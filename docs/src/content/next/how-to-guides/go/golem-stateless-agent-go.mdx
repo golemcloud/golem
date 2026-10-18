@@ -121,7 +121,7 @@ var (
 - Constructor parameters still define identity — different `ID` values are still distinct addressable agents.
 - Ephemeral agents can still call other agents (RPC), make HTTP requests, and use the rest of the SDK — they simply don't retain state or replay.
 - The oplog is recorded lazily (inspectable via `golem agent oplog`) but is never replayed for recovery.
-- State-only durability features (snapshotting, atomic blocks over persisted state) have nothing to persist here; leave `Spec.Snapshot` at its default.
+- Snapshot-based recovery does not apply to ephemeral agents; leave `Spec.Snapshot` at its default.
 
 ### Related Guides
 | Guide | Description |

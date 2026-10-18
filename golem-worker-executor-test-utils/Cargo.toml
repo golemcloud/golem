@@ -31,6 +31,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 prometheus = { workspace = true }
+prost = { workspace = true }
 regex = { workspace = true }
 rustls = { workspace = true }
 scc = { workspace = true }
@@ -49,3 +50,4 @@ uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
+zstd = { workspace = true }

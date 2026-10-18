@@ -22,8 +22,8 @@ import "golem/schema/schema.proto";
 // removed and replaced by `Start`, `End`, `Cancelled`. Their tag numbers are reserved to
 // prevent accidental reuse should we ever need rolling-version compatibility in the future.
 message OplogEntry {
-  reserved 2, 14, 15, 41;
-  reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite", "FilesystemStorageUsageUpdate";
+  reserved 2, 7, 12, 13, 14, 15, 41;
+  reserved "HostCall", "NoOp", "BeginAtomicRegion", "EndAtomicRegion", "BeginRemoteWrite", "EndRemoteWrite", "FilesystemStorageUsageUpdate";
 
   oneof entry {
     CreateParameters Create = 1;
@@ -31,12 +31,9 @@ message OplogEntry {
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
-    TimestampParameter NoOp = 7;
     JumpParameters Jump = 8;
     TimestampParameter Interrupted = 9;
     TimestampParameter Exited = 10;
-    TimestampParameter BeginAtomicRegion = 12;
-    EndAtomicRegionParameters EndAtomicRegion = 13;
     PendingAgentInvocationParameters PendingAgentInvocation = 16;
     PendingUpdateParameters PendingUpdate = 17;
     SuccessfulUpdateParameters SuccessfulUpdate = 18;
@@ -83,6 +80,8 @@ message OplogEntry {
     TimestampParameter Resumed = 65;
     TimestampParameter RecoverySucceeded = 66;
     SnapshotConfirmedParameters SnapshotConfirmed = 67;
+    ToolAttachmentReadParameters ToolAttachmentRead = 68;
+    ToolAttachmentControlParameters ToolAttachmentControl = 69;
   }
 }
 
@@ -98,11 +97,8 @@ message WrappedFunctionType {
     WRITE_LOCAL = 1;
     READ_REMOTE = 2;
     WRITE_REMOTE = 3;
-    WRITE_REMOTE_BATCHED = 4;
-    WRITE_REMOTE_TRANSACTION = 5;
   }
   Type type = 1;
-  optional uint64 oplog_index = 2;
 }
 
 message PluginInstallationDescription {
@@ -153,6 +149,7 @@ message StartParameters {
   optional DurableInvocationId invocation_id = 7;
   optional uint64 observational_owner = 8;
   optional SpanStarted span_started = 9;
+  optional string denial = 10;
 }
 
 message EndParameters {
@@ -416,10 +413,12 @@ enum OplogErrorKind {
 }
 
 message ErrorParameters {
+  reserved 4;
+  reserved "inside_atomic_region";
+
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
   uint64 retry_from = 3;
-  bool inside_atomic_region = 4;
   optional RetryPolicyState retry_policy_state = 5;
   OplogErrorKind kind = 6;
 }
@@ -566,14 +565,21 @@ message HostStreamFrameParameters {
   golem.schema.TypedSchemaValue payload = 4;
 }
 
+message ToolAttachmentReadParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.schema.TypedSchemaValue observation = 2;
+  optional bytes payload = 3;
+}
+
+message ToolAttachmentControlParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.schema.TypedSchemaValue attachment = 2;
+  golem.schema.TypedSchemaValue transition = 3;
+}
+
 message DurableStreamRecordParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.schema.TypedSchemaValue record = 2;
-}
-
-message EndAtomicRegionParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 begin_index = 2;
 }
 
 message BeginRemoteTransactionParameters {
@@ -765,6 +771,24 @@ message OplogEntryWithIndex {
   uint64 oplog_index = 1;
   OplogEntry entry = 2;
   PublicOplogEntryAttribution attribution = 3;
+}
+
+// An oplog entry that an oplog page leaves out because its encoded form is larger than the
+// limit of the executor.
+message OmittedOplogEntry {
+  uint64 oplog_index = 1;
+  PublicOplogEntryAttribution attribution = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string entry_type = 4;
+  uint64 size = 5;
+  uint64 component_revision = 6;
+}
+
+message OplogPageEntry {
+  oneof entry {
+    OplogEntryWithIndex included = 1;
+    OmittedOplogEntry omitted = 2;
+  }
 }
 
 enum PublicAgentEntityKind {

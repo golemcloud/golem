@@ -739,19 +739,32 @@ impl TypeScriptBridgeGenerator {
     fn generate_guest_ts_class(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         let class_name = &self.agent_type.type_name.0;
         let mut member_naming = ParameterNaming::new();
-        member_naming.reserve_many(["resolved", "constructor"]);
+        member_naming.reserve_many(["resolved", "scopeCard", "withScopeCard", "constructor"]);
         if self.agent_type.mode == AgentMode::Durable {
             member_naming.reserve("agentId");
         }
         writer.write_doc(&self.agent_type.description);
         writer.begin_export_class(class_name);
         writer.declare_field("resolved", "base.RemoteAgentHandle", None);
+        writer.declare_field("scopeCard", "base.ScopeCard | undefined", None);
         let mut constructor = writer.begin_private_constructor();
         constructor.param("resolved", "base.RemoteAgentHandle");
+        constructor.param("scopeCard?", "base.ScopeCard");
         constructor.write_line("this.resolved = resolved;");
+        constructor.write_line("this.scopeCard = scopeCard;");
         drop(constructor);
 
         self.generate_guest_constructors(writer, class_name)?;
+        writer.write_doc(
+            "Returns a client for the same agent whose awaited calls borrow `scopeCard` as their default scope card. Trigger and schedule never send a scope card.",
+        );
+        let mut with_scope_card = writer.begin_method("withScopeCard");
+        with_scope_card.param("scopeCard", "base.ScopeCard | undefined");
+        with_scope_card.result(class_name);
+        with_scope_card.write_line(format!(
+            "return new {class_name}(this.resolved, scopeCard);"
+        ));
+        drop(with_scope_card);
         if self.agent_type.mode == AgentMode::Durable {
             writer.write_doc("Returns the durable agent's runtime identity.");
             let mut getter = writer.begin_method("get agentId");
@@ -1032,24 +1045,26 @@ impl TypeScriptBridgeGenerator {
                 "base.ownSchemaValueStreams(__result); return __decode(__result);"
             };
             writer.write_doc(&format!(
-                "{}\n\nNative streams move into this awaited call and cannot be reused. Returned streams are lazy; unread forwarding preserves the endpoint. Use abortable(signal, ...) for cancellation. Trigger and schedule are unavailable for stream methods.",
+                "{}\n\nNative streams move into this awaited call and cannot be reused. Returned streams are lazy; unread forwarding preserves the endpoint. Use abortable(signal, ...) for cancellation and withScopeCard(scopeCard, ...) to borrow a scope card for one call; null sends no scope card. Trigger and schedule are unavailable for stream methods.",
                 method.description
             ));
             writer.write_line(formatdoc! {"
                 readonly {member_name}: {{
                   (...args: [{args}]): Promise<{await_result}>;
                   abortable(signal: AbortSignal, ...args: [{args}]): Promise<{await_result}>;
+                  withScopeCard(scopeCard: base.ScopeCard | null, ...args: [{args}]): Promise<{await_result}>;
                 }} = (() => {{
                   const __encode = {encode};
                   const __decode = {decode};
-                  const __await = async (signal: AbortSignal | undefined, ...__args: [{args}]): Promise<{await_result}> => {{
+                  const __await = async (signal: AbortSignal | undefined, scopeCard: base.ScopeCard | undefined, ...__args: [{args}]): Promise<{await_result}> => {{
                     base.throwIfAborted(signal);
                     const __result = await base.withNativeStreamScope(() => __encode(__args),
-                      __value => this.resolved.{invoke}({method_name}, __value, signal));
+                      __value => this.resolved.{invoke}({method_name}, __value, signal, scopeCard));
                     return base.withNativeStreamScope(() => {{ {decode_result} }});
                   }};
-                  return Object.assign((...__args: [{args}]) => __await(undefined, ...__args), {{
-                    abortable: (signal: AbortSignal, ...__args: [{args}]) => __await(signal, ...__args),
+                  return Object.assign((...__args: [{args}]) => __await(undefined, this.scopeCard, ...__args), {{
+                    abortable: (signal: AbortSignal, ...__args: [{args}]) => __await(signal, this.scopeCard, ...__args),
+                    withScopeCard: (scopeCard: base.ScopeCard | null, ...__args: [{args}]) => __await(undefined, scopeCard ?? undefined, ...__args),
                   }});
                 }})();
             "});
@@ -1072,11 +1087,11 @@ impl TypeScriptBridgeGenerator {
         };
         let await_call = if ephemeral {
             format!(
-                "const __result = await {remote}.invokeAndAwaitWithMetadata({method_name}, __encode(__args), signal); return {{ metadata: __result.metadata, value: __decode(__result.value) }};"
+                "const __result = await {remote}.invokeAndAwaitWithMetadata({method_name}, __encode(__args), signal, scopeCard); return {{ metadata: __result.metadata, value: __decode(__result.value) }};"
             )
         } else {
             format!(
-                "const __result = await {remote}.invokeAndAwait({method_name}, __encode(__args), signal); return __decode(__result);"
+                "const __result = await {remote}.invokeAndAwait({method_name}, __encode(__args), signal, scopeCard); return __decode(__result);"
             )
         };
         let trigger_call = if ephemeral {
@@ -1098,30 +1113,32 @@ impl TypeScriptBridgeGenerator {
         } else {
             format!("return {remote}.scheduleCancelable(at, {method_name}, __encode(__args));")
         };
-        writer.write_doc(&method.description);
+        writer.write_doc(&format!(
+            "{}\n\nUse withScopeCard(scopeCard, ...) to borrow a scope card for one awaited call; null sends no scope card. Trigger and schedule never send a scope card.",
+            method.description
+        ));
         writer.write_line(formatdoc! {"
-            readonly {}: {{
-              (...args: [{}]): Promise<{}>;
-              abortable(signal: AbortSignal, ...args: [{}]): Promise<{}>;
-              trigger(...args: [{}]): {};
-              schedule(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{}]): {};
-              scheduleCancelable(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{}]): {};
+            readonly {member_name}: {{
+              (...args: [{args}]): Promise<{await_result}>;
+              abortable(signal: AbortSignal, ...args: [{args}]): Promise<{await_result}>;
+              withScopeCard(scopeCard: base.ScopeCard | null, ...args: [{args}]): Promise<{await_result}>;
+              trigger(...args: [{args}]): {trigger_result};
+              schedule(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{args}]): {schedule_result};
+              scheduleCancelable(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{args}]): {cancel_result};
             }} = (() => {{
-              const __encode = {};
-              const __decode = {};
-              const __await = async (signal: AbortSignal | undefined, ...__args: [{}]): Promise<{}> => {{ {} }};
-              const __call = (...__args: [{}]) => __await(undefined, ...__args);
+              const __encode = {encode};
+              const __decode = {decode};
+              const __await = async (signal: AbortSignal | undefined, scopeCard: base.ScopeCard | undefined, ...__args: [{args}]): Promise<{await_result}> => {{ {await_call} }};
+              const __call = (...__args: [{args}]) => __await(undefined, this.scopeCard, ...__args);
               return Object.assign(__call, {{
-                abortable: (signal: AbortSignal, ...__args: [{}]) => __await(signal, ...__args),
-                trigger: (...__args: [{}]): {} => {{ {} }},
-                schedule: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{}]): {} => {{ {} }},
-                scheduleCancelable: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{}]): {} => {{ {} }},
+                abortable: (signal: AbortSignal, ...__args: [{args}]) => __await(signal, this.scopeCard, ...__args),
+                withScopeCard: (scopeCard: base.ScopeCard | null, ...__args: [{args}]) => __await(undefined, scopeCard ?? undefined, ...__args),
+                trigger: (...__args: [{args}]): {trigger_result} => {{ {trigger_call} }},
+                schedule: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{args}]): {schedule_result} => {{ {schedule_call} }},
+                scheduleCancelable: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{args}]): {cancel_result} => {{ {cancel_call} }},
               }});
             }})();
-        ", member_name, args, await_result, args, await_result,
-            args, trigger_result, args, schedule_result, args, cancel_result, encode, decode, args,
-            await_result, await_call, args, args, args, trigger_result, trigger_call,
-            args, schedule_result, schedule_call, args, cancel_result, cancel_call});
+        "});
         Ok(())
     }
 
@@ -3225,8 +3242,11 @@ impl TypeScriptBridgeGenerator {
             SchemaType::QuotaToken { .. } => {
                 format!("base.quotaTokenFromSchemaValue({value})")
             }
+            SchemaType::PermissionCard { spec, .. } if spec.polymorphic => {
+                format!("base.polymorphicPermissionCardFromSchemaValue({value})")
+            }
             SchemaType::PermissionCard { .. } => {
-                format!("base.permissionCardHandleFromSchemaValue({value})")
+                format!("base.permissionCardFromSchemaValue({value})")
             }
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest decode; value expr = {value}"
@@ -3653,8 +3673,11 @@ impl TypeScriptBridgeGenerator {
             SchemaType::QuotaToken { .. } => {
                 format!("base.quotaTokenToSchemaValue({value})")
             }
+            SchemaType::PermissionCard { spec, .. } if spec.polymorphic => {
+                format!("base.polymorphicPermissionCardToSchemaValue({value})")
+            }
             SchemaType::PermissionCard { .. } => {
-                format!("base.permissionCardHandleToSchemaValue({value})")
+                format!("base.permissionCardToSchemaValue({value})")
             }
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest encode; value expr = {value}"
@@ -4498,10 +4521,15 @@ impl TypeScriptBridgeGenerator {
                     {
                         Ok("base.QuotaToken".to_string())
                     }
+                    SchemaType::PermissionCard { spec, .. }
+                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc && spec.polymorphic =>
+                    {
+                        Ok("base.PolymorphicPermissionCard".to_string())
+                    }
                     SchemaType::PermissionCard { .. }
                         if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
                     {
-                        Ok("base.PermissionCardHandle".to_string())
+                        Ok("base.PermissionCard".to_string())
                     }
                     SchemaType::Stream {
                         inner: Some(inner), ..
@@ -4666,10 +4694,15 @@ impl TypeScriptBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == TypeScriptBridgeMode::GuestWasmRpc => {
                 Ok("base.QuotaToken".to_string())
             }
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == TypeScriptBridgeMode::GuestWasmRpc && spec.polymorphic =>
+            {
+                Ok("base.PolymorphicPermissionCard".to_string())
+            }
             SchemaType::PermissionCard { .. }
                 if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
             {
-                Ok("base.PermissionCardHandle".to_string())
+                Ok("base.PermissionCard".to_string())
             }
             SchemaType::Stream {
                 inner: Some(inner), ..

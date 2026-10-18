@@ -81,42 +81,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await?;
 
         let result = 'resp: {
-            let (mut handle, denied) = match begun.resolve(self).await? {
+            let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
-                    let denied = match dns_target(&name) {
-                        Ok(target) => {
-                            !matches!(self.authorize_live_permission(&target).await, Ok(Ok(_)))
-                        }
-                        Err(_) => true,
+                    let denial = match dns_target(&name) {
+                        Ok(target) => match self.authorize_live_permission(&target).await {
+                            Ok(Ok(_)) => None,
+                            Ok(Err(error)) => Some(error.to_string()),
+                            Err(error) => Some(error.to_string()),
+                        },
+                        Err(error) => Some(error.to_string()),
                     };
-                    (
-                        begun
-                            .start_live(self, HostRequestSocketsResolveName { name: name.clone() })
-                            .await?,
-                        denied,
-                    )
+                    let request = HostRequestSocketsResolveName { name: name.clone() };
+                    if let Some(denial) = denial {
+                        break 'resp begun
+                            .start_live_denied(self, request, denial)
+                            .await
+                            .map_err(|e| SocketError::trap(wasmtime::Error::from_anyhow(e)))?;
+                    }
+                    begun.start_live(self, request).await?
                 }
                 ResolvedCall::Replay(mut handle) => {
                     match handle.replay(self).await? {
                         CallReplayOutcome::Replayed(response) => break 'resp response,
                         CallReplayOutcome::Incomplete(live) => handle = live,
                     }
-                    (handle, false)
+                    handle
                 }
             };
-
-            if denied {
-                break 'resp handle
-                    .complete(
-                        self,
-                        HostResponseSocketsResolveName {
-                            result: Err(SerializableSocketError::from(SocketError::from(
-                                ErrorCode::AccessDenied,
-                            ))),
-                        },
-                    )
-                    .await?;
-            }
 
             let result = loop {
                 let network_borrow = Resource::new_borrow(network.rep());

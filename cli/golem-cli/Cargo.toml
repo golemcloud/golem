@@ -10,6 +10,9 @@ license-file = "../../LICENSE"
 autotests = false
 build = "build.rs"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 server-commands = []
@@ -115,6 +118,7 @@ tree-sitter = { workspace = true }
 tree-sitter-go = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-rust = { workspace = true }
+tree-sitter-scala = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-yaml = { workspace = true }
 strip-ansi-escapes = { workspace = true }
@@ -155,6 +159,7 @@ reqwest = { workspace = true }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }
+tokio-rustls = { workspace = true }
 wat = { workspace = true }
 
 [build-dependencies]

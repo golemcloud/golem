@@ -38,7 +38,7 @@
 // ---------------------------------------------------------------------------
 
 import { z } from 'zod';
-import { defineAgent, method, atomically } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
 // 10s per-request deadline — analogous to Temporal's startToCloseTimeout
 // and identical to the user's V2 source.
@@ -46,13 +46,8 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 async function post(api: string, path: string, body: unknown): Promise<any> {
   console.log(`POST ${path}`);
-  // Wrap the timer + fetch + throw in `atomically` so that an AbortController
-  // timeout (or any other thrown error) is retried *inside the same wasm
-  // instance* — no trap, no oplog replay. Without this, replay would re-read
-  // the original `setTimeout`'s persisted wake time (already in the past) and
-  // fire `ac.abort()` immediately on every retry, never giving the next live
-  // fetch a chance to wait the full timeout window.
-  return atomically(async () => {
+  // Each attempt has a fresh durable timer and request.
+  for (let attempt = 0; ; attempt++) {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -69,10 +64,12 @@ async function post(api: string, path: string, body: unknown): Promise<any> {
         throw new Error(`${path} failed: ${res.status} ${await res.text()}`);
       }
       return await res.json();
+    } catch (error) {
+      if (attempt >= 10) throw error;
     } finally {
       clearTimeout(timer);
     }
-  });
+  }
 }
 
 export const CheckoutAgentV2 = defineAgent({

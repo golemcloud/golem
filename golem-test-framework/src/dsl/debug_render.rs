@@ -68,6 +68,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             if let Some(span) = &params.span_started {
                 let _ = writeln!(result, "{pad}span started:      {span:?}");
             }
+            if let Some(denial) = &params.denial {
+                let _ = writeln!(result, "{pad}denied:            {denial}");
+            }
         }
         PublicOplogEntry::End(params) => {
             let _ = writeln!(result, "END");
@@ -190,10 +193,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "RECOVERY SUCCEEDED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
         }
-        PublicOplogEntry::NoOp(params) => {
-            let _ = writeln!(result, "NOP");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-        }
         PublicOplogEntry::Jump(params) => {
             let _ = writeln!(result, "JUMP");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -207,15 +206,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::Exited(params) => {
             let _ = writeln!(result, "EXITED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-        }
-        PublicOplogEntry::BeginAtomicRegion(params) => {
-            let _ = writeln!(result, "BEGIN ATOMIC REGION");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-        }
-        PublicOplogEntry::EndAtomicRegion(params) => {
-            let _ = writeln!(result, "END ATOMIC REGION");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}begin index:       {}", params.begin_index);
         }
         PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
             PublicAgentInvocation::AgentInitialization(inner_params) => {
@@ -611,6 +601,30 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 "{pad}payload:           {}",
                 typed_schema_value_to_string(&params.payload)
             );
+        }
+        PublicOplogEntry::ToolAttachmentControl(params) => {
+            let _ = writeln!(result, "TOOL ATTACHMENT CONTROL");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}attachment:        {}",
+                typed_schema_value_to_string(&params.attachment)
+            );
+            let _ = writeln!(
+                result,
+                "{pad}transition:        {}",
+                typed_schema_value_to_string(&params.transition)
+            );
+        }
+        PublicOplogEntry::ToolAttachmentRead(params) => {
+            let _ = writeln!(result, "TOOL ATTACHMENT READ");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}observation:       {}",
+                typed_schema_value_to_string(&params.observation)
+            );
+            let _ = writeln!(result, "{pad}payload:           {:?}", params.payload);
         }
         PublicOplogEntry::StreamRegistered(params) => {
             let _ = writeln!(result, "STREAM REGISTERED");

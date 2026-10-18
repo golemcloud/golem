@@ -134,6 +134,8 @@ declare_structs! {
         pub upper_positive: Vec<PermissionPattern>,
         #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_negative: Vec<PermissionPattern>,
+        /// The earliest expiry of the root cards; the scope card stops authorizing then.
+        pub expires_at: Option<DateTime<Utc>>,
     }
 
     #[derive(Eq)]

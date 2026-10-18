@@ -4,6 +4,60 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Saga transactions
+
+`fallible_transaction` returns after one attempt and compensation. Use
+`infallible_transaction` to retry a fully compensated failure with the host's
+bounded saga retry policy. Both functions return `Result<Out, TransactionFailure<Err>>`.
+Return operation failures as `Result`, and propagate them with `?` in the body.
+
+Successful operations register compensations. A failed attempt runs them in
+reverse order. A compensation failure returns `FailedAndRolledBackPartially`
+immediately; the SDK does not repeat partly compensated side effects.
+`RetryExhausted` retains the last operation error. `RetryPolicyError` retains
+that error and the host's policy error, and never substitutes immediate retries.
+
+The SDK resolves policies with verb `saga`, the agent URN as the noun,
+`attempt` starting at 1 for the first failed attempt, and
+`error-kind` set to `operation-error`. No transaction name is available in this API.
+Reading the agent identity uses `get_self_metadata` and requires self-view
+permission. An identity lookup failure returns `RetryPolicyError`.
+No matching policy selects the configured default. The host rejects unbounded
+policies and changed effective policies rather than resetting the retry budget.
+It records decisions, jitter, and policy errors for replay. The SDK carries the
+opaque continuation between compensated failures and uses the durable clock and
+timer; elapsed time includes body execution, compensation, and waits.
+
+## Outgoing HTTP
+
+Use `golem_rust::http` for WASI HTTP p3 requests in async agent methods. No separate
+HTTP client crate is needed. The SDK uses standard `http` request builders:
+
+```rust,no_run
+use golem_rust::http::{self, Request};
+
+async fn fetch_text(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let request = Request::get(url).body(Vec::new())?;
+    let response = http::send(request).await?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()).into());
+    }
+    Ok(http::response_text(response).await?)
+}
+```
+
+`send` accepts a buffered `Request<Vec<u8>>` and checks upload and transmission
+errors. It does not reject HTTP error statuses, follow redirects, or retry on its
+own. Read status and headers before consuming the response with `response_bytes`,
+`response_text`, or `response_json::<T>` (the default `json` feature). These helpers
+buffer the entire remaining body and propagate final body errors. For large bodies,
+read frames from `response.into_body()` using `http_body_util::BodyExt` instead.
+
+For JSON requests, set `Content-Type: application/json` and use
+`.body(serde_json::to_vec(&value)?)`. Low-level p3 bindings and HTTP adapters are
+available through `golem_rust::wasip3::{http, http_compat}`. Sending requires the
+Golem WASI p3 runtime, not a native socket executor.
+
 ## Self metadata and restrictive permissions
 
 `get_self_metadata()` returns `Result<AgentMetadata, AgentOperationError>`. Handle
@@ -45,6 +99,7 @@ schedule and applied to arbitrary async user code:
 
 ```rust
 let raw = resolve_retry_policy("send", "email://welcome", &context)
+    .map_err(std::io::Error::other)?
     .expect("matching named policy");
 let schedule = RetrySchedule::try_from(&raw)?;
 
@@ -70,6 +125,22 @@ RetrySchedule::try_from(&raw.policy)?
 `RetrySchedule` is a user-space guest loop. It does not install a policy or create executor
 `RetryAttempt` entries, and its attempts are not one host-managed retry sequence. Host calls made
 by the loop retain their normal durable replay and suspension behavior.
+
+## Custom durable operations
+
+`golem_rust::durability::Durability` is for library code that turns an otherwise raw operation
+into a durable call. `new` encodes the request but does not begin execution or observe the call.
+Synchronous runners begin when called; async runners begin and observe on their first poll.
+Dropping an unpolled runner opens no custom invocation. Code between construction and execution
+is outside that operation.
+
+Async runners install their custom scope around polling and destruction, then restore the actual
+caller's scope. Concurrent futures can run sibling operations, including borrowed and non-`Send`
+bodies. Nested operations must finish or be dropped before the parent finishes. Await nested work
+inside the body; detached `spawn_local` work does not automatically acquire the custom scope.
+Body resources are destroyed before the response is recorded. Dropping an unfinished operation
+leaves it incomplete, so recovery can re-execute its whole body; make repeated external effects
+safe. A Rust panic on the default `wasm32-wasip2` target aborts rather than running drop cleanup.
 
 ## External Durable Streams
 
@@ -145,9 +216,8 @@ Transient transport, timeout, 429 and unavailable errors use bounded retries
 and durable timers, respecting Retry-After; protocol/conflict errors do not.
 An active bounded HTTP request remains resident; idle/retry timers can suspend.
 
-The SDK does not change Golem's idempotence mode. Explicitly disabling it retains
-fail-closed recovery for interrupted writes. Exactly-once external effects rely
-on the peer atomically persisting and retaining producer deduplication state.
+Exactly-once external effects rely on the peer atomically persisting and
+retaining producer deduplication state.
 Golem forks copy checkpoints, producer IDs, epochs and pending data: they do not
 call a Durable Streams fork API or create independent producers. Divergent
 branches can collide on the same tuple; a later acknowledged sequence is a typed
@@ -171,6 +241,42 @@ invocations return `InvalidToolName`; agent initialization and invocation return
 `InvalidInput`. Snapshot load returns an unsupported error. Agent definition
 and snapshot save trap with an explicit unsupported message because their WIT
 signatures have no error result.
+
+## Tool output and result ownership
+
+After a tool handler returns success or a declared error, the generated dispatch
+attempts to finish stdout and stderr independently. A finish failure does not
+replace the structured outcome. An explicit `OutputStream::finish` or `fail`
+consumes the shared writer, so implicit finishing cannot replace its terminal.
+SDK result-encoding failures and host declaration-validation failures (including
+undeclared named errors with decodable payloads) are `InvalidResult`; outputs
+finish normally for these returned outcomes. Structurally undecodable wire
+payloads can instead produce host runtime or protocol errors. An ordinary handler panic
+remains a panic or trap, not `InvalidResult`. The SDK does not guarantee implicit
+finishing during panic unwinding or after a trap.
+
+`ToolInvocationOutput::close` permanently closes only that output. It does not
+close its sibling or cancel the invocation. Later `next` calls return `None`.
+Dropping a pending `next` future does not guarantee that a later read resumes it;
+the SDK adds no pending-read or buffering mechanism.
+
+`ToolInvocation::detach_result` permanently stops structured result delivery.
+Pending and future `result` observers return
+`ToolError::Rpc(RpcError::Protocol("tool result delivery is detached"))`, not
+`RpcError::Cancelled`. This is a local observation error, not invocation
+cancellation. Dropping one `result` future is not detachment: other observers
+and outputs still share the cached outcome.
+Detachment releases unclaimed cached results and discards late results, including
+their unclaimed capabilities. Capabilities already delivered to a caller remain
+owned by that caller.
+
+Detachment continues the shared host observation in a background task, so output
+readers and filesystem-capable calls still make progress, even without a result
+consumer. Physical disposal of an unsettled host observer waits for settlement;
+a call that never settles can retain that observer. `ToolInvocation::cancel`
+remains an explicit invocation cancellation request while the observer exists.
+After physical disposal, `cancel` is a no-op. Closing or dropping local outputs
+does not issue an invocation cancellation request.
 
 ## File response headers
 

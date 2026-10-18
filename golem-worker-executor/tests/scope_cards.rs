@@ -23,16 +23,19 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, PolymorphicCard, PolymorphicPermissionPattern, StoredCard,
-    parse_polymorphic_permission,
+    Card, CardId, CardManagedByRuntimeDerived, PolymorphicCard, PolymorphicPermissionPattern,
+    StoredCard, parse_permission_fields, parse_polymorphic_permission,
 };
 use golem_common::model::component::ComponentId;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
 use golem_common::model::oplog::{
-    HostRequestGolemRpcActivate, HostResponse, HostResponseGolemRpcActivate,
-    HostResponseP3SocketsConnect, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
+    HostRequestGolemRpcActivate, HostResponse, HostResponseFileSystemStat,
+    HostResponseGolemRpcActivate, HostResponseKVUnit, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
+    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
 };
-use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::worker::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
 use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
@@ -50,7 +53,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, registry_test_card, start_with_overrides,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -69,6 +72,10 @@ inherit_test_dep!(
     #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_moonbit")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test_dep(scope = Shared)]
@@ -85,6 +92,10 @@ async fn permission_mysql() -> DockerMysqlRdb {
 async fn permission_ignite() -> DockerIgniteRdb {
     DockerIgniteRdb::new().await
 }
+
+/// The owner path of the test environment, as the test component service
+/// names its account, application and environment.
+const TEST_ENVIRONMENT_OWNER: &str = "test@golem/test-app/test-env";
 
 fn scope_card_initial_permissions() -> Vec<PolymorphicPermissionPattern> {
     vec![
@@ -151,6 +162,14 @@ struct ScopeCardAuthority {
     additional_cards: RwLock<HashMap<CardId, StoredCard>>,
     revoke_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
     record_revoked_cards_gate: std::sync::Mutex<Option<CardServiceGate>>,
+    check_cards_gate: std::sync::Mutex<Option<CheckCardsGate>>,
+    fail_gated_check_cards: AtomicBool,
+}
+
+/// Pauses the first `check_cards` call that names all of `card_ids`.
+struct CheckCardsGate {
+    card_ids: Vec<CardId>,
+    gate: CardServiceGate,
 }
 
 /// Pauses one card service call until the test releases it.
@@ -261,6 +280,49 @@ impl ScopeCardAuthority {
     fn gate_record_revoked_cards(&self) -> CardServiceGateHandle {
         CardServiceGate::install(&self.record_revoked_cards_gate)
     }
+
+    fn gate_check_cards(&self, card_ids: Vec<CardId>) -> CardServiceGateHandle {
+        let slot = std::sync::Mutex::new(None);
+        let handle = CardServiceGate::install(&slot);
+        let gate = slot
+            .into_inner()
+            .expect("card service gate lock poisoned")
+            .expect("card service gate was just installed");
+        *self
+            .check_cards_gate
+            .lock()
+            .expect("check-cards gate lock poisoned") = Some(CheckCardsGate { card_ids, gate });
+        handle
+    }
+
+    /// Fails the `check_cards` call that the installed gate pauses once the test releases it.
+    fn fail_gated_check_cards(&self) {
+        self.fail_gated_check_cards.store(true, Ordering::SeqCst);
+    }
+
+    /// Returns whether the installed gate paused this call.
+    async fn pass_check_cards_gate(&self, card_ids: &[CardId]) -> bool {
+        let gate = {
+            let mut slot = self
+                .check_cards_gate
+                .lock()
+                .expect("check-cards gate lock poisoned");
+            if slot
+                .as_ref()
+                .is_some_and(|gate| gate.card_ids.iter().all(|id| card_ids.contains(id)))
+            {
+                slot.take().map(|gate| gate.gate)
+            } else {
+                None
+            }
+        };
+        let Some(gate) = gate else {
+            return false;
+        };
+        let _ = gate.entered.send(());
+        let _ = gate.release.await;
+        true
+    }
 }
 
 struct ScopeCardService {
@@ -316,6 +378,16 @@ impl CardService for ScopeCardService {
         self.authority
             .check_cards_count
             .fetch_add(1, Ordering::SeqCst);
+        if self.authority.pass_check_cards_gate(&card_ids).await
+            && self
+                .authority
+                .fail_gated_check_cards
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(WorkerExecutorError::runtime(
+                "injected card service failure",
+            ));
+        }
         let root_card = self.authority.root_card().ok_or_else(|| {
             WorkerExecutorError::runtime("scope-card test root was not configured")
         })?;
@@ -355,7 +427,7 @@ async fn start_scope_card_executor(
                     authority: authority.clone(),
                 })
             })),
-            ..Default::default()
+            ..TestExecutorOverrides::agent_sockets_enabled()
         },
     )
     .await
@@ -459,6 +531,787 @@ async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let lent_env = vec![("LENT_ENV".to_string(), "lent".to_string())];
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("SealedScopeAgent")
+        .with_env("SealedScopeAgent", lent_env.clone())
+        .with_env("ScopeCardAgent", lent_env)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.extend(scope_card_initial_permissions());
+            grants.push(
+                parse_polymorphic_permission("env(?env/*/*) @ * : read : LENT_ENV")
+                    .expect("valid lent environment permission"),
+            );
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "lent-env-caller");
+    let sealed_target_name = "sealed-target";
+    let sealed_target = agent_id!("SealedScopeAgent", sealed_target_name);
+    let inspecting_target_name = "inspecting-target";
+    let inspecting_target = agent_id!("ScopeCardAgent", inspecting_target_name);
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let sealed_worker = executor
+        .start_agent(&component.id, sealed_target.clone())
+        .await?;
+
+    // Without card:inspect the lent scope card stays out of the wallet listing,
+    // but its grant still lets the callee read the variable during the call.
+    let (listed, value, slot_grant_is_invalid, root_card_id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_env_scope",
+            data_value!(sealed_target_name, true, TEST_ENVIRONMENT_OWNER),
+        )
+        .await?
+        .into_typed::<(Option<SchemaCardId>, Option<String>, bool, SchemaCardId)>()?;
+    assert!(listed.is_none(), "a sealed scope card must not be listed");
+    assert_eq!(value.as_deref(), Some("lent"));
+    assert!(
+        slot_grant_is_invalid,
+        "a requested grant with an owner slot must be an invalid pattern"
+    );
+
+    // The callee itself has no grant for the variable.
+    let (listed, value) = executor
+        .invoke_and_await_agent(
+            &component,
+            &sealed_target,
+            "lent_scope_observation",
+            data_value!(root_card_id),
+        )
+        .await?
+        .into_typed::<(Option<SchemaCardId>, Option<String>)>()?;
+    assert_eq!((listed, value), (None, None));
+
+    let (listed, _, _, _) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_env_scope",
+            data_value!(inspecting_target_name, false, TEST_ENVIRONMENT_OWNER),
+        )
+        .await?
+        .into_typed::<(Option<SchemaCardId>, Option<String>, bool, SchemaCardId)>()?;
+    let scope_card_id = listed.expect("a callee with card:inspect must see the lent scope card");
+    assert_scope_absent(&executor, &component, &inspecting_target, scope_card_id).await?;
+
+    executor.check_oplog_is_queryable(&sealed_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn scope_card_revoked_at_the_wallet_boundary_is_not_listed_to_an_inspecting_callee(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "revoked-lent-caller");
+    let target_name = "revoked-lent-target";
+    let target = agent_id!("SealedScopeAgent", target_name);
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    // The callee may inspect cards through its own card, which the revocation
+    // of the scope card's root does not touch.
+    let target_card = StoredCard::Polymorphic(
+        component
+            .metadata
+            .agent_type_initial_permission_card(&target.agent_type)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing sealed-scope test initial card"))?,
+    );
+    let target_card_id = target_card.card_id();
+    authority.add_card(target_card);
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+
+    // Pause the callee's self-wallet call while its wallet snapshot holds the
+    // card-event boundary, and queue the revocation of the scope card's root
+    // behind it. The revocation is then applied by the authority boundary that
+    // self-wallet crosses before it lists the lent scope card.
+    let mut gate = authority.gate_check_cards(vec![target_card_id, root_card_id]);
+    let key = IdempotencyKey::fresh();
+    let params = data_value!(target_name);
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "lend_scope_to_observer",
+            params.clone(),
+        )
+        .await?;
+    gate.entered().await?;
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        gate.release();
+    };
+    let (queued, ()) = tokio::join!(
+        executor.queue_card_revocation(&target_worker, root_card_id),
+        release
+    );
+    queued?;
+
+    let (listed, parent_refused) = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "lend_scope_to_observer",
+            params,
+        )
+        .await?
+        .into_typed::<(bool, bool)>()?;
+    assert!(
+        !listed,
+        "a scope card revoked at the wallet boundary must not be listed"
+    );
+    assert!(
+        parent_refused,
+        "a revoked scope card must not be usable as a scope parent"
+    );
+    Ok(())
+}
+
+/// The wallet observation that the guest makes in each read of a `remember_wallet_*` call.
+#[derive(Clone, Copy, Debug)]
+enum WalletRead {
+    /// `self-wallet`, kept as the number of listed cards.
+    CardCount,
+    /// `self-version`, kept as the wallet generation.
+    Generation,
+}
+
+impl WalletRead {
+    fn method(self) -> &'static str {
+        match self {
+            WalletRead::CardCount => "remember_wallet_card_counts",
+            WalletRead::Generation => "remember_wallet_generations",
+        }
+    }
+
+    fn host_function(self) -> HostFunctionName {
+        match self {
+            WalletRead::CardCount => HostFunctionName::GolemPermissionsSelfWallet,
+            WalletRead::Generation => HostFunctionName::GolemPermissionsSelfVersion,
+        }
+    }
+}
+
+/// How the card service call that the gate pauses inside a wallet read ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PausedRead {
+    /// The read lists the wallet it observed.
+    Completes,
+    /// The read fails, so its invocation traps and is retried by reconstruction.
+    Fails,
+}
+
+/// The oplog indices of the wallet reads of `read` in the invocation that `key` started: the
+/// `Start` of each read in guest order, its `End`, and the invocation's `AgentInvocationStarted`
+/// and `AgentInvocationFinished`.
+struct RecordedWalletReads {
+    started: OplogIndex,
+    finished: Option<OplogIndex>,
+    reads: Vec<(OplogIndex, Option<OplogIndex>)>,
+}
+
+impl RecordedWalletReads {
+    fn find(
+        entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        key: &IdempotencyKey,
+        read: WalletRead,
+    ) -> Option<Self> {
+        let started = entries.iter().find_map(|(index, entry)| {
+            matches!(entry,
+                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key
+            )
+            .then_some(*index)
+        })?;
+        let finished = entries.range(started.next()..).find_map(|(index, entry)| {
+            matches!(entry, OplogEntry::AgentInvocationFinished { .. }).then_some(*index)
+        });
+        let after_start = entries.range(started.next()..);
+        let reads = after_start
+            .clone()
+            .filter(|(index, _)| finished.is_none_or(|finished| **index < finished))
+            .filter_map(|(index, entry)| match entry {
+                OplogEntry::Start { function_name, .. }
+                    if *function_name == read.host_function() =>
+                {
+                    let end = after_start.clone().find_map(|(end_index, entry)| {
+                        matches!(entry,
+                            OplogEntry::End { start_index, .. } if start_index == index
+                        )
+                        .then_some(*end_index)
+                    });
+                    Some((*index, end))
+                }
+                _ => None,
+            })
+            .collect();
+        Some(Self {
+            started,
+            finished,
+            reads,
+        })
+    }
+
+    fn completed_reads(&self) -> usize {
+        self.reads.iter().filter(|(_, end)| end.is_some()).count()
+    }
+}
+
+async fn read_whole_oplog(
+    owner: &golem_worker_executor::services::active_agents::ActiveAgent<
+        golem_worker_executor_test_utils::TestWorkerCtx,
+    >,
+) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+    let oplog = owner.execution().oplog();
+    let tip = oplog.current_oplog_index().await;
+    oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap()
+}
+
+/// Makes `reads` adjacent wallet reads of `read` in one invocation and revokes one of the two
+/// wallet cards while read `paused_read` (1-based) holds the card-event boundary. The revocation
+/// waits on the boundary's fair mutex before the paused read continues, so it applies at the
+/// boundary of the next read: no sleep or runtime hook places it. Then the executor is dropped
+/// and a new executor over the same storage reconstructs the agent, which must keep the
+/// observations of the live run.
+///
+/// When `paused` is [`PausedRead::Fails`], the paused read fails after its `Start` is committed.
+/// The retry reconstructs the agent, replays the completed reads from their records and completes
+/// the incomplete read live, so that read and the later ones observe the revocation.
+async fn wallet_reads_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+    read: WalletRead,
+    reads: u32,
+    paused_read: usize,
+    paused: PausedRead,
+) -> anyhow::Result<()> {
+    use golem_common::model::OwnedAgentId;
+
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", agent_name);
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let extra = registry_test_card();
+    let extra_id = extra.card_id();
+    authority.add_card(extra.clone());
+    executor.queue_card_install(&worker, extra).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        2
+    );
+
+    let unchanged = executor
+        .invoke_and_await_agent(&component, &caller, read.method(), data_value!(reads))
+        .await?
+        .into_typed::<Vec<u64>>()?;
+    assert_eq!(unchanged.len(), reads as usize);
+    assert!(
+        unchanged.iter().all(|observed| *observed == unchanged[0]),
+        "reads of an unchanged wallet must agree: {unchanged:?}"
+    );
+    if matches!(read, WalletRead::CardCount) {
+        assert_eq!(unchanged[0], 2);
+    }
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "remembered_wallet_observations",
+                data_value!()
+            )
+            .await?
+            .into_typed::<Vec<u64>>()?,
+        unchanged,
+        "the unchanged-wallet reconstruction control must keep every observation"
+    );
+
+    let owner = executor
+        .active_agent(&OwnedAgentId::new(context.default_environment_id, &worker))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the reconstructed agent is not active"))?;
+    let key = IdempotencyKey::fresh();
+    let wallet_ids = vec![root_card_id, extra_id];
+    let mut gate = authority.gate_check_cards(wallet_ids.clone());
+    let live_call = executor.invoke_and_await_agent_with_key(
+        &component,
+        &caller,
+        &key,
+        read.method(),
+        data_value!(reads),
+    );
+    let revoke_during_read = async {
+        let mut in_paused_read = false;
+        for _ in 0..64 {
+            gate.entered().await?;
+            let entries = read_whole_oplog(&owner).await;
+            in_paused_read = RecordedWalletReads::find(&entries, &key, read)
+                .is_some_and(|recorded| recorded.completed_reads() == paused_read - 1);
+            if in_paused_read {
+                break;
+            }
+            let next = authority.gate_check_cards(wallet_ids.clone());
+            gate.release();
+            gate = next;
+        }
+        assert!(
+            in_paused_read,
+            "the gate must pause wallet read {paused_read} of the guest invocation"
+        );
+        if paused == PausedRead::Fails {
+            authority.fail_gated_check_cards();
+        }
+        // Register the revocation's waiter while the paused read still holds the boundary. The
+        // fair mutex hands it the boundary before the guest's next wallet read.
+        let primary = owner.primary();
+        let card_ids = [extra_id];
+        let revoke = primary.queue_card_revocations(&card_ids);
+        tokio::pin!(revoke);
+        assert!(futures::poll!(&mut revoke).is_pending());
+        gate.release();
+        revoke.await?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let (live, ()) = tokio::try_join!(live_call, revoke_during_read)?;
+    let live = live.into_typed::<Vec<u64>>()?;
+
+    let first_changed = match paused {
+        PausedRead::Completes => paused_read,
+        PausedRead::Fails => paused_read - 1,
+    };
+    assert_eq!(live.len(), reads as usize);
+    assert_eq!(
+        live[..first_changed],
+        unchanged[..first_changed],
+        "reads before the revocation must observe the unchanged wallet: {live:?}"
+    );
+    assert!(
+        live[first_changed..]
+            .iter()
+            .all(|observed| *observed == live[first_changed]),
+        "reads after the revocation must agree: {live:?}"
+    );
+    match read {
+        WalletRead::CardCount => assert_eq!(live[first_changed], 1, "{live:?}"),
+        WalletRead::Generation => assert!(live[first_changed] > unchanged[0], "{live:?}"),
+    }
+
+    let entries = read_whole_oplog(&owner).await;
+    drop(owner);
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    let reconstructed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "remembered_wallet_observations",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<u64>>()?;
+    assert_eq!(
+        reconstructed, live,
+        "reconstruction must keep the guest's observations"
+    );
+
+    let recorded = RecordedWalletReads::find(&entries, &key, read)
+        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
+    let finished = recorded
+        .finished
+        .ok_or_else(|| anyhow::anyhow!("the invocation did not finish"))?;
+    assert!(
+        entries
+            .range(recorded.started.next()..finished)
+            .all(|(_, entry)| match entry {
+                OplogEntry::Start { function_name, .. } => *function_name == read.host_function(),
+                _ => true,
+            }),
+        "no other host call may separate the wallet reads"
+    );
+    assert_eq!(
+        recorded.reads.len(),
+        reads as usize,
+        "each read must have exactly one recorded call, also the repaired one"
+    );
+    let ends = recorded
+        .reads
+        .iter()
+        .map(|(_, end)| end.ok_or_else(|| anyhow::anyhow!("a wallet read has no End")))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let cascade = entries
+        .range(recorded.started.next()..finished)
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::CardRevokedCascade {
+                revoked_card_ids, ..
+            } if revoked_card_ids.contains(&extra_id) => Some(*index),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("the revocation was not applied in the invocation"))?;
+    // The paused read's next boundary applies the revocation: in a completing `self-wallet` read
+    // that is the boundary that decides the lent scope card, after the read listed its cards.
+    let after = recorded.reads[paused_read - 1].0;
+    let before = match paused {
+        PausedRead::Completes => ends[paused_read],
+        PausedRead::Fails => ends[paused_read - 1],
+    };
+    assert!(
+        after < cascade && cascade < before,
+        "the revocation {cascade} must be recorded between {after} and {before}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn adjacent_wallet_reads_keep_their_observations_after_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "adjacent-wallet-reads",
+        WalletRead::CardCount,
+        2,
+        1,
+        PausedRead::Completes,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn a_revocation_after_a_later_wallet_read_keeps_every_observation_after_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "later-wallet-read",
+        WalletRead::CardCount,
+        4,
+        3,
+        PausedRead::Completes,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn adjacent_wallet_version_reads_keep_their_generations_after_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "adjacent-wallet-versions",
+        WalletRead::Generation,
+        3,
+        2,
+        PausedRead::Completes,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn an_incomplete_wallet_read_observes_the_live_wallet_when_repaired(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "incomplete-wallet-read",
+        WalletRead::CardCount,
+        3,
+        2,
+        PausedRead::Fails,
+    )
+    .await
+}
+
+/// A concrete card derived from `parent` that grants card inspection.
+fn concrete_inspect_card(parent: CardId, expires_at: Option<chrono::DateTime<Utc>>) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: vec![parent],
+        lower_positive: vec![
+            parse_permission_fields("card", "*", "*", "inspect", "*")
+                .expect("valid card inspection grant"),
+        ],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+/// The cards of a wallet as the raw `self-wallet` labels them, with their ids
+/// and parents, and the kinds the typed `permissions::wallet` reports; see
+/// `labelled_wallet` in the host-api-tests component.
+type LabelledWallet = (Vec<(String, SchemaCardId, Vec<SchemaCardId>)>, Vec<String>);
+
+fn labelled_cards(wallet: LabelledWallet) -> Vec<(String, SchemaCardId, Vec<SchemaCardId>)> {
+    let (cards, typed_kinds) = wallet;
+    assert_eq!(
+        cards
+            .iter()
+            .map(|(kind, _, _)| kind.clone())
+            .collect::<Vec<_>>(),
+        typed_kinds,
+        "the typed wallet must report the kinds that self-wallet labels"
+    );
+    let mut cards = cards;
+    cards.sort_by(|left, right| left.0.cmp(&right.0));
+    cards
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn self_wallet_labels_concrete_template_and_lent_scope_cards(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "labelled-wallet-caller");
+    let target_name = "labelled-wallet-target";
+    let target = agent_id!("ScopeCardAgent", target_name);
+    let root_card = configure_scope_card_root(&authority, &component, &caller)?;
+    let root_card_id = SchemaCardId::from(root_card.0);
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    executor.start_agent(&component.id, target.clone()).await?;
+
+    let concrete_card = concrete_inspect_card(root_card, None);
+    let concrete_card_id = SchemaCardId::from(concrete_card.card_id().0);
+    authority.add_card(concrete_card.clone());
+    executor
+        .queue_card_install(&caller_worker, concrete_card)
+        .await?;
+
+    // The initial card is a template card; the installed card is concrete.
+    let wallet = executor
+        .invoke_and_await_agent(&component, &caller, "labelled_wallet", data_value!())
+        .await?
+        .into_typed::<LabelledWallet>()?;
+    assert_eq!(
+        labelled_cards(wallet),
+        vec![
+            (
+                "concrete".to_string(),
+                concrete_card_id,
+                vec![root_card_id.clone()]
+            ),
+            ("template".to_string(), root_card_id.clone(), vec![]),
+        ]
+    );
+
+    // A callee that may inspect cards lists the lent scope card as a scope
+    // entry next to its own template card.
+    let wallet = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_to_wallet_lister",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<LabelledWallet>()?;
+    let cards = labelled_cards(wallet);
+    let [(scope_kind, scope_card_id, scope_parents), template] = cards.as_slice() else {
+        panic!("the callee must list its template card and the lent scope card: {cards:?}");
+    };
+    assert_eq!(scope_kind, "scope");
+    assert_eq!(scope_parents, &vec![root_card_id.clone()]);
+    assert_ne!(scope_card_id, &root_card_id);
+    assert_eq!(
+        template,
+        &("template".to_string(), root_card_id.clone(), vec![])
+    );
+    assert_scope_absent(&executor, &component, &target, scope_card_id.clone()).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "expiring-scope-caller");
+    let target_name = "expiring-scope-target";
+    let target = agent_id!("ScopeCardAgent", target_name);
+    let root_card = configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    executor.start_agent(&component.id, target.clone()).await?;
+
+    // The scope-card parents are, in this order, concrete cards that expire
+    // after two hours, one hour and three hours, then the initial card, which
+    // does not expire. Only the minimum gives one hour: the first, the last
+    // and the latest expiring parent all differ from it.
+    // Whole seconds, so the expiry survives any timestamp encoding unchanged.
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+        .expect("the current time is a valid timestamp");
+    let earliest_expiry = now + chrono::Duration::hours(1);
+    let parent_expiries = [
+        now + chrono::Duration::hours(2),
+        earliest_expiry,
+        now + chrono::Duration::hours(3),
+    ];
+    for expires_at in parent_expiries {
+        let card = concrete_inspect_card(root_card, Some(expires_at));
+        authority.add_card(card.clone());
+        executor.queue_card_install(&caller_worker, card).await?;
+    }
+    let parent_expiries = parent_expiries
+        .iter()
+        .map(|expires_at| (expires_at.timestamp(), expires_at.timestamp_subsec_nanos()))
+        .collect::<Vec<_>>();
+    let expected = Some((
+        earliest_expiry.timestamp(),
+        earliest_expiry.timestamp_subsec_nanos(),
+    ));
+
+    let (earliest, scope_expiry, (listed, callee_expiry)) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "expiring_scope_expiries",
+            data_value!(target_name, parent_expiries),
+        )
+        .await?
+        .into_typed::<(
+            Option<(i64, u32)>,
+            Option<(i64, u32)>,
+            (bool, Option<(i64, u32)>),
+        )>()?;
+    assert_eq!(
+        earliest, expected,
+        "the guest must see the expiry of the one-hour parent"
+    );
+    assert_eq!(
+        scope_expiry, expected,
+        "the scope card must expire with its earliest expiring root"
+    );
+    assert!(
+        listed,
+        "a callee with card:inspect must list the lent scope card"
+    );
+    assert_eq!(
+        callee_expiry, expected,
+        "the callee must see the expiry of the lent scope card"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn scope_cards_reject_non_await_and_persistent_arguments(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -506,6 +1359,31 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
     assert!(
         persistent_denied,
         "a persistent card must not be accepted as the scope-card argument"
+    );
+
+    let persistent_async_denied = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "persistent_async_scope_is_denied",
+            data_value!("rejection-target"),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        persistent_async_denied,
+        "async-invoke-and-await must deny a persistent scope-card argument without trapping"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let wallet_cards = executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert!(
+        wallet_cards > 0,
+        "the caller must recover by replaying the recorded async scope-card denial"
     );
 
     for (method, caller_name) in [
@@ -931,16 +1809,17 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
 
-    assert!(
-        !executor
+    assert_eq!(
+        executor
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "derive_from_wallet_is_denied",
+                "derive_from_wallet_denial",
                 data_value!(),
             )
             .await?
-            .into_typed::<bool>()?,
+            .into_typed::<Option<String>>()?,
+        None,
         "the cached surface must initially authorize wallet derivation"
     );
 
@@ -949,18 +1828,37 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         .queue_card_revocation(&caller_worker, root_card_id)
         .await?;
 
-    let error = executor
+    let denial = executor
         .invoke_and_await_agent(
             &component,
             &caller,
-            "derive_from_wallet_is_denied",
+            "derive_from_wallet_denial",
             data_value!(),
         )
-        .await
-        .expect_err("the queued revocation must deny wallet derivation");
+        .await?
+        .into_typed::<Option<String>>()?
+        .expect("the queued revocation must deny wallet derivation");
     assert!(
-        error.to_string().contains("card:derive is not permitted"),
-        "unexpected authorization error: {error:#}"
+        denial.contains("NotPermitted") && denial.contains("card:derive is not permitted"),
+        "unexpected wallet derivation denial: {denial}"
+    );
+
+    drop(caller_worker);
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let replayed_denial = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "derive_from_wallet_denial",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Option<String>>()?;
+    assert!(
+        replayed_denial.is_some(),
+        "the caller must replay its earlier denials and stay denied after recovery"
     );
 
     let oplog = executor
@@ -1326,6 +2224,139 @@ async fn accessor_boundary_preserves_install_before_revoke_order(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn runtime_card_audit_recovers_after_unrelated_committed_hint(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "audit-recovery-after-hint");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let release = executor
+        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor.gate_next_call_end(&worker, true).await;
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_before_promise",
+            data_value!(release.clone()),
+        )
+        .await?;
+    let start = loop {
+        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+        let start = gate.start_index();
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        if entries.iter().any(|entry| {
+            entry.oplog_index == start
+                && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                    if params.function_name.ends_with("::persist-derived-card"))
+        }) {
+            break start;
+        }
+        let next = executor.gate_next_call_end(&worker, true).await;
+        drop(gate);
+        gate = next;
+    };
+    let queued = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &queued,
+            "wallet_card_count",
+            data_value!(),
+        )
+        .await?;
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let end = entries
+        .iter()
+        .find(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start))
+        .expect("the gated creation End is committed")
+        .oplog_index;
+    assert!(entries.iter().any(|entry| entry.oplog_index > end
+        && matches!(&entry.entry, PublicOplogEntry::PendingAgentInvocation(_))));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::CardDerived(_)))
+    );
+    assert_eq!(authority.create_card_count.load(Ordering::SeqCst), 1);
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(gate);
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_before_promise",
+            data_value!(release),
+        )
+        .await?
+        .into_typed::<SchemaCardId>()?;
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &queued,
+            "wallet_card_count",
+            data_value!(),
+        )
+        .await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?;
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(authority.create_card_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::End(params) if params.start_index == start))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::CardDerived(_)))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1395,18 +2426,19 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
         1,
         "replay must not query registry liveness; only the replay-to-live transition may do so"
     );
-    let error = executor
+    let denial = executor
         .invoke_and_await_agent(
             &component,
             &caller,
-            "derive_from_wallet_is_denied",
+            "derive_from_wallet_denial",
             data_value!(),
         )
-        .await
-        .expect_err("the revoked card must stop authorizing new live invocations");
+        .await?
+        .into_typed::<Option<String>>()?
+        .expect("the revoked card must stop authorizing new live invocations");
     assert!(
-        error.to_string().contains("card:derive is not permitted"),
-        "unexpected authorization error: {error:#}"
+        denial.contains("NotPermitted") && denial.contains("card:derive is not permitted"),
+        "unexpected wallet derivation denial: {denial}"
     );
     Ok(())
 }
@@ -1628,7 +2660,7 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "invoke_and_await_repeated_scope_inspection",
+                "repeated_scope_inspection_through_default_scope_card",
                 data_value!(target_name, 0u32),
             )
             .await?
@@ -1643,7 +2675,7 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "invoke_and_await_repeated_scope_inspection",
+                "repeated_scope_inspection_through_default_scope_card",
                 data_value!(target_name, 5u32),
             )
             .await?
@@ -1762,6 +2794,119 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
         authority.check_cards_count(),
         0,
         "replaying a recorded denial must not consult current card authority"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("Networking")
+        .store()
+        .await?;
+    let caller = agent_id!("Networking", "p2-tcp-permission-denial");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let invocation_key = IdempotencyKey::fresh();
+
+    let denied = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "probe_p2",
+            data_value!("tcp-start-connect", "", port, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        denied
+            .as_ref()
+            .is_err_and(|error| normalized_error_contains(error, "accessdenied")),
+        "a P2 TCP connect without a grant must return AccessDenied, got {denied:?}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), listener.accept())
+            .await
+            .is_err(),
+        "a denied connect must not reach the TCP backend"
+    );
+
+    let oplog = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let check_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "sockets::tcp::permissions::check-connect" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the denied connect must record its permission check");
+    let check_response = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) if params.start_index == check_start => {
+                params.response.clone()
+            }
+            _ => None,
+        })
+        .expect("the permission check recorded at {check_start} must be complete");
+    assert!(
+        HostResponsePermissionCheck::from_value(check_response.value())?
+            .result
+            .is_err(),
+        "the permission check must record the denial"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let replayed = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "probe_p2",
+            data_value!("tcp-start-connect", "", port, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(replayed, denied);
+    // Replay runs the guest again; a denial replayed as allowed would connect now.
+    let after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "probe_p2",
+            data_value!("resolve-addresses", "localhost", 0u16, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        after_restart.is_err(),
+        "the new probe must be denied, got {after_restart:?}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), listener.accept())
+            .await
+            .is_err(),
+        "replaying a denied connect must not reach the TCP backend"
     );
     Ok(())
 }
@@ -2315,6 +3460,35 @@ async fn filesystem_rename_preflights_both_paths_before_mutating_source(
     Ok(())
 }
 
+/// Probe operations that each make one protected descriptor import on the preopened root.
+const PROTECTED_DESCRIPTOR_OPERATIONS: [&str; 22] = [
+    "read",
+    "read-via-stream",
+    "write",
+    "write-via-stream",
+    "append-via-stream",
+    "set-size",
+    "set-times",
+    "sync-data",
+    "sync",
+    "read-directory",
+    "stat",
+    "stat-at",
+    "metadata-hash",
+    "metadata-hash-at",
+    "readlink-at",
+    "create-directory-at",
+    "set-times-at",
+    "symlink-at",
+    "remove-directory-at",
+    "unlink-file-at",
+    "rename-at",
+    "link-at",
+];
+
+const PROTECTED_OPEN_OPERATIONS: [&str; 4] =
+    ["open-read", "open-create", "open-write", "open-truncate"];
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
@@ -2336,32 +3510,8 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
-    let descriptor_operations = [
-        "read",
-        "read-via-stream",
-        "write",
-        "write-via-stream",
-        "append-via-stream",
-        "set-size",
-        "set-times",
-        "sync-data",
-        "sync",
-        "read-directory",
-        "stat",
-        "stat-at",
-        "metadata-hash",
-        "metadata-hash-at",
-        "readlink-at",
-        "create-directory-at",
-        "set-times-at",
-        "symlink-at",
-        "remove-directory-at",
-        "unlink-file-at",
-        "rename-at",
-        "link-at",
-    ];
     for preview in ["probe_p2", "probe_p3"] {
-        for operation in descriptor_operations {
+        for operation in PROTECTED_DESCRIPTOR_OPERATIONS {
             if preview == "probe_p3" && matches!(operation, "read" | "write") {
                 continue;
             }
@@ -2379,7 +3529,7 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
                 "{preview} {operation} must return a typed NotPermitted denial, got {denied:?}"
             );
         }
-        for operation in ["open-read", "open-create", "open-write", "open-truncate"] {
+        for operation in PROTECTED_OPEN_OPERATIONS {
             let denied = executor
                 .invoke_and_await_agent(
                     &component,
@@ -2431,6 +3581,313 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
         );
     }
     Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("FileSystem")
+        .add_rw_file(
+            "FileSystem",
+            "/mutable/entry.txt",
+            "initial-file-system/files/foo.txt",
+        )?
+        .update_agent_provision_config("FileSystem", |config| {
+            config.initial_permissions.lower_bound.positive.extend([
+                filesystem_permission("read", "/mutable"),
+                filesystem_permission("list", "/mutable"),
+            ]);
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "denials-replay-after-restart");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let mut probes = Vec::new();
+    for preview in ["probe_p2", "probe_p3"] {
+        for operation in PROTECTED_DESCRIPTOR_OPERATIONS {
+            if preview == "probe_p3" && matches!(operation, "read" | "write") {
+                continue;
+            }
+            probes.push((
+                preview,
+                operation,
+                String::new(),
+                format!("{preview}-{operation}"),
+            ));
+        }
+        for operation in PROTECTED_OPEN_OPERATIONS {
+            probes.push((
+                preview,
+                operation,
+                format!("{preview}-{operation}"),
+                String::new(),
+            ));
+        }
+        probes.push((
+            preview,
+            "unlink-file-at-mutable",
+            "/mutable".to_string(),
+            "entry.txt".to_string(),
+        ));
+    }
+    for (preview, operation, path, other) in &probes {
+        let denied = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                preview,
+                data_value!(*operation, path.clone(), other.clone()),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert!(
+            denied.as_ref().is_err_and(|error| is_not_permitted(error)),
+            "{preview} {operation} must return a typed NotPermitted denial, got {denied:?}"
+        );
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let mut denials = Vec::new();
+    for entry in &oplog {
+        let PublicOplogEntry::Start(start) = &entry.entry else {
+            continue;
+        };
+        let Some(denied) = recorded_filesystem_denial(&start.function_name) else {
+            continue;
+        };
+        let response = oplog
+            .iter()
+            .find_map(|end| match &end.entry {
+                PublicOplogEntry::End(params) if params.start_index == entry.oplog_index => {
+                    params.response.clone()
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the {} call recorded at {} must be complete",
+                    start.function_name, entry.oplog_index
+                )
+            });
+        if denied(response.value())? {
+            denials.push(start.function_name.clone());
+        }
+    }
+    assert_eq!(
+        denials.len(),
+        probes.len(),
+        "every denied import must record exactly one denial, recorded: {denials:?}"
+    );
+
+    let root_before_restart = root_names(&executor, &worker_id).await?;
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    // The new invocation replays every recorded denial first.
+    let after_restart = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent,
+            "probe_p3",
+            data_value!("stat-at", "", "after-restart"),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the replay of the recorded denials did not finish"))??
+    .into_typed::<Result<(), String>>()?;
+    assert!(
+        after_restart
+            .as_ref()
+            .is_err_and(|error| is_not_permitted(error)),
+        "a new stat-at after the replay must be denied, got {after_restart:?}"
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/mutable/entry.txt")
+            .await?
+            .as_ref(),
+        b"foo\n",
+        "the replay must not apply the denied unlink"
+    );
+    // A denial that replays as allowed would create the probe's file, directory, or link.
+    assert_eq!(
+        root_names(&executor, &worker_id).await?,
+        root_before_restart,
+        "the replay must not apply a denied mutation of the root directory"
+    );
+    Ok(())
+}
+
+/// A `Start` of a denied call without its `End` is a crash between the two. Recovery must
+/// complete the call with the recorded denial instead of running the denied operation.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn recovery_completes_a_denied_call_without_its_end_as_denied(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let cache_bucket = "__golem_wasi_keyvalue_cache";
+    let key = "probe-key";
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("KeyValue")
+        .update_agent_provision_config("KeyValue", |config| {
+            config.initial_permissions.lower_bound.positive.extend([
+                kv_permission("read", "probe-store", key),
+                kv_permission("read", cache_bucket, key),
+            ]);
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("KeyValue", "denied-call-without-end");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    for (method, function_name, bucket, params) in [
+        (
+            "eventual_probe",
+            "keyvalue::eventual::set",
+            "probe-store",
+            data_value!("set", "probe-store", key, vec![1u8]),
+        ),
+        (
+            "cache_probe",
+            "keyvalue::cache::set",
+            cache_bucket,
+            data_value!("set", key, vec![1u8]),
+        ),
+    ] {
+        let denied = executor
+            .invoke_and_await_agent(&component, &agent, method, params)
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert!(denied.is_err(), "{function_name} must be denied");
+
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let (start_index, denial) = oplog
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name == function_name => {
+                    Some((entry.oplog_index, start.denial.clone()))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("no Start of {function_name} was recorded"))?;
+        assert!(
+            denial.is_some(),
+            "the Start of {function_name} must record its denial"
+        );
+
+        executor
+            .revert(
+                &worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: start_index,
+                }),
+            )
+            .await?;
+        // The revert unloads the agent, so this invocation first recovers the reverted call.
+        let stored = executor
+            .invoke_and_await_agent(&component, &agent, "get_result", data_value!(bucket, key))
+            .await?
+            .into_typed::<Result<Option<Vec<u8>>, String>>()?;
+        assert_eq!(
+            stored,
+            Ok(None),
+            "recovery must not run the denied {function_name}"
+        );
+
+        let oplog = executor.get_oplog(&worker_id, start_index).await?;
+        let response = oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) if end.start_index == start_index => {
+                    end.response.clone()
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recovery did not complete {function_name}"))?;
+        let response = HostResponseKVUnit::from_value(response.value())?;
+        assert!(
+            response.result.is_err(),
+            "recovery must complete {function_name} with its denial, got {:?}",
+            response.result
+        );
+    }
+    Ok(())
+}
+
+type RecordedDenial = fn(&SchemaValue) -> anyhow::Result<bool>;
+
+/// Whether the response of a durable call that can record a filesystem permission decision
+/// holds a denial. Stat imports and P3 stream writes record a denial as their own `NotPermitted`
+/// result.
+fn recorded_filesystem_denial(function_name: &str) -> Option<RecordedDenial> {
+    match function_name {
+        "filesystem::permissions::check" => Some(|value| {
+            Ok(HostResponsePermissionCheck::from_value(value)?
+                .result
+                .is_err())
+        }),
+        "filesystem::types::descriptor::stat" | "filesystem::types::descriptor::stat_at" => {
+            Some(|value| {
+                Ok(is_not_permitted_error(
+                    HostResponseFileSystemStat::from_value(value)?.result,
+                ))
+            })
+        }
+        "filesystem::types::descriptor::stat-async" | "filesystem::types::descriptor::stat-at" => {
+            Some(|value| {
+                Ok(is_not_permitted_error(
+                    HostResponseP3FileSystemStat::from_value(value)?.result,
+                ))
+            })
+        }
+        "filesystem::types::descriptor::write-via-stream"
+        | "filesystem::types::descriptor::append-via-stream" => Some(|value| {
+            Ok(is_not_permitted_error(
+                HostResponseP3FileSystemWriteAdmission::from_value(value)?.result,
+            ))
+        }),
+        _ => None,
+    }
+}
+
+fn is_not_permitted_error<T, E: std::fmt::Debug>(result: Result<T, E>) -> bool {
+    result.is_err_and(|error| normalized_error_contains(&format!("{error:?}"), "notpermitted"))
+}
+
+async fn root_names(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<BTreeSet<String>> {
+    Ok(executor
+        .get_file_system_node(worker_id, "/")
+        .await?
+        .into_iter()
+        .map(|node| node.name)
+        .collect())
 }
 
 #[test]
@@ -2800,21 +4257,6 @@ async fn every_protected_network_http_and_websocket_import_enforces_permissions(
     let http = agent_id!("RawWasiHttp", "every-protected-http-import");
     configure_scope_card_root(&authority, &component, &http)?;
     executor.start_agent(&component.id, http.clone()).await?;
-    let p2_http_denied = executor
-        .invoke_and_await_agent(
-            &component,
-            &http,
-            "probe_p2",
-            data_value!("outgoing-handler-handle", "127.0.0.1:9"),
-        )
-        .await?
-        .into_typed::<Result<(), String>>()?;
-    assert!(
-        p2_http_denied
-            .as_ref()
-            .is_err_and(|error| normalized_error_contains(error, "httprequestdenied")),
-        "P2 HTTP handle must return HttpRequestDenied, got {p2_http_denied:?}"
-    );
     let p3_http_denied = executor
         .invoke_and_await_agent(
             &component,
@@ -4439,14 +5881,39 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
             data_value!("capability-round-trip-receiver"),
         )
         .await?
-        .into_typed::<Result<Vec<String>, String>>()?
+        .into_typed::<Result<(Vec<String>, bool, bool, bool, Option<String>), String>>()?
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(observations.len(), 7);
-    assert_eq!(observations[0], observations[1]);
-    assert_eq!(observations[0], observations[2]);
-    assert_eq!(observations[3], observations[4]);
-    assert_eq!(observations[3], observations[5]);
-    assert_eq!(observations[6], secret_value);
+    let (
+        secret_observations,
+        receiver_got_sent_card,
+        sender_got_sent_card,
+        sender_got_template_back,
+        mismatched_kind_error,
+    ) = observations;
+    assert_eq!(secret_observations.len(), 4);
+    assert_eq!(secret_observations[0], secret_observations[1]);
+    assert_eq!(secret_observations[0], secret_observations[2]);
+    assert_eq!(secret_observations[3], secret_value);
+    assert!(
+        receiver_got_sent_card,
+        "the receiver must get the sent card"
+    );
+    assert!(
+        sender_got_sent_card,
+        "the sender must get the sent card back"
+    );
+    assert!(
+        sender_got_template_back,
+        "the sender must get its template card back"
+    );
+    // The guest codec decodes any card value as the declared type; the host
+    // checks the kind of the card against the declared parameter.
+    let mismatched_kind_error = mismatched_kind_error
+        .expect("a template card sent to a concrete-card parameter must be refused");
+    assert!(
+        mismatched_kind_error.contains("expected polymorphic `false`, found `true`"),
+        "unexpected refusal of a template card: {mismatched_kind_error}"
+    );
 
     let codec_sender = agent_id!("CapabilityRpcSender", "capability-codec-rejections");
     configure_scope_card_root(&authority, &component, &codec_sender)?;
@@ -4458,12 +5925,14 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
         .await?
         .into_typed::<Result<Vec<String>, String>>()?
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(errors.len(), 6);
+    assert_eq!(errors.len(), 8);
     for (error, expected) in errors.iter().zip([
         "same secret handle appeared more than once",
         "secret handle was already transferred",
         "same quota-token handle appeared more than once",
         "quota-token handle was already transferred",
+        "same permission-card handle appeared more than once",
+        "permission-card handle was already transferred",
         "same permission-card handle appeared more than once",
         "permission-card handle was already transferred",
     ]) {
@@ -4950,3 +6419,5 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
     )
     .await
 }
+
+mod moonbit;

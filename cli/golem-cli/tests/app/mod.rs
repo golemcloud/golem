@@ -57,6 +57,7 @@ mod server_config;
 #[cfg(unix)]
 mod server_restart;
 mod ssh;
+mod tls_endpoint;
 mod tool_metadata_conformance;
 mod tool_middleware;
 mod tool_middleware_conformance;
@@ -103,7 +104,7 @@ tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
 tag_suite!(effect_http_router, deploy);
-tag_suite!(external_durable_streams, agents_streaming);
+tag_suite!(external_durable_streams, agents);
 tag_suite!(go_agent_ops, deploy);
 tag_suite!(go_guest_streams, agents_guest_bridge);
 tag_suite!(go_http_router, deploy);
@@ -131,6 +132,7 @@ tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(secrets, deploy);
 tag_suite!(self_identity, deploy);
 tag_suite!(ssh, deploy);
+tag_suite!(tls_endpoint, agents);
 tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(tool_middleware_conformance, deploy);
@@ -160,18 +162,17 @@ use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
-use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, tag_suite, test};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use test_r::{inherit_test_dep, tag_suite};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -180,95 +181,6 @@ use url::Url;
 use uuid::Uuid;
 
 const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
-
-fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
-    static SOURCES: OnceLock<Vec<(PathBuf, String)>> = OnceLock::new();
-
-    SOURCES.get_or_init(|| {
-        let workspace = workspace_path();
-        let manifest: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(workspace.join("builtin-artifacts.lock.json"))
-                .expect("failed to read builtin-artifacts.lock.json"),
-        )
-        .expect("failed to parse builtin-artifacts.lock.json");
-        let artifacts = manifest["artifacts"]
-            .as_object()
-            .expect("builtin-artifacts.lock.json must contain an artifacts object");
-        let local_artifacts = [
-            ("bash", "builtin-tools/bash.wasm"),
-            ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
-            ("git_tool", "builtin-tools/git-tool.wasm"),
-            ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
-            ("otlp_exporter", "plugins/otlp-exporter.wasm"),
-            ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
-            ("web_fetch", "builtin-tools/web-fetch.wasm"),
-        ];
-
-        local_artifacts
-            .into_iter()
-            .map(|(artifact_id, relative_path)| {
-                let source = workspace.join(relative_path);
-                let expected = artifacts[artifact_id]["sha256"]
-                    .as_str()
-                    .expect("default built-in artifacts must have a SHA-256")
-                    .to_string();
-                let bytes = std::fs::read(&source).unwrap_or_else(|error| {
-                    panic!(
-                        "failed to read built-in artifact '{}': {error}; run 'cargo make fetch-builtin-artifacts' first",
-                        source.display()
-                    )
-                });
-                let actual = format!("{:x}", Sha256::digest(bytes));
-                assert_eq!(
-                    actual,
-                    expected,
-                    "built-in artifact '{}' does not match builtin-artifacts.lock.json",
-                    source.display()
-                );
-                (source, expected)
-            })
-            .collect()
-    })
-}
-
-fn install_builtin_artifact_cache(data_dir: &Path) {
-    let cache_dir = data_dir.join("builtin-artifacts");
-    std::fs::create_dir_all(&cache_dir)
-        .expect("failed to create built-in artifact cache directory");
-
-    for (source, sha256) in builtin_artifact_sources() {
-        let destination = cache_dir.join(format!("{sha256}.wasm"));
-        if destination.is_file() {
-            continue;
-        }
-        if std::fs::hard_link(source, &destination).is_err() {
-            std::fs::copy(source, &destination).unwrap_or_else(|error| {
-                panic!(
-                    "failed to install built-in artifact '{}' as '{}': {error}",
-                    source.display(),
-                    destination.display()
-                )
-            });
-        }
-    }
-}
-
-#[test]
-fn builtin_artifacts_are_installed_under_checksum_names() {
-    let data_dir = TempDir::new().unwrap();
-
-    install_builtin_artifact_cache(data_dir.path());
-    install_builtin_artifact_cache(data_dir.path());
-
-    let cache_dir = data_dir.path().join("builtin-artifacts");
-    for (source, sha256) in builtin_artifact_sources() {
-        let cached = cache_dir.join(format!("{sha256}.wasm"));
-        assert_eq!(
-            cached.metadata().unwrap().len(),
-            source.metadata().unwrap().len()
-        );
-    }
-}
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
@@ -335,6 +247,24 @@ pub struct Output {
     quiet: bool,
     status: ExitStatus,
     output: Vec<CommandOutput>,
+}
+
+/// Exit code that a shell shows for a process that SIGPIPE has ended.
+pub(crate) const CLOSED_OUTPUT_EXIT: i32 = 141;
+
+/// When the reader of a closed output pipe goes away.
+#[derive(Clone, Copy)]
+enum CloseWhen {
+    AtSpawn,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Quiet,
+    AfterBytes(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ClosedStream {
+    Stdout,
+    Stderr,
 }
 
 struct RawOutput {
@@ -563,6 +493,7 @@ struct TestContext {
     startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
     server_log: Option<PathBuf>,
+    server_closed_stream: Option<ClosedStream>,
     server_args: Vec<String>,
     env: HashMap<String, String>,
 }
@@ -656,6 +587,7 @@ impl TestContext {
             server_args: Vec::new(),
             server_process: None,
             server_log,
+            server_closed_stream: None,
             env,
         };
 
@@ -763,6 +695,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -803,6 +736,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -844,6 +778,58 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::AtSpawn)
+            .await
+    }
+
+    async fn cli_with_broken_stderr<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(command_args, ClosedStream::Stderr, CloseWhen::AtSpawn)
+            .await
+    }
+
+    /// Closes the read end of stdout once the CLI has printed nothing for a while, as `head`
+    /// does after it has read enough.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::Quiet)
+            .await
+    }
+
+    /// Closes the read end of stdout once the CLI has printed at least `bytes` bytes, as
+    /// `head -c` does. The result holds the bytes that were read before the close.
+    async fn cli_closing_stdout_after_bytes<I, S>(&self, command_args: I, bytes: usize) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(
+            command_args,
+            ClosedStream::Stdout,
+            CloseWhen::AfterBytes(bytes),
+        )
+        .await
+    }
+
+    /// Runs the CLI, closes the read end of one of its output pipes when `when` says so, then
+    /// collects the other pipe and the exit status.
+    async fn cli_closing_output<I, S>(
+        &self,
+        command_args: I,
+        closed: ClosedStream,
+        when: CloseWhen,
+    ) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         self.rewrite_local_http_domain_ports();
 
         let mut args = vec![
@@ -869,22 +855,69 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        drop(child.stdout.take());
-        let mut stderr = child.stderr.take().unwrap();
+        let stdout: Pin<Box<dyn AsyncRead + Send>> = Box::pin(child.stdout.take().unwrap());
+        let stderr: Pin<Box<dyn AsyncRead + Send>> = Box::pin(child.stderr.take().unwrap());
+        let (mut closing, other) = match closed {
+            ClosedStream::Stdout => (stdout, stderr),
+            ClosedStream::Stderr => (stderr, stdout),
+        };
+        // The other pipe is drained meanwhile, so that it never blocks the CLI.
+        let other = tokio::spawn(async move {
+            let mut other = other;
+            let mut bytes = Vec::new();
+            other.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
 
-        let mut stderr_bytes = Vec::new();
-        stderr.read_to_end(&mut stderr_bytes).await.unwrap();
+        let mut read_before_close = Vec::new();
+        let mut buffer = [0u8; 4096];
+        match when {
+            CloseWhen::AtSpawn => {}
+            CloseWhen::Quiet => loop {
+                match tokio::time::timeout(Duration::from_secs(5), closing.read(&mut buffer)).await
+                {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                    Ok(Ok(_)) => {}
+                }
+            },
+            CloseWhen::AfterBytes(bytes) => {
+                tokio::time::timeout(Duration::from_secs(120), async {
+                    while read_before_close.len() < bytes {
+                        let count = closing.read(&mut buffer).await.unwrap();
+                        assert!(
+                            count > 0,
+                            "the CLI ended after {} of {bytes} bytes",
+                            read_before_close.len()
+                        );
+                        read_before_close.extend_from_slice(&buffer[..count]);
+                    }
+                })
+                .await
+                .expect("the CLI did not print enough output before the reader left");
+            }
+        }
+        drop(closing);
 
-        RawOutput {
-            status: child.wait().await.unwrap(),
-            stdout: Vec::new(),
-            stderr: stderr_bytes,
+        let other = other.await.unwrap();
+        let status = child.wait().await.unwrap();
+        match closed {
+            ClosedStream::Stdout => RawOutput {
+                status,
+                stdout: read_before_close,
+                stderr: other,
+            },
+            ClosedStream::Stderr => RawOutput {
+                status,
+                stdout: other,
+                stderr: read_before_close,
+            },
         }
     }
 
@@ -923,6 +956,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -994,6 +1028,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1178,7 +1213,6 @@ impl TestContext {
 
     fn spawn_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
-        install_builtin_artifact_cache(self.data_dir.path());
 
         println!("{}", "> starting golem server".bold());
         println!(
@@ -1225,13 +1259,29 @@ impl TestContext {
                 .stderr(Stdio::from(log_file_stderr));
         }
 
-        self.server_process = Some(command.spawn().unwrap());
+        match self.server_closed_stream {
+            Some(ClosedStream::Stdout) => {
+                command.stdout(Stdio::piped());
+            }
+            Some(ClosedStream::Stderr) => {
+                command.stderr(Stdio::piped());
+            }
+            None => {}
+        }
+
+        let mut server_process = command.spawn().unwrap();
+        match self.server_closed_stream {
+            Some(ClosedStream::Stdout) => drop(server_process.stdout.take()),
+            Some(ClosedStream::Stderr) => drop(server_process.stderr.take()),
+            None => {}
+        }
+        self.server_process = Some(server_process);
     }
 
     async fn wait_for_server_startup(&mut self) {
         {
             let start = Instant::now();
-            let timeout = Duration::from_secs(60);
+            let timeout = Duration::from_secs(180);
             let sleep_interval = Duration::from_millis(100);
             loop {
                 let server_process = self

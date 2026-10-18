@@ -19,9 +19,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
-use crate::mark_atomic_operation;
-use crate::{OplogIndex, get_oplog_index, set_oplog_index};
-
 pub use compfn::*;
 
 /// A boxed local future. Used as the return type for transaction closures
@@ -44,7 +41,7 @@ pub fn boxed<'a, T>(fut: impl Future<Output = T> + 'a) -> LocalBoxFuture<'a, T> 
     Box::pin(fut)
 }
 
-/// Represents an atomic operation of the transaction which has a rollback action.
+/// Represents a compensable operation of the transaction.
 ///
 /// Implement this trait and use it within a `transaction` block.
 /// Operations can also be constructed from closures using `operation` or `sync_operation`.
@@ -133,6 +130,10 @@ pub type TransactionResult<Out, Err> = Result<Out, TransactionFailure<Err>>;
 /// The result of a transaction execution that failed.
 #[derive(Debug)]
 pub enum TransactionFailure<Err> {
+    /// The host policy exhausted its retry budget after complete compensation.
+    RetryExhausted(Err),
+    /// The host rejected the policy or continuation after complete compensation.
+    RetryPolicyError { failure: Err, message: String },
     /// One of the operations failed with an error, and the transaction was fully rolled back.
     FailedAndRolledBackCompletely(Err),
     /// One of the operations failed with an error, and the transaction was partially rolled back
@@ -146,6 +147,13 @@ pub enum TransactionFailure<Err> {
 impl<Err: Display> Display for TransactionFailure<Err> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            TransactionFailure::RetryExhausted(err) => {
+                write!(f, "Transaction retry policy exhausted: {err}")
+            }
+            TransactionFailure::RetryPolicyError { failure, message } => write!(
+                f,
+                "Transaction failed with {failure}; retry policy error: {message}"
+            ),
             TransactionFailure::FailedAndRolledBackCompletely(err) => {
                 write!(
                     f,
@@ -179,33 +187,154 @@ where
     }
 }
 
-/// Retry the transaction in case of failure. If any operation returns with a failure, all
-/// the already executed successful operation's compensation actions are executed in reverse order
-/// and the transaction gets retried, using Golem's active retry policy.
-pub async fn infallible_transaction<Out>(
-    f: impl for<'a> FnOnce(&'a mut InfallibleTransaction) -> LocalBoxFuture<'a, Out>,
-) -> Out {
-    let oplog_index = get_oplog_index();
-    let _atomic_region = mark_atomic_operation();
-    let mut transaction = InfallibleTransaction::new(oplog_index);
-    f(&mut transaction).await
+/// Runs new attempts until the body succeeds. Return operation errors with `?`.
+/// Each failed attempt compensates successful operations in reverse order before
+/// starting a new attempt. Attempts append durable history; they never rewind it.
+/// The host resolves the `saga` policy after each completely compensated failure.
+/// Exhaustion, policy errors and partial compensation return typed failures.
+/// Rust WASM panics abort as programming errors without compensation.
+pub async fn infallible_transaction<Out, Err: Clone + 'static>(
+    mut f: impl for<'a> FnMut(&'a mut FallibleTransaction<Err>) -> LocalBoxFuture<'a, Result<Out, Err>>,
+) -> TransactionResult<Out, Err> {
+    let started = saga_host::now();
+    let mut state = Vec::new();
+    let mut attempt = 0_i64;
+    loop {
+        let mut transaction = FallibleTransaction::new();
+        match f(&mut transaction).await {
+            Ok(output) => return Ok(output),
+            Err(error) => {
+                let failure = transaction.on_fail(error).await;
+                let TransactionFailure::FailedAndRolledBackCompletely(error) = failure else {
+                    return Err(failure);
+                };
+                attempt = attempt.saturating_add(1);
+                match saga_next(&state, saga_host::now().saturating_sub(started), attempt) {
+                    Ok(decision) => {
+                        state = decision.state;
+                        match decision.delay {
+                            Some(delay) => saga_host::wait(delay).await,
+                            None => return Err(TransactionFailure::RetryExhausted(error)),
+                        }
+                    }
+                    Err(message) => {
+                        return Err(TransactionFailure::RetryPolicyError {
+                            failure: error,
+                            message,
+                        });
+                    }
+                }
+            }
+        }
+    }
 }
 
-/// Same as `infallible_transaction`, but with strong rollback guarantees. The compensation actions
-/// are guaranteed to be always executed before the transaction gets retried, even if it
-/// fails due to a panic or an external executor failure.
-pub async fn infallible_transaction_with_strong_rollback_guarantees<Out>(
-    _f: impl for<'a> FnOnce(&'a mut InfallibleTransaction) -> LocalBoxFuture<'a, Out>,
-) -> Out {
-    unimplemented!()
+fn saga_next(
+    state: &[u8],
+    elapsed: u64,
+    attempt: i64,
+) -> Result<crate::bindings::golem::api::retry::RetryDecision, String> {
+    use crate::bindings::golem::api::retry::PredicateValue;
+    let noun = saga_host::noun()?;
+    let properties = vec![
+        ("attempt".to_string(), PredicateValue::Integer(attempt)),
+        (
+            "error-kind".to_string(),
+            PredicateValue::Text("operation-error".to_string()),
+        ),
+    ];
+    let policy = saga_host::resolve("saga", &noun, &properties)?;
+    saga_host::next(policy.as_ref(), state, elapsed, "saga", &noun, &properties)
 }
 
-/// A generic interface for defining transactions, where the transaction mode is
-/// determined by the function's parameter (it can be `FallibleTransaction` or `InfallibleTransaction`).
-///
-/// This makes switching between different transaction guarantees easier, but is more constrained
-/// than using the specific transaction functions where for retried transactions errors does
-/// not have to be handled.
+#[cfg(test)]
+mod saga_host {
+    use crate::bindings::golem::api::retry::{PredicateValue, RetryDecision, RetryPolicy};
+    use std::cell::Cell;
+    thread_local! {
+        pub static CLOCK: Cell<u64> = const { Cell::new(0) };
+        pub static ELAPSED: Cell<u64> = const { Cell::new(0) };
+        pub static POLICY_ERROR: Cell<bool> = const { Cell::new(false) };
+        pub static RESOLVE_ERROR: Cell<bool> = const { Cell::new(false) };
+    }
+    pub fn now() -> u64 {
+        CLOCK.get()
+    }
+    pub async fn wait(delay: u64) {
+        CLOCK.set(CLOCK.get() + delay);
+    }
+    pub fn noun() -> Result<String, String> {
+        Ok("urn:worker:component/agent".into())
+    }
+    pub fn resolve(
+        verb: &str,
+        noun: &str,
+        properties: &[(String, PredicateValue)],
+    ) -> Result<Option<RetryPolicy>, String> {
+        assert_eq!(verb, "saga");
+        assert_eq!(noun, "urn:worker:component/agent");
+        assert_eq!(properties[1].0, "error-kind");
+        assert!(
+            matches!(&properties[1].1, PredicateValue::Text(value) if value == "operation-error")
+        );
+        if RESOLVE_ERROR.replace(false) {
+            return Err("invalid resolver predicate".into());
+        }
+        Ok(None)
+    }
+    pub fn next(
+        policy: Option<&RetryPolicy>,
+        state: &[u8],
+        elapsed: u64,
+        verb: &str,
+        noun: &str,
+        properties: &[(String, PredicateValue)],
+    ) -> Result<RetryDecision, String> {
+        assert!(policy.is_none());
+        ELAPSED.set(elapsed);
+        resolve(verb, noun, properties)?;
+        assert_eq!(properties[0].0, "attempt");
+        let PredicateValue::Integer(attempt) = properties[0].1 else {
+            panic!("missing attempt")
+        };
+        if POLICY_ERROR.replace(false) {
+            return Err("invalid policy".into());
+        }
+        let expected = if attempt == 1 {
+            vec![]
+        } else {
+            vec![attempt as u8 - 1]
+        };
+        assert_eq!(state, expected);
+        assert!(elapsed >= (attempt as u64 - 1) * 10);
+        Ok(RetryDecision {
+            state: vec![attempt as u8],
+            delay: (attempt < 3).then_some(10),
+        })
+    }
+}
+
+#[cfg(not(test))]
+mod saga_host {
+    pub use crate::bindings::golem::api::retry::next_retry_delay as next;
+    pub use crate::retry::resolve_retry_policy as resolve;
+    pub fn now() -> u64 {
+        crate::wasip3::clocks::monotonic_clock::now()
+    }
+    pub async fn wait(delay: u64) {
+        crate::wasip3::clocks::monotonic_clock::wait_for(delay).await;
+    }
+    pub fn noun() -> Result<String, String> {
+        let metadata = crate::get_self_metadata().map_err(|e| format!("{e:?}"))?;
+        let id = metadata.agent_id;
+        Ok(format!(
+            "urn:worker:{}/{}",
+            id.component_id.uuid, id.agent_id
+        ))
+    }
+}
+
+/// Runs a transaction through the [`Transaction`] interface.
 pub async fn transaction<Out: 'static, Err, T>(
     f: impl for<'a> FnOnce(&'a mut T) -> LocalBoxFuture<'a, Result<Out, Err>>,
 ) -> TransactionResult<Out, Err>
@@ -231,8 +360,8 @@ impl<Err> CompensationAction<Err> {
 /// operations fails all the already performed operation's compensation actions got executed in
 /// reverse order.
 ///
-/// In case of fatal errors (panic) and external executor failures it does not perform the
-/// compensation actions and the whole transaction gets retried.
+/// Panics and external executor failures do not trigger compensation. Recovery
+/// follows ordinary durable replay, without rewinding the transaction.
 pub struct FallibleTransaction<Err> {
     compensations: Vec<CompensationAction<Err>>,
 }
@@ -279,71 +408,6 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
     }
 }
 
-/// InfallibleTransaction is a sequence of operations that are executed in a way that if any of the
-/// operations or the underlying Golem executor fails, the whole transaction is going to
-/// be retried.
-///
-/// In addition to that, **user level failures** (represented by the `Result::Err` value
-/// of an operation) lead to performing the compensation actions of each already performed operation
-/// in reverse order.
-///
-/// Fatal errors (panic) and external executor failures are currently cannot perform the
-/// rollback actions.
-pub struct InfallibleTransaction {
-    begin_oplog_index: OplogIndex,
-    compensations: Vec<CompensationAction<()>>,
-}
-
-impl InfallibleTransaction {
-    fn new(begin_oplog_index: OplogIndex) -> Self {
-        Self {
-            begin_oplog_index,
-            compensations: Vec::new(),
-        }
-    }
-
-    pub async fn execute<
-        OpIn: Clone + 'static,
-        OpOut: Clone + 'static,
-        OpErr: Debug + Clone + 'static,
-    >(
-        &mut self,
-        operation: impl Operation<In = OpIn, Out = OpOut, Err = OpErr> + 'static,
-        input: OpIn,
-    ) -> OpOut {
-        match operation.execute(input.clone()).await {
-            Ok(output) => {
-                let cloned_op = operation.clone();
-                let cloned_out = output.clone();
-                self.compensations.push(CompensationAction {
-                    action: Box::new(move || {
-                        Box::pin(async move {
-                            cloned_op
-                                .compensate(input.clone(), cloned_out.clone())
-                                .await
-                                .expect("Compensation action failed");
-                            Ok(())
-                        })
-                    }),
-                });
-                output
-            }
-            Err(_) => {
-                self.retry().await;
-                unreachable!()
-            }
-        }
-    }
-
-    /// Stop executing the transaction and retry from the beginning, after executing the compensation actions
-    pub async fn retry(&mut self) {
-        for compensation_action in self.compensations.drain(..).rev() {
-            let _ = compensation_action.execute().await;
-        }
-        set_oplog_index(self.begin_oplog_index);
-    }
-}
-
 /// A unified interface for the different types of transactions. Using it can make the code
 /// easier to switch between different transactional guarantees but is more constrained in
 /// terms of error types.
@@ -382,31 +446,6 @@ impl<Err: Clone + 'static> Transaction<Err> for FallibleTransaction<Err> {
     }
 }
 
-impl<Err: Debug + Clone + 'static> Transaction<Err> for InfallibleTransaction {
-    async fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
-        &mut self,
-        operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
-        input: OpIn,
-    ) -> Result<OpOut, Err> {
-        Ok(InfallibleTransaction::execute(self, operation, input).await)
-    }
-
-    async fn fail(&mut self, error: Err) -> Result<(), Err> {
-        InfallibleTransaction::retry(self).await;
-        Err(error)
-    }
-
-    async fn run<Out: 'static>(
-        f: impl for<'a> FnOnce(&'a mut Self) -> LocalBoxFuture<'a, Result<Out, Err>>,
-    ) -> TransactionResult<Out, Err> {
-        Ok(infallible_transaction(|tx| -> LocalBoxFuture<'_, Out> {
-            let fut = f(tx);
-            Box::pin(async { fut.await.unwrap() })
-        })
-        .await)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -415,10 +454,134 @@ mod tests {
 
     use crate::{boxed, fallible_transaction, infallible_transaction, sync_operation};
 
-    // Not a real test, just verifying that the code compiles
     #[test]
-    #[ignore]
-    async fn tx_test_1() {
+    async fn bounded_retries_wait_and_exhaust() {
+        super::saga_host::CLOCK.set(0);
+        let op = sync_operation(
+            |()| {
+                super::saga_host::CLOCK.set(super::saga_host::CLOCK.get() + 2);
+                Ok::<_, &str>(())
+            },
+            |(), ()| {
+                super::saga_host::CLOCK.set(super::saga_host::CLOCK.get() + 3);
+                Ok(())
+            },
+        );
+        let mut attempts = 0;
+        let result = infallible_transaction(|tx| {
+            attempts += 1;
+            let op = op.clone();
+            boxed(async move {
+                tx.execute(op, ()).await?;
+                Err::<(), _>("operation")
+            })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::RetryExhausted("operation"))
+        ));
+        assert_eq!(attempts, 3);
+        assert_eq!(super::saga_host::CLOCK.get(), 35);
+        assert_eq!(super::saga_host::ELAPSED.get(), 35);
+    }
+
+    #[test]
+    async fn resolver_error_preserves_original_failure() {
+        super::saga_host::RESOLVE_ERROR.set(true);
+        let mut attempts = 0;
+        let result = infallible_transaction(|_| {
+            attempts += 1;
+            boxed(async { Err::<(), _>("original") })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::RetryPolicyError { failure: "original", message })
+                if message == "invalid resolver predicate"
+        ));
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    async fn invalid_policy_never_retries() {
+        super::saga_host::POLICY_ERROR.set(true);
+        let mut attempts = 0;
+        let result = infallible_transaction(|_| {
+            attempts += 1;
+            boxed(async { Err::<(), _>("operation") })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::RetryPolicyError {
+                failure: "operation",
+                ..
+            })
+        ));
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    async fn compensation_order_and_partial_failure() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let compensation_log = log.clone();
+        let op = sync_operation(
+            |input: u8| Ok::<_, &str>(input),
+            move |input, output| {
+                assert_eq!(input, output);
+                compensation_log.borrow_mut().push(input);
+                if input == 2 {
+                    Err("compensation")
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        let result = fallible_transaction(|tx| {
+            boxed(async move {
+                tx.execute(op.clone(), 1).await?;
+                tx.execute(op.clone(), 2).await?;
+                tx.execute(op, 3).await?;
+                Err::<(), _>("body")
+            })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::FailedAndRolledBackPartially {
+                failure: "body",
+                compensation_failure: "compensation"
+            })
+        ));
+        assert_eq!(*log.borrow(), [3, 2]);
+    }
+
+    #[test]
+    async fn infallible_stops_on_compensation_failure() {
+        let op = sync_operation(|()| Ok::<_, &str>(()), |(), ()| Err("compensation"));
+        let mut attempts = 0;
+        let result = infallible_transaction(|tx| {
+            attempts += 1;
+            assert_eq!(attempts, 1);
+            let op = op.clone();
+            boxed(async move {
+                tx.execute(op, ()).await?;
+                Err::<(), _>("body")
+            })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::FailedAndRolledBackPartially {
+                failure: "body",
+                compensation_failure: "compensation"
+            })
+        ));
+    }
+
+    #[test]
+    async fn fallible_compensates_successful_operations_only() {
         let log = Rc::new(RefCell::new(Vec::new()));
 
         let log1 = log.clone();
@@ -460,14 +623,20 @@ mod tests {
         })
         .await;
 
-        println!("{log:?}");
-        println!("{result:?}");
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::FailedAndRolledBackCompletely(
+                "op2 error"
+            ))
+        ));
+        assert_eq!(
+            *log.borrow(),
+            ["op1 execute hello", "op2 execute", "op1 rollback hello"]
+        );
     }
 
-    // Not a real test, just verifying that the code compiles
     #[test]
-    #[ignore]
-    async fn tx_test_2() {
+    async fn infallible_retries_with_fresh_compensations() {
         let log = Rc::new(RefCell::new(Vec::new()));
 
         let log1 = log.clone();
@@ -478,7 +647,7 @@ mod tests {
         let op1 = sync_operation(
             move |input: String| {
                 log1.borrow_mut().push(format!("op1 execute {input}"));
-                Ok::<(), ()>(())
+                Ok::<(), &str>(())
             },
             move |input: String, _| {
                 log2.borrow_mut().push(format!("op1 rollback {input}"));
@@ -486,10 +655,17 @@ mod tests {
             },
         );
 
+        let attempts = Rc::new(std::cell::Cell::new(0));
+        let count = attempts.clone();
         let op2 = sync_operation(
             move |_: ()| {
                 log3.clone().borrow_mut().push("op2 execute".to_string());
-                Err::<(), &str>("op2 error")
+                count.set(count.get() + 1);
+                if count.get() < 3 {
+                    Err("op2 error")
+                } else {
+                    Ok(())
+                }
             },
             move |_: (), r| {
                 log4.clone()
@@ -500,19 +676,40 @@ mod tests {
         );
 
         let result = infallible_transaction(|tx| {
+            let op1 = op1.clone();
+            let op2 = op2.clone();
             boxed(async move {
                 println!("First we execute op1");
-                tx.execute(op1, "hello".to_string()).await;
+                tx.execute(op1.clone(), "hello".to_string()).await?;
+                tx.execute(op1, "world".to_string()).await?;
                 println!("Then execute op2");
-                tx.execute(op2, ()).await;
+                tx.execute(op2, ()).await?;
                 println!("Finally compute a result");
-                11
+                Ok(11)
             })
         })
         .await;
 
-        println!("{log:?}");
-        println!("{result:?}");
+        assert_eq!(result.unwrap(), 11);
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(
+            *log.borrow(),
+            [
+                "op1 execute hello",
+                "op1 execute world",
+                "op2 execute",
+                "op1 rollback world",
+                "op1 rollback hello",
+                "op1 execute hello",
+                "op1 execute world",
+                "op2 execute",
+                "op1 rollback world",
+                "op1 rollback hello",
+                "op1 execute hello",
+                "op1 execute world",
+                "op2 execute"
+            ]
+        );
     }
 }
 
@@ -598,8 +795,8 @@ mod macro_tests {
         let result = infallible_transaction(|tx| {
             boxed(async move {
                 println!("Executing the annotated function as an operation directly");
-                let _ = tx.test_operation(1, 0.1).await;
-                11
+                tx.test_operation(1, 0.1).await?;
+                Ok(11)
             })
         })
         .await;

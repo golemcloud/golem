@@ -50,7 +50,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, NoAdditionalDeps, worker_enumeration};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
     FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
@@ -478,7 +478,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision {
+    ) -> InvocationFailureDecision {
         self.durable_ctx
             .on_invocation_failure(full_function_name, trap_type)
             .await
@@ -497,14 +497,6 @@ impl InvocationHooks for Context {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
-    }
-
-    fn current_in_atomic_region(&self) -> bool {
-        self.durable_ctx.current_in_atomic_region()
-    }
-
-    fn current_atomic_region_had_side_effects(&self) -> bool {
-        self.durable_ctx.current_atomic_region_had_side_effects()
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {
@@ -1019,10 +1011,6 @@ impl WorkerCtx for Context {
 
     fn as_wasi_view(&mut self) -> impl WasiView {
         self.durable_ctx.as_wasi_view()
-    }
-
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
-        self.durable_ctx.as_wasi_http_view()
     }
 
     fn get_public_state(&self) -> &Self::PublicState {

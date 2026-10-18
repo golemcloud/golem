@@ -27,13 +27,12 @@ use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTim
 use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardExpiredParams, CardInstalledParams,
-    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
-    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardDerivedParams, CardExpiredParams, CardInstalledParams, CardRevokedCascadeParams,
+    CardRevokedParams, CardTransferConfirmedParams, CardTransferStartedParams,
+    CardTransferredParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
     RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
@@ -43,17 +42,17 @@ use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, DurableInvocationId,
     FilesystemSnapshotName, JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData,
-    MultipartSnapshotPart, OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription,
-    PublicAgentEntity, PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode,
-    PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
-    PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
-    PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
-    PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome, PublicSpanStarted,
-    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
-    QueuedCardEvent, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
-    UpdateDescription,
+    MultipartSnapshotPart, OmittedOplogEntry, OplogEntry, OplogErrorKind, OplogPayload,
+    PluginInstallationDescription, PublicAgentEntity, PublicAgentEntityKind, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicEntityCallMode, PublicEntityInvocation, PublicEntityInvocationContext,
+    PublicEntityInvocationOperation, PublicFailedSnapshotAssistedUpdateDetails,
+    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+    PublicOplogPageEntry, PublicQueuedCardEvent, PublicSnapshotAssistedUpdateDetails,
+    PublicSnapshotData, PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind,
+    PublicSpanLink, PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
+    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -94,6 +93,73 @@ fn durable_invocation_id_uses_variable_length_integers() {
 }
 
 #[test]
+fn durable_function_type_contract() {
+    use golem_api_grpc::proto::golem::worker::{WrappedFunctionType, raw_oplog_entry};
+
+    for (function_type, name, tag) in [
+        (DurableFunctionType::ReadLocal, "ReadLocal", 0),
+        (DurableFunctionType::WriteLocal, "WriteLocal", 1),
+        (DurableFunctionType::ReadRemote, "ReadRemote", 2),
+        (DurableFunctionType::WriteRemote, "WriteRemote", 3),
+    ] {
+        let public = PublicDurableFunctionType::from(function_type.clone());
+        let json = serde_json::json!({ "type": name });
+        assert_eq!(serde_json::to_value(&public).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<PublicDurableFunctionType>(json).unwrap(),
+            public
+        );
+        let proto: WrappedFunctionType = public.clone().into();
+        assert_eq!(proto.r#type, tag);
+        assert_eq!(PublicDurableFunctionType::try_from(proto).unwrap(), public);
+
+        let entry = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: Some(OplogIndex::from_u64(7)),
+            function_name: HostFunctionName::Custom("operation".to_string()),
+            invocation_id: None,
+            observational_owner: None,
+            request: None,
+            durable_function_type: function_type,
+            span_started: None,
+            denial: None,
+        };
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+            entry
+        );
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+        for invalid_tag in [4, 5, -1, 99] {
+            assert!(
+                PublicDurableFunctionType::try_from(WrappedFunctionType {
+                    r#type: invalid_tag,
+                })
+                .is_err()
+            );
+            let mut invalid = proto.clone();
+            let Some(raw_oplog_entry::Entry::Start(start)) = &mut invalid.entry else {
+                panic!("expected Start");
+            };
+            start.durable_function_type = Some(WrappedFunctionType {
+                r#type: invalid_tag,
+            });
+            assert!(OplogEntry::try_from(invalid).is_err());
+        }
+    }
+    for removed in ["WriteRemoteBatched", "WriteRemoteTransaction"] {
+        assert!(
+            serde_json::from_value::<PublicDurableFunctionType>(
+                serde_json::json!({ "type": removed, "index": 7 }),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn start_desert_roundtrip() {
     use crate::model::invocation_context::AttributeValue;
     use crate::model::oplog::raw_types::{AttributeMap, SpanKind, SpanStarted};
@@ -119,6 +185,7 @@ fn start_desert_roundtrip() {
             )])),
             kind: SpanKind::Client,
         })),
+        denial: None,
     };
 
     let bytes = crate::serialization::serialize(&entry).unwrap();
@@ -405,6 +472,25 @@ fn observational_start_public_protobuf_roundtrip() {
         request: None,
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
+        denial: None,
+    });
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+}
+
+#[test]
+fn denied_start_public_protobuf_roundtrip() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "keyvalue::eventual::set".to_string(),
+        invocation_id: None,
+        observational_owner: None,
+        request: None,
+        durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+        span_started: None,
+        denial: Some("access denied".to_string()),
     });
 
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
@@ -446,8 +532,9 @@ fn entity_attribution_public_protobuf_and_json_roundtrip() {
             invocation,
             ancestors: vec![ancestor],
         }),
-        entry: PublicOplogEntry::NoOp(NoOpParams {
+        entry: PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
             timestamp: Timestamp::now_utc().rounded(),
+            name: "policy".to_string(),
         }),
     };
 
@@ -498,7 +585,7 @@ fn entity_attribution_public_protobuf_rejects_invalid_start_index() {
 fn entity_attribution_raw_protobuf_roundtrip() {
     let parent_start_index = Some(OplogIndex::from_u64(17));
     let entries = vec![
-        OplogEntry::no_op(parent_start_index),
+        OplogEntry::remove_retry_policy(parent_start_index, "policy".to_string()),
         OplogEntry::Log {
             timestamp: Timestamp::now_utc().rounded(),
             parent_start_index,
@@ -516,7 +603,9 @@ fn entity_attribution_raw_protobuf_roundtrip() {
     }
 
     let mut invalid: golem_api_grpc::proto::golem::worker::RawOplogEntry =
-        OplogEntry::no_op(parent_start_index).try_into().unwrap();
+        OplogEntry::remove_retry_policy(parent_start_index, "policy".to_string())
+            .try_into()
+            .unwrap();
     invalid.entity_parent_start_index = Some(0);
     assert_eq!(
         OplogEntry::try_from(invalid).unwrap_err(),
@@ -640,6 +729,7 @@ fn start_serialization_poem_serde_equivalence() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -675,6 +765,7 @@ fn start_with_span_serialization_poem_serde_equivalence() {
             }],
             kind: PublicSpanKind::Client,
         }),
+        denial: None,
     });
 
     let poem_json = entry.to_json_string();
@@ -732,6 +823,7 @@ fn start_with_handle_serialization_poem_serde_equivalence() {
         )),
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -813,6 +905,7 @@ fn start_with_complex_values_serialization_poem_serde_equivalence() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -836,6 +929,7 @@ fn matcher_matches_payload_less_variant_case_name() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
 
     assert!(entry.matches(&Query::parse("none").unwrap()));
@@ -859,6 +953,7 @@ fn matcher_matches_variant_payload_under_case_path() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
 
     assert!(entry.matches(&Query::parse("some").unwrap()));
@@ -884,6 +979,7 @@ fn matcher_matches_secret_reveal_request_payload() {
         request: Some(request),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
 
     assert!(entry.matches(&Query::parse("reveal").unwrap()));
@@ -921,6 +1017,7 @@ fn matcher_matches_span_started_trace_context() {
             attributes: vec![],
             kind: PublicSpanKind::Client,
         }),
+        denial: None,
     });
 
     for query in [
@@ -1123,27 +1220,33 @@ fn suspend_serialization_poem_serde_equivalence() {
 
 #[test]
 fn error_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Error(ErrorParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        kind: OplogErrorKind::Invocation,
-        error: "test".to_string(),
-        retry_from: OplogIndex::INITIAL,
-        inside_atomic_region: false,
-        retry_policy_state: None,
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
+    use crate::model::oplog::{
+        PublicRetryPolicyState, PublicRetryPolicyStateAndThen, PublicRetryPolicyStateCounter,
+    };
 
-#[test]
-fn no_op_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::NoOp(NoOpParams {
-        timestamp: Timestamp::now_utc().rounded(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
+    for retry_policy_state in [None].into_iter().chain([false, true].map(|on_right| {
+        Some(PublicRetryPolicyState::AndThen(
+            PublicRetryPolicyStateAndThen {
+                left: Box::new(PublicRetryPolicyState::Counter(
+                    PublicRetryPolicyStateCounter { count: 3 },
+                )),
+                right: Box::new(PublicRetryPolicyState::Terminal(Empty {})),
+                on_right,
+            },
+        ))
+    })) {
+        let entry = PublicOplogEntry::Error(ErrorParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            kind: OplogErrorKind::Invocation,
+            error: "test".to_string(),
+            retry_from: OplogIndex::INITIAL,
+            retry_policy_state,
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+        assert_eq!(entry.to_json(), Some(serde_json::to_value(&entry).unwrap()));
+    }
 }
 
 #[test]
@@ -1174,27 +1277,6 @@ fn interrupted_serialization_poem_serde_equivalence() {
 fn exited_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Exited(ExitedParams {
         timestamp: Timestamp::now_utc().rounded(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn begin_atomic_region_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
-        timestamp: Timestamp::now_utc().rounded(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn end_atomic_region_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        begin_index: OplogIndex::from_u64(1),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1613,6 +1695,60 @@ fn rolled_back_remote_transaction_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn oplog_page_entries_roundtrip_through_serde_and_protobuf() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Raw(RawSnapshotData {
+            data: vec![1, 2, 3, 4],
+            mime_type: "application/octet-stream".to_string(),
+        }),
+        filesystem_snapshot: None,
+    });
+    let page_entries = vec![
+        PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
+            oplog_index: OplogIndex::from_u64(3),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: entry.clone(),
+        }),
+        PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+            oplog_index: OplogIndex::from_u64(4),
+            attribution: PublicOplogEntryAttribution::agent(),
+            timestamp: entry.timestamp(),
+            entry_type: entry.entry_type().to_string(),
+            size: 62_914_560,
+            component_revision: ComponentRevision::new(7).unwrap(),
+        }),
+    ];
+
+    for page_entry in page_entries {
+        let json = serde_json::to_string(&page_entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogPageEntry>(&json).unwrap(),
+            page_entry
+        );
+        assert_eq!(
+            serde_json::from_str::<PublicOplogPageEntry>(&page_entry.to_json_string()).unwrap(),
+            page_entry
+        );
+
+        let proto: golem_api_grpc::proto::golem::worker::OplogPageEntry =
+            page_entry.clone().try_into().unwrap();
+        assert_eq!(PublicOplogPageEntry::try_from(proto).unwrap(), page_entry);
+    }
+}
+
+#[test]
+fn public_oplog_entry_type_is_the_serialized_type_tag() {
+    let entry = PublicOplogEntry::RolledBackRemoteTransaction(RolledBackRemoteTransactionParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        begin_index: OplogIndex::from_u64(3),
+    });
+    let json: serde_json::Value = serde_json::from_str(&entry.to_json_string()).unwrap();
+    assert_eq!(json["type"], entry.entry_type());
+    assert_eq!(entry.entry_type(), "RolledBackRemoteTransaction");
 }
 
 #[test]
@@ -2328,19 +2464,17 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
     assert_eq!(entry, deserialized);
 }
 
-mod scope_scan {
+mod scope_projection {
     use crate::model::card::CardId;
     use crate::model::invocation_context::SpanId;
     use crate::model::oplog::host_functions::HostFunctionName;
     use crate::model::oplog::raw_types::PayloadId;
     use crate::model::oplog::{
         AgentError, AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogErrorKind,
-        OplogPayload, OplogScopeProjection, ScopeScanState,
+        OplogPayload, OplogScopeProjection,
     };
     use crate::model::regions::OplogRegion;
-    use crate::model::{
-        AgentInvocationResult, ComponentRevision, OplogIndex, Timestamp, TransactionId,
-    };
+    use crate::model::{OplogIndex, Timestamp, TransactionId};
     use std::collections::HashMap;
     use test_r::test;
 
@@ -2358,31 +2492,7 @@ mod scope_scan {
             request: None,
             durable_function_type,
             span_started: None,
-        }
-    }
-
-    /// Replays the forward scan that `lookup_oplog_entry_with_condition_and_state` performs,
-    /// returning `true` if no entry between the scope `Start` (`root`) and its `End` is a foreign
-    /// concurrent side effect (i.e. `for_all_intermediate` holds for all of `entries`).
-    fn scan(root: u64, entries: &[(u64, OplogEntry)]) -> bool {
-        let mut state = ScopeScanState::new(idx(root));
-        let mut ok = true;
-        for (i, entry) in entries {
-            entry.track_scope_membership(idx(*i), &mut state);
-            if !entry.no_concurrent_side_effect(idx(root), &state) {
-                ok = false;
-            }
-        }
-        ok
-    }
-
-    fn invocation_finished() -> OplogEntry {
-        OplogEntry::AgentInvocationFinished {
-            timestamp: Timestamp::now_utc(),
-            result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
-            method_name: None,
-            consumed_fuel: 0,
-            component_revision: ComponentRevision(0),
+            denial: None,
         }
     }
 
@@ -2431,7 +2541,6 @@ mod scope_scan {
                     OplogErrorKind::Invocation,
                     AgentError::TransientError("entity-owned".to_string()),
                     idx(99),
-                    false,
                     None,
                 ),
             ),
@@ -2442,12 +2551,17 @@ mod scope_scan {
                     OplogErrorKind::Invocation,
                     AgentError::TransientError("agent-owned".to_string()),
                     idx(10),
-                    false,
                     None,
                 ),
             ),
-            (13, OplogEntry::no_op(Some(idx(10)))),
-            (14, OplogEntry::no_op(None)),
+            (
+                13,
+                OplogEntry::remove_retry_policy(Some(idx(10)), "policy".to_string()),
+            ),
+            (
+                14,
+                OplogEntry::remove_retry_policy(None, "policy".to_string()),
+            ),
             (
                 15,
                 OplogEntry::CardExpired {
@@ -2539,16 +2653,13 @@ mod scope_scan {
                     None,
                 ),
             ),
-            (
-                15,
-                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
-            ),
+            (15, start(Some(10), DurableFunctionType::WriteRemote)),
             (
                 16,
                 OplogEntry::BeginRemoteTransaction {
                     timestamp: Timestamp::now_utc(),
                     transaction_id: TransactionId::new("entity-tx".to_string()),
-                    original_begin_index: None,
+                    original_begin_index: idx(15),
                 },
             ),
             (
@@ -2587,16 +2698,13 @@ mod scope_scan {
     #[test]
     fn scope_projection_includes_retried_transaction_begin_marker() {
         let entries = [
-            (
-                10,
-                start(None, DurableFunctionType::WriteRemoteTransaction(None)),
-            ),
+            (10, start(None, DurableFunctionType::WriteRemote)),
             (
                 11,
                 OplogEntry::BeginRemoteTransaction {
                     timestamp: Timestamp::now_utc(),
                     transaction_id: TransactionId::new("initial".to_string()),
-                    original_begin_index: None,
+                    original_begin_index: idx(10),
                 },
             ),
             (
@@ -2615,7 +2723,7 @@ mod scope_scan {
                 OplogEntry::BeginRemoteTransaction {
                     timestamp: Timestamp::now_utc(),
                     transaction_id: TransactionId::new("retry".to_string()),
-                    original_begin_index: Some(idx(10)),
+                    original_begin_index: idx(10),
                 },
             ),
         ];
@@ -2633,16 +2741,13 @@ mod scope_scan {
     fn scope_projection_excludes_adjacent_foreign_retried_transaction_begin_marker() {
         let entries = [
             (10, start(None, DurableFunctionType::WriteLocal)),
-            (
-                11,
-                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
-            ),
+            (11, start(Some(10), DurableFunctionType::WriteRemote)),
             (
                 12,
                 OplogEntry::BeginRemoteTransaction {
                     timestamp: Timestamp::now_utc(),
                     transaction_id: TransactionId::new("foreign-retry".to_string()),
-                    original_begin_index: Some(idx(20)),
+                    original_begin_index: idx(20),
                 },
             ),
         ];
@@ -2657,7 +2762,7 @@ mod scope_scan {
     }
 
     #[test]
-    fn stream_hints_are_benign_revision_neutral_and_excluded_from_scope_projection() {
+    fn stream_hints_are_revision_neutral_and_excluded_from_scope_projection() {
         macro_rules! external_payload {
             () => {
                 OplogPayload::External {
@@ -2700,125 +2805,20 @@ mod scope_scan {
             },
         ];
         let root = idx(10);
-        let state = ScopeScanState::new(root);
         let mut projection = OplogScopeProjection::new(root);
         assert!(projection.includes(root, &start(None, DurableFunctionType::WriteLocal)));
 
         for (offset, entry) in entries.iter().enumerate() {
-            assert!(entry.no_concurrent_side_effect(root, &state));
             assert_eq!(entry.specifies_component_revision(), None);
             assert!(!projection.includes(idx(11 + offset as u64), entry));
         }
     }
-
-    #[test]
-    fn direct_child_scope_is_allowed() {
-        // An HTTP call inside a batched-write scope writes a `Start` whose parent is the scope root.
-        let entries = vec![(
-            11,
-            start(
-                Some(10),
-                DurableFunctionType::WriteRemoteBatched(Some(idx(10))),
-            ),
-        )];
-        assert!(scan(10, &entries));
-    }
-
-    #[test]
-    fn transitive_grandchild_scope_is_allowed() {
-        // A grandchild's parent is the inner scope (11), not the root (10); transitive tracking
-        // must still recognise it as part of the scope.
-        let entries = vec![
-            (
-                11,
-                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
-            ),
-            (12, start(Some(11), DurableFunctionType::WriteRemote)),
-        ];
-        assert!(scan(10, &entries));
-    }
-
-    #[test]
-    fn foreign_read_remote_is_allowed() {
-        let entries = vec![(11, start(None, DurableFunctionType::ReadRemote))];
-        assert!(scan(10, &entries));
-    }
-
-    #[test]
-    fn foreign_write_remote_is_rejected() {
-        let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
-        assert!(!scan(10, &entries));
-    }
-
-    #[test]
-    fn foreign_batched_scope_is_rejected() {
-        let entries = vec![(
-            11,
-            start(None, DurableFunctionType::WriteRemoteBatched(None)),
-        )];
-        assert!(!scan(10, &entries));
-    }
-
-    #[test]
-    fn grandchild_of_foreign_scope_is_rejected() {
-        // The intermediate scope (11) is foreign (parent is unrelated 99), so its descendant (12)
-        // must not be absorbed into the root scope.
-        let entries = vec![
-            (
-                11,
-                start(Some(99), DurableFunctionType::WriteRemoteBatched(None)),
-            ),
-            (12, start(Some(11), DurableFunctionType::WriteRemote)),
-        ];
-        assert!(!scan(10, &entries));
-    }
-
-    #[test]
-    fn end_and_cancelled_markers_are_not_side_effects() {
-        let end = OplogEntry::End {
-            timestamp: Timestamp::now_utc(),
-            start_index: idx(11),
-            response: None,
-            forced_commit: false,
-            span_finished: None,
-            span_attributes: None,
-        };
-        let cancelled = OplogEntry::Cancelled {
-            timestamp: Timestamp::now_utc(),
-            start_index: idx(12),
-            partial: None,
-            span_finished: None,
-        };
-        let entries = vec![
-            (11, start(Some(10), DurableFunctionType::WriteRemote)),
-            (12, end),
-            (13, cancelled),
-        ];
-        assert!(scan(10, &entries));
-    }
-
-    #[test]
-    fn invocation_finished_marker_is_not_a_foreign_side_effect() {
-        let entries = vec![
-            (
-                11,
-                start(
-                    Some(10),
-                    DurableFunctionType::WriteRemoteBatched(Some(idx(10))),
-                ),
-            ),
-            (12, invocation_finished()),
-        ];
-        assert!(scan(10, &entries));
-    }
 }
 
-/// The serialized bytes of a filesystem snapshot name, of a successful update record that holds
-/// it, and of a pending update entry that holds it. The form on the wire must not change.
+/// The serialized bytes of a filesystem snapshot name and a successful update record that holds it.
 const NAME_BYTES: &str =
     "034c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
 const RECORD_BYTES: &str = "0300000000000000000700000000000000020000000000000005014c702d30303030303030302d303030302d343030302d383030302d3030303030303030303030310000";
-const ENTRY_BYTES: &str = "030010000000000000000007000200000000000000000200050303010203306170706c69636174696f6e2f6f637465742d73747265616d014c702d30303030303030302d303030302d343030302d383030302d30303030303030303030303100";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -2857,10 +2857,9 @@ fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
     let written = [
         hex(&crate::serialization::serialize(&name).unwrap()),
         hex(&crate::serialization::serialize(&record).unwrap()),
-        hex(&crate::serialization::serialize(&entry).unwrap()),
     ];
 
-    assert_eq!(written, [NAME_BYTES, RECORD_BYTES, ENTRY_BYTES]);
+    assert_eq!(written, [NAME_BYTES, RECORD_BYTES]);
     assert_eq!(
         crate::serialization::deserialize::<FilesystemSnapshotName>(&unhex(NAME_BYTES)).unwrap(),
         name
@@ -2872,12 +2871,13 @@ fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
         .unwrap(),
         record
     );
+    let entry_bytes = crate::serialization::serialize(&entry).unwrap();
     assert_eq!(
-        hex(&crate::serialization::serialize(
-            &crate::serialization::deserialize::<OplogEntry>(&unhex(ENTRY_BYTES)).unwrap()
+        crate::serialization::serialize(
+            &crate::serialization::deserialize::<OplogEntry>(&entry_bytes).unwrap()
         )
-        .unwrap()),
-        ENTRY_BYTES
+        .unwrap(),
+        entry_bytes
     );
 }
 

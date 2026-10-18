@@ -48,6 +48,7 @@ import {
   schemaGraphToWit,
   schemaValueFromWit,
   schemaValueToWit,
+  restoreEncodedCapabilitiesOnAbort,
   schemaValueToWitAsync,
   assertSchemaValueRepresentable,
   preflightWitValueTree,
@@ -71,6 +72,7 @@ import { agentStreamFromHandle, agentStreamToHandle } from "./internal/agentStre
 import { GuestSecretHandle, peekGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 import { SECRET_INTERNAL } from "./internal/schema-model/secretInternal.js"
 import {
+  assignGuestPermissionCardHandleKind,
   GuestPermissionCardHandle,
   peekGuestPermissionCardHandle,
 } from "./internal/schema-model/permissionCardHandle.js"
@@ -1279,6 +1281,7 @@ const walk = (
                 type: t.permissionCard(native.spec),
                 pair: {
                   toValue: (handle: GuestPermissionCardHandle) => v.permissionCard(handle),
+                  // A received card takes the kind that the schema declares.
                   fromValue: (x) => {
                     const handle = (x as Extract<SchemaValue, { tag: "permission-card" }>).handle
                     if (
@@ -1286,7 +1289,11 @@ const walk = (
                     ) {
                       throw new Error("permission-card handle was already consumed")
                     }
-                    return handle
+                    return assignGuestPermissionCardHandleKind(
+                      PERMISSION_CARD_INTERNAL,
+                      handle,
+                      native.spec.polymorphic ? "template" : "concrete",
+                    )
                   },
                 },
               }
@@ -2203,14 +2210,23 @@ export const makeWireEncoder = <A, RD, RE>(
     }
     return (value: A): Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, RE> =>
       Effect.flatMap(encode(value), (tree) =>
-        asynchronous ? async(async () => validate(tree)) : sync(() => validate(tree)),
+        asynchronous
+          ? async((signal) =>
+              restoreEncodedCapabilitiesOnAbort(
+                signal,
+                Promise.resolve().then(() => validate(tree)),
+              ),
+            )
+          : sync(() => validate(tree)),
       )
   }
   const encode = Schema.encodeEffect(codec)
   return (value: A): Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, RE> =>
     Effect.flatMap(encode(value), (encoded) =>
       asynchronous
-        ? async((signal) => schemaValueToWitAsync(encoded, signal))
+        ? async((signal) =>
+            restoreEncodedCapabilitiesOnAbort(signal, schemaValueToWitAsync(encoded, signal)),
+          )
         : sync(() => schemaValueToWit(encoded)),
     )
 }

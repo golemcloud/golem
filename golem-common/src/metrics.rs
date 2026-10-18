@@ -260,11 +260,6 @@ pub mod api {
             "Number of active gRPC API streams"
         )
         .unwrap();
-        static ref HTTP_API_ACTIVE_STREAMS: Gauge = register_gauge!(
-            "http_api_active_streams",
-            "Number of active HTTP API streams"
-        )
-        .unwrap();
     }
 
     pub fn record_api_success(
@@ -294,14 +289,6 @@ pub mod api {
 
     pub fn record_closed_grpc_api_active_stream() {
         GRPC_API_ACTIVE_STREAMS.dec();
-    }
-
-    pub fn record_new_http_api_active_stream() {
-        HTTP_API_ACTIVE_STREAMS.inc();
-    }
-
-    pub fn record_closed_http_api_active_stream() {
-        HTTP_API_ACTIVE_STREAMS.dec();
     }
 
     pub struct RecordedApiRequest {

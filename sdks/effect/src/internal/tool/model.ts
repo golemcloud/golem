@@ -942,6 +942,8 @@ export const canonicalInputDefaults = (
         return ((argument.options as { readonly min?: number }).min ?? 0) > 0
           ? []
           : [[argument.name, []]]
+      if (argument.options.default !== undefined && !argument.repeatable)
+        return [[argument.name, argument.options.default]]
       const required = argument.options.required ?? argument.kind === "positional"
       if (required) return []
       if (argument.options.default !== undefined) return [[argument.name, argument.options.default]]

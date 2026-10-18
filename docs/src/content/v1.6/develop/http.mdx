@@ -2,7 +2,7 @@ import { Callout, Tabs } from "nextra/components"
 
 # HTTP requests
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
     HTTP requests can be made with the standard `fetch` function.
 
@@ -314,6 +314,46 @@ import { Callout, Tabs } from "nextra/components"
 
     This is the exact SDK wrapper signature. Request bodies and response bodies are async byte streams; consume the full response stream before decoding JSON, and use `moonbitlang/core/encoding/utf8` rather than character-to-byte casts.
 
+</Tabs.Tab>
+
+<Tabs.Tab>
+    HTTP requests can be made with the standard `net/http` package. The Go SDK installs its `wasi:http` transport as `http.DefaultTransport`, so `http.Get`, `http.DefaultClient`, and client libraries built on `net/http` work without extra setup.
+
+    For example:
+
+    ```go
+    import (
+        "bytes"
+        "encoding/json"
+        "fmt"
+        "log/slog"
+        "net/http"
+
+        "github.com/golemcloud/golem/sdks/go/golem"
+    )
+
+    type ExampleRequest struct {
+        Title  string `json:"title"`
+        Body   string `json:"body"`
+        UserID uint16 `json:"userId"`
+    }
+
+    payload := golem.Must(json.Marshal(ExampleRequest{Title: "foo", Body: "bar", UserID: 1}))
+
+    response := golem.Must(http.Post(
+        fmt.Sprintf("http://localhost:%d/todos", port),
+        "application/json",
+        bytes.NewReader(payload),
+    ))
+    defer response.Body.Close()
+
+    var data map[string]any
+    golem.Must0(json.NewDecoder(response.Body).Decode(&data))
+
+    slog.Info("Body", "data", data)
+    ```
+
+    Raw sockets (`net.Dial`) are not available in Go agents; outgoing HTTP goes through `net/http`.
 </Tabs.Tab>
 </Tabs>
 

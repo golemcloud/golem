@@ -73,16 +73,6 @@ interface oplog {
         read-remote,
         /// The side-effect manipulates external state (for example an RPC call)
         write-remote,
-        /// The side-effect manipulates external state through multiple invoked functions (for example
-        /// a HTTP request where reading the response involves multiple host function calls)
-        ///
-        /// On the first invocation of the batch, the parameter should be `None` - this triggers
-        /// writing a scope `Start` entry in the oplog. Followup invocations should contain this
-        /// entry's index as the parameter so their host-call `Start` entries can point back to the
-        /// scope. In batched remote writes it is the caller's responsibility to manually write the
-        /// matching scope `End` entry (using `end_function`) when the operation is completed.
-        write-remote-batched(option<oplog-index>),
-        write-remote-transaction(option<oplog-index>)
     }
 
     record plugin-installation-description {
@@ -143,6 +133,9 @@ interface oplog {
     /// and blobstore operations — surfaces as a generic `typed-schema-value`
     /// tree, identified by `function-name`; there are no per-interface named WIT
     /// variants for the payload shapes.
+    ///
+    /// `denial` is the reason the host denied the call before it ran. A denied
+    /// call never runs its operation, and its `end` holds the denied response.
     record start-parameters {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
@@ -152,6 +145,7 @@ interface oplog {
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
+        denial: option<string>,
     }
 
     /// Parameters of an enriched durable host-call `end` entry. Like the
@@ -300,7 +294,6 @@ interface oplog {
         kind: oplog-error-kind,
         error: string,
         retry-from: oplog-index,
-        inside-atomic-region: bool,
         /// Persistent retry policy state, if a semantic retry policy is active.
         retry-policy-state: option<retry-policy-state>,
     }
@@ -409,15 +402,24 @@ interface oplog {
         payload: typed-schema-value,
     }
 
+    /// A consumed attachment read with inline observation metadata.
+    record tool-attachment-read-parameters {
+        timestamp: datetime,
+        observation: typed-schema-value,
+        payload: option<list<u8>>,
+    }
+
+    /// An effective attachment control transition without a byte payload.
+    record tool-attachment-control-parameters {
+        timestamp: datetime,
+        attachment: typed-schema-value,
+        transition: typed-schema-value,
+    }
+
     /// A public durable-stream producer record rendered as a typed schema value.
     record durable-stream-record-parameters {
         timestamp: datetime,
         %record: typed-schema-value,
-    }
-
-    record end-atomic-region-parameters {
-        timestamp: datetime,
-        begin-index: oplog-index
     }
 
     record agent-initialization-parameters {
@@ -745,6 +747,7 @@ interface oplog {
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
+        denial: option<string>,
     }
 
     record raw-end-parameters {
@@ -780,6 +783,22 @@ interface oplog {
         parent-start-index: oplog-index,
         kind: host-stream-kind,
         payload: oplog-payload,
+    }
+
+    /// A consumed attachment read; only original data observations own payloads.
+    record raw-tool-attachment-read-parameters {
+        timestamp: datetime,
+        entity-parent-start-index: option<oplog-index>,
+        observation: typed-schema-value,
+        payload: option<oplog-payload>,
+    }
+
+    /// An effective attachment control transition without a byte payload.
+    record raw-tool-attachment-control-parameters {
+        timestamp: datetime,
+        entity-parent-start-index: option<oplog-index>,
+        attachment: typed-schema-value,
+        transition: typed-schema-value,
     }
 
     /// A raw durable-stream producer record, stored inline or in external payload storage.
@@ -828,7 +847,6 @@ interface oplog {
         kind: oplog-error-kind,
         error: worker-error,
         retry-from: oplog-index,
-        inside-atomic-region: bool,
         /// Persistent retry policy state, if a semantic retry policy is active.
         retry-policy-state: option<retry-policy-state>,
     }
@@ -913,7 +931,7 @@ interface oplog {
     record raw-begin-remote-transaction-parameters {
         timestamp: datetime,
         transaction-id: string,
-        original-begin-index: option<oplog-index>
+        original-begin-index: oplog-index
     }
 
     record raw-snapshot-parameters {
@@ -954,9 +972,6 @@ interface oplog {
         error(raw-error-parameters),
         /// A previously failed startup or replay completed successfully.
         recovery-succeeded(timestamp),
-        /// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
-        /// more predictable.
-        no-op(timestamp),
         /// The agent needs to recover up to the given target oplog index and continue running from
         /// the source oplog index from there
         /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -967,13 +982,6 @@ interface oplog {
         interrupted(timestamp),
         /// Indicates that the agent has been exited using WASI's exit function.
         exited(timestamp),
-        /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-        /// recovery except if there is a corresponding `EndAtomicRegion` entry.
-        begin-atomic-region(timestamp),
-        /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-        /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-        /// compaction.
-        end-atomic-region(end-atomic-region-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(raw-pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts
@@ -1033,6 +1041,8 @@ interface oplog {
         /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
         /// attached to the durable host call identified by its start entry's index
         host-stream-frame(raw-host-stream-frame-parameters),
+        tool-attachment-read(raw-tool-attachment-read-parameters),
+        tool-attachment-control(raw-tool-attachment-control-parameters),
         /// Registers a durable stream before exposing its handle
         stream-registered(raw-durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch
@@ -1074,9 +1084,6 @@ interface oplog {
         error(error-parameters),
         /// A previously failed startup or replay completed successfully.
         recovery-succeeded(timestamp),
-        /// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
-        /// more predictable.
-        no-op(timestamp),
         /// The agent needs to recover up to the given target oplog index and continue running from
         /// the source oplog index from there
         /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -1087,13 +1094,6 @@ interface oplog {
         interrupted(timestamp),
         /// Indicates that the agent has been exited using WASI's exit function.
         exited(timestamp),
-        /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-        /// recovery except if there is a corresponding `EndAtomicRegion` entry.
-        begin-atomic-region(timestamp),
-        /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-        /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-        /// compaction.
-        end-atomic-region(end-atomic-region-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts
@@ -1153,6 +1153,8 @@ interface oplog {
         /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
         /// attached to the durable host call identified by its start entry's index
         host-stream-frame(host-stream-frame-parameters),
+        tool-attachment-read(tool-attachment-read-parameters),
+        tool-attachment-control(tool-attachment-control-parameters),
         /// Registers a durable stream before exposing its handle
         stream-registered(durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch

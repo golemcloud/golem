@@ -421,8 +421,11 @@ func checkedUnsignedString(raw string, label string) (uint64, error) {
 
 // PackJSON is the inverse of [Ref.UnpackJSON]: it builds a value from canonical
 // JSON.
+//
+// A root record field the reference has a default for may be left out; it is
+// then that default, checked against the field's type like any other value.
 func (r Ref) PackJSON(value any) (SchemaValue, error) {
-	return (&packer{ref: r}).build(r.typ, value, "")
+	return (&packer{ref: r.At(r.typ), defaults: r.rootFieldDefaults()}).build(r.typ, value, "")
 }
 
 // PackJSONBytes is [Ref.PackJSON] over serialised JSON.
@@ -449,9 +452,16 @@ func (r Ref) UnpackJSONBytes(v SchemaValue) ([]byte, error) {
 	return json.Marshal(rendered)
 }
 
-type packer struct{ ref Ref }
+type packer struct {
+	ref Ref
+	// defaults are the root record's field defaults. The first build call,
+	// which is the root's, takes them, so no nested record sees them.
+	defaults map[string]SchemaValue
+}
 
 func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error) {
+	defaults := p.defaults
+	p.defaults = nil
 	body, err := p.ref.At(t).body()
 	if err != nil {
 		return nil, err
@@ -705,6 +715,14 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		for _, f := range b.Fields {
 			raw, present := obj[f.Name]
 			if !present {
+				if d, defaulted := defaults[f.Name]; defaulted {
+					if err := p.ref.validate(f.Body, d, child(path, f.Name), 0); err != nil {
+						issues = append(issues, Issue{Path: child(path, f.Name), Message: err.Error()})
+						continue
+					}
+					fields = append(fields, cloneValue(d))
+					continue
+				}
 				// An optional field may be left out: it is then None.
 				if fb, err := p.ref.At(f.Body).body(); err == nil {
 					if _, optional := fb.(OptionType); optional {

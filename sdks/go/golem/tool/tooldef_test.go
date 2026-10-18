@@ -487,13 +487,11 @@ func TestToolCallReportsDeclaredErrors(t *testing.T) {
 	}
 }
 
-func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
+func TestToolHandlerUndeclaredErrorsAreInvalidResultsAndUnexpectedFailuresTrap(t *testing.T) {
 	v, r, d := newVcs(t)
 	loopback(t, r, d, golem.AnonymousPrincipal{})
 	for name, want := range map[string]string{
 		"undeclared": `undeclared error "nothing-to-commit"`,
-		"plain":      "command remote push failed: disk full",
-		"panic":      "command remote push panicked: handler gave up",
 	} {
 		inv, err := v.push.Call(func(a *PushArgs) { a.Name = name })
 		if err != nil {
@@ -504,6 +502,16 @@ func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
 		if !errors.As(err, &ce) || ce.Kind != CallInvalidResult || !strings.Contains(ce.Message, want) {
 			t.Errorf("%s: got %v, want an invalid result mentioning %q", name, err, want)
 		}
+	}
+	for _, name := range []string{"plain", "panic"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s did not panic", name)
+				}
+			}()
+			_, _ = v.push.Call(func(a *PushArgs) { a.Name = name })
+		}()
 	}
 }
 
@@ -526,15 +534,6 @@ func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 		t.Errorf("got %q, %q and %d", got.Stdout, got.Stderr, got.Result)
 	}
 
-	inv, _ = v.push.Call(func(a *PushArgs) { a.Name = "panic" })
-	_, err = io.ReadAll(inv.Stdout())
-	var se *OutputError
-	if !errors.As(err, &se) || se.Failure.String() != "failed: command remote push panicked: handler gave up" {
-		t.Errorf("stdout of a panicking command ended with %v", err)
-	}
-	if _, err := inv.Wait(); err == nil {
-		t.Errorf("a panicking command succeeded")
-	}
 }
 
 // TestCollectKeepsEachOutcome — a failed output does not hide the result or the
@@ -559,11 +558,6 @@ func TestCollectKeepsEachOutcome(t *testing.T) {
 		t.Errorf("stderr %q, %v", got.Stderr, got.StderrErr)
 	}
 
-	inv, _ = v.push.Call(func(a *PushArgs) { a.Name = "panic" })
-	got = inv.Collect()
-	if got.Err == nil || !errors.As(got.StdoutErr, &se) {
-		t.Errorf("a panicking command collected %v, %v", got.Err, got.StdoutErr)
-	}
 }
 
 func TestWaitDrainsTheOutputsNotTaken(t *testing.T) {

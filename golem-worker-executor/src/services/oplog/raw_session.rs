@@ -60,7 +60,8 @@ impl RawSessionCache {
         let service = service.ok_or_else(|| "stream session index is not installed".to_string())?;
         let mut status = service
             .lookup_persisted(id, mode, fingerprint, committed, &key.idempotency_key)
-            .await?;
+            .await
+            .map_err(|error| error.to_string())?;
         for (offset, entry) in buffer.iter().enumerate() {
             let index = OplogIndex::from_u64(committed.as_u64() + offset as u64 + 1);
             if let OplogEntry::PendingAgentInvocation {

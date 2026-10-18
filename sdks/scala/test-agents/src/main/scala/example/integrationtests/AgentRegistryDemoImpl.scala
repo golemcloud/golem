@@ -151,10 +151,9 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
         js.BigInt(key.highBits.toString),
         js.BigInt(key.lowBits.toString)
       )
-      val targetCid  = HostApi.ComponentIdLiteral(targetUuid)
-      val targetAid  = HostApi.AgentIdLiteral(targetCid, "fork-target")
-      val oplogIndex = HostApi.getOplogIndex()
-      HostApi.forkAgent(self.agentId, targetAid, oplogIndex)
+      val targetCid = HostApi.ComponentIdLiteral(targetUuid)
+      val targetAid = HostApi.AgentIdLiteral(targetCid, "fork-target")
+      HostApi.forkAgent(self.agentId, targetAid, BigInt(2))
       sb.append("forkAgent: succeeded\n")
     } catch {
       case e: Throwable => sb.append(s"forkAgent: ${e.getMessage}\n")

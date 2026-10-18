@@ -448,10 +448,17 @@ enum StartProblem {
     /// The blob storage refused the executor a read of an initial-file source of the target at
     /// the update point.
     BlobStorageRefused(BlobRefusal),
+    /// The oplog of the agent failed: it does not read or an archive layer did not store it. It is
+    /// the row of every such error, whatever the
+    /// step of the start that read the oplog.
+    OplogFailed,
 }
 
 impl StartProblem {
     fn of(error: &RawStartError<'_>) -> Self {
+        if error.oplog_failed() {
+            return Self::OplogFailed;
+        }
         match error {
             RawStartError::StaleSource(_) => Self::StaleSource,
             RawStartError::TargetFetch(error) => Self::Target(FetchProblem::of(error)),
@@ -660,6 +667,11 @@ enum Cell {
 /// The outcome table. A cell that cannot occur passes the error.
 fn cell(column: Column, problem: StartProblem) -> Cell {
     use StartProblem as Problem;
+    // An oplog that failed fails the start in every column. Skipping or rejecting the
+    // record, or failing the update, would start the agent from another history.
+    if problem == Problem::OplogFailed {
+        return Cell::Pass;
+    }
     let fail = Cell::Fail(Failure::PLAIN);
     let coded = |code| Cell::Fail(Failure::coded(code));
     let target = |fetch: FetchProblem| match fetch {
@@ -912,28 +924,52 @@ fn raw_text(error: &RawStartError<'_>) -> String {
 }
 
 impl RawStartError<'_> {
-    /// The error of the problem as it is, for the recovery path: a filesystem failure as a
-    /// reconstruction error or a suspension, a disabled baseline as a runtime error, and every
-    /// other raw error unchanged.
-    pub(crate) fn passed_through(&self) -> WorkerExecutorError {
+    /// The executor error that the raw error carries as it is: the error of a target fetch, of a
+    /// target load, of an instantiation or of the replay, and the error of a load of the
+    /// application snapshot that did not load.
+    fn carried_error(&self) -> Option<&WorkerExecutorError> {
         match self {
-            RawStartError::Filesystem(error) | RawStartError::Finish(error) => {
-                reconstruction_startup_error(error)
-            }
             RawStartError::TargetFetch(error)
             | RawStartError::TargetLoad(error)
             | RawStartError::Instantiation(error)
-            | RawStartError::Replay { error, .. } => (*error).clone(),
+            | RawStartError::Replay { error, .. } => Some(*error),
             RawStartError::Load(
                 SnapshotRecoveryResult::Failed(error)
                 | SnapshotRecoveryResult::Unavailable(error)
                 | SnapshotRecoveryResult::Lost(error),
-            ) => error.clone(),
+            ) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// Whether the start failed because the oplog of the agent failed.
+    fn oplog_failed(&self) -> bool {
+        matches!(
+            self.carried_error(),
+            Some(WorkerExecutorError::OplogFailed { .. })
+        )
+    }
+
+    /// The error of the problem as it is, for the recovery path: a filesystem failure as a
+    /// reconstruction error or a suspension, a disabled baseline as a runtime error, and every
+    /// other raw error unchanged.
+    pub(crate) fn passed_through(&self) -> WorkerExecutorError {
+        if let Some(error) = self.carried_error() {
+            return error.clone();
+        }
+        match self {
+            RawStartError::Filesystem(error) | RawStartError::Finish(error) => {
+                reconstruction_startup_error(error)
+            }
             RawStartError::UpdateState(error) => error.to_worker_executor_error(),
             RawStartError::ManualLoad(ManualLoadResult::Interrupted(kind)) => {
                 WorkerExecutorError::Interrupted { kind: *kind }
             }
-            RawStartError::StaleSource(_)
+            RawStartError::TargetFetch(_)
+            | RawStartError::TargetLoad(_)
+            | RawStartError::Instantiation(_)
+            | RawStartError::Replay { .. }
+            | RawStartError::StaleSource(_)
             | RawStartError::TargetUnsupported(_)
             | RawStartError::ModeChange(_)
             | RawStartError::Disabled
@@ -1759,6 +1795,62 @@ mod tests {
                 Problem::AfterReplay,
             ]
         );
+    }
+
+    /// An oplog that does not read ends the start with its error from every step of the start
+    /// that reads it, for every baseline and head: no record is skipped or rejected, and no
+    /// update fails, because each of them would start the agent from another history.
+    #[test]
+    fn an_unreadable_oplog_fails_the_start_in_every_column() {
+        let unreadable = WorkerExecutorError::oplog_failed(
+            agent_id(),
+            "corrupt oplog data from archive layer 1: failed to decode compressed oplog chunk",
+        );
+        let failed = SnapshotRecoveryResult::Failed(unreadable.clone());
+        let unavailable = SnapshotRecoveryResult::Unavailable(unreadable.clone());
+        let lost = SnapshotRecoveryResult::Lost(unreadable.clone());
+        let errors = [
+            RawStartError::Replay {
+                error: &unreadable,
+                diverged: false,
+            },
+            RawStartError::Replay {
+                error: &unreadable,
+                diverged: true,
+            },
+            RawStartError::Load(&failed),
+            RawStartError::Load(&unavailable),
+            RawStartError::Load(&lost),
+            RawStartError::Instantiation(&unreadable),
+            RawStartError::TargetLoad(&unreadable),
+            RawStartError::TargetFetch(&unreadable),
+        ];
+        let assisted = Arc::new(assisted_head());
+        let manual = Arc::new(manual_head());
+        let automatic = automatic_head();
+        let starts = [
+            (BaselineRole::Periodic(OplogIndex::from_u64(10)), None),
+            (BaselineRole::ManualPending(manual.clone()), Some(&*manual)),
+            (BaselineRole::ManualPromoted, None),
+            (BaselineRole::InitialFiles, None),
+            (BaselineRole::ManualPromoted, Some(&automatic)),
+            (BaselineRole::AssistedPromoted, Some(&automatic)),
+            (BaselineRole::InitialFiles, Some(&automatic)),
+            (
+                BaselineRole::AssistedPending(assisted.clone()),
+                Some(&*assisted),
+            ),
+            (BaselineRole::AssistedPromoted, None),
+        ];
+        for (role, head) in &starts {
+            for (index, error) in errors.iter().enumerate() {
+                let action = decide_now(role, *head, *error);
+                assert!(
+                    matches!(&action, StartAction::Error(error) if *error == unreadable),
+                    "{role:?} with error {index}: {action:?}"
+                );
+            }
+        }
     }
 
     fn decide_now(

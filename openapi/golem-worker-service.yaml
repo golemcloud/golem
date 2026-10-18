@@ -1071,6 +1071,113 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_oplog
+  /v1/components/{component_id}/workers/{agent_name}/oplog/{oplog_index}:
+    get:
+      tags:
+      - Worker
+      summary: Get one oplog entry of a worker
+      description: |-
+        Oplog pages omit entries whose encoded form is larger than a server limit, and describe
+        them by their type, timestamp, size and component revision. This endpoint returns such an
+        entry in full. Pass the component revision of the description to save the server from
+        scanning the oplog for it.
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: oplog_index
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: component_revision
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_oplog_entry
   /v1/components/{component_id}/workers/{agent_name}/files/{file_name}:
     get:
       tags:
@@ -2775,8 +2882,7 @@ components:
           type: array
           description: |-
             Oplog regions that are skipped during the worker's state recovery, but describe
-            the history of the worker. For example if an atomic region gets restarted, its partially
-            recorded oplog entries will be skipped on retry.
+            the history of the worker.
           items:
             $ref: '#/components/schemas/OplogRegion'
         deletedRegions:
@@ -5134,7 +5240,7 @@ components:
         entries:
           type: array
           items:
-            $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+            $ref: '#/components/schemas/PublicOplogPageEntry'
         next:
           $ref: '#/components/schemas/OplogCursor'
         firstIndexInChunk:
@@ -5544,6 +5650,41 @@ components:
         unit:
           type: string
           nullable: true
+    OmittedOplogEntry:
+      type: object
+      title: OmittedOplogEntry
+      description: |-
+        An oplog entry that an oplog page leaves out because its encoded form is larger than the
+        limit of the server. The oplog entry endpoint returns the full entry for the oplog index.
+      required:
+      - oplogIndex
+      - attribution
+      - timestamp
+      - entryType
+      - size
+      - componentRevision
+      properties:
+        oplogIndex:
+          type: integer
+          format: uint64
+        attribution:
+          $ref: '#/components/schemas/PublicOplogEntryAttribution'
+        timestamp:
+          type: string
+          format: date-time
+        entryType:
+          type: string
+          description: The type of the entry, the `type` field of its `PublicOplogEntry` form.
+        size:
+          type: integer
+          format: uint64
+          description: The size of the encoded entry in bytes.
+        componentRevision:
+          type: integer
+          format: uint64
+          description: |-
+            The component revision the server decodes the entry with. Passing it to the oplog
+            entry endpoint saves the server from scanning the oplog for it.
     OplogCursor:
       type: object
       title: OplogCursor
@@ -6124,8 +6265,6 @@ components:
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -6133,8 +6272,6 @@ components:
           WriteLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
           ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
           WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
-          WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-          WriteRemoteTransaction: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
     PublicDurableFunctionType_Empty:
       allOf:
       - type: object
@@ -6147,30 +6284,6 @@ components:
             - WriteRemote
             example: WriteRemote
       - $ref: '#/components/schemas/Empty'
-    PublicDurableFunctionType_WriteRemoteBatchedParameters:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - WriteRemoteBatched
-            example: WriteRemoteBatched
-      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
-    PublicDurableFunctionType_WriteRemoteTransactionParameters:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - WriteRemoteTransaction
-            example: WriteRemoteTransaction
-      - $ref: '#/components/schemas/WriteRemoteTransactionParameters'
     PublicEntityCallMode:
       type: string
       enum:
@@ -6369,12 +6482,9 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -6409,6 +6519,8 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentReadParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
@@ -6429,12 +6541,9 @@ components:
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
-          NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
           Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
           Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
           Exited: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
-          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
           PendingAgentInvocation: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -6469,6 +6578,8 @@ components:
           CardRevokedCascade: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
           CardTransferConfirmed: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
           HostStreamFrame: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+          ToolAttachmentRead: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentReadParams'
+          ToolAttachmentControl: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
           StreamRegistered: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
           StreamItems: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
           StreamEnd: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
@@ -6562,18 +6673,6 @@ components:
             - AgentInvocationStarted
             example: AgentInvocationStarted
       - $ref: '#/components/schemas/r#AgentInvocationStartedParams'
-    PublicOplogEntry_r#BeginAtomicRegionParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - BeginAtomicRegion
-            example: BeginAtomicRegion
-      - $ref: '#/components/schemas/r#BeginAtomicRegionParams'
     PublicOplogEntry_r#BeginRemoteTransactionParams:
       allOf:
       - type: object
@@ -6814,18 +6913,6 @@ components:
             - DropResource
             example: DropResource
       - $ref: '#/components/schemas/r#DropResourceParams'
-    PublicOplogEntry_r#EndAtomicRegionParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - EndAtomicRegion
-            example: EndAtomicRegion
-      - $ref: '#/components/schemas/r#EndAtomicRegionParams'
     PublicOplogEntry_r#EndParams:
       allOf:
       - type: object
@@ -6934,18 +7021,6 @@ components:
             - Log
             example: Log
       - $ref: '#/components/schemas/r#LogParams'
-    PublicOplogEntry_r#NoOpParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - NoOp
-            example: NoOp
-      - $ref: '#/components/schemas/r#NoOpParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -7210,6 +7285,73 @@ components:
             - Suspend
             example: Suspend
       - $ref: '#/components/schemas/r#SuspendParams'
+    PublicOplogEntry_r#ToolAttachmentControlParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ToolAttachmentControl
+            example: ToolAttachmentControl
+      - $ref: '#/components/schemas/r#ToolAttachmentControlParams'
+    PublicOplogEntry_r#ToolAttachmentReadParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ToolAttachmentRead
+            example: ToolAttachmentRead
+      - $ref: '#/components/schemas/r#ToolAttachmentReadParams'
+    PublicOplogPageEntry:
+      type: object
+      description: |-
+        An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+        because it is too large.
+      oneOf:
+      - $ref: '#/components/schemas/PublicOplogPageEntry_PublicOplogEntryWithIndex'
+      - $ref: '#/components/schemas/PublicOplogPageEntry_OmittedOplogEntry'
+      discriminator:
+        propertyName: type
+        mapping:
+          Included: '#/components/schemas/PublicOplogPageEntry_PublicOplogEntryWithIndex'
+          Omitted: '#/components/schemas/PublicOplogPageEntry_OmittedOplogEntry'
+    PublicOplogPageEntry_OmittedOplogEntry:
+      description: |-
+        An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+        because it is too large.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Omitted
+            example: Omitted
+      - $ref: '#/components/schemas/OmittedOplogEntry'
+    PublicOplogPageEntry_PublicOplogEntryWithIndex:
+      description: |-
+        An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+        because it is too large.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Included
+            example: Included
+      - $ref: '#/components/schemas/PublicOplogEntryWithIndex'
     PublicQueuedCardEvent:
       type: object
       oneOf:
@@ -7326,7 +7468,7 @@ components:
       required:
       - left
       - right
-      - on_right
+      - onRight
       properties:
         left:
           description: State of the first (left) policy.
@@ -7338,7 +7480,7 @@ components:
           allOf:
           - $ref: '#/components/schemas/PublicRetryPolicyState'
           - description: State of the second (right) policy.
-        on_right:
+        onRight:
           type: boolean
           description: Whether execution has moved to the right policy.
     PublicRetryPolicyStateCountBox:
@@ -9973,20 +10115,6 @@ components:
             $ref: '#/components/schemas/AgentMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
-    WriteRemoteBatchedParameters:
-      type: object
-      title: WriteRemoteBatchedParameters
-      properties:
-        index:
-          type: integer
-          format: uint64
-    WriteRemoteTransactionParameters:
-      type: object
-      title: WriteRemoteTransactionParameters
-      properties:
-        index:
-          type: integer
-          format: uint64
     r#ActivatePluginParams:
       type: object
       title: r#ActivatePluginParams
@@ -10036,15 +10164,6 @@ components:
           $ref: '#/components/schemas/PublicAgentInvocation'
         walletPin:
           $ref: '#/components/schemas/PublicInvocationWalletPin'
-    r#BeginAtomicRegionParams:
-      type: object
-      title: r#BeginAtomicRegionParams
-      required:
-      - timestamp
-      properties:
-        timestamp:
-          type: string
-          format: date-time
     r#BeginRemoteTransactionParams:
       type: object
       title: r#BeginRemoteTransactionParams
@@ -10452,19 +10571,6 @@ components:
           type: string
         owner:
           type: string
-    r#EndAtomicRegionParams:
-      type: object
-      title: r#EndAtomicRegionParams
-      required:
-      - timestamp
-      - beginIndex
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        beginIndex:
-          type: integer
-          format: uint64
     r#EndParams:
       type: object
       title: r#EndParams
@@ -10495,7 +10601,6 @@ components:
       - kind
       - error
       - retryFrom
-      - insideAtomicRegion
       properties:
         timestamp:
           type: string
@@ -10507,8 +10612,6 @@ components:
         retryFrom:
           type: integer
           format: uint64
-        insideAtomicRegion:
-          type: boolean
         retryPolicyState:
           $ref: '#/components/schemas/PublicRetryPolicyState'
     r#ExitedParams:
@@ -10613,15 +10716,6 @@ components:
           type: string
         traceContext:
           $ref: '#/components/schemas/LogTraceContext'
-    r#NoOpParams:
-      type: object
-      title: r#NoOpParams
-      required:
-      - timestamp
-      properties:
-        timestamp:
-          type: string
-          format: date-time
     r#OplogProcessorCheckpointParams:
       type: object
       title: r#OplogProcessorCheckpointParams
@@ -10836,6 +10930,8 @@ components:
           $ref: '#/components/schemas/PublicDurableFunctionType'
         spanStarted:
           $ref: '#/components/schemas/PublicSpanStarted'
+        denial:
+          type: string
     r#StreamCancelParams:
       type: object
       title: r#StreamCancelParams
@@ -10929,6 +11025,38 @@ components:
         timestamp:
           type: string
           format: date-time
+    r#ToolAttachmentControlParams:
+      type: object
+      title: r#ToolAttachmentControlParams
+      required:
+      - timestamp
+      - attachment
+      - transition
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        attachment:
+          $ref: '#/components/schemas/TypedSchemaValue'
+        transition:
+          $ref: '#/components/schemas/TypedSchemaValue'
+    r#ToolAttachmentReadParams:
+      type: object
+      title: r#ToolAttachmentReadParams
+      required:
+      - timestamp
+      - observation
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        observation:
+          $ref: '#/components/schemas/TypedSchemaValue'
+        payload:
+          type: array
+          items:
+            type: integer
+            format: uint8
   securitySchemes:
     Cookie:
       type: apiKey

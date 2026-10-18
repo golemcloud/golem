@@ -12,7 +12,7 @@ The currently supported databases are:
 <details>
     <summary>See selected API types and signatures</summary>
 
-    <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
       ```ts
       declare module 'golem:rdbms/types@1.5.0' {
@@ -605,6 +605,103 @@ The currently supported databases are:
     ```
     </Tabs.Tab>
 
+    <Tabs.Tab>
+
+    In Go, use the `postgres` and `mysql` packages under `github.com/golemcloud/golem/sdks/go/golem/rdbms`. They wrap the
+    `golem:rdbms` interfaces in a `database/sql`-flavoured style; the shared temporal and network types live in the
+    `rdbms` package:
+
+    ```go
+    // package rdbms
+    type Date struct{ Year, Month, Day int }
+    type Time struct{ Hour, Minute, Second, Nanosecond int }
+    type Timetz struct {
+        Time          Time
+        OffsetSeconds int
+    }
+    type Timestamp struct {
+        Date Date
+        Time Time
+    }
+    type Timestamptz struct {
+        Timestamp     Timestamp
+        OffsetSeconds int
+    }
+    type Interval struct {
+        Months       int
+        Days         int
+        Microseconds int64
+    }
+    type MacAddr [6]byte
+
+    type ErrorKind uint8
+
+    const (
+        ConnectionFailure ErrorKind = iota
+        QueryParameterFailure
+        QueryExecutionFailure
+        QueryResponseFailure
+        Other
+    )
+    ```
+
+    The `postgres` and `mysql` packages expose the same connection API:
+
+    ```go
+    // package postgres (package mysql is identical)
+    type Error struct {
+        Kind    ErrorKind // rdbms.ErrorKind
+        Message string
+    }
+
+    type Column struct {
+        Ordinal    uint64
+        Name       string
+        DbTypeName string
+    }
+
+    func Open(address string) (*DB, error)
+
+    func (db *DB) Query(sql string, args ...any) (*ResultSet, error)
+    func (db *DB) QueryStream(sql string, args ...any) (*Stream, error)
+    func (db *DB) Exec(sql string, args ...any) (uint64, error)
+    func (db *DB) Begin() (*Tx, error)
+    func (db *DB) Transaction(fn func(*Tx) error) error
+    func (db *DB) Close()
+
+    func (tx *Tx) Query(sql string, args ...any) (*ResultSet, error)
+    func (tx *Tx) QueryStream(sql string, args ...any) (*Stream, error)
+    func (tx *Tx) Exec(sql string, args ...any) (uint64, error)
+    func (tx *Tx) Commit() error
+    func (tx *Tx) Rollback() error
+
+    func (rs *ResultSet) Columns() []Column
+    func (rs *ResultSet) Rows() []Row
+
+    func (s *Stream) Columns() []Column
+    func (s *Stream) Next() (row Row, ok bool, err error)
+    func (s *Stream) Close()
+
+    func (r Row) Len() int
+    func (r Row) IsNull(i int) bool
+    func (r Row) Get(i int) (any, error)
+    func (r Row) Int64(i int) (int64, error)
+    func (r Row) Float64(i int) (float64, error)
+    func (r Row) String(i int) (string, error)
+    func (r Row) Bool(i int) (bool, error)
+    func (r Row) Bytes(i int) ([]byte, error)
+    func (r Row) Time(i int) (time.Time, error)
+    func (r Row) Scan(dest ...any) error
+    ```
+
+    Query arguments are ordinary Go values: `nil`, `bool`, the sized integer and float types, `string`, `[]byte` and
+    `time.Time` (plus `golem.UUID` for Postgres) map to the natural column types. Where the exact column type matters,
+    build a `DbValue` with a constructor of the driver package and pass it like any other argument, for example
+    `postgres.Numeric`, `postgres.JSONB`, `postgres.Int4`, `postgres.Array`, `postgres.Int4Range`, or `mysql.Decimal`,
+    `mysql.JSON`, `mysql.Int`. The `postgres` `Row` additionally has `UUID`, range, `Enum`, `SparseVec`, `Array`,
+    `Composite` and `Domain` getters, and the `mysql` `Row` has `Uint64`.
+    </Tabs.Tab>
+
     </Tabs>
 </details>
 
@@ -615,7 +712,7 @@ To execute an SQL statement with `golem-rdbms`, first create a `db-connection` r
 The Effect examples below run inside a Golem Effect agent, whose runtime supplies the database host services. Creating an Effect does not execute it. Database failures use the `SqlError` error channel; handle them or map them to the agent method's declared error type.
 
 #### MySQL
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/mysql@1.5.0";
@@ -735,11 +832,38 @@ The Effect examples below run inside a Golem Effect agent, whose runtime supplie
   </Callout>
   </Tabs.Tab>
 
+  <Tabs.Tab>
+  ```go
+  import (
+      "github.com/golemcloud/golem/sdks/go/golem"
+      "github.com/golemcloud/golem/sdks/go/golem/rdbms/mysql"
+  )
+
+  // Connecting to the database called 'test' with user 'root'
+  // Use appropriate error handling in real code
+  db := golem.Must(mysql.Open("mysql://root@localhost:3306/test"))
+  defer db.Close()
+
+  golem.Must(db.Exec(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );`))
+  ```
+
+  <Callout type="info">
+  The functions in the `rdbms/mysql` package are blocking calls that return an `error`; `golem.Must` panics on the error, which fails the invocation.
+  </Callout>
+  </Tabs.Tab>
+
 </Tabs>
 
 #### PostgreSQL
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/postgres@1.5.0";
@@ -859,11 +983,38 @@ The Effect examples below run inside a Golem Effect agent, whose runtime supplie
   The functions in `golemcloud/golem_sdk/interface/golem/rdbms/postgres` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
   </Callout>
   </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```go
+  import (
+      "github.com/golemcloud/golem/sdks/go/golem"
+      "github.com/golemcloud/golem/sdks/go/golem/rdbms/postgres"
+  )
+
+  // Connecting to the database called 'test' with user 'user'
+  // Use appropriate error handling in real code
+  db := golem.Must(postgres.Open("postgresql://user@localhost:5432/test"))
+  defer db.Close()
+
+  golem.Must(db.Exec(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );`))
+  ```
+
+  <Callout type="info">
+    The functions in the `rdbms/postgres` package are blocking calls that return an `error`; `golem.Must` panics on the error, which fails the invocation.
+  </Callout>
+  </Tabs.Tab>
 </Tabs>
 
 #### Apache Ignite
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/ignite2@1.5.0";
@@ -1029,6 +1180,10 @@ The Effect examples below run inside a Golem Effect agent, whose runtime supplie
   <Callout type="info">
   The functions in `golemcloud/golem_sdk/interface/golem/rdbms/ignite2` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
   </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  The Go SDK does not provide an Apache Ignite 2 client; its `rdbms/postgres` and `rdbms/mysql` packages cover PostgreSQL and MySQL.
   </Tabs.Tab>
 
 </Tabs>

@@ -217,11 +217,15 @@ handler Effect.
 
 ## Infallible Transactions
 
-`Saga.infallibleTransaction(body)` accepts only `Effect<A, never, R>`. On interruption it drains
-compensations, rewinds to the transaction checkpoint with the Golem oplog, and relies on durable
-replay to try again. Do not cast away a real error channel or turn expected failures into defects to
-force a body into this API. A deterministic retry condition can loop forever, and rewind recovery
-must not be wrapped in `persistNothing`.
+`Saga.infallibleTransaction(body)` accepts a typed failure channel. After each completely
+compensated failure, it resolves the host policy with verb `saga`, noun the agent URN, and
+`attempt`/`error-kind` properties. `next-retry-delay` uses the existing evaluator and opaque
+binary continuation; the SDK uses durable clocks and timers. No match selects the agent default.
+Unbounded policies are rejected rather than silently capped. Count/time/never exhaustion and
+selector/evaluator errors return `SagaRetryFailure` retaining the original Cause. New attempts
+append history; they do not rewind it. Caught defects and self-interruption can be policy-retried.
+External cancellation terminates retries while retaining original and compensation evidence in
+the Cause. Prefer a fallible saga when the caller must observe a domain failure.
 
 Use `fallibleTransaction` whenever failure is an acceptable caller-visible outcome. It is the right
 choice for methods returning `{ success, error }`.
@@ -231,19 +235,23 @@ choice for methods returning `{ success, error }`.
 - Keep execute and compensation actions idempotent; durable replay or interruption can repeat work.
 - Compensations run sequentially in reverse registration order.
 - Await every step by yielding its Effect. Starting work outside the returned Effect breaks ordering.
-- Defects bypass compensation and trap the worker. Use the typed error channel for business failure.
+- Caught failures, defects and interruption run reverse-order compensation. A fallible saga
+  propagates the original Cause only after complete rollback; partial rollback retains both
+  original and compensation failures. Uncatchable guest traps cannot run compensation.
 - Do not nest `fallibleTransaction` or `infallibleTransaction`; nested sagas fail with
   `NestedSagaError`.
 - Do not use compensation combinators outside a transaction; the step runs but no rollback is
   retained.
-- Saga atomic regions make each durable step recoverable; they do not make external systems ACID.
+- Saga execute and compensation calls are individually durable. Recovery repairs an eligible
+  incomplete call at its own `Start`, while completed calls replay their results. New attempts
+  append new calls without erasing earlier work; sagas do not make external systems ACID.
 - Await every outgoing HTTP execute and compensation request; do not start either one in a detached
   Effect.
 - Keep the agent durable so the oplog can recover saga steps.
 
 ## Authoritative API Sources
 
-- [`Saga` implementation and signatures](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Saga.ts)
+- [`Saga` implementation and signatures](https://github.com/golemcloud/golem/blob/main/sdks/effect/src/Saga.ts)
 - [Pinned booking-saga agent example](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/integration-test/components/agents/src/booking-saga-agent.ts)
 - [Method schemas and handler input](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/internal/method.ts)
 - [Effect HTTP client skill](../golem-make-http-request-effect/SKILL.md)

@@ -156,6 +156,7 @@ impl FilesystemStorageError {
 
     /// Gives the same error about `path`, for an operation that reached the path under another
     /// name, such as a path below `/proc/self/fd/`.
+    #[cfg(any(test, target_os = "linux"))]
     fn about(mut self, path: &Path) -> Self {
         self.inner.path = path.to_path_buf();
         self
@@ -545,18 +546,19 @@ enum NativeNameModeSource {
 
 #[derive(Clone, Default)]
 struct NativeNameModeProbe {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl NativeNameModeProbe {
+    #[cfg(target_os = "linux")]
     fn record(&self) {
         #[cfg(test)]
         self.count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn count(&self) -> usize {
         self.count.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -857,6 +859,10 @@ enum FileCopyMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuotaAuthority {
     Unsupported,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "project quotas are installed only on Linux")
+    )]
     Project {
         project_id: NonZeroU32,
         filesystem_block_bytes: NonZeroU64,
@@ -1227,7 +1233,7 @@ impl SandboxFilesystem {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn name_mode_probe_count(&self) -> usize {
         self.name_mode_probe.count()
     }
@@ -1831,6 +1837,7 @@ async fn verify_fresh_directory(path: &Path) -> Result<(), FilesystemStorageErro
     verify_empty_directory(path).await
 }
 
+#[cfg(target_os = "linux")]
 async fn verify_fresh_open_directory(path: &Path) -> Result<(), FilesystemStorageError> {
     let metadata = tokio::fs::metadata(path)
         .await
@@ -2301,6 +2308,27 @@ mod tests {
     #[test]
     fn a_copy_on_write_volume_makes_copy_on_write_copies() {
         assert!(copy_on_write_volume().copies_on_write());
+    }
+
+    #[test]
+    fn space_uses_fragment_size_and_executor_available_counts() {
+        let space = space_from_values(10, 4, 4096, 20, 7).unwrap();
+
+        assert_eq!(
+            space,
+            FilesystemSpace::Observed {
+                total_bytes: 40_960,
+                available_bytes: 16_384,
+                total_filesystem_objects: 20,
+                available_filesystem_objects: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn space_rejects_byte_overflow() {
+        assert!(space_from_values(u64::MAX, 1, 2, 0, 0).is_err());
+        assert!(space_from_values(1, u64::MAX, 2, 0, 0).is_err());
     }
 
     #[test]

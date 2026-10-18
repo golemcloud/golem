@@ -59,11 +59,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.timestamp.seconds == BigInt(1700000000)
       )
     },
-    test("NoOp from dynamic") {
-      val raw    = wrapEntry("no-op", js.Dynamic.literal(timestamp = ts()))
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(parsed.isInstanceOf[OplogEntry.NoOp])
-    },
     test("Interrupted from dynamic") {
       val raw    = wrapEntry("interrupted", js.Dynamic.literal(timestamp = ts()))
       val parsed = OplogEntry.fromJs(raw)
@@ -73,11 +68,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val raw    = wrapEntry("exited", js.Dynamic.literal(timestamp = ts()))
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(parsed.isInstanceOf[OplogEntry.Exited])
-    },
-    test("BeginAtomicRegion from dynamic") {
-      val raw    = wrapEntry("begin-atomic-region", js.Dynamic.literal(timestamp = ts()))
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(parsed.isInstanceOf[OplogEntry.BeginAtomicRegion])
     },
     test("BeginRemoteWrite from dynamic") {
       val raw    = wrapEntry("begin-remote-write", js.Dynamic.literal(timestamp = ts()))
@@ -124,20 +114,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         e.params.kind == OplogErrorKind.Recovery,
         e.params.error == "something failed",
         e.params.retryFrom == BigInt(5)
-      )
-    },
-    test("EndAtomicRegion from dynamic") {
-      val raw = wrapEntry(
-        "end-atomic-region",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          beginIndex = js.BigInt("10")
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.EndAtomicRegion],
-        parsed.asInstanceOf[OplogEntry.EndAtomicRegion].params.beginIndex == BigInt(10)
       )
     },
     test("EndRemoteWrite from dynamic") {
@@ -434,7 +410,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
               )
             ),
             kind = "client"
-          )
+          ),
+          denial = "access denied"
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -448,6 +425,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         s.params.observationalOwner.contains(BigInt(11)),
         s.params.request.isDefined,
         s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote,
+        s.params.denial.contains("access denied"),
         span.spanId == "span-1",
         span.traceId == "trace-1",
         span.traceStates == List("vendor=opaque", "sampled=true"),
@@ -540,7 +518,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
               observationalOwner = js.undefined,
               request = js.undefined,
               durableFunctionType = js.Dynamic.literal(tag = "read-local"),
-              spanStarted = js.undefined
+              spanStarted = js.undefined,
+              denial = js.undefined
             )
           )
         )
@@ -575,6 +554,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         .asInstanceOf[OplogEntry.Cancelled]
       assertTrue(
         start.params.spanStarted.isEmpty,
+        start.params.denial.isEmpty,
         end.params.spanFinished.isEmpty,
         end.params.spanAttributes.isEmpty,
         cancelled.params.spanFinished.isEmpty,
@@ -738,9 +718,11 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.PendingUpdate],
         ud.isInstanceOf[UpdateDescription.SnapshotBased],
         ud.asInstanceOf[UpdateDescription.SnapshotBased].data.toList == List[Byte](1, 2, 3),
-        ud.asInstanceOf[UpdateDescription.SnapshotBased].filesystemSnapshot.contains(
-          "u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
-        )
+        ud.asInstanceOf[UpdateDescription.SnapshotBased]
+          .filesystemSnapshot
+          .contains(
+            "u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+          )
       )
     },
     test("Snapshot with filesystem snapshot from dynamic") {

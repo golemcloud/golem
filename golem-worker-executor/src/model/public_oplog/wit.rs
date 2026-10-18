@@ -23,23 +23,22 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams,
-    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
-    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
-    StreamRegisteredParams, StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams,
-    SuspendParams, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedParams, CommittedRemoteTransactionParams, CompletionDeliveredParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult,
+    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
+    PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
+    ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SnapshotConfirmedParams, SnapshotParams, StartParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams,
 };
 
 fn durable_invocation_id_to_wit(
@@ -618,6 +617,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 request,
                 durable_function_type: wrapped_function_type,
                 span_started,
+                denial,
             }) => Self::Start(oplog::StartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|c| c.into()),
@@ -627,6 +627,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 request: request.map(encode_public_typed_schema_value).transpose()?,
                 durable_function_type: wrapped_function_type.into(),
                 span_started: span_started.map(public_span_started_to_wit),
+                denial,
             }),
             PublicOplogEntry::End(EndParams {
                 timestamp,
@@ -698,14 +699,12 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
             }) => Self::Error(oplog::ErrorParameters {
                 timestamp: timestamp.into(),
                 kind: kind.into(),
                 error: error.to_string(),
                 retry_from: retry_from.into(),
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(|s| {
                     let internal: golem_common::model::RetryPolicyState = s.into();
                     internal.into()
@@ -714,7 +713,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp }) => {
                 Self::RecoverySucceeded(timestamp.into())
             }
-            PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
                 Self::Jump(oplog::JumpParameters {
                     timestamp: timestamp.into(),
@@ -728,16 +726,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 Self::Interrupted(timestamp.into())
             }
             PublicOplogEntry::Exited(ExitedParams { timestamp }) => Self::Exited(timestamp.into()),
-            PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }) => {
-                Self::BeginAtomicRegion(timestamp.into())
-            }
-            PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                timestamp,
-                begin_index,
-            }) => Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
-                timestamp: timestamp.into(),
-                begin_index: begin_index.into(),
-            }),
             PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                 timestamp,
                 invocation,
@@ -1044,6 +1032,20 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                     record: encode_public_typed_schema_value(record)?,
                 })
             }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                Self::ToolAttachmentControl(oplog::ToolAttachmentControlParameters {
+                    timestamp: params.timestamp.into(),
+                    attachment: encode_public_typed_schema_value(params.attachment)?,
+                    transition: encode_public_typed_schema_value(params.transition)?,
+                })
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                Self::ToolAttachmentRead(oplog::ToolAttachmentReadParameters {
+                    timestamp: params.timestamp.into(),
+                    observation: encode_public_typed_schema_value(params.observation)?,
+                    payload: params.payload,
+                })
+            }
             PublicOplogEntry::StreamItems(StreamItemsParams { timestamp, record }) => {
                 Self::StreamItems(oplog::DurableStreamRecordParameters {
                     timestamp: timestamp.into(),
@@ -1115,12 +1117,6 @@ impl From<PublicDurableFunctionType> for oplog::WrappedFunctionType {
             PublicDurableFunctionType::ReadLocal(_) => Self::ReadLocal,
             PublicDurableFunctionType::WriteRemote(_) => Self::WriteRemote,
             PublicDurableFunctionType::ReadRemote(_) => Self::ReadRemote,
-            PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
-                index: idx,
-            }) => Self::WriteRemoteBatched(idx.map(|idx| idx.into())),
-            PublicDurableFunctionType::WriteRemoteTransaction(
-                WriteRemoteTransactionParameters { index: idx },
-            ) => Self::WriteRemoteTransaction(idx.map(|idx| idx.into())),
         }
     }
 }
@@ -1626,6 +1622,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 request: params.request.map(oplog_payload_from_wit),
                 durable_function_type: params.durable_function_type.into(),
                 span_started: params.span_started.map(|span| raw_span_started_from_wit(span).map(Box::new)).transpose()?,
+                denial: params.denial,
             }),
             oplog::OplogEntry::End(params) => Ok(Self::End {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -1691,7 +1688,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 kind: params.kind.into(),
                 error: params.error.into(),
                 retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
-                inside_atomic_region: params.inside_atomic_region,
                 retry_policy_state: params.retry_policy_state.map(|s| {
                     let internal: golem_common::model::RetryPolicyState = s.into();
                     internal
@@ -1699,10 +1695,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::RecoverySucceeded(ts) => Ok(Self::RecoverySucceeded {
                 timestamp: timestamp_from_datetime(ts.timestamp),
-            }),
-            oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
-                timestamp: timestamp_from_datetime(ts.timestamp),
-                entity_parent_start_index: None,
             }),
             oplog::OplogEntry::Jump(params) => Ok(Self::Jump {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -1717,15 +1709,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::Exited(ts) => Ok(Self::Exited {
                 timestamp: timestamp_from_datetime(ts.timestamp),
-            }),
-            oplog::OplogEntry::BeginAtomicRegion(ts) => Ok(Self::BeginAtomicRegion {
-                timestamp: timestamp_from_datetime(ts.timestamp),
-                entity_parent_start_index: None,
-            }),
-            oplog::OplogEntry::EndAtomicRegion(params) => Ok(Self::EndAtomicRegion {
-                timestamp: timestamp_from_datetime(params.timestamp),
-                entity_parent_start_index: None,
-                begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
             }),
             oplog::OplogEntry::PendingAgentInvocation(params) => {
                 let trace_id = golem_common::model::invocation_context::TraceId::from_string(
@@ -1881,9 +1864,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::BeginRemoteTransaction(params) => Ok(Self::BeginRemoteTransaction {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 transaction_id: golem_common::model::TransactionId::from(params.transaction_id),
-                original_begin_index: params
-                    .original_begin_index
-                    .map(golem_common::model::OplogIndex::from_u64),
+                original_begin_index: golem_common::model::OplogIndex::from_u64(params.original_begin_index),
             }),
             oplog::OplogEntry::PreCommitRemoteTransaction(params) => {
                 Ok(Self::PreCommitRemoteTransaction {
@@ -2012,6 +1993,31 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 record: oplog_payload_from_wit(params.record),
                 summary: params.summary.map(durable_stream_summary_from_wit),
             }),
+            oplog::OplogEntry::ToolAttachmentControl(params) => {
+                use golem_common::schema::FromSchema as _;
+                use golem_common::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentControl};
+                let attachment = golem_schema::schema::wit::decode_typed(&params.attachment).map_err(|error| error.to_string())?;
+                let transition = golem_schema::schema::wit::decode_typed(&params.transition).map_err(|error| error.to_string())?;
+                Ok(Self::ToolAttachmentControl {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+                    attachment: ToolAttachmentId::from_value(attachment.value()).map_err(|error| error.to_string())?,
+                    transition: ToolAttachmentControl::from_value(transition.value()).map_err(|error| error.to_string())?,
+                })
+            }
+            oplog::OplogEntry::ToolAttachmentRead(params) => {
+                use golem_common::schema::FromSchema as _;
+                let observation = golem_schema::schema::wit::decode_typed(&params.observation).map_err(|error| error.to_string())?;
+                let observation = golem_common::base_model::oplog::attachment::ToolAttachmentReadObservation::from_value(observation.value()).map_err(|error| error.to_string())?;
+                observation.validate_payload_presence(params.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(Self::ToolAttachmentRead {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+                    observation: Box::new(observation),
+                    payload: params.payload.map(oplog_payload_from_wit),
+                })
+            }
             oplog::OplogEntry::StreamItems(params) => Ok(Self::StreamItems {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
@@ -2445,6 +2451,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 request,
                 durable_function_type,
                 span_started,
+                denial,
             } => Ok(Self::Start(oplog::RawStartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|i| i.into()),
@@ -2454,6 +2461,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 request: request.map(oplog_payload_to_wit).transpose()?,
                 durable_function_type: durable_function_type.into(),
                 span_started: span_started.map(|span| raw_span_started_to_wit(*span)),
+                denial,
             })),
             M::End {
                 timestamp,
@@ -2539,7 +2547,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Ok(Self::Error(oplog::RawErrorParameters {
@@ -2547,11 +2554,9 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 kind: kind.into(),
                 error: error.into(),
                 retry_from: retry_from.into(),
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(|s| s.into()),
             })),
             M::RecoverySucceeded { timestamp } => Ok(Self::RecoverySucceeded(timestamp.into())),
-            M::NoOp { timestamp, .. } => Ok(Self::NoOp(timestamp.into())),
             M::Jump {
                 timestamp, jump, ..
             } => Ok(Self::Jump(oplog::JumpParameters {
@@ -2563,15 +2568,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             })),
             M::Interrupted { timestamp } => Ok(Self::Interrupted(timestamp.into())),
             M::Exited { timestamp } => Ok(Self::Exited(timestamp.into())),
-            M::BeginAtomicRegion { timestamp, .. } => Ok(Self::BeginAtomicRegion(timestamp.into())),
-            M::EndAtomicRegion {
-                timestamp,
-                begin_index,
-                ..
-            } => Ok(Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
-                timestamp: timestamp.into(),
-                begin_index: begin_index.into(),
-            })),
             M::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
@@ -2693,6 +2689,50 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     summary: summary.map(durable_stream_summary_to_wit),
                 },
             )),
+            M::ToolAttachmentControl {
+                timestamp,
+                entity_parent_start_index,
+                attachment,
+                transition,
+            } => {
+                use golem_common::schema::IntoTypedSchemaValue as _;
+                Ok(Self::ToolAttachmentControl(
+                    oplog::RawToolAttachmentControlParameters {
+                        timestamp: timestamp.into(),
+                        entity_parent_start_index: entity_parent_start_index.map(Into::into),
+                        attachment: encode_public_typed_schema_value(
+                            attachment
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?,
+                        )?,
+                        transition: encode_public_typed_schema_value(
+                            transition
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?,
+                        )?,
+                    },
+                ))
+            }
+            M::ToolAttachmentRead {
+                timestamp,
+                entity_parent_start_index,
+                observation,
+                payload,
+            } => {
+                use golem_common::schema::IntoTypedSchemaValue as _;
+                Ok(Self::ToolAttachmentRead(
+                    oplog::RawToolAttachmentReadParameters {
+                        timestamp: timestamp.into(),
+                        entity_parent_start_index: entity_parent_start_index.map(Into::into),
+                        observation: encode_public_typed_schema_value(
+                            (*observation)
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?,
+                        )?,
+                        payload: payload.map(oplog_payload_to_wit).transpose()?,
+                    },
+                ))
+            }
             M::StreamItems {
                 timestamp,
                 record,
@@ -2862,7 +2902,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 oplog::RawBeginRemoteTransactionParameters {
                     timestamp: timestamp.into(),
                     transaction_id: transaction_id.to_string(),
-                    original_begin_index: original_begin_index.map(|idx| idx.into()),
+                    original_begin_index: original_begin_index.into(),
                 },
             )),
             M::PreCommitRemoteTransaction {
@@ -3061,6 +3101,7 @@ mod tests {
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: Some(Box::new(started.clone())),
+                denial: None,
             },
             OplogEntry::End {
                 timestamp: finished_at,
@@ -3103,6 +3144,7 @@ mod tests {
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal.into(),
                 span_started: Some(public_started),
+                denial: None,
             }),
             PublicOplogEntry::End(EndParams {
                 timestamp: finished_at,

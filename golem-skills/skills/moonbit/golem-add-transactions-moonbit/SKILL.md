@@ -1,157 +1,58 @@
 ---
 name: golem-add-transactions-moonbit
-description: "Saga-pattern transactions with compensation in MoonBit Golem agents. Use when the user asks about transactions, compensating actions, rollback, or saga patterns."
+description: "Implements saga-pattern compensation in MoonBit Golem agents. Use when a workflow needs reverse-order compensation, domain failure reporting, or another attempt after compensation."
 ---
 
 # Saga-Pattern Transactions (MoonBit)
 
-## Overview
+The MoonBit SDK has no high-level saga runner. Implement the workflow with ordinary guest
+control flow and durable host calls. Do not change the execution cursor to retry business work.
 
-Golem supports the **saga pattern** for multi-step operations where each step has a compensation (undo) action. If a step fails, previously completed steps are automatically compensated in reverse order.
+## Compensate and loop
 
-> **SDK Limitation:** The MoonBit SDK does not yet provide a high-level transaction/saga API like Rust's `fallible_transaction` / `infallible_transaction` macros. A future SDK release may add dedicated transaction support. In the meantime, the saga pattern can be implemented manually using the oplog and atomic operation APIs.
+The following is application pseudocode, not an SDK API:
 
-## Concept
-
-A saga transaction is a sequence of **execute + compensate** pairs:
-
-1. **Execute** — perform a step (e.g., reserve inventory, charge payment)
-2. **Compensate** — undo that step (e.g., cancel reservation, refund payment)
-
-If step N fails, compensations for steps N-1 through 1 run in **reverse order**. Compensation logic must be **idempotent** — it may be called more than once during retries.
-
-## Manual Implementation
-
-Use Golem's oplog and atomic operation APIs from `@golem_sdk/api` to build saga-style transactions manually.
-
-### Available APIs
-
-| API | Purpose |
-|-----|---------|
-| `@api.mark_begin_operation()` | Start an atomic region; returns an oplog index |
-| `@api.mark_end_operation(idx)` | Commit an atomic region |
-| `@api.with_atomic_operation(f)` | Run `f` inside an atomic region (auto-committed) |
-| `@api.set_oplog_index(idx)` | Roll back execution to a previous oplog position |
-| `@api.get_oplog_index()` | Get the current oplog position |
-
-### Defining Operations
-
-Model each step as a pair of functions — one to execute and one to compensate:
-
-```moonbit
-fn reserve_inventory(sku : String) -> String {
-  // Call inventory API, return reservation_id
-  let reservation_id = call_inventory_api(sku)
-  reservation_id
-}
-
-fn cancel_reservation(reservation_id : String) -> Unit {
-  // Compensate: cancel the reservation (must be idempotent)
-  call_cancel_reservation_api(reservation_id)
-}
-
-fn charge_payment(amount : UInt) -> String {
-  // Call payment API, return charge_id
-  let charge_id = call_payment_api(amount)
-  charge_id
-}
-
-fn refund_payment(charge_id : String) -> Unit {
-  // Compensate: refund the payment (must be idempotent)
-  call_refund_api(charge_id)
-}
+```text
+repeat:
+  completed = []
+  for each step:
+    result = step.execute()
+    if result succeeded:
+      register compensation with the successful result
+    else:
+      run completed compensations in reverse order
+      if any compensation failed:
+        return partial-compensation failure with the original error
+      if failure is acceptable:
+        return the original domain error
+      otherwise:
+        resolve the saga policy and request next-retry-delay with continuation state
+        if exhausted or invalid, return failure preserving the original error
+        await the delay with a durable timer, then start another attempt
+  if every step succeeded:
+    return success
 ```
 
-### Fallible Transaction (Manual)
+Register compensation only after a step succeeds. Preserve compensation failures so callers do
+not mistake partial compensation for a completed rollback. A permanent domain failure can loop
+forever; prefer a fallible workflow unless the application has an explicit retry decision.
+The SDK exposes `@api.resolve_retry_policy` and `@api.next_retry_delay`, not a saga runner.
+An application can resolve verb `saga`, noun the agent URN, with `attempt`/`error-kind` after
+complete compensation. Pass the opaque binary continuation unchanged, measure elapsed work and
+waiting with durable clocks, and await delays with durable timers. No matching policy selects
+the agent default. Unbounded policies are rejected; exhaustion and policy errors must return a
+failure preserving the original error. Do not invent a MoonBit saga helper or reset the budget.
 
-On failure, compensate completed steps in reverse order and return an error:
+## Recovery rules
 
-```moonbit
-struct CompletedStep {
-  compensate : () -> Unit
-}
-
-fn fallible_saga() -> Result[String, String] {
-  let completed : Array[CompletedStep] = []
-
-  // Step 1: Reserve inventory
-  let reservation_id = try {
-    @api.with_atomic_operation(fn() { reserve_inventory("SKU-123") })
-  } catch {
-    e => {
-      compensate_all(completed)
-      return Err("Reserve failed: \{e}")
-    }
-  }
-  completed.push({ compensate: fn() { cancel_reservation(reservation_id) } })
-
-  // Step 2: Charge payment
-  let charge_id = try {
-    @api.with_atomic_operation(fn() { charge_payment(4999) })
-  } catch {
-    e => {
-      compensate_all(completed)
-      return Err("Payment failed: \{e}")
-    }
-  }
-  completed.push({ compensate: fn() { refund_payment(charge_id) } })
-
-  Ok("reservation=\{reservation_id}, charge=\{charge_id}")
-}
-
-fn compensate_all(steps : Array[CompletedStep]) -> Unit {
-  // Compensate in reverse order
-  for i = steps.length() - 1; i >= 0; i = i - 1 {
-    (steps[i].compensate)()
-  }
-}
-```
-
-### Infallible Transaction (Manual)
-
-On failure, compensate completed steps and retry the entire transaction using `set_oplog_index`:
-
-```moonbit
-fn infallible_saga() -> String {
-  let checkpoint = @api.get_oplog_index()
-  let completed : Array[CompletedStep] = []
-
-  // Step 1: Reserve inventory
-  let reservation_id = try {
-    @api.with_atomic_operation(fn() { reserve_inventory("SKU-123") })
-  } catch {
-    _ => {
-      compensate_all(completed)
-      @api.set_oplog_index(checkpoint) // retry from the beginning
-      panic() // unreachable — set_oplog_index rewinds execution
-    }
-  }
-  completed.push({ compensate: fn() { cancel_reservation(reservation_id) } })
-
-  // Step 2: Charge payment
-  let charge_id = try {
-    @api.with_atomic_operation(fn() { charge_payment(4999) })
-  } catch {
-    _ => {
-      compensate_all(completed)
-      @api.set_oplog_index(checkpoint) // retry from the beginning
-      panic() // unreachable
-    }
-  }
-  completed.push({ compensate: fn() { refund_payment(charge_id) } })
-
-  "reservation=\{reservation_id}, charge=\{charge_id}"
-}
-```
-
-When `set_oplog_index` is called, Golem rewinds execution to the saved checkpoint. The side-effecting calls will be re-executed on retry, potentially with different results.
-
-## Guidelines
-
-- **No high-level API yet** — implement sagas manually using oplog primitives as shown above
-- Wrap each step in `with_atomic_operation` so partial steps are retried as a unit on failure
-- Keep compensation logic **idempotent** — it may run more than once
-- Compensate in **reverse order** of execution
-- Use `set_oplog_index` for infallible (auto-retry) semantics; use `Result` for fallible semantics
-- Side-effecting calls (HTTP, database) should be wrapped in durable function patterns for replay safety
-- A future MoonBit SDK release may add `fallible_transaction` / `infallible_transaction` helpers — check the SDK changelog for updates
+- Each new attempt appends new calls. Failed attempts and compensations remain in the oplog.
+- Reconstruction replays completed call outcomes and repairs an eligible incomplete call at its
+  own `Start`; it does not rerun the whole workflow.
+- Use domain `Result` values for expected failures. A deterministic guest trap fails the
+  invocation and does not guarantee compensation.
+- Make execute and compensation actions duplicate-safe. External exactly-once behavior requires
+  peer-enforced idempotency keys.
+- Host HTTP transport, status-code and response-body retries remain host responsibilities. They
+  are separate from the application's compensate-and-loop decision.
+- A lost nonresumable handle reports typed loss. Explicitly reopen and initialize the next
+  session; loss does not prove an earlier write never reached the peer.

@@ -5,11 +5,11 @@ use bash_shell::commands::CommandDescriptor;
 use bash_shell::commands::{CommandFuture, CommandInvoker, CommandOutput, PreparedCommand};
 #[cfg(target_arch = "wasm32")]
 use bash_shell::session::Session;
-use golem_schema::TypedSchemaValue;
 use golem_schema::tool::{
-    Tool,
+    ProcessExitStatus, Tool,
     argv::{self, ParsedToolArguments},
 };
+use golem_schema::{IntoSchema, SchemaGraph, SchemaType, TypedSchemaValue};
 use std::collections::{BTreeMap, HashMap};
 #[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
@@ -26,6 +26,12 @@ impl Catalog {
         for (name, tool) in &tools {
             golem_schema::tool::validation::validate_tool(tool)
                 .map_err(|errors| format!("invalid tool {name:?}: {errors:?}"))?;
+            for command in &tool.commands.nodes {
+                if let Some(result) = command.body.as_ref().and_then(|body| body.result.as_ref()) {
+                    process_status_type(&tool.schema, &result.type_)
+                        .map_err(|error| format!("invalid tool {name:?}: {error}"))?;
+                }
+            }
         }
         Ok(Self { tools })
     }
@@ -75,6 +81,10 @@ impl Catalog {
                     stdin: body.stdin.is_some(),
                     stdout: body.stdout.is_some(),
                     stderr: body.stderr.is_some(),
+                    result_is_status: body
+                            .result
+                            .as_ref()
+                            .is_some_and(|result| matches!(&result.type_, SchemaType::Ref { id, .. } if *id == ProcessExitStatus::type_id())),
                     errors: body
                         .errors
                         .iter()
@@ -107,6 +117,7 @@ struct Invocation {
     stdin: bool,
     stdout: bool,
     stderr: bool,
+    result_is_status: bool,
     errors: BTreeMap<String, u8>,
 }
 
@@ -166,6 +177,82 @@ fn rpc_failure(
         | ToolRpcError::RemoteInternalError(message)
         | ToolRpcError::ResourceExhausted(message) => (1, message),
         other => (1, format!("{other:?}")),
+    }
+}
+
+fn process_status_type(graph: &SchemaGraph, root: &SchemaType) -> Result<bool, String> {
+    if !matches!(root, SchemaType::Ref { id, .. } if *id == ProcessExitStatus::type_id()) {
+        return Ok(false);
+    }
+    let definition = graph.lookup(&ProcessExitStatus::type_id());
+    if let Some(definition) = definition
+        && let SchemaType::Record { fields, .. } = &definition.body
+        && fields.len() == 1
+        && fields[0].name == "exit_code"
+        && matches!(
+            fields[0].body,
+            SchemaType::U8 {
+                restrictions: None,
+                ..
+            }
+        )
+    {
+        return Ok(true);
+    }
+    Err("ProcessExitStatus must define exactly one exit_code: u8 field".into())
+}
+
+/// ProcessExitStatus controls shell status; all other results retain their rendering behavior.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn apply_result(
+    output: &mut CommandOutput,
+    stdout: bool,
+    result_is_status: bool,
+    wire: Option<golem_rust::schema::wit::wire::TypedSchemaValue>,
+) {
+    let result = (|| -> Result<(), String> {
+        if stdout && !result_is_status {
+            return Ok(());
+        }
+        let Some(wire) = wire else {
+            return if result_is_status {
+                Err("result: missing ProcessExitStatus".into())
+            } else {
+                Ok(())
+            };
+        };
+        let typed = golem_rust::decode_typed_schema_value(&wire)
+            .map_err(|error| format!("result: {error:?}"))?;
+        if result_is_status {
+            if !process_status_type(typed.graph(), typed.root_type())? {
+                return Err("result: expected named ProcessExitStatus".into());
+            }
+            let golem_schema::SchemaValue::Record { fields } = typed.value() else {
+                return Err("result: expected ProcessExitStatus record".into());
+            };
+            let [golem_schema::SchemaValue::U8(status)] = fields.as_slice() else {
+                return Err("result: expected exactly one u8 exit status value".into());
+            };
+            if output.exit_code == 0 {
+                output.exit_code = *status;
+            }
+        } else {
+            let json = golem_rust::schema::render::json_value::to_json_value_redacted(
+                typed.graph(),
+                typed.root_type(),
+                typed.value(),
+            )
+            .map_err(|error| format!("result: {error:?}"))?;
+            output.stdout = match json {
+                serde_json::Value::String(text) => text.into_bytes(),
+                value => format!("{value}\n").into_bytes(),
+            };
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        output.exit_code = 1;
+        output.stderr.extend(format!("{error}\n").bytes());
     }
 }
 

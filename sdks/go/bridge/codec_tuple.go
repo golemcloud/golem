@@ -22,6 +22,20 @@ import (
 // Tuple conversions, one pair per arity the value vocabulary provides. They
 // are identical but for the arity, and Go cannot abstract over it.
 
+func EncodeTuple1[A any](t values.Tuple1[A], fa Encoder[A]) schema.SchemaValue {
+	return schema.TupleValue{Elements: []schema.SchemaValue{fa(t.A)}}
+}
+
+func DecodeTuple1[A any](sv schema.SchemaValue, fa Decoder[A]) (values.Tuple1[A], error) {
+	var out values.Tuple1[A]
+	els, err := tupleElements(sv, 1)
+	if err != nil {
+		return out, err
+	}
+	out.A, err = fa(els[0])
+	return out, err
+}
+
 func EncodeTuple2[A, B any](t values.Tuple2[A, B], fa Encoder[A], fb Encoder[B]) schema.SchemaValue {
 	return schema.TupleValue{Elements: []schema.SchemaValue{fa(t.A), fb(t.B)}}
 }

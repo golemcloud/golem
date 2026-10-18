@@ -98,6 +98,7 @@ sealed trait JsStartParameters extends js.Object {
   def request: js.UndefOr[JsTypedSchemaValue]         = js.native
   def durableFunctionType: JsWrappedFunctionType      = js.native
   def spanStarted: js.UndefOr[JsSpanStarted]          = js.native
+  def denial: js.UndefOr[String]                      = js.native
 }
 
 @js.native
@@ -243,14 +244,6 @@ sealed trait JsSetRetryPolicyParameters extends js.Object {
 sealed trait JsRemoveRetryPolicyParameters extends js.Object {
   def timestamp: JsDatetime = js.native
   def name: String          = js.native
-}
-
-// --- EndAtomicRegionParameters ---
-
-@js.native
-sealed trait JsEndAtomicRegionParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def beginIndex: js.BigInt = js.native
 }
 
 // --- EndRemoteWriteParameters ---

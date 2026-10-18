@@ -18,20 +18,20 @@ use super::{
     AgentMethodInvocationParameters, AgentResourceId, ExternalToolInvocationParameters,
     ExternalToolResultParameters, FallibleResultParameters, JsonSnapshotData,
     LoadSnapshotParameters, LogLevel, LogTraceContext, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogCursor, PluginInstallationDescription,
-    ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentEntity,
-    PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
-    PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
+    MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogCursor,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
+    PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue,
+    PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicExternalSpanData,
     PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicOplogPageEntry,
     PublicRetryPolicyState, PublicSnapshotAssistedUpdateDetails, PublicSnapshotData,
     PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanLink,
     PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
     SaveSnapshotResultParameters, SnapshotAssistedAutomaticUpdateParameters,
     SnapshotAssistedUpdateDetails, SnapshotBasedUpdateParameters, StringAttributeValue,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
@@ -62,20 +62,19 @@ use crate::model::oplog::payload::types::{
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
     CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
-    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SnapshotConfirmedParams, SnapshotParams, StartParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    SuccessfulUpdateParams, SuspendParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::raw_types::{
     AttributeMap, CreateParameters, DurableStreamEventSummary, DurableStreamOutcome,
@@ -95,6 +94,166 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
+
+fn decode_attachment_observation(
+    value: &crate::schema::TypedSchemaValue,
+) -> Result<crate::base_model::oplog::attachment::ToolAttachmentReadObservation, String> {
+    use crate::schema::FromSchema as _;
+    crate::base_model::oplog::attachment::ToolAttachmentReadObservation::from_value(value.value())
+        .map_err(|error| error.to_string())
+}
+
+fn decode_attachment_control(
+    attachment: &crate::schema::TypedSchemaValue,
+    transition: &crate::schema::TypedSchemaValue,
+) -> Result<
+    (
+        crate::base_model::oplog::attachment::ToolAttachmentId,
+        crate::base_model::oplog::attachment::ToolAttachmentControl,
+    ),
+    String,
+> {
+    use crate::base_model::oplog::attachment::{ToolAttachmentControl, ToolAttachmentId};
+    use crate::schema::FromSchema as _;
+    Ok((
+        ToolAttachmentId::from_value(attachment.value()).map_err(|error| error.to_string())?,
+        ToolAttachmentControl::from_value(transition.value()).map_err(|error| error.to_string())?,
+    ))
+}
+
+#[cfg(test)]
+mod tool_attachment_control_tests {
+    use super::*;
+    use crate::base_model::oplog::attachment::{
+        ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentControl, ToolAttachmentId,
+        ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use crate::model::Timestamp;
+    use crate::model::oplog::public_oplog_entry::ToolAttachmentControlParams;
+    use crate::schema::IntoTypedSchemaValue;
+    use test_r::test;
+
+    #[test]
+    fn tool_attachment_control_contract_roundtrips() {
+        let timestamp = Timestamp::now_utc().rounded();
+        let transitions = [
+            ToolAttachmentControl::ReaderDiscarded,
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::HostResourceExhausted),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Finished,
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::ConsumerCancelled,
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled),
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Failed("failure".to_string())),
+            )),
+        ];
+        for slot in [
+            ToolAttachmentSlot::Stdin,
+            ToolAttachmentSlot::Stdout,
+            ToolAttachmentSlot::Stderr,
+            ToolAttachmentSlot::Output,
+        ] {
+            let attachment = ToolAttachmentId {
+                creation_start: OplogIndex::from_u64(3),
+                slot,
+            };
+            for transition in &transitions {
+                for parent in [None, Some(OplogIndex::from_u64(2))] {
+                    let raw = OplogEntry::ToolAttachmentControl {
+                        timestamp,
+                        entity_parent_start_index: parent,
+                        attachment,
+                        transition: transition.clone(),
+                    };
+                    assert!(raw.is_hint());
+                    assert_eq!(raw.entity_parent_start_index(), parent);
+                    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+                        raw.clone().try_into().unwrap();
+                    let decoded: OplogEntry = proto.try_into().unwrap();
+                    assert_eq!(decoded, raw);
+                    let bytes = crate::serialization::serialize(&raw).unwrap();
+                    let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+                    assert_eq!(decoded, raw);
+                }
+                let public = PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+                    timestamp,
+                    attachment: attachment.into_typed_schema_value().unwrap(),
+                    transition: transition.clone().into_typed_schema_value().unwrap(),
+                });
+                let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                    public.clone().try_into().unwrap();
+                let decoded: PublicOplogEntry = proto.try_into().unwrap();
+                assert_eq!(decoded, public);
+                for value in ["toolattachmentcontrol", "tool-attachment-control"] {
+                    assert!(public.matches(&crate::model::lucene::Query::Term {
+                        value: value.to_string(),
+                    }));
+                }
+                let json = serde_json::to_value(&public).unwrap();
+                assert_eq!(json["type"], "ToolAttachmentControl");
+                assert!(json.get("payload").is_none());
+                assert_eq!(
+                    serde_json::from_value::<PublicOplogEntry>(json).unwrap(),
+                    public
+                );
+                let raw: OplogEntry = public.try_into().unwrap();
+                assert_eq!(
+                    raw,
+                    OplogEntry::ToolAttachmentControl {
+                        timestamp,
+                        entity_parent_start_index: None,
+                        attachment,
+                        transition: transition.clone(),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_attachment_control_rejects_invalid_metadata() {
+        let timestamp = Timestamp::now_utc();
+        let attachment = ToolAttachmentId {
+            creation_start: OplogIndex::from_u64(3),
+            slot: ToolAttachmentSlot::Output,
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        let transition = ToolAttachmentControl::ReaderDiscarded
+            .into_typed_schema_value()
+            .unwrap();
+        for (attachment, transition) in [
+            (transition.clone(), transition.clone()),
+            (attachment.clone(), attachment.clone()),
+        ] {
+            let public = PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+                timestamp,
+                attachment: attachment.clone(),
+                transition: transition.clone(),
+            });
+            let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                public.clone().try_into().unwrap();
+            assert!(PublicOplogEntry::try_from(proto).is_err());
+            assert!(OplogEntry::try_from(public).is_err());
+            let proto = golem_api_grpc::proto::golem::worker::RawOplogEntry {
+                timestamp: Some(timestamp.into()),
+                entity_parent_start_index: None,
+                entry: Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::ToolAttachmentControl(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentControlParameters {
+                        attachment: Some(attachment.try_into().unwrap()),
+                        transition: Some(transition.try_into().unwrap()),
+                    },
+                )),
+            };
+            assert!(OplogEntry::try_from(proto).is_err());
+        }
+    }
+}
 
 impl TryFrom<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
@@ -1287,6 +1446,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .span_started
                     .map(public_span_started_from_proto)
                     .transpose()?,
+                denial: start.denial,
             })),
             oplog_entry::Entry::End(end) => Ok(PublicOplogEntry::End(EndParams {
                 timestamp: end.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1375,7 +1535,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 kind: oplog_error_kind_from_proto(error.kind)?,
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
-                inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error
                     .retry_policy_state
                     .map(TryInto::try_into)
@@ -1389,9 +1548,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                 }),
             ),
-            oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
-                timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
-            })),
             oplog_entry::Entry::Jump(jump) => Ok(PublicOplogEntry::Jump(JumpParams {
                 timestamp: jump.timestamp.ok_or("Missing timestamp field")?.into(),
                 jump: OplogRegion {
@@ -1410,24 +1566,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::Exited(exited) => Ok(PublicOplogEntry::Exited(ExitedParams {
                 timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
-            oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => Ok(
-                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
-                    timestamp: begin_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                }),
-            ),
-            oplog_entry::Entry::EndAtomicRegion(end_atomic_region) => {
-                Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                    timestamp: end_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    begin_index: OplogIndex::from_u64(end_atomic_region.begin_index),
-                }))
-            }
-
             oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
                 PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                     timestamp: pending_worker_invocation
@@ -1853,6 +1991,40 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     payload: params.payload.ok_or("Missing payload field")?.try_into()?,
                 }))
             }
+            oplog_entry::Entry::ToolAttachmentControl(params) => {
+                let attachment = params
+                    .attachment
+                    .ok_or("Missing attachment field")?
+                    .try_into()?;
+                let transition = params
+                    .transition
+                    .ok_or("Missing transition field")?
+                    .try_into()?;
+                decode_attachment_control(&attachment, &transition)?;
+                Ok(PublicOplogEntry::ToolAttachmentControl(
+                    crate::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                        timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                        attachment,
+                        transition,
+                    },
+                ))
+            }
+            oplog_entry::Entry::ToolAttachmentRead(params) => {
+                let observation = params
+                    .observation
+                    .ok_or("Missing observation field")?
+                    .try_into()?;
+                decode_attachment_observation(&observation)?
+                    .validate_payload_presence(params.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(PublicOplogEntry::ToolAttachmentRead(
+                    crate::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                        timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                        observation,
+                        payload: params.payload,
+                    },
+                ))
+            }
             oplog_entry::Entry::StreamRegistered(params) => {
                 Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1934,6 +2106,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         request: start.request.map(TryInto::try_into).transpose()?,
                         durable_function_type: Some(start.durable_function_type.into()),
                         span_started: start.span_started.map(public_span_started_to_proto),
+                        denial: start.denial,
                     },
                 )),
             },
@@ -2025,7 +2198,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         kind: oplog_error_kind_to_proto(error.kind) as i32,
                         error: error.error,
                         retry_from: error.retry_from.0,
-                        inside_atomic_region: error.inside_atomic_region,
                         retry_policy_state: error.retry_policy_state.map(Into::into),
                     },
                 )),
@@ -2039,13 +2211,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::NoOp(no_op) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::NoOp(
-                    golem_api_grpc::proto::golem::worker::TimestampParameter {
-                        timestamp: Some(no_op.timestamp.into()),
-                    },
-                )),
-            },
             PublicOplogEntry::Jump(jump) => golem_api_grpc::proto::golem::worker::OplogEntry {
                 entry: Some(oplog_entry::Entry::Jump(
                     golem_api_grpc::proto::golem::worker::JumpParameters {
@@ -2071,26 +2236,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::BeginAtomicRegion(begin_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::BeginAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(begin_atomic_region.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::EndAtomicRegion(end_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::EndAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::EndAtomicRegionParameters {
-                            timestamp: Some(end_atomic_region.timestamp.into()),
-                            begin_index: end_atomic_region.begin_index.into(),
-                        },
-                    )),
-                }
-            }
-
             PublicOplogEntry::PendingAgentInvocation(pending_worker_invocation) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::PendingAgentInvocation(
@@ -2575,6 +2720,28 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ToolAttachmentControl(
+                        golem_api_grpc::proto::golem::worker::ToolAttachmentControlParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            attachment: Some(params.attachment.try_into()?),
+                            transition: Some(params.transition.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ToolAttachmentRead(
+                        golem_api_grpc::proto::golem::worker::ToolAttachmentReadParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            observation: Some(params.observation.try_into()?),
+                            payload: params.payload,
+                        },
+                    )),
+                }
+            }
             PublicOplogEntry::StreamItems(params) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::StreamItems(
@@ -2627,7 +2794,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
     fn try_from(
         value: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
     ) -> Result<Self, Self::Error> {
-        match value.r#type() {
+        match wrapped_function_type::Type::try_from(value.r#type).map_err(|err| err.to_string())? {
             wrapped_function_type::Type::ReadLocal => {
                 Ok(PublicDurableFunctionType::ReadLocal(Empty {}))
             }
@@ -2640,18 +2807,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
             wrapped_function_type::Type::WriteRemote => {
                 Ok(PublicDurableFunctionType::WriteRemote(Empty {}))
             }
-            wrapped_function_type::Type::WriteRemoteBatched => Ok(
-                PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
-                    index: value.oplog_index.map(OplogIndex::from_u64),
-                }),
-            ),
-            wrapped_function_type::Type::WriteRemoteTransaction => {
-                Ok(PublicDurableFunctionType::WriteRemoteTransaction(
-                    WriteRemoteTransactionParameters {
-                        index: value.oplog_index.map(OplogIndex::from_u64),
-                    },
-                ))
-            }
         }
     }
 }
@@ -2662,37 +2817,21 @@ impl From<PublicDurableFunctionType> for golem_api_grpc::proto::golem::worker::W
             PublicDurableFunctionType::ReadLocal(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::ReadLocal as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::WriteLocal(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::WriteLocal as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::ReadRemote(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::ReadRemote as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::WriteRemote(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::WriteRemote as i32,
-                    oplog_index: None,
-                }
-            }
-            PublicDurableFunctionType::WriteRemoteBatched(parameters) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
-                    oplog_index: parameters.index.map(|index| index.into()),
-                }
-            }
-            PublicDurableFunctionType::WriteRemoteTransaction(parameters) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemoteTransaction as i32,
-                    oplog_index: parameters.index.map(|index| index.into()),
                 }
             }
         }
@@ -3523,6 +3662,54 @@ impl TryFrom<PublicOplogEntryWithIndex>
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogPageEntry> for PublicOplogPageEntry {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::OplogPageEntry,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::oplog_page_entry::Entry;
+
+        match value.entry.ok_or("Missing field: entry")? {
+            Entry::Included(entry) => Ok(PublicOplogPageEntry::Included(entry.try_into()?)),
+            Entry::Omitted(omitted) => Ok(PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+                oplog_index: OplogIndex::from_u64(omitted.oplog_index),
+                attribution: omitted
+                    .attribution
+                    .ok_or("Missing field: attribution")?
+                    .try_into()?,
+                timestamp: omitted.timestamp.ok_or("Missing field: timestamp")?.into(),
+                entry_type: omitted.entry_type,
+                size: omitted.size,
+                component_revision: omitted.component_revision.try_into()?,
+            })),
+        }
+    }
+}
+
+impl TryFrom<PublicOplogPageEntry> for golem_api_grpc::proto::golem::worker::OplogPageEntry {
+    type Error = String;
+
+    fn try_from(value: PublicOplogPageEntry) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::oplog_page_entry::Entry;
+
+        let entry = match value {
+            PublicOplogPageEntry::Included(entry) => Entry::Included(entry.try_into()?),
+            PublicOplogPageEntry::Omitted(omitted) => {
+                Entry::Omitted(golem_api_grpc::proto::golem::worker::OmittedOplogEntry {
+                    oplog_index: omitted.oplog_index.into(),
+                    attribution: Some(omitted.attribution.into()),
+                    timestamp: Some(omitted.timestamp.into()),
+                    entry_type: omitted.entry_type,
+                    size: omitted.size,
+                    component_revision: omitted.component_revision.into(),
+                })
+            }
+        };
+        Ok(Self { entry: Some(entry) })
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::PublicOplogEntryAttribution>
     for PublicOplogEntryAttribution
 {
@@ -3881,12 +4068,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     PublicDurableFunctionType::WriteLocal(_) => DurableFunctionType::WriteLocal,
                     PublicDurableFunctionType::ReadRemote(_) => DurableFunctionType::ReadRemote,
                     PublicDurableFunctionType::WriteRemote(_) => DurableFunctionType::WriteRemote,
-                    PublicDurableFunctionType::WriteRemoteBatched(params) => {
-                        DurableFunctionType::WriteRemoteBatched(params.index)
-                    }
-                    PublicDurableFunctionType::WriteRemoteTransaction(params) => {
-                        DurableFunctionType::WriteRemoteTransaction(params.index)
-                    }
                 };
 
                 let request = start
@@ -3909,6 +4090,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                         .span_started
                         .map(public_span_started_to_raw)
                         .map(Box::new),
+                    denial: start.denial,
                 })
             }
             PublicOplogEntry::End(end) => {
@@ -3976,15 +4158,10 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 kind: error.kind,
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
-                inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
             }),
             PublicOplogEntry::RecoverySucceeded(p) => Ok(OplogEntry::RecoverySucceeded {
                 timestamp: p.timestamp,
-            }),
-            PublicOplogEntry::NoOp(p) => Ok(OplogEntry::NoOp {
-                timestamp: p.timestamp,
-                entity_parent_start_index: None,
             }),
             PublicOplogEntry::Jump(jump) => Ok(OplogEntry::Jump {
                 timestamp: jump.timestamp,
@@ -3997,20 +4174,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Exited(p) => Ok(OplogEntry::Exited {
                 timestamp: p.timestamp,
             }),
-            PublicOplogEntry::BeginAtomicRegion(p) => {
-                Ok(OplogEntry::BeginAtomicRegion {
-                    timestamp: p.timestamp,
-                    entity_parent_start_index: None,
-                })
-            }
-            PublicOplogEntry::EndAtomicRegion(p) => {
-                Ok(OplogEntry::EndAtomicRegion {
-                    timestamp: p.timestamp,
-                    entity_parent_start_index: None,
-                    begin_index: p.begin_index,
-                })
-            }
-
             PublicOplogEntry::PendingAgentInvocation(_) => {
                 Err("Cannot convert PendingAgentInvocation from public to raw oplog entry".to_string())
             }
@@ -4279,6 +4442,26 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     record: OplogPayload::Inline(Box::new(StreamRegisteredRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
+                })
+            }
+            PublicOplogEntry::ToolAttachmentControl(p) => {
+                let (attachment, transition) = decode_attachment_control(&p.attachment, &p.transition)?;
+                Ok(OplogEntry::ToolAttachmentControl {
+                    timestamp: p.timestamp,
+                    entity_parent_start_index: None,
+                    attachment,
+                    transition,
+                })
+            }
+            PublicOplogEntry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(&p.observation)?;
+                observation.validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp: p.timestamp,
+                    entity_parent_start_index: None,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(|bytes| OplogPayload::Inline(Box::new(bytes))),
                 })
             }
             PublicOplogEntry::StreamItems(p) => {
@@ -4582,37 +4765,21 @@ fn durable_function_type_to_proto(
         DurableFunctionType::ReadLocal => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::ReadLocal as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::WriteLocal => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::WriteLocal as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::ReadRemote => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::ReadRemote as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::WriteRemote => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::WriteRemote as i32,
-                oplog_index: None,
-            }
-        }
-        DurableFunctionType::WriteRemoteBatched(idx) => {
-            golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
-                oplog_index: idx.map(|i| i.into()),
-            }
-        }
-        DurableFunctionType::WriteRemoteTransaction(idx) => {
-            golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                r#type: wrapped_function_type::Type::WriteRemoteTransaction as i32,
-                oplog_index: idx.map(|i| i.into()),
             }
         }
     }
@@ -4622,17 +4789,11 @@ fn durable_function_type_from_proto(
     wft: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
 ) -> Result<DurableFunctionType, String> {
     use golem_api_grpc::proto::golem::worker::wrapped_function_type;
-    match wft.r#type() {
+    match wrapped_function_type::Type::try_from(wft.r#type).map_err(|err| err.to_string())? {
         wrapped_function_type::Type::ReadLocal => Ok(DurableFunctionType::ReadLocal),
         wrapped_function_type::Type::WriteLocal => Ok(DurableFunctionType::WriteLocal),
         wrapped_function_type::Type::ReadRemote => Ok(DurableFunctionType::ReadRemote),
         wrapped_function_type::Type::WriteRemote => Ok(DurableFunctionType::WriteRemote),
-        wrapped_function_type::Type::WriteRemoteBatched => Ok(
-            DurableFunctionType::WriteRemoteBatched(wft.oplog_index.map(OplogIndex::from_u64)),
-        ),
-        wrapped_function_type::Type::WriteRemoteTransaction => Ok(
-            DurableFunctionType::WriteRemoteTransaction(wft.oplog_index.map(OplogIndex::from_u64)),
-        ),
     }
 }
 
@@ -4770,11 +4931,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCardTransferredParameters, RawCompletionDeliveredParameters,
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
             RawDeactivatePluginParameters, RawDropResourceParameters,
-            RawDurableStreamRecordParameters, RawEndAtomicRegionParameters, RawEndParameters,
-            RawEnvVar, RawErrorParameters, RawFailedSnapshotAssistedUpdateDetails,
-            RawFailedUpdateParameters, RawGrowMemoryParameters, RawHostStreamFrameParameters,
-            RawJumpParameters, RawLogParameters, RawOplogProcessorCheckpointParameters,
-            RawOplogRegion, RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
+            RawDurableStreamRecordParameters, RawEndParameters, RawEnvVar, RawErrorParameters,
+            RawFailedSnapshotAssistedUpdateDetails, RawFailedUpdateParameters,
+            RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
+            RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
+            RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSnapshotAssistedUpdateDetails,
             RawSnapshotConfirmedParameters, RawSnapshotParameters, RawStartParameters,
@@ -4840,6 +5001,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 request,
                 durable_function_type,
                 span_started,
+                denial,
                 ..
             } => Entry::Start(RawStartParameters {
                 parent_start_index: parent_start_index.map(|id| id.as_u64()),
@@ -4849,6 +5011,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 request: request.map(oplog_payload_to_proto).transpose()?,
                 durable_function_type: Some(durable_function_type_to_proto(durable_function_type)),
                 span_started: span_started.map(|span| raw_span_started_to_proto(*span)),
+                denial,
             }),
             OplogEntry::End {
                 start_index,
@@ -4920,20 +5083,17 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
                 kind: oplog_error_kind_to_proto(kind) as i32,
                 retry_from: retry_from.into(),
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
                     .transpose()?,
             }),
             OplogEntry::RecoverySucceeded { .. } => Entry::RecoverySucceeded(RawTimestampOnly {}),
-            OplogEntry::NoOp { .. } => Entry::NoOp(RawTimestampOnly {}),
             OplogEntry::Jump { jump, .. } => Entry::Jump(RawJumpParameters {
                 jump: Some(RawOplogRegion {
                     start: jump.start.into(),
@@ -4942,13 +5102,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::Interrupted { .. } => Entry::Interrupted(RawTimestampOnly {}),
             OplogEntry::Exited { .. } => Entry::Exited(RawTimestampOnly {}),
-            OplogEntry::BeginAtomicRegion { .. } => Entry::BeginAtomicRegion(RawTimestampOnly {}),
-            OplogEntry::EndAtomicRegion { begin_index, .. } => {
-                Entry::EndAtomicRegion(RawEndAtomicRegionParameters {
-                    begin_index: begin_index.into(),
-                })
-            }
-
             OplogEntry::PendingAgentInvocation {
                 idempotency_key,
                 payload,
@@ -5086,7 +5239,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::BeginRemoteTransaction(RawBeginRemoteTransactionParameters {
                 transaction_id: String::from(transaction_id),
-                original_begin_index: original_begin_index.map(|i: OplogIndex| i.into()),
+                original_begin_index: original_begin_index.into(),
             }),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. } => {
                 Entry::PreCommitRemoteTransaction(RawRemoteTransactionParameters {
@@ -5301,6 +5454,47 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 record: Some(oplog_payload_to_proto(record)?),
                 summary: summary.map(Into::into),
             }),
+            OplogEntry::ToolAttachmentControl {
+                attachment,
+                transition,
+                ..
+            } => {
+                use crate::schema::IntoTypedSchemaValue as _;
+                Entry::ToolAttachmentControl(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentControlParameters {
+                        attachment: Some(
+                            attachment
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                        transition: Some(
+                            transition
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                    },
+                )
+            }
+            OplogEntry::ToolAttachmentRead {
+                observation,
+                payload,
+                ..
+            } => {
+                use crate::schema::IntoTypedSchemaValue as _;
+                Entry::ToolAttachmentRead(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentReadParameters {
+                        observation: Some(
+                            (*observation)
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                        payload: payload.map(oplog_payload_to_proto).transpose()?,
+                    },
+                )
+            }
             OplogEntry::StreamItems {
                 record, summary, ..
             } => Entry::StreamItems(RawDurableStreamRecordParameters {
@@ -5434,6 +5628,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .map(raw_span_started_from_proto)
                         .transpose()?
                         .map(Box::new),
+                    denial: p.denial,
                 })
             }
             Entry::End(p) => {
@@ -5521,15 +5716,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     kind: oplog_error_kind_from_proto(p.kind)?,
                     error,
                     retry_from,
-                    inside_atomic_region: p.inside_atomic_region,
                     retry_policy_state,
                 })
             }
             Entry::RecoverySucceeded(_) => Ok(OplogEntry::RecoverySucceeded { timestamp }),
-            Entry::NoOp(_) => Ok(OplogEntry::NoOp {
-                timestamp,
-                entity_parent_start_index,
-            }),
             Entry::Jump(p) => {
                 let jump = p.jump.ok_or("Missing jump region")?;
                 Ok(OplogEntry::Jump {
@@ -5543,15 +5733,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }
             Entry::Interrupted(_) => Ok(OplogEntry::Interrupted { timestamp }),
             Entry::Exited(_) => Ok(OplogEntry::Exited { timestamp }),
-            Entry::BeginAtomicRegion(_) => Ok(OplogEntry::BeginAtomicRegion {
-                timestamp,
-                entity_parent_start_index,
-            }),
-            Entry::EndAtomicRegion(p) => Ok(OplogEntry::EndAtomicRegion {
-                timestamp,
-                entity_parent_start_index,
-                begin_index: OplogIndex::from_u64(p.begin_index),
-            }),
             Entry::PendingAgentInvocation(p) => {
                 let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
@@ -5727,7 +5908,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }
             Entry::BeginRemoteTransaction(p) => {
                 let transaction_id = crate::model::TransactionId::from(p.transaction_id);
-                let original_begin_index = p.original_begin_index.map(OplogIndex::from_u64);
+                let original_begin_index = OplogIndex::from_u64(p.original_begin_index);
                 Ok(OplogEntry::BeginRemoteTransaction {
                     timestamp,
                     transaction_id,
@@ -5930,6 +6111,32 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
+            Entry::ToolAttachmentControl(p) => {
+                let (attachment, transition) = decode_attachment_control(
+                    &p.attachment.ok_or("Missing attachment")?.try_into()?,
+                    &p.transition.ok_or("Missing transition")?.try_into()?,
+                )?;
+                Ok(OplogEntry::ToolAttachmentControl {
+                    timestamp,
+                    entity_parent_start_index,
+                    attachment,
+                    transition,
+                })
+            }
+            Entry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(
+                    &p.observation.ok_or("Missing observation")?.try_into()?,
+                )?;
+                observation
+                    .validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp,
+                    entity_parent_start_index,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(oplog_payload_from_proto).transpose()?,
+                })
+            }
             Entry::StreamItems(p) => Ok(OplogEntry::StreamItems {
                 timestamp,
                 entity_parent_start_index,
@@ -6021,6 +6228,26 @@ mod observational_start_proto_tests {
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn denied_start_raw_protobuf_roundtrips() {
+        let original = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: None,
+            function_name: HostFunctionName::KeyvalueEventualSet,
+            invocation_id: None,
+            observational_owner: None,
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: Some("access denied".to_string()),
         };
 
         let proto: RawOplogEntry = original.clone().try_into().unwrap();
@@ -6065,6 +6292,7 @@ mod observational_start_proto_tests {
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: Some(Box::new(started)),
+            denial: None,
         }
         .rounded();
         let end = OplogEntry::End {

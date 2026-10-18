@@ -31,14 +31,14 @@ type CardsIn struct {
 // with their polymorphic flag, and sending one moves it.
 func TestPermissionCardsMoveWhenSent(t *testing.T) {
 	plain, open := &types.PermissionCard{}, &types.PermissionCard{}
-	in := CardsIn{Plain: PermissionCard{st: &permissionCardState{h: plain}}, Open: PolymorphicPermissionCard{st: &permissionCardState{h: open}}}
+	in := CardsIn{Plain: PermissionCard{st: &permissionCardState{h: plain}}, Open: PolymorphicPermissionCard{pst: &permissionCardState{h: open}}}
 	sent := in
 
 	got := roundTrip(t, in)
-	if got.Plain.st.h != plain || got.Open.st.h != open {
+	if got.Plain.st.h != plain || got.Open.pst.h != open {
 		t.Fatalf("the receiver got %+v", got)
 	}
-	if sent.Plain.st.h != nil || sent.Open.st.h != nil {
+	if sent.Plain.st.h != nil || sent.Open.pst.h != nil {
 		t.Error("the sender still holds the cards")
 	}
 

@@ -22,7 +22,7 @@ pub use crate::golem_agentic::golem::agent::common::Principal;
 pub use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 pub use crate::schema::tool::Tool;
 pub use crate::schema::tool::{
-    MonomorphicToolMiddlewareScope, ToolMiddleware, ToolMiddlewareScope,
+    MonomorphicToolMiddlewareScope, ProcessExitStatus, ToolMiddleware, ToolMiddlewareScope,
 };
 pub use tool_middleware::{
     InputStream, InvocationResult, RawCustomToolError, ToolInvokeError, TypedUnderlyingInvocation,

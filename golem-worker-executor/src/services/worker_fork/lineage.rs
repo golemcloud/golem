@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps};
+use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, StreamForkCutRecord, StreamItemsPayload,
@@ -45,7 +45,7 @@ impl LineageSource<'_> {
         &self,
         index: OplogIndex,
         count: u64,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         match self {
             Self::Open(oplog) => oplog.read_exact(index, count).await,
             Self::Service {
@@ -104,7 +104,10 @@ impl StreamForkLineage {
         let mut covered = from.previous();
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await;
+            let entries = source
+                .read_exact(covered.next(), count)
+                .await
+                .map_err(|error| error.to_string())?;
             if entries.len() as u64 != count {
                 return Err("missing oplog entries while discovering stream fork lineage".into());
             }
@@ -185,7 +188,10 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await;
+            let entries = source
+                .read_exact(covered.next(), count)
+                .await
+                .map_err(|error| error.to_string())?;
             if entries.len() as u64 != count {
                 return Err(
                     "missing oplog entries while discovering reverted stream history".into(),
@@ -223,7 +229,10 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await;
+            let entries = source
+                .read_exact(covered.next(), count)
+                .await
+                .map_err(|error| error.to_string())?;
             if entries.len() as u64 != count {
                 return Err("missing oplog entries while loading stream fork lineage".into());
             }
@@ -567,7 +576,8 @@ pub(crate) mod tests {
                     ))),
                     None,
                 )
-                .await;
+                .await
+                .unwrap();
             Self {
                 service,
                 oplog,
@@ -684,14 +694,7 @@ pub(crate) mod tests {
         for matching in [None, Some(false), Some(true)] {
             let fixture = ServiceFixture::new(&identity, fingerprint).await;
             for _ in 2..=3 {
-                fixture
-                    .oplog
-                    .add(OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    })
-                    .await
-                    .unwrap();
+                fixture.oplog.add(OplogEntry::grow_memory(0)).await.unwrap();
             }
             if let Some(matching) = matching {
                 fixture
@@ -702,14 +705,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
             } else {
-                fixture
-                    .oplog
-                    .add(OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    })
-                    .await
-                    .unwrap();
+                fixture.oplog.add(OplogEntry::grow_memory(0)).await.unwrap();
             }
             let marker = StreamSessionRecord::ForkCut(self_revert(3));
             fixture
@@ -861,10 +857,7 @@ pub(crate) mod tests {
                             .unwrap(),
                     }
                 }
-                _ => OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                },
+                _ => OplogEntry::grow_memory(0),
             };
             fixture.oplog.add(entry).await.unwrap();
         }
@@ -955,10 +948,7 @@ pub(crate) mod tests {
                         .await
                         .unwrap(),
                 },
-                _ => OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                },
+                _ => OplogEntry::grow_memory(0),
             };
             oplog.add(entry).await.unwrap();
         }
@@ -1033,10 +1023,7 @@ pub(crate) mod tests {
                         record: oplog.upload_payload(&session).await.unwrap(),
                     }
                 } else {
-                    OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    }
+                    OplogEntry::grow_memory(0)
                 };
                 oplog.add(entry).await.unwrap();
             }
@@ -1088,10 +1075,7 @@ pub(crate) mod tests {
                         .await
                         .unwrap(),
                 },
-                _ => OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                },
+                _ => OplogEntry::grow_memory(0),
             };
             assert_eq!(
                 fixture.oplog.add(entry).await.unwrap(),
@@ -1136,14 +1120,7 @@ pub(crate) mod tests {
         let fixture = ServiceFixture::new(&target, fingerprint).await;
         for index in 2..=1024 {
             assert_eq!(
-                fixture
-                    .oplog
-                    .add(OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    })
-                    .await
-                    .unwrap(),
+                fixture.oplog.add(OplogEntry::grow_memory(0)).await.unwrap(),
                 OplogIndex::from_u64(index)
             );
         }

@@ -2210,7 +2210,7 @@ async fn dynamic_tool_invalid_params_forces_refresh_to_distinguish_removal_from_
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
-async fn dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy(
+async fn dynamic_tool_crash_retains_call_identity(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -2218,7 +2218,7 @@ async fn dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy(
 ) -> anyhow::Result<()> {
     use serde_json::{Value, json};
     use std::sync::Mutex;
-    for (idempotent, atomic) in [(true, true), (false, false)] {
+    {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let effects = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
         let crash_after_effect = Arc::new(tokio::sync::Notify::new());
@@ -2293,7 +2293,7 @@ async fn dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy(
                 oauth_grant_generation: None,
             },
         );
-        let agent_id = agent_id!("GolemHostApi", format!("mcp-policy-{idempotent}-{atomic}"));
+        let agent_id = agent_id!("GolemHostApi", "mcp-crash-recovery");
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -2309,8 +2309,8 @@ async fn dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy(
                         &component,
                         &agent_id,
                         &key,
-                        "tool_rpc_invoke_with_policy",
-                        data_value!("dynamic-call", idempotent, atomic),
+                        "tool_rpc_invoke_and_await_result",
+                        data_value!("dynamic-call", Vec::<String>::new(), "{}"),
                     )
                     .await
             })
@@ -2328,33 +2328,30 @@ async fn dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy(
                 &component,
                 &agent_id,
                 &invocation_key,
-                "tool_rpc_invoke_with_policy",
-                data_value!("dynamic-call", idempotent, atomic),
+                "tool_rpc_invoke_and_await_result",
+                data_value!("dynamic-call", Vec::<String>::new(), "{}"),
             )
             .await;
-        if atomic {
-            assert_eq!(result?.into_typed::<Result<(), String>>()?, Ok(()));
-            {
-                let requests = requests.lock().unwrap();
-                assert_eq!(requests.len(), 2);
-                assert_eq!(
-                    requests[0], requests[1],
-                    "atomic rollback changed the child key"
-                );
-            }
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            assert!(oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::tool::mcp::call" && entry.oplog_index != original)), "atomic retry must run under a new physical Start");
-        } else {
-            assert!(
-                result.is_err(),
-                "non-idempotent incomplete effect must fail recovery: {result:?}"
-            );
+        assert_eq!(result?.into_typed::<Result<(), String>>()?, Ok(()));
+        {
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 2);
             assert_eq!(
-                requests.lock().unwrap().len(),
-                1,
-                "non-idempotent effect was resent"
+                requests[0], requests[1],
+                "call-local recovery changed the child key"
             );
         }
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::tool::mcp::call")).count(),
+            1,
+            "recovery must retain the original MCP Start"
+        );
+        assert_eq!(
+            oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == original)).count(),
+            1,
+            "recovery must complete the original MCP Start"
+        );
         assert_eq!(
             effects.lock().unwrap().len(),
             1,
@@ -2483,8 +2480,8 @@ async fn dynamic_tool_http_limits_apply_before_dispatch(
                     .invoke_and_await_agent(
                         &component,
                         &agent_id,
-                        "tool_rpc_invoke_with_policy",
-                        data_value!("dynamic-call", true, false),
+                        "tool_rpc_invoke_and_await_result",
+                        data_value!("dynamic-call", Vec::<String>::new(), String::new()),
                     )
                     .await
             })

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::metrics::agent_filesystem::{self, ProjectCleanup as ProjectCleanupMetric};
 use golem_xfs_quotad::{
     FS_DQUOT_VERSION, FS_PROJ_QUOTA, FS_QSTATV_VERSION1, FsDiskQuota, FsQuotaStatV,
     PROJECT_DATA_LIMIT_FIELDS, PROJECT_LIMIT_FIELDS, XfsQuotadClient,
@@ -206,6 +207,7 @@ pub(super) fn bind_reflink(
         name_mode,
         ..
     } = root;
+    agent_filesystem::record_agent_filesystem_volume_opened(false);
     Ok((
         FilesystemVolume::copy_on_write(root_fd, identity),
         directories::DirectoryProvisioning::new(
@@ -309,6 +311,7 @@ impl ManagedProvisioning {
                 FilesystemStorageError::io("connect to xfs-quotad", &configured_root, error)
             })?;
         clear_root_project_assignment(&root_fd, &configured_root)?;
+        agent_filesystem::record_agent_filesystem_volume_opened(true);
         let backend = Self {
             volume: FilesystemVolume::copy_on_write(Arc::clone(&root_fd), identity)
                 .with_project_quotas(Arc::clone(&quotas)),
@@ -1319,6 +1322,7 @@ impl ManagedProvisioning {
                 .project
                 .finish()
                 .await?;
+            agent_filesystem::record_project_stale_reclaim();
             lifecycle = Some(
                 stale_cleanup
                     .as_mut()
@@ -1411,17 +1415,28 @@ pub(super) struct ManagedProjectCleanup {
 
 impl ManagedProjectCleanup {
     pub(super) async fn delete(&mut self) -> Result<(), FilesystemStorageError> {
-        remove_and_verify(
-            &self.project.path,
-            "delete managed XFS runtime directory",
-            &self.project.cleanup_retry,
-        )
-        .await?;
-        self.project.finish().await
+        let deleted = async {
+            remove_and_verify(
+                &self.project.path,
+                "delete managed XFS runtime directory",
+                &self.project.cleanup_retry,
+            )
+            .await?;
+            self.project.finish().await
+        }
+        .await;
+        if deleted.is_err() {
+            agent_filesystem::record_project_cleanup_failure(ProjectCleanupMetric::Delete);
+        }
+        deleted
     }
 
     pub(super) fn delete_blocking(&mut self) -> Result<(), FilesystemStorageError> {
-        self.project.remove_and_finish_blocking()
+        let deleted = self.project.remove_and_finish_blocking();
+        if deleted.is_err() {
+            agent_filesystem::record_project_cleanup_failure(ProjectCleanupMetric::Drop);
+        }
+        deleted
     }
 }
 
@@ -1459,6 +1474,7 @@ impl Drop for StaleProjectCleanup {
             let lifecycle = self.lifecycle.take();
             std::thread::spawn(move || {
                 if let Err(error) = project.remove_and_finish_blocking() {
+                    agent_filesystem::record_project_cleanup_failure(ProjectCleanupMetric::Stale);
                     tracing::error!(error = %error, "Failed to clean reserved managed XFS project");
                 }
                 drop((parent, lifecycle));
@@ -1687,26 +1703,6 @@ mod tests {
     use std::io::{Seek, SeekFrom, Write};
     use std::time::Duration;
     use test_r::{test, timeout};
-
-    #[test]
-    fn space_uses_fragment_size_and_executor_available_counts() {
-        let space = space_from_values(10, 4, 4096, 20, 7).unwrap();
-
-        assert_eq!(
-            space,
-            FilesystemSpace::Observed {
-                total_bytes: 40_960,
-                available_bytes: 16_384,
-                total_filesystem_objects: 20,
-                available_filesystem_objects: 7,
-            }
-        );
-    }
-
-    #[test]
-    fn space_rejects_byte_overflow() {
-        assert!(space_from_values(u64::MAX, 1, 2, 0, 0).is_err());
-    }
 
     #[test]
     fn managed_name_mode_proof_requires_xfs_filesystem_type() {

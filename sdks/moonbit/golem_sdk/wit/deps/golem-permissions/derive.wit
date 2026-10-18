@@ -7,11 +7,21 @@ package golem:permissions@0.1.0;
 /// parent's lattice. The caller specifies which lower-positive and
 /// upper-positive grants to retain and which lower-negative and
 /// upper-negative grants to add, plus an optional lifespan.
+///
+/// Requested grants must be concrete. A grant with a slot variable (`?agent`,
+/// `?env`, ...) is rejected with `invalid-pattern`: deriving a new template
+/// card, with slot variables in its grants, is not supported yet. A template
+/// parent in the caller's wallet is resolved for the caller, so the child is
+/// a concrete card.
 interface derive {
     use golem:core/types@2.0.0.{permission-card};
     use types.{pattern-grant, permission-error, duration};
 
     /// Derive a child card from `parent`, narrowing the grant lattice.
+    ///
+    /// A template parent (one whose grants carry slot variables) must be in
+    /// the caller's wallet and is resolved against the caller's identity.
+    /// Only its grants addressed to the caller can be retained.
     derive: func(
         parent: borrow<permission-card>,
         lower-positive-to-retain: list<pattern-grant>,

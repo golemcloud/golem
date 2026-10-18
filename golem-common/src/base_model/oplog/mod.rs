@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod attachment;
 pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
@@ -109,6 +110,9 @@ oplog_entry! {
     /// for ordinary replayable calls.
     /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
     /// host-level request payload (batched-write, future transaction scopes).
+    /// `denial` is the reason the host denied the call before it ran. A denied call never runs
+    /// its operation: its `End` holds the denied response, and recovery of a `Start` without a
+    /// terminal completes it with that response.
     Start {
         hint: false
         wit_raw_type: "raw-start-parameters"
@@ -121,6 +125,7 @@ oplog_entry! {
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
             span_started: Option<Box<SpanStarted>>,
+            denial: Option<String>,
         }
         public {
             parent_start_index: Option<OplogIndex>,
@@ -130,6 +135,7 @@ oplog_entry! {
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
             span_started: Option<PublicSpanStarted>,
+            denial: Option<String>,
         }
     },
     /// Marks the successful completion of a durable host call (or scope) started by the
@@ -232,14 +238,9 @@ oplog_entry! {
             entity_parent_start_index: Option<OplogIndex>,
             kind: OplogErrorKind,
             error: AgentError,
-            /// Points to the oplog index where the retry should start from. Normally this can be just the
-            /// current oplog index (after the last persisted side-effect). When failing in an atomic region
-            /// or batched remote writes, this should point to the start of the region.
+            /// Points to the oplog index where the retry should start from.
             /// When counting the number of retries for a specific error, the error entries are grouped by this index.
             retry_from: OplogIndex,
-            /// Whether the error occurred inside an active atomic region that has already performed side effects.
-            /// This affects retry decisions for deterministic traps.
-            inside_atomic_region: bool,
             /// Optional semantic retry state. When present, this allows exact reconstruction
             /// of semantic retry policies without count-based replay.
             retry_policy_state: Option<RetryPolicyState>,
@@ -248,7 +249,6 @@ oplog_entry! {
             kind: OplogErrorKind,
             error: String,
             retry_from: OplogIndex,
-            inside_atomic_region: bool,
             retry_policy_state: Option<PublicRetryPolicyState>,
         }
     },
@@ -258,17 +258,6 @@ oplog_entry! {
         wit_raw_type: "timestamp"
         wit_public_type: "timestamp"
         raw {}
-        public {}
-    },
-    /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
-    /// more predictable.
-    NoOp {
-        hint: false
-        wit_raw_type: "timestamp"
-        wit_public_type: "timestamp"
-        raw {
-            entity_parent_start_index: Option<OplogIndex>,
-        }
         public {}
     },
     /// The worker needs to recover up to the given target oplog index and continue running from
@@ -303,32 +292,6 @@ oplog_entry! {
         wit_public_type: "timestamp"
         raw {}
         public {}
-    },
-    /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-    /// recovery except if there is a corresponding `EndAtomicRegion` entry.
-    BeginAtomicRegion {
-        hint: false
-        wit_raw_type: "timestamp"
-        wit_public_type: "timestamp"
-        raw {
-            entity_parent_start_index: Option<OplogIndex>,
-        }
-        public {}
-    },
-    /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-    /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-    /// compaction.
-    EndAtomicRegion {
-        hint: false
-        wit_raw_type: "end-atomic-region-parameters"
-        wit_public_type: "end-atomic-region-parameters"
-        raw {
-            entity_parent_start_index: Option<OplogIndex>,
-            begin_index: OplogIndex,
-        }
-        public {
-            begin_index: OplogIndex,
-        }
     },
     /// An invocation request arrived while the worker was busy
     PendingAgentInvocation {
@@ -531,15 +494,13 @@ oplog_entry! {
     },
     /// Marks the beginning of a remote transaction
     BeginRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "raw-begin-remote-transaction-parameters"
         wit_public_type: "begin-remote-transaction-parameters"
         raw {
             transaction_id: TransactionId,
-            /// BeginRemoteTransaction entries need to be repeated on retries, because they may need a new
-            /// transaction_id. The `begin_index` field always points to the original, first entry. This makes
-            /// error grouping work. When None, this is the original begin entry.
-            original_begin_index: Option<OplogIndex>,
+            /// The transaction scope Start that owns this marker.
+            original_begin_index: OplogIndex,
         }
         public {
             transaction_id: TransactionId
@@ -547,7 +508,7 @@ oplog_entry! {
     },
     /// Marks the point before a remote transaction is committed
     PreCommitRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -559,7 +520,7 @@ oplog_entry! {
     },
     /// Marks the point before a remote transaction is rolled back
     PreRollbackRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -571,7 +532,7 @@ oplog_entry! {
     },
     /// Marks the point after a remote transaction is committed
     CommittedRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -583,7 +544,7 @@ oplog_entry! {
     },
     /// Marks the point after a remote transaction is rolled back
     RolledBackRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -888,6 +849,39 @@ oplog_entry! {
             parent_start_index: OplogIndex,
             kind: HostStreamKind,
             payload: TypedSchemaValue,
+        }
+    },
+    /// A consumed tool attachment read. Metadata remains inline so reconstruction can
+    /// index read boundaries without downloading bytes. Only an original data observation
+    /// owns a payload; re-observations refer to their original observation instead.
+    /// Guest observations reserve their replay boundary despite being hint entries.
+    ToolAttachmentRead {
+        hint: true
+        wit_raw_type: "raw-tool-attachment-read-parameters"
+        wit_public_type: "tool-attachment-read-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            observation: Box<attachment::ToolAttachmentReadObservation>,
+            payload: Option<payload::OplogPayload<Vec<u8>>>,
+        }
+        public {
+            observation: TypedSchemaValue,
+            payload: Option<Vec<u8>>,
+        }
+    },
+    /// An effective tool attachment control transition with no byte payload.
+    ToolAttachmentControl {
+        hint: true
+        wit_raw_type: "raw-tool-attachment-control-parameters"
+        wit_public_type: "tool-attachment-control-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            attachment: attachment::ToolAttachmentId,
+            transition: attachment::ToolAttachmentControl,
+        }
+        public {
+            attachment: TypedSchemaValue,
+            transition: TypedSchemaValue,
         }
     },
     /// Registers a durable stream before its handle can be observed.

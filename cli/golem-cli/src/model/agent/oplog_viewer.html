@@ -252,13 +252,12 @@ const KINDS = {
   AgentInvocationStarted: ['INVOKE', 'invocation'], AgentInvocationFinished: ['INVOKE COMPLETED', 'invocation'],
   PendingAgentInvocation: ['ENQUEUED', 'invocation', 1], CancelPendingInvocation: ['CANCEL INVOCATION', 'invocation', 1],
   Suspend: ['SUSPEND', 'lifecycle', 1], Error: ['ERROR', 'error', 1], RecoverySucceeded: ['RECOVERY SUCCEEDED', 'lifecycle', 1],
-  NoOp: ['NOP', 'lifecycle'], Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
+  Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
   Exited: ['EXITED', 'lifecycle', 1], Restart: ['RESTART', 'lifecycle', 1], Resumed: ['RESUMED', 'lifecycle', 1],
   Revert: ['REVERT', 'lifecycle', 1], GrowMemory: ['GROW MEMORY', 'lifecycle', 1],
-  BeginAtomicRegion: ['BEGIN ATOMIC REGION', 'region'], EndAtomicRegion: ['END ATOMIC REGION', 'region'],
-  BeginRemoteTransaction: ['BEGIN REMOTE TRANSACTION', 'region'], PreCommitRemoteTransaction: ['PRE COMMIT', 'region'],
-  PreRollbackRemoteTransaction: ['PRE ROLLBACK', 'region'], CommittedRemoteTransaction: ['COMMITTED', 'region'],
-  RolledBackRemoteTransaction: ['ROLLED BACK', 'region'],
+  BeginRemoteTransaction: ['BEGIN REMOTE TRANSACTION', 'region', 1], PreCommitRemoteTransaction: ['PRE COMMIT', 'region', 1],
+  PreRollbackRemoteTransaction: ['PRE ROLLBACK', 'region', 1], CommittedRemoteTransaction: ['COMMITTED', 'region', 1],
+  RolledBackRemoteTransaction: ['ROLLED BACK', 'region', 1],
   PendingUpdate: ['ENQUEUED UPDATE', 'update', 1], SuccessfulUpdate: ['SUCCESSFUL UPDATE', 'update', 1], FailedUpdate: ['FAILED UPDATE', 'update', 1],
   CreateResource: ['CREATE RESOURCE', 'resource', 1], DropResource: ['DROP RESOURCE', 'resource', 1],
   Log: ['LOG', 'log', 1],
@@ -273,6 +272,7 @@ const KINDS = {
   CardRevokedCascade: ['CARD REVOKED CASCADE', 'card', 1], CardTransferConfirmed: ['CARD TRANSFER CONFIRMED', 'card', 1],
   StreamRegistered: ['STREAM REGISTERED', 'stream', 1], StreamItems: ['STREAM ITEMS', 'stream', 1],
   StreamEnd: ['STREAM END', 'stream', 1], StreamCancel: ['STREAM CANCEL', 'stream', 1], StreamSession: ['STREAM SESSION', 'stream', 1],
+  Omitted: ['OMITTED ENTRY', 'lifecycle'],
 };
 const CATEGORIES = ['invocation', 'host', 'error', 'log', 'region', 'lifecycle', 'update', 'snapshot', 'resource', 'plugin', 'retry', 'card', 'stream'];
 const LOG_LEVELS = ['Stdout', 'Stderr', 'Trace', 'Debug', 'Info', 'Warn', 'Error', 'Critical'];
@@ -291,6 +291,8 @@ const h = (tag, attrs, ...kids) => {
 };
 const kindInfo = t => KINDS[t] || [t.replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase(), 'lifecycle'];
 const isHint = t => !!(KINDS[t] || [])[2];
+// An omitted entry keeps the category and replay role of the entry kind it stands for.
+const classOf = e => e.type === 'Omitted' && e.entry.entryType ? e.entry.entryType : e.type;
 const catColor = c => `var(--c-${c})`;
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 const fmtBytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KiB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MiB' : (n / 1073741824).toFixed(2) + ' GiB';
@@ -567,7 +569,7 @@ function summary(e) {
   const p = e.entry; const t = e.type;
   switch (t) {
     case 'Create': return [span('fn', 'agent created'), ' ', span('val', `revision ${p.componentRevision} · ${p.agentMode || ''} · ${fmtBytes(p.componentSize || 0)}` + (p.parent ? ` · parent ${p.parent.agentId || ''}` : ''))];
-    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null];
+    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.denial != null ? span('err', ' · denied: ' + p.denial) : null];
     case 'End': return [span('val', '← #' + idxOf(p.startIndex)), ' ', p.response != null ? [arrow(), span('val', typedText(p.response, 120))] : span('val', 'scope end'), p.forcedCommit ? span('val', ' · forced commit') : null];
     case 'Cancelled': return [span('err', 'cancelled'), span('val', ' ← #' + idxOf(p.startIndex)), p.partial != null ? [span('val', ' · partial: '), span('val', typedText(p.partial, 80))] : null];
     case 'CompletionDelivered': return [span('val', 'result of #' + idxOf(p.startIndex) + ' delivered to the guest')];
@@ -577,10 +579,9 @@ function summary(e) {
     case 'AgentInvocationFinished': { const r = p.result; const err = resultError(r); const out = resultOutput(r); return [span('val', p.methodName || (r && r.type) || ''), ' ', err ? [span('err', 'error: ' + err)] : out ? [arrow(), span('val', typedText(out, 120))] : r && r.type === 'SaveSnapshot' ? [arrow(), span('val', snapshotText(r.snapshot))] : span('ok', 'ok')]; }
     case 'PendingAgentInvocation': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, span('val', ' · queued')]; }
     case 'CancelPendingInvocation': return [span('val', 'idempotency key ' + (p.idempotencyKey && p.idempotencyKey.value || p.idempotencyKey))];
-    case 'Error': return [span('err', (p.kind || '') + ': ' + trunc(String(p.error || ''), 200)), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : '') + (p.insideAtomicRegion ? ' · inside atomic region' : ''))];
+    case 'Error': return [span('err', (p.kind || '') + ': ' + trunc(String(p.error || ''), 200)), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : ''))];
     case 'Jump': return [span('val', `replay skips #${idxOf(p.jump.start)} … #${idxOf(p.jump.end)}`)];
     case 'Revert': return [span('val', `dropped #${idxOf(p.droppedRegion.start)} … #${idxOf(p.droppedRegion.end)} · reverted to #${idxOf(p.droppedRegion.start) - 1}`)];
-    case 'EndAtomicRegion': return [span('val', 'begin #' + idxOf(p.beginIndex))];
     case 'BeginRemoteTransaction': return [span('val', 'transaction ' + (p.transactionId && p.transactionId.value || p.transactionId))];
     case 'PreCommitRemoteTransaction': case 'PreRollbackRemoteTransaction': case 'CommittedRemoteTransaction': case 'RolledBackRemoteTransaction': return [span('val', 'begin #' + idxOf(p.beginIndex))];
     case 'PendingUpdate': return [span('fn', '→ revision ' + p.targetRevision), span('val', ' · ' + (p.description && p.description.type || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() + ` · attempt #${idxOf(p.updateAttemptIndex)}`)];
@@ -592,6 +593,7 @@ function summary(e) {
     case 'ActivatePlugin': case 'DeactivatePlugin': return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];
     case 'OplogProcessorCheckpoint': return [span('fn', p.plugin.pluginName), span('val', ` · confirmed up to #${idxOf(p.confirmedUpTo)} · sending up to #${idxOf(p.sendingUpTo)}`)];
     case 'Snapshot': return [span('val', snapshotText(p.data)), p.filesystemSnapshot ? span('val', ' · fs ' + p.filesystemSnapshot) : null];
+    case 'Omitted': return [span('val', `${p.entryType} · ${fmtBytes(p.size || 0)} · omitted from the oplog page`)];
     case 'SnapshotConfirmed': return [span('val', 'fs snapshot ' + p.filesystemSnapshot)];
     case 'SetRetryPolicy': return [span('fn', p.policy.name), span('val', ` · priority ${p.policy.priority}`)];
     case 'RemoveRetryPolicy': return [span('fn', p.name)];
@@ -608,7 +610,7 @@ function summary(e) {
 function detailFields(e) {
   const p = e.entry; const rows = [];
   const add = (k, v) => rows.push([k, v]);
-  add('type', h('span', null, e.type, isHint(e.type) ? h('span', { class: 'tag hint', style: 'margin-left:6px' }, 'hint · skipped during replay') : null));
+  add('type', h('span', null, e.type, isHint(classOf(e)) ? h('span', { class: 'tag hint', style: 'margin-left:6px' }, 'hint · skipped during replay') : null));
   add('timestamp', h('span', { title: p.timestamp }, fmtDate(e.ts), ' ', h('span', { class: 'muted' }, p.timestamp)));
   if (e.attribution && e.attribution.type === 'Entity') {
     const chain = [...(e.attribution.ancestors || []), e.attribution.invocation];
@@ -625,8 +627,7 @@ function detailFields(e) {
 }
 
 // ---------------------------------------------------------------------------
-// Structure: build a tree of groups (invocations, host calls, entity chains,
-// atomic regions, transactions) from the flat entry list.
+// Structure: build a tree of invocations, host calls and entity chains from the flat entry list.
 // ---------------------------------------------------------------------------
 function buildTree(entries, extraDropped) {
   const root = { kind: 'root', children: [], members: [], parent: null };
@@ -635,9 +636,9 @@ function buildTree(entries, extraDropped) {
   // Entries that belong to a host call (its end, stream frames, completion marker) are kept as
   // members of the host node so the merged row can summarize them.
   const member = (e, host) => { const m = { kind: 'entry', e, children: [], members: [], parent: host, frames: [] }; host.members.push(m); return m; };
-  let invocation = null; const regions = []; const hosts = new Map(); const hostNodes = new Map(); const entities = new Map();
+  let invocation = null; const hosts = new Map(); const hostNodes = new Map(); const entities = new Map();
   const errorsByRetry = new Map(); const nodeOf = new Map();
-  const container = () => regions.length ? regions[regions.length - 1] : (invocation || root);
+  const container = () => invocation || root;
   for (const e of entries) {
     const p = e.entry; const t = e.type; let n = null;
     let target = container();
@@ -653,16 +654,12 @@ function buildTree(entries, extraDropped) {
       target = parent;
     }
     switch (t) {
-      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; regions.length = 0; n = mk('invocation', e, root); invocation = n; break;
-      case 'AgentInvocationFinished': regions.length = 0; if (invocation) { invocation.end = e; n = leaf(e, invocation); invocation = null; } else n = leaf(e, root); break;
+      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; n = mk('invocation', e, root); invocation = n; break;
+      case 'AgentInvocationFinished': if (invocation) { invocation.end = e; n = leaf(e, invocation); invocation = null; } else n = leaf(e, root); break;
       case 'Start': { const parent = p.parentStartIndex != null ? hosts.get(idxOf(p.parentStartIndex)) : null; n = mk('host', e, parent || target); hosts.set(e.index, n); hostNodes.set(e.index, n); break; }
       case 'End': case 'Cancelled': { const s = hosts.get(idxOf(p.startIndex)); if (s) { s.end = e; hosts.delete(idxOf(p.startIndex)); n = member(e, s); } else n = leaf(e, target); break; }
       case 'CompletionDelivered': case 'CompletionDiscarded': { const s = hostNodes.get(idxOf(p.startIndex)); if (s) { s.completion = e; n = member(e, s); } else n = leaf(e, target); break; }
       case 'HostStreamFrame': { const s = hostNodes.get(idxOf(p.parentStartIndex)); if (s) { s.frames.push(e); n = member(e, s); } else n = leaf(e, target); break; }
-      case 'BeginAtomicRegion': n = mk('atomic', e, target); regions.push(n); break;
-      case 'EndAtomicRegion': { const i = regions.findIndex(r => r.kind === 'atomic' && r.e.index === idxOf(p.beginIndex)); if (i >= 0) { const r = regions[i]; regions.length = i; r.end = e; n = leaf(e, r); } else n = leaf(e, target); break; }
-      case 'BeginRemoteTransaction': n = mk('transaction', e, target); regions.push(n); break;
-      case 'CommittedRemoteTransaction': case 'RolledBackRemoteTransaction': { const i = regions.findIndex(r => r.kind === 'transaction' && r.e.index === idxOf(p.beginIndex)); if (i >= 0) { const r = regions[i]; regions.length = i; r.end = e; n = leaf(e, r); } else n = leaf(e, target); break; }
       case 'Error': { const k = idxOf(p.retryFrom); const c = (errorsByRetry.get(k) || 0) + 1; errorsByRetry.set(k, c); e.attempt = c; n = leaf(e, target); break; }
       default: n = leaf(e, target);
     }
@@ -697,10 +694,10 @@ function searchText(e) {
   return e._s;
 }
 function entryVisible(e) {
-  const [, cat] = kindInfo(e.type);
+  const [, cat] = kindInfo(classOf(e));
   if (!state.cats.has(cat)) return false;
   if (state.types && !state.types.has(e.type)) return false;
-  if (!state.hints && isHint(e.type) && e.type !== 'Error') return false;
+  if (!state.hints && isHint(classOf(e)) && classOf(e) !== 'Error') return false;
   if (e.type === 'Log' && LOG_LEVELS.indexOf(e.entry.level) < state.minLog) return false;
   if (state.from != null && e.index < state.from) return false;
   if (state.to != null && e.index > state.to) return false;
@@ -720,7 +717,7 @@ function rowTime(e, prevTs) {
   const d = prevTs != null && !isNaN(e.ts) ? e.ts - prevTs : null;
   return h('span', { class: 'time', title: e.entry.timestamp }, fmtTime(e.ts, state.rel), d != null && d > 0 ? h('span', { class: 'd' }, '+' + fmtDur(d)) : null);
 }
-function badge(t) { const [label, cat] = kindInfo(t); return h('span', { class: 'badge', style: `--c:${catColor(cat)}` }, label); }
+function badge(t, c) { const [label, cat] = kindInfo(t); return h('span', { class: 'badge', style: `--c:${catColor(c || cat)}` }, label); }
 function attrTag(e) {
   if (e.attribution && e.attribution.type === 'Entity') { const inv = e.attribution.invocation; return h('span', { class: 'tag attr', title: 'executed by ' + inv.entity.kind + ' ' + inv.entity.name }, inv.entity.name); }
   return null;
@@ -744,14 +741,11 @@ function groupHeader(n) {
     if (n.completion) right.push(h('span', { class: 'tag ' + (n.completion.type === 'CompletionDiscarded' ? 'warn' : ''), title: n.completion.type }, n.completion.type === 'CompletionDiscarded' ? 'discarded' : 'delivered'));
     if (n.frames.length) right.push(h('span', { class: 'tag' }, n.frames.length + ' frames'));
     if (p.observationalOwner != null) right.push(h('span', { class: 'tag' }, 'observational'));
+    if (p.denial != null) right.push(h('span', { class: 'tag warn', title: p.denial }, 'denied'));
     if (end) right.push(h('span', { class: 'tag', title: 'end entry index' }, '→ #' + end.index));
   } else if (n.kind === 'entity') {
     const inv = n.inv; const op = inv.operation;
     parts.push(h('span', { class: 'badge', style: `--c:${catColor('plugin')}` }, inv.entity.kind === 'toolMiddleware' ? 'MIDDLEWARE' : 'TOOL'), h('span', { class: 'sum' }, span('fn', inv.entity.name), op && op.type === 'Tool' ? span('val', ' ' + (op.commandPath || []).join(' ')) : null, span('val', ` · ${inv.callMode.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} · start #${idxOf(inv.startIndex)}`)));
-    right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
-  } else if (n.kind === 'atomic' || n.kind === 'transaction') {
-    parts.push(badge(e.type), h('span', { class: 'sum' }, n.kind === 'transaction' ? span('val', 'transaction ' + (e.entry.transactionId && e.entry.transactionId.value || e.entry.transactionId)) : span('val', 'atomic region'), n.end ? [arrow(), span(n.end.type === 'RolledBackRemoteTransaction' ? 'err' : 'ok', n.end.type === 'RolledBackRemoteTransaction' ? 'rolled back' : n.end.type === 'CommittedRemoteTransaction' ? 'committed' : 'ended at #' + n.end.index)] : span('err', ' · never closed')));
-    if (n.end) right.push(h('span', { class: 'tag dur' }, fmtDur(n.end.ts - e.ts)));
     right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
   }
   return { parts, cls, right };
@@ -764,8 +758,8 @@ function renderNodeEl(n, prev) {
   const isGroup = n.kind !== 'entry';
   const e = n.e;
   const el = h('div', { class: 'node ' + (isGroup ? 'group ' + n.kind : 'entry'), 'data-key': nodeKey(n) });
-  if (e) { el.dataset.index = e.index; if (e.dropped) { el.classList.add('dropped'); el.title = 'ignored during replay (dropped by #' + e.dropped + ')'; } if (isHint(e.type)) el.classList.add('hint'); if (e.type === 'Log') { if (['Error', 'Critical', 'Stderr'].includes(e.entry.level)) el.classList.add('err-level'); else if (e.entry.level === 'Warn') el.classList.add('warn-level'); } }
-  el.style.setProperty('--c', catColor(e ? kindInfo(e.type)[1] : 'plugin'));
+  if (e) { el.dataset.index = e.index; if (e.dropped) { el.classList.add('dropped'); el.title = 'ignored during replay (dropped by #' + e.dropped + ')'; } if (isHint(classOf(e))) el.classList.add('hint'); if (e.type === 'Log') { if (['Error', 'Critical', 'Stderr'].includes(e.entry.level)) el.classList.add('err-level'); else if (e.entry.level === 'Warn') el.classList.add('warn-level'); } }
+  el.style.setProperty('--c', catColor(e ? kindInfo(classOf(e))[1] : 'plugin'));
   if (e && e.revision != null && e.type === 'SuccessfulUpdate') el.append(h('div', { class: 'divider' }, `component revision ${e.revision} from here`));
   const row = h('div', { class: 'row' });
   const caret = h('span', { class: 'caret' }, isGroup ? '▶' : '');
@@ -777,7 +771,7 @@ function renderNodeEl(n, prev) {
     if (e.type === 'Error') right.push(h('span', { class: 'tag warn' }, 'attempt ' + e.attempt));
     const a = attrTag(e); if (a) right.push(a);
     if (state.live && state.live.serverQuery) right.push(h('span', { class: 'tag ctx', title: 'load the oplog around this entry', onclick: ev => { ev.stopPropagation(); showContext(e.index); } }, 'context'));
-    row.append(h('span', { class: 'kind' }, badge(e.type)), h('span', { class: 'sum' }, ...summary(e)), h('span', { class: 'right' }, ...right));
+    row.append(h('span', { class: 'kind' }, badge(e.type, kindInfo(classOf(e))[1])), h('span', { class: 'sum' }, ...summary(e)), h('span', { class: 'right' }, ...right));
   }
   el.append(row);
   if (e) prev.ts = e.ts;
@@ -882,7 +876,7 @@ function setAllOpen(open) { state.forceOpen = open; state.openKeys.clear(); rend
 // Toolbar, chips, minimap, sidebar.
 // ---------------------------------------------------------------------------
 function renderChips() {
-  const counts = {}; for (const e of state.entries) { const c = kindInfo(e.type)[1]; counts[c] = (counts[c] || 0) + 1; }
+  const counts = {}; for (const e of state.entries) { const c = kindInfo(classOf(e))[1]; counts[c] = (counts[c] || 0) + 1; }
   const el = $('#chips'); el.replaceChildren();
   for (const c of CATEGORIES) {
     if (!counts[c]) continue;
@@ -906,7 +900,7 @@ function drawMinimap() {
   if (LIVE && state.live.meta && state.live.meta.lastOplogIndex) { const last = state.live.meta.lastOplogIndex; ctx.fillStyle = colors.lifecycle; ctx.globalAlpha = .25; ctx.fillRect(0, H - 4, W, 4); ctx.globalAlpha = 1; ctx.fillStyle = cs.getPropertyValue('--accent').trim(); const x0 = ((state.live.lo - 1) / last) * W; const x1 = (state.live.hi / last) * W; ctx.fillRect(x0, H - 4, Math.max(2, x1 - x0), 4); }
   // Draw invocations as a background band, entries as ticks.
   for (let i = 0; i < n; i++) {
-    const e = state.entries[i]; const [, cat] = kindInfo(e.type);
+    const e = state.entries[i]; const [, cat] = kindInfo(classOf(e));
     const x = (i / n) * W;
     if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
     const tall = cat === 'error' || cat === 'update' || cat === 'invocation';
@@ -973,7 +967,7 @@ function renderSidebar() {
     h('h3', null, 'legend'), h('div', null, CATEGORIES.map(c => h('div', { style: 'margin:2px 0' }, h('span', { class: 'badge', style: `--c:${catColor(c)}` }, c), ' ', h('span', { class: 'muted' }, LEGEND[c])))),
     h('h3', null, 'notes'), h('div', { class: 'muted' }, 'Hint entries are not consumed during replay. Entries struck through lie in a region skipped by a JUMP or dropped by a REVERT. A START row is merged with its END / CANCELLED entry; expand it to see stream frames, the end entry and completion markers. Entries executed by a tool entity are nested under the tool invocation.'));
 }
-const LEGEND = { invocation: 'agent invocations: start, finish, queue', host: 'durable host calls and their completions', error: 'failures and retries', log: 'stdout, stderr and structured logs', region: 'atomic regions and remote transactions', lifecycle: 'create, suspend, restart, jump, exit', update: 'component updates', snapshot: 'state and filesystem snapshots', resource: 'resource instances', plugin: 'plugins and oplog processors', retry: 'retry policies', card: 'permission cards and wallet', stream: 'durable streams' };
+const LEGEND = { invocation: 'agent invocations: start, finish, queue', host: 'durable host calls and their completions', error: 'failures and retries', log: 'stdout, stderr and structured logs', region: 'remote transactions', lifecycle: 'create, suspend, restart, jump, exit', update: 'component updates', snapshot: 'state and filesystem snapshots', resource: 'resource instances', plugin: 'plugins and oplog processors', retry: 'retry policies', card: 'permission cards and wallet', stream: 'durable streams' };
 
 // ---------------------------------------------------------------------------
 // Loading data.

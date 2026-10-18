@@ -9,6 +9,7 @@ import "golem/component/agent.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/public_oplog.proto";
+import "golem/schema/schema.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_error.proto";
 import "golem/worker/worker_id.proto";
@@ -16,8 +17,8 @@ import "google/protobuf/timestamp.proto";
 
 // An oplog entry in its raw/internal representation.
 message RawOplogEntry {
-  reserved 21;
-  reserved "filesystem_storage_usage_update";
+  reserved 8, 12, 13, 21;
+  reserved "no_op", "begin_atomic_region", "end_atomic_region", "filesystem_storage_usage_update";
 
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 entity_parent_start_index = 3;
@@ -27,12 +28,9 @@ message RawOplogEntry {
     RawAgentInvocationFinishedParameters agent_invocation_finished = 5;
     RawTimestampOnly suspend = 6;
     RawErrorParameters error = 7;
-    RawTimestampOnly no_op = 8;
     RawJumpParameters jump = 9;
     RawTimestampOnly interrupted = 10;
     RawTimestampOnly exited = 11;
-    RawTimestampOnly begin_atomic_region = 12;
-    RawEndAtomicRegionParameters end_atomic_region = 13;
     RawPendingAgentInvocationParameters pending_agent_invocation = 16;
     RawPendingUpdateParameters pending_update = 17;
     RawSuccessfulUpdateParameters successful_update = 18;
@@ -79,6 +77,8 @@ message RawOplogEntry {
     RawTimestampOnly resumed = 64;
     RawTimestampOnly recovery_succeeded = 65;
     RawSnapshotConfirmedParameters snapshot_confirmed = 66;
+    RawToolAttachmentReadParameters tool_attachment_read = 67;
+    RawToolAttachmentControlParameters tool_attachment_control = 68;
   }
 }
 
@@ -184,6 +184,7 @@ message RawStartParameters {
   optional DurableInvocationId invocation_id = 6;
   optional uint64 observational_owner = 7;
   optional RawSpanStarted span_started = 8;
+  optional string denial = 9;
 }
 
 message RawEndParameters {
@@ -278,19 +279,17 @@ message RawAgentInvocationFinishedParameters {
 }
 
 message RawErrorParameters {
+  reserved 3;
+  reserved "inside_atomic_region";
+
   AgentError error = 1;
   uint64 retry_from = 2;
-  bool inside_atomic_region = 3;
   optional bytes retry_policy_state = 4;
   OplogErrorKind kind = 5;
 }
 
 message RawJumpParameters {
   RawOplogRegion jump = 1;
-}
-
-message RawEndAtomicRegionParameters {
-  uint64 begin_index = 1;
 }
 
 message RawPendingAgentInvocationParameters {
@@ -389,7 +388,7 @@ message RawCancelPendingInvocationParameters {
 
 message RawBeginRemoteTransactionParameters {
   string transaction_id = 1;
-  optional uint64 original_begin_index = 2;
+  uint64 original_begin_index = 2;
 }
 
 message RawRemoteTransactionParameters {
@@ -549,6 +548,16 @@ message RawHostStreamFrameParameters {
   uint64 parent_start_index = 1;
   HostStreamKind kind = 2;
   RawOplogPayload payload = 3;
+}
+
+message RawToolAttachmentReadParameters {
+  golem.schema.TypedSchemaValue observation = 1;
+  RawOplogPayload payload = 2;
+}
+
+message RawToolAttachmentControlParameters {
+  golem.schema.TypedSchemaValue attachment = 1;
+  golem.schema.TypedSchemaValue transition = 2;
 }
 
 message RawDurableStreamRecordParameters {

@@ -40,7 +40,8 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{GolemEntityInvoke, GolemToolInvocationRejected};
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
+    SerializableEntityBodyExecution, SerializableToolAdmissionRefusal,
+    SerializableToolOperationTerminal, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
     AttributeMap, DurableFunctionType, HostPayloadPair, HostRequest, HostRequestEntityInvocation,
@@ -126,6 +127,7 @@ pub struct EntityInvocationDurability {
     input: TypedSchemaValue,
     resolved_position: ResolvedEntityInvocationPosition,
     historical_reconstruction: Option<HistoricalReconstruction>,
+    scope_interest: Arc<crate::services::card_interest::CardInterestContribution>,
 }
 
 /// Caller identity captured in guest admission order, before asynchronous dispatch or replay claims.
@@ -133,7 +135,6 @@ pub struct EntityInvocationDurability {
 pub(crate) struct EntityInvocationKeyContext {
     caller_key: golem_common::model::IdempotencyKey,
     logical_position: Option<OplogIndex>,
-    assume_idempotence: bool,
     stream_session_idempotency_key: golem_common::model::IdempotencyKey,
 }
 
@@ -145,13 +146,17 @@ impl EntityInvocationKeyContext {
         let caller_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
             WorkerExecutorError::runtime("entity invocation requires an active caller key")
         })?;
-        let logical_position = ctx
-            .state
-            .current_atomic_region_idempotency_key_oplog_index()
-            .map(|_| {
+        let logical_position = if ctx
+            .entity_invocation_scope()
+            .is_some_and(|scope| scope.logical_key_positions())
+        {
+            Some(
                 ctx.state
-                    .current_idempotency_key_oplog_index(OplogIndex::NONE)
-            });
+                    .current_idempotency_key_oplog_index(OplogIndex::NONE),
+            )
+        } else {
+            None
+        };
         let stream_parent_key = ctx
             .entity_invocation_scope()
             .map(|scope| scope.stream_session_idempotency_key().clone())
@@ -161,7 +166,6 @@ impl EntityInvocationKeyContext {
         Ok(Self {
             caller_key,
             logical_position,
-            assume_idempotence: ctx.state.assume_idempotence,
             stream_session_idempotency_key,
         })
     }
@@ -320,7 +324,6 @@ impl EntityInvocationDurability {
             operation,
             principal,
             plan,
-            assume_idempotence: key_context.assume_idempotence,
             authority_wallet: store
                 .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
         };
@@ -356,9 +359,10 @@ impl EntityInvocationDurability {
                 DurableFunctionType::WriteLocal,
                 AccessClaimOptions {
                     parent_start_index: Some(parent_start_index),
+                    incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
-                async move |_| Ok(request),
+                request,
                 span_started.clone(),
             )
             .await?;
@@ -397,6 +401,7 @@ impl EntityInvocationDurability {
                         GolemToolInvocationRejected::HOST_FUNCTION_NAME,
                     ),
                     parent_start_index: Some(parent_start_index),
+                    incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
             )
@@ -411,6 +416,21 @@ impl EntityInvocationDurability {
             store.with(|mut access| get_ctx(access.data_mut()).entity_reconstruction_claim_hook())
         {
             hook.after_claim(handle.start_index()).await;
+        }
+        if let Some(operation) =
+            store.with(|mut access| get_ctx(access.data_mut()).entity_tool_operation())
+            && let Some((expected, _)) = operation.expected_admission_refusal()
+            && expected
+                == (SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: handle.start_index().into(),
+                })
+        {
+            let error = operation.reproduce_admission_refusal(expected).await;
+            if !crate::durable_host::is_tool_attachment_live_admission_rejection(&error) {
+                return Err(error);
+            }
+            // The original incomplete-child repair retained the child after refusing its
+            // parent's live admission. Reconstruct and validate that child here as well.
         }
         match load_recorded_request(store, get_ctx, handle.start_index()).await? {
             HostRequest::EntityInvocation(request) => {
@@ -497,13 +517,29 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let (owner, invocation_scope_card) = store.with(|mut access| {
+        let (owner, invocation_scope_card, interest) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
                 ctx.state.owned_agent_id.clone(),
                 ctx.current_invocation_scope_card(),
+                ctx.state.owner_wallet.interest.clone(),
             )
         });
+        let invocation_id = EntityInvocationId::new(
+            OwnedAgentEntityId {
+                owner: owner.clone(),
+                entity: metadata.entity.clone(),
+            },
+            handle.start_index(),
+        )
+        .map_err(WorkerExecutorError::runtime)?;
+        let scope_interest = interest.contribute(
+            Some(invocation_id.clone()),
+            invocation_scope_card
+                .as_ref()
+                .map(|scope| scope.root_card_ids.as_slice())
+                .unwrap_or_default(),
+        );
         let calling_principal = Principal::Agent(AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         });
@@ -531,20 +567,12 @@ impl EntityInvocationDurability {
         };
         let principal = metadata.principal;
         let activation = Arc::new(resolved_position.layer().activation().clone());
-        let invocation_id = EntityInvocationId::new(
-            OwnedAgentEntityId {
-                owner,
-                entity: metadata.entity,
-            },
-            handle.start_index(),
-        )
-        .map_err(WorkerExecutorError::runtime)?;
         let execution_mode = if handle.is_live() {
             InvocationExecutionMode::Live
         } else {
             let replay =
                 store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-            if replay.has_visible_terminal(handle.start_index()).await {
+            if replay.has_visible_terminal(handle.start_index()).await? {
                 InvocationExecutionMode::ReplayingCompleted
             } else {
                 InvocationExecutionMode::ReplayingIncomplete
@@ -567,7 +595,6 @@ impl EntityInvocationDurability {
             calling_principal,
             execution_mode,
             idempotency_key,
-            metadata.assume_idempotence,
             true,
             stream_session_idempotency_key,
         )
@@ -585,6 +612,7 @@ impl EntityInvocationDurability {
             input,
             resolved_position,
             historical_reconstruction,
+            scope_interest,
         })
     }
 
@@ -594,6 +622,12 @@ impl EntityInvocationDurability {
 
     pub(crate) fn historical_reconstruction_hold(&self) -> Option<HistoricalReconstruction> {
         self.historical_reconstruction.clone()
+    }
+
+    pub(crate) fn scope_interest(
+        &self,
+    ) -> Arc<crate::services::card_interest::CardInterestContribution> {
+        self.scope_interest.clone()
     }
 
     pub fn principal(&self) -> &Principal {
@@ -635,7 +669,7 @@ impl EntityInvocationDurability {
         let replay = store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
         if replay
             .has_visible_scope_descendant(self.handle.start_index())
-            .await
+            .await?
         {
             return Ok(IncompleteLiveRepairBeforeBody::Ready(self));
         }
@@ -650,6 +684,7 @@ impl EntityInvocationDurability {
             input,
             resolved_position,
             mut historical_reconstruction,
+            scope_interest,
         } = self;
         let (handle, cancelled) = match handle.replay_reconstruction_access(store, get_ctx).await? {
             ReconstructionReplayOutcome::Incomplete(handle) => (handle, false),
@@ -678,7 +713,6 @@ impl EntityInvocationDurability {
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
             scope.idempotency_key().clone(),
-            scope.assume_idempotence(),
             scope.logical_key_positions(),
             scope.stream_session_idempotency_key().clone(),
         )
@@ -702,6 +736,7 @@ impl EntityInvocationDurability {
             input,
             resolved_position,
             historical_reconstruction: None,
+            scope_interest,
         };
         Ok(if cancelled {
             IncompleteLiveRepairBeforeBody::Cancelled(durability)
@@ -737,7 +772,7 @@ impl EntityInvocationDurability {
         });
         let entry = replay
             .visible_terminal_entry(self.handle.start_index())
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
                     format!(
@@ -947,6 +982,7 @@ impl EntityInvocationDurability {
             parent,
             call_mode,
             mut historical_reconstruction,
+            scope_interest: _scope_interest,
             ..
         } = self;
         let invocation = scope.invocation_id().clone();
@@ -997,6 +1033,9 @@ impl EntityInvocationDurability {
                 let cancelled = terminal.cancelled();
                 *replay_terminal.lock().unwrap() = Some(terminal);
                 Ok(if cancelled {
+                    replay_state
+                        .await_tool_attachment_reconstruction(structural_start)
+                        .await?;
                     // Select attachment cancellation before the coordinator
                     // aborts the body and drops its producer resources.
                     on_completed_cancelled();
@@ -1015,6 +1054,7 @@ impl EntityInvocationDurability {
             let supervisor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
             let completed_supervisor = executor_tasks.spawn_entity(async move {
                 let _activity = supervisor_activity;
+                let _scope_interest = _scope_interest;
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(
@@ -1212,6 +1252,12 @@ impl EntityInvocationDurability {
                         EntityReconstructionResolution::Cancelled(recorded)
                     }
                     ReconstructionReplayOutcome::Incomplete(handle) => {
+                        if cancellation
+                            .as_ref()
+                            .is_some_and(|token| token.is_cancelled())
+                        {
+                            on_completed_cancelled();
+                        }
                         neutral = store.with(|mut access| {
                             get_ctx(access.data_mut())
                                 .runtime_suspension
@@ -1410,9 +1456,10 @@ where
         DurableFunctionType::WriteLocal,
         AccessClaimOptions {
             parent_start_index: Some(parent.start_index()),
+            incomplete_repair_authorized_by_scope: true,
             ..AccessClaimOptions::default()
         },
-        async move |_| Ok(request),
+        request,
         span_started,
     )
     .await?;
@@ -1442,6 +1489,7 @@ async fn skipped_tool_terminal(
         SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Skipped,
             result: Err(error),
+            admission_refusal: None,
         },
         "failed to encode skipped tool terminal",
     )
@@ -1455,6 +1503,7 @@ async fn cancelled_tool_terminal(
         SerializableToolOperationTerminal {
             body_execution,
             result: Err(SerializableToolRpcError::Cancelled),
+            admission_refusal: None,
         },
         "failed to encode entity cancellation terminal",
     )
@@ -1583,7 +1632,7 @@ where
     Ctx: WorkerCtx,
 {
     let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-    let entry = oplog.read(start_index).await;
+    let entry = oplog.read(start_index).await?;
     let OplogEntry::Start {
         request: Some(request),
         ..
@@ -1978,6 +2027,7 @@ mod tests {
                 result: Ok(SerializableToolOperationTerminal {
                     body_execution: SerializableEntityBodyExecution::Executed,
                     result,
+                    admission_refusal: None,
                 }
                 .into_typed_schema_value()
                 .unwrap()),
@@ -2107,7 +2157,6 @@ mod tests {
                 agent_id: owner.agent_id,
             }),
             plan,
-            assume_idempotence: true,
             authority_wallet: Vec::new(),
         })
         .unwrap()

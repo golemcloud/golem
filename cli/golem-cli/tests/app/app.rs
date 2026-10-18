@@ -1,7 +1,7 @@
 use crate::app::{
-    TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
-    extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
-    placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
+    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, check_component_metadata, cmd,
+    copy_placeholder_wasm, extracted_component_metadata_path_hash, extracted_metadata_json, flag,
+    pattern, placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
     seed_full_extracted_metadata,
 };
 use crate::{Tracing, workspace_path};
@@ -114,6 +114,229 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
             .unwrap()
             .contains("Failed to install tokio runtime metrics recorder")
     );
+}
+
+enum Closed {
+    Stdout,
+    Stderr,
+}
+
+async fn exit_code_with_closed(
+    ctx: &TestContext,
+    closed: Closed,
+    args: &[&str],
+) -> (Option<i32>, String) {
+    let outputs = match closed {
+        Closed::Stdout => ctx.cli_with_broken_stdout(args.iter().copied()).await,
+        Closed::Stderr => ctx.cli_with_broken_stderr(args.iter().copied()).await,
+    };
+    (outputs.exit_code(), outputs.stderr_text())
+}
+
+async fn assert_the_server_keeps_running_without_a_reader(closed: ClosedStream) {
+    let mut ctx = TestContext::new();
+    ctx.server_closed_stream = Some(closed);
+    ctx.start_server().await;
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let server = ctx.server_process.as_mut().unwrap();
+    assert!(
+        server.try_wait().unwrap().is_none(),
+        "the server ended after the reader of one of its outputs had gone"
+    );
+}
+
+/// Runs a shell pipeline in a pseudo-terminal that is in canonical mode with echo, and asserts
+/// that its first command ends with the exit code of SIGPIPE and that `stty -a` shows a terminal
+/// in canonical mode with echo afterwards. When `wait_for` is given, the file is created once
+/// the text has appeared on the terminal.
+#[cfg(unix)]
+async fn assert_terminal_is_usable_after_closed_stdout(
+    ctx: &TestContext,
+    pipeline: String,
+    wait_for: Option<(&'static str, std::path::PathBuf)>,
+) {
+    let working_dir = ctx.working_dir.clone();
+    let (exit, output) = tokio::task::spawn_blocking(move || {
+        let script =
+            format!("stty icanon echo; {pipeline}; echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a");
+        let mut command = std::process::Command::new("bash");
+        command
+            .current_dir(working_dir)
+            .env("TERM", "xterm-256color")
+            .args(["-c", &script]);
+        use expectrl::Expect;
+        let mut session = expectrl::Session::spawn(command).expect("failed to spawn bash");
+        session.set_expect_timeout(Some(Duration::from_secs(60)));
+        if let Some((text, file)) = wait_for {
+            session
+                .expect(text)
+                .unwrap_or_else(|error| panic!("'{text}' did not appear: {error}"));
+            std::fs::write(file, "").unwrap();
+        }
+        let exit = session
+            .expect(expectrl::Regex("EXIT=[0-9]+"))
+            .expect("the CLI did not end")
+            .as_bytes()
+            .to_vec();
+        let rest = session.expect(expectrl::Eof).expect("no end of output");
+        (
+            String::from_utf8_lossy(&exit).to_string(),
+            String::from_utf8_lossy(rest.as_bytes()).to_string(),
+        )
+    })
+    .await
+    .unwrap();
+
+    println!("{exit}\n{output}");
+    assert!(exit.ends_with("EXIT=141"), "{exit}");
+    let flags: Vec<&str> = output.split_whitespace().collect();
+    assert!(
+        flags.contains(&"icanon"),
+        "the terminal is not in canonical mode after the CLI ended"
+    );
+    assert!(
+        flags.contains(&"echo"),
+        "the terminal does not echo after the CLI ended"
+    );
+}
+
+/// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
+/// stdout leaves.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let leave = ctx.cwd_path_join("reader-leaves");
+
+    // The reader of stdout stays until the prompt has appeared.
+    let pipeline = format!(
+        "'{golem_cli}' --config-dir '{config_dir}' profile new \
+         | {{ while [ ! -e '{leave}' ]; do sleep 0.2; done; }}",
+        leave = leave.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(
+        &ctx,
+        pipeline,
+        Some(("create a new profile interactively", leave)),
+    )
+    .await;
+}
+
+/// The reader of stdout takes the terminal before the CLI starts, as a pager does: it sets raw
+/// mode, and it puts the terminal back before it leaves. The CLI opens no prompt, so the terminal
+/// must stay as the reader left it.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_stay_as_the_reader_of_stdout_left_them(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let raw_mode_set = ctx.cwd_path_join("raw-mode-set");
+
+    // The CLI starts once the terminal is in raw mode. The reader takes the first byte of the
+    // output, so the CLI runs when the reader puts the terminal back and leaves. The rest of the
+    // output does not fit into the pipe, so the CLI ends at a failed write.
+    let pipeline = format!(
+        "{{ while [ ! -e '{raw_mode_set}' ]; do sleep 0.1; done; \
+            '{golem_cli}' --config-dir '{config_dir}' completion bash; }} \
+         | {{ stty raw -echo < /dev/tty; touch '{raw_mode_set}'; head -c 1 > /dev/null; \
+              stty sane < /dev/tty; }}",
+        raw_mode_set = raw_mode_set.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(&ctx, pipeline, None).await;
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stdout).await;
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stderr_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stderr).await;
+}
+
+#[test]
+async fn a_verbose_command_ends_with_the_exit_code_of_sigpipe_when_the_reader_of_stderr_has_gone(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    // The command writes only to stdout, but its diagnostics go to stderr.
+    let (code, stderr) =
+        exit_code_with_closed(&ctx, Closed::Stderr, &["-vvv", cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(CLOSED_OUTPUT_EXIT), "{stderr}");
+}
+
+#[test]
+async fn a_command_whose_stdout_has_no_reader_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // The reader is gone before the command starts: the watch or the first write to stdout ends it.
+    // `build` prints its failure line, and `new` its missing input, to stdout in text format.
+    for args in [
+        &[cmd::BUILD][..],
+        &[flag::YES, cmd::NEW][..],
+        &["--help"][..],
+        &[cmd::COMPLETION, "bash"][..],
+    ] {
+        let (code, stderr) = exit_code_with_closed(&ctx, Closed::Stdout, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stdout: {stderr}"
+        );
+        assert!(!stderr.contains("panicked"));
+        assert!(!stderr.contains("Broken pipe"));
+    }
+}
+
+#[test]
+async fn a_command_that_writes_to_a_closed_stderr_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // `build` prints the hint about the missing manifest to stderr.
+    for args in [
+        &["--no-such-flag", cmd::NEW][..],
+        &[flag::YES, cmd::NEW][..],
+        &[cmd::BUILD][..],
+    ] {
+        let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stderr"
+        );
+    }
+}
+
+#[test]
+async fn a_command_that_does_not_write_to_the_closed_stream_keeps_its_own_exit_code(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // A usage error of clap goes to stderr only, and a command line that does not parse starts no
+    // watch of stdout.
+    let (code, _) =
+        exit_code_with_closed(&ctx, Closed::Stdout, &["--no-such-flag", cmd::NEW]).await;
+    assert_eq!(code, Some(2), "a usage error with a closed stdout");
+
+    // The completion script goes to stdout only.
+    let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, &[cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(0), "completion with a closed stderr");
 }
 
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
@@ -294,6 +517,415 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     assert!(outputs.stderr_contains("app:typescript"));
     assert!(outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
     assert!(outputs.stderr_contains("npm-install"));
+}
+
+#[test]
+async fn app_new_with_failing_template_plan_leaves_single_component_app_unchanged(
+    _tracing: &Tracing,
+) {
+    let app_name = "test-app-failing-plan";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // An edited skill file cannot be merged with the template's, so the template plan for a
+    // second component fails after the layout upgrade is planned.
+    let skill = ctx.cwd_path_join(".agents/skills/golem-new-project/SKILL.md");
+    let edited = format!("{}\nedited\n", fs::read_to_string(&skill).unwrap());
+    fs::write_str(&skill, edited).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Already existing non-mergeable files"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_with_overlapping_layout_upgrades_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-two-flat";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Two components in the flat layout: promoting both would move the same root files.
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest = format!(
+        "{}  {app_name}:ts-other:\n    dir: \"\"\n    templates: ts\n",
+        fs::read_to_string(&manifest_path).unwrap()
+    );
+    fs::write_str(&manifest_path, manifest).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-third"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Overlapping move paths in plan"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_with_missing_layout_upgrade_source_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-missing-source";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The layout upgrade moves `src` first and `tsconfig.json` after it, so a missing
+    // `tsconfig.json` must fail the validation before `src` moves.
+    std::fs::remove_file(ctx.cwd_path_join("tsconfig.json")).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Source path does not exist"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_adds_template_to_component_without_dir_in_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-no-dir";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains("    dir: \"\"\n"));
+    fs::write_str(&manifest_path, manifest.replace("    dir: \"\"\n", "")).unwrap();
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    assert!(ctx.cwd_path_join("src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join(",").exists());
+}
+
+#[test]
+async fn app_new_adds_template_to_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`.
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    std::fs::rename(
+        ctx.cwd_path_join("tsconfig.json"),
+        ctx.cwd_path_join("sub/tsconfig.json"),
+    )
+    .unwrap();
+    let component_entry = format!("  {app_name}:ts-main:\n    templates: ts\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:ts-main:\n    dir: \"\"\n    templates: ts\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(ctx.cwd_path_join("sub/src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+}
+
+#[test]
+async fn app_new_adds_template_to_scala_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-scala-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`. The
+    // component sbt file stays at the application root, points to `sub` and has a custom
+    // dependency.
+    let component_sbt_name = "test_app_scala_included_scala_main.sbt";
+    let component_sbt = ctx.cwd_path_join(component_sbt_name);
+    let custom_dependency =
+        "libraryDependencies += \"org.example\" % \"custom-library\" % \"1.0\",";
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(".in(file(\"\"))"), "{sbt}");
+    fs::write_str(
+        &component_sbt,
+        sbt.replace(".in(file(\"\"))", ".in(file(\"sub\"))")
+            .replace(
+                "    name := ",
+                &format!("    {custom_dependency}\n    name := "),
+            ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    let component_entry = format!("  {app_name}:scala-main:\n    templates: scala\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:scala-main:\n    dir: \"\"\n    templates: scala\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(!ctx.cwd_path_join("sub").join(component_sbt_name).exists());
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(custom_dependency), "{sbt}");
+    assert!(sbt.contains(".in(file(\"sub\"))"), "{sbt}");
+    assert!(ctx.cwd_path_join("sub/src/main/scala").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+}
+
+#[test]
+async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_tracing: &Tracing) {
+    let app_name = "test-app-scala-merge";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let component_sbt = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension().is_some_and(|ext| ext == "sbt")
+                && path.file_name().is_some_and(|name| name != "build.sbt")
+        })
+        .expect("component sbt file");
+
+    let append = |path: &Path, line: &str| {
+        let contents = format!("{}{line}\n", fs::read_to_string(path).unwrap());
+        fs::write_str(path, contents).unwrap();
+    };
+    append(&component_sbt, "// customized component");
+    let build_sbt = ctx.cwd_path_join("build.sbt");
+    let multiline_scala_version = fs::read_to_string(&build_sbt).unwrap().replace(
+        "ThisBuild / scalaVersion := ",
+        "ThisBuild / scalaVersion :=\n  ",
+    );
+    fs::write_str(&build_sbt, multiline_scala_version).unwrap();
+    append(&build_sbt, "ThisBuild / organization := \"customized\"");
+    append(
+        &ctx.cwd_path_join("project/plugins.sbt"),
+        "addSbtPlugin(\"org.scalameta\" % \"sbt-scalafmt\" % \"2.5.2\")",
+    );
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let component_sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(component_sbt.contains("// customized component"));
+    assert!(component_sbt.contains(".in(file(\"scala-main\"))"));
+    let build_sbt = fs::read_to_string(&build_sbt).unwrap();
+    assert!(build_sbt.contains("ThisBuild / organization := \"customized\""));
+    assert_eq!(build_sbt.matches("scalaVersion").count(), 1, "{build_sbt}");
+    assert!(
+        build_sbt.starts_with("ThisBuild / scalaVersion := \""),
+        "{build_sbt}"
+    );
+    assert_eq!(build_sbt.lines().count(), 2, "{build_sbt}");
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("project/plugins.sbt"))
+            .unwrap()
+            .contains("sbt-scalafmt")
+    );
+    assert!(ctx.cwd_path_join("scala-main/src").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
+}
+
+#[test]
+async fn app_new_with_unrecognized_scala_setting_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-scala-unrecognized";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The merge cannot replace a template-owned setting in a form that it does not recognize.
+    fs::write_str(
+        ctx.cwd_path_join("build.sbt"),
+        "inThisBuild(Seq(scalaVersion := \"3.3.0\"))\n",
+    )
+    .unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("cannot merge `scalaVersion`"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+fn snapshot_dir(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != "golem-temp")
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let rel_path = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let contents = entry
+                .file_type()
+                .is_file()
+                .then(|| std::fs::read(entry.path()).unwrap());
+            (rel_path, contents)
+        })
+        .collect()
 }
 
 #[test]

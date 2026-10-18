@@ -2791,13 +2791,13 @@
    }
   },
   "opt find: sorted siblings": {
-   "script": "d20bef8f5520f7f3",
+   "script": "7fe1f4808a5fc56e",
    "status": 0,
    "stderr": {
     "text": ""
    },
    "stdout": {
-    "text": "c\nc/three.log\na\na/b\na/one.txt\n"
+    "text": "a\na/b\na/one.txt\nc\nc/three.log\n"
    }
   },
   "opt find: starting point is file": {
@@ -2821,7 +2821,7 @@
    }
   },
   "opt find: trailing slash start": {
-   "script": "04a465ac4a9af29c",
+   "script": "78b7be636e9a7b55",
    "status": 0,
    "stderr": {
     "text": ""

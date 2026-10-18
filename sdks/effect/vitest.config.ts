@@ -31,6 +31,30 @@ const golemAliases = [
     find: "golem:durability/durability@1.6.0",
     replacement: resolve(mockDir, "golem-durability.ts"),
   },
+  {
+    find: "golem:permissions/derive@0.1.0",
+    replacement: resolve(mockDir, "golem-permissions.ts"),
+  },
+  {
+    find: "golem:permissions/inspect@0.1.0",
+    replacement: resolve(mockDir, "golem-permissions.ts"),
+  },
+  {
+    find: "golem:permissions/kernel-introspection@0.1.0",
+    replacement: resolve(mockDir, "golem-permissions.ts"),
+  },
+  {
+    find: "golem:permissions/revoke@0.1.0",
+    replacement: resolve(mockDir, "golem-permissions.ts"),
+  },
+  {
+    find: "golem:permissions/types@0.1.0",
+    replacement: resolve(mockDir, "golem-permissions.ts"),
+  },
+  {
+    find: "golem:permissions/wallet@0.1.0",
+    replacement: resolve(mockDir, "golem-permissions.ts"),
+  },
   { find: "golem:quota/types@1.5.0", replacement: resolve(mockDir, "golem-quota-types.ts") },
   { find: "wasi:cli/environment@0.3.0", replacement: resolve(mockDir, "wasi-cli-environment.ts") },
   { find: "wasi:logging/logging", replacement: resolve(mockDir, "wasi-logging.ts") },

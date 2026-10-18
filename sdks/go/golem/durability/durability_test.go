@@ -33,29 +33,10 @@ func TestFunctionTypeMapping(t *testing.T) {
 		{"WriteLocal", WriteLocal, apiOplog.WrappedFunctionTypeWriteLocal},
 		{"ReadRemote", ReadRemote, apiOplog.WrappedFunctionTypeReadRemote},
 		{"WriteRemote", WriteRemote, apiOplog.WrappedFunctionTypeWriteRemote},
-		{"WriteRemoteBatched", WriteRemoteBatched(), apiOplog.WrappedFunctionTypeWriteRemoteBatched},
-		{"WriteRemoteTransaction", WriteRemoteTransaction(), apiOplog.WrappedFunctionTypeWriteRemoteTransaction},
 	}
 	for _, c := range cases {
 		if got := c.ft.raw.Tag(); got != c.tag {
 			t.Fatalf("%s tag = %d, want %d", c.name, got, c.tag)
 		}
-	}
-}
-
-// TestWriteRemoteBatchedBeginIndex — the optional begin index is carried when
-// given and absent otherwise, for both batched and transaction variants.
-func TestWriteRemoteBatchedBeginIndex(t *testing.T) {
-	if idx := WriteRemoteBatched().raw.WriteRemoteBatched(); idx.IsSome() {
-		t.Fatalf("WriteRemoteBatched() should carry no begin index, got %d", idx.Some())
-	}
-	if idx := WriteRemoteBatched(42).raw.WriteRemoteBatched(); !idx.IsSome() || idx.Some() != 42 {
-		t.Fatalf("WriteRemoteBatched(42) begin index = %v, want Some(42)", idx)
-	}
-	if idx := WriteRemoteTransaction().raw.WriteRemoteTransaction(); idx.IsSome() {
-		t.Fatalf("WriteRemoteTransaction() should carry no begin index, got %d", idx.Some())
-	}
-	if idx := WriteRemoteTransaction(7).raw.WriteRemoteTransaction(); !idx.IsSome() || idx.Some() != 7 {
-		t.Fatalf("WriteRemoteTransaction(7) begin index = %v, want Some(7)", idx)
 	}
 }

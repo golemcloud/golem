@@ -73,6 +73,8 @@ import {
   type TypedSchemaValue,
 } from './internal/schema-model';
 import { ToolRegistry } from './internal/registry/toolRegistry';
+import { detachGuestPermissionCardResource } from './internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from './internal/schema-model/permissionCardInternal';
 import type { ToolClientOptions } from './toolClient';
 import {
   emptyMiddlewareParameterCodec,
@@ -2334,12 +2336,17 @@ function decodeWireValue(
   });
 }
 
+// A decoder and its enclosing observer can reject the same endpoints. Both
+// boundaries must attempt cleanup, but each endpoint closes and disposes once.
+const closedWireStreams = new WeakSet<object>();
+const disposedWireCapabilities = new WeakSet<object>();
+
 /** @internal Own wire endpoints until synchronous validation and conversion succeed. */
 export function withWireValueOwnership<T>(
   wire: WireTypedSchemaValue,
   decode: (lift: () => TypedSchemaValue) => T,
 ): T | Promise<never> {
-  const resources = new Map<object, Array<{ val: unknown }>>();
+  const resources = new Map<object, Array<{ tag: string; val: unknown }>>();
   const streams = new Set<SchemaValueStream>();
   const nodes = wire?.value?.valueNodes;
   for (const node of Array.isArray(nodes) ? nodes : []) {
@@ -2364,6 +2371,12 @@ export function withWireValueOwnership<T>(
     const dispose = (): never => {
       for (const [raw, nodes] of resources) {
         for (const node of nodes) node.val = undefined;
+        // A card lifted before the failure must not keep a disposed resource.
+        if (nodes.some((node) => node.tag === 'permission-card-handle')) {
+          detachGuestPermissionCardResource(PERMISSION_CARD_INTERNAL, raw as never);
+        }
+        if (disposedWireCapabilities.has(raw)) continue;
+        disposedWireCapabilities.add(raw);
         try {
           (raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
         } catch {
@@ -2377,6 +2390,8 @@ export function withWireValueOwnership<T>(
       // Start every cancellation before joining shared producer finalizers.
       await Promise.all(
         [...streams].map(async (stream) => {
+          if (closedWireStreams.has(stream)) return;
+          closedWireStreams.add(stream);
           try {
             const source = await SchemaValueStream.unwrap(stream);
             await source[Symbol.asyncIterator]().return?.();

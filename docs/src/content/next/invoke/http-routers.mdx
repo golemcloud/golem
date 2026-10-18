@@ -1082,6 +1082,11 @@ that no environment can register it:
 reserved_domains = ["api.golem.example.com"]
 ```
 
+The single `golem` executable has this router built in: set `router.management_host`
+(`GOLEM__ROUTER__MANAGEMENT_HOST`) to the management host, and the main API port serves the
+management API for that host and the HTTP API and MCP deployments for every other host. It
+reserves the management host itself.
+
 A reserved domain is matched by host, ignoring case, port and a trailing dot. The registry
 checks it when a domain is registered; registrations that exist before the domain is
 reserved stay in place. The proxy in

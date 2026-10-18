@@ -36,6 +36,10 @@ impl TryFrom<&ScopeCard> for golem_api_grpc::proto::golem::worker::EncodedScopeC
                 .map_err(|error| format!("failed to encode upper-positive grants: {error}"))?,
             upper_negative: desert_rust::serialize_to_byte_vec(&value.upper_negative)
                 .map_err(|error| format!("failed to encode upper-negative grants: {error}"))?,
+            expires_at: value.expires_at.map(|expires_at| prost_types::Timestamp {
+                seconds: expires_at.timestamp(),
+                nanos: expires_at.timestamp_subsec_nanos() as i32,
+            }),
         })
     }
 }
@@ -68,6 +72,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EncodedScopeCard> for ScopeCa
                 .map_err(|error| format!("failed to decode upper-positive grants: {error}"))?,
             upper_negative: desert_rust::deserialize(&value.upper_negative)
                 .map_err(|error| format!("failed to decode upper-negative grants: {error}"))?,
+            expires_at: value
+                .expires_at
+                .map(|expires_at| {
+                    u32::try_from(expires_at.nanos)
+                        .ok()
+                        .and_then(|nanos| {
+                            chrono::DateTime::from_timestamp(expires_at.seconds, nanos)
+                        })
+                        .ok_or("invalid scope-card expiry")
+                })
+                .transpose()?,
         })
     }
 }
@@ -92,6 +107,7 @@ mod tests {
             lower_negative: vec![grant.clone()],
             upper_positive: vec![grant.clone()],
             upper_negative: vec![grant],
+            expires_at: chrono::DateTime::from_timestamp(1_800_000_000, 123_456_789),
         }
     }
 

@@ -1,7 +1,8 @@
 import { lstatSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import fsPromises from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
-import { ok, s, toolDefinition } from '@golemcloud/golem-ts-sdk';
+import { ok, processExitStatusSchema, toolDefinition } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod/v4';
 import { runCli, validatedCwd } from '../../shared/cli-runtime.js';
 import { evaluateCommonJs, installPrivateReadOnlyFiles } from '../../shared/private-vfs.js';
@@ -25,7 +26,7 @@ type NpmBundle = {
 };
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
-  .version('0.1.6')
+  .version('0.1.9')
   .doc("Run a JavaScript file or inline expression with Golem's Node-compatible runtime.")
   .annotations({ openWorld: false })
   .body((body) =>
@@ -39,13 +40,21 @@ const nodeTool = toolDefinition('node', { requiresFilesystem: true })
         verbatim: true,
         doc: 'A script path and its arguments, an inline expression with -e, or a Node option.',
       })
-      .stdout({ required: true, doc: 'Output written by the JavaScript program.' })
-      .stderr({ required: true, doc: 'Diagnostics written by the JavaScript program.' })
-      .returns(s.s32(), { doc: 'Process exit code; zero indicates success.' }),
+      .stdout({
+        required: true,
+        doc: 'Output written by the JavaScript program.',
+      })
+      .stderr({
+        required: true,
+        doc: 'Diagnostics written by the JavaScript program.',
+      })
+      .returns(processExitStatusSchema, {
+        doc: 'Process exit status; exit_code zero indicates success.',
+      }),
   );
 
 const npmTool = toolDefinition('npm', { requiresFilesystem: true })
-  .version('10.9.9+golem.6')
+  .version('10.9.9+golem.9')
   .doc('Install and manage JavaScript packages and run package scripts with npm.')
   .annotations({ openWorld: false })
   .body((body) =>
@@ -65,11 +74,13 @@ const npmTool = toolDefinition('npm', { requiresFilesystem: true })
       })
       .stdout({ required: true, doc: 'Normal npm command output.' })
       .stderr({ required: true, doc: 'npm warnings and diagnostics.' })
-      .returns(s.s32(), { doc: 'Process exit code; zero indicates success.' }),
+      .returns(processExitStatusSchema, {
+        doc: 'Process exit status; exit_code zero indicates success.',
+      }),
   );
 
 const npxTool = toolDefinition('npx', { requiresFilesystem: true })
-  .version('10.9.9+golem.6')
+  .version('10.9.9+golem.9')
   .doc('Run a command provided by a local or downloaded npm package.')
   .annotations({ openWorld: false })
   .body((body) =>
@@ -88,8 +99,13 @@ const npxTool = toolDefinition('npx', { requiresFilesystem: true })
         doc: 'A package command followed by its arguments.',
       })
       .stdout({ required: true, doc: 'Output written by the package command.' })
-      .stderr({ required: true, doc: 'Warnings and diagnostics from npx or the package command.' })
-      .returns(s.s32(), { doc: 'Process exit code; zero indicates success.' }),
+      .stderr({
+        required: true,
+        doc: 'Warnings and diagnostics from npx or the package command.',
+      })
+      .returns(processExitStatusSchema, {
+        doc: 'Process exit status; exit_code zero indicates success.',
+      }),
   );
 
 async function loadNpm(): Promise<NpmBundle> {
@@ -99,7 +115,10 @@ async function loadNpm(): Promise<NpmBundle> {
 async function runNpm(
   name: 'npm' | 'npx',
   input: { cwd: string; registry: string; args: string[] },
-  streams: { stdout: WritableStream<Uint8Array>; stderr: WritableStream<Uint8Array> },
+  streams: {
+    stdout: WritableStream<Uint8Array>;
+    stderr: WritableStream<Uint8Array>;
+  },
 ) {
   const argv = [
     'node',
@@ -119,7 +138,7 @@ async function runNpm(
   const invocation = npmInvocation(input.cwd, input.registry);
   try {
     return await runCli(
-      { argv, cwd: input.cwd, ...invocation },
+      { argv, cwd: input.cwd, ...invocation, npmExit: true },
       streams,
       async (processFacade) => {
         const loaded = await loadNpm();
@@ -144,7 +163,11 @@ async function runNpm(
   }
 }
 
-function parseNodeArguments(args: string[]): { source?: string; entry?: string; argv: string[] } {
+function parseNodeArguments(args: string[]): {
+  source?: string;
+  entry?: string;
+  argv: string[];
+} {
   if (args[0] === '--version' || args[0] === '-v') return { source: '', argv: args };
   if (args[0] === '--eval' || args[0] === '-e') {
     if (args[1] === undefined) throw new Error('node --eval requires source');
@@ -156,7 +179,10 @@ function parseNodeArguments(args: string[]): { source?: string; entry?: string; 
 
 async function runNode(
   input: { cwd: string; args: string[] },
-  streams: { stdout: WritableStream<Uint8Array>; stderr: WritableStream<Uint8Array> },
+  streams: {
+    stdout: WritableStream<Uint8Array>;
+    stderr: WritableStream<Uint8Array>;
+  },
 ) {
   let parsed: ReturnType<typeof parseNodeArguments> | undefined;
   let parseError: unknown;
@@ -167,6 +193,9 @@ async function runNode(
   }
   const cwd = validatedCwd(input.cwd);
   const home = `${cwd}/.golem-home`;
+  const globalScope = globalThis as typeof globalThis & { require: NodeJS.Require };
+  const originalRequire = globalScope.require;
+  if (parsed?.source !== undefined) globalScope.require = createRequire(join(cwd, '[eval]'));
   return runCli(
     {
       argv: parsed?.argv ?? ['node', ...input.args],
@@ -197,17 +226,19 @@ async function runNode(
         await import(entry!);
       }
     },
-  );
+  ).finally(() => {
+    globalScope.require = originalRequire;
+  });
 }
 
 nodeTool.implement({
-  node: async (input, context) => ok(await runNode(input, context)),
+  node: async (input, context) => ok({ exit_code: await runNode(input, context) }),
 });
 
 npmTool.implement({
-  npm: async (input, context) => ok(await runNpm('npm', input, context)),
+  npm: async (input, context) => ok({ exit_code: await runNpm('npm', input, context) }),
 });
 
 npxTool.implement({
-  npx: async (input, context) => ok(await runNpm('npx', input, context)),
+  npx: async (input, context) => ok({ exit_code: await runNpm('npx', input, context) }),
 });
