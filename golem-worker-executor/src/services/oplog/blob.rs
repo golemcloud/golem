@@ -29,7 +29,6 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
-use golem_common::serialization::deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, agent_path_segment, join_blob_key,
@@ -395,7 +394,7 @@ impl BlobOplogArchive {
         else {
             return Ok(None);
         };
-        let chunk: CompressedOplogChunk = deserialize(&bytes).map_err(|error| {
+        let chunk: CompressedOplogChunk = golem_common::serialization::decode(&bytes).map_err(|error| {
             OplogReadError::corruption(
                 source,
                 format!(
