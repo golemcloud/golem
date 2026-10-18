@@ -184,7 +184,7 @@ The common error kinds are:
 | Producer safety | `sequence-conflict`, `fenced`, `producer-diverged` | Reconcile producer ownership and retained state |
 | Transient | `timeout`, `transport`, `rate-limited`, `unavailable` | Retry with bounded exponential delay and honor `retry-after` |
 
-SDK defaults retry only transient failures. One HTTP attempt's timeout is separate from each SDK's retry limit; retry-count and wall-clock-budget policies differ by SDK. An error is never EOF; only a batch marked closed ends a reader normally.
+SDK defaults retry only transient failures. Every SDK retries a failed read or append 8 times after the first attempt by default. The delay starts at 100 ms and doubles up to 30 s; a longer `retry-after` wins. One HTTP attempt's timeout is separate from the retry count, and a successful response resets the count. An error is never EOF; only a batch marked closed ends a reader normally.
 
 Stream retention and expiry are controlled by the external service, not Golem. An expired or deleted URL typically reports `gone` or `not-found`; `gone` can also mean a checkpoint precedes retained data. There is no separate guest-side keepalive guarantee, although provider-defined reads or writes may refresh a sliding TTL. Persist only provider-supported checkpoints and follow that provider's expiry policy.
 

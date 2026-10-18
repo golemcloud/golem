@@ -719,12 +719,17 @@ const program = Effect.gen(function* () {
   `{ _tag: "Concrete", card: PermissionCard }`, `{ _tag: "Template", card: PolymorphicPermissionCard }`,
   or `{ _tag: "Scope", card: ScopeCard }`. A `Scope` entry is the scope card lent to the current
   invocation; the host lists it only when the agent holds `card:inspect`.
-- `PolymorphicPermissionCard` supports the same operations as `PermissionCard`. `derive` from a
-  template card returns a `PermissionCard`, because the host resolves the template for the holder.
+- `derive` and `deriveFromWallet` return `PersistentCard` (`PermissionCard | PolymorphicPermissionCard`).
+  The host determines the child kind. Use `Schema.is(WitTypes.PermissionCard)` or
+  `Schema.is(WitTypes.PolymorphicPermissionCard)` before passing it to a kind-specific schema.
+  Parent templates resolve in the caller's wallet. Child slots name the eventual holder and
+  the host validates them universally, not just against the caller. Slot tool owners do not
+  resolve aliases using caller metadata.
 - `deriveScope` returns a `ScopeCard`, which is a separate type from `PermissionCard`. Its parents
   are persistent cards or scope cards of the current invocation. A scope card supports `id`,
   `parents`, `expiresAt`, `inspect`, `release`, and use as a `deriveScope` parent. It cannot be
   revoked, installed, derived from with `derive`, or sent as an agent-method argument or result.
+  Scope derivation rejects slots with `invalid-pattern`; scope cards remain concrete.
 - `expiresAt` of a scope card is the earliest expiry of the root cards of this scope card, or none
   when no root card expires. The scope card stops authorizing then.
 - A scope card is valid only during the invocation that derived it. If you keep one, or a client

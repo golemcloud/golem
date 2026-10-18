@@ -139,11 +139,12 @@ records its `PermissionWalletVersion` token. Replay of a completed read returns 
 and reads neither the wallet nor the card registry. A read whose `Start` has no committed `End`
 was never observed by the guest; repair completes it live at its own `Start`, after the live
 transition, against the canonical live wallet. A crash after a committed `End` replays the
-recorded view. Authorization decisions (`inspect-card`, derivation, installation) are not
-recorded: they still evaluate the replayed wallet at their boundary, so a card event between two
-adjacent decisions can still diverge after reconstruction. Do not substitute current live state
-for recorded inputs or weaken replay checks to hide that limit. Tests: the
-`wallet_reads_survive_reconstruction` cases in `tests/scope_cards.rs`.
+recorded view. The authorization decisions of `inspect-card`, `derive`, `derive-from-wallet`,
+`derive-scope` and `install-card` are recorded in the same way, in `ReadLocal` decision calls
+that hold the outcome and the wallet data it used (see "Card authorization decisions" in
+`SKILL.md`). Do not substitute current live state for recorded inputs or weaken replay checks.
+Tests: the `wallet_reads_survive_reconstruction` and `card_decisions_survive_reconstruction` cases
+in `tests/scope_cards.rs`.
 
 ### Structural tool authorization
 

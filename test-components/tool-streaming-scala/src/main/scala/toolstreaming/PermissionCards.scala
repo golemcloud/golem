@@ -161,17 +161,19 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
     val inspectOnly  = Bounds(lowerPositive = List(inspectGrant))
 
     // 1. Derive a card from the wallet. 2. Inspect it.
-    val derived     = unwrap("deriveFromWallet", PermissionsApi.deriveFromWallet(inspectOnly))
+    val derived: PersistentCard = unwrap("deriveFromWallet", PermissionsApi.deriveFromWallet(inspectOnly))
     val derivedView = unwrap("inspect derived", derived.inspect())
 
     // 3. Derive a child with a lifespan.
     val child          = unwrap("derive child", derived.derive(inspectOnly, Some(Lifespan(1.hour))))
-    val childParent    = child.parents == List(derived.id)
+    val childParent    = child match {
+      case PersistentCard.Concrete(card) => card.parents == List(derived.id)
+      case PersistentCard.Template(_)   => false
+    }
     val childExpiry    = child.expiresAt.nonEmpty && derived.expiresAt.isEmpty
 
-    // A template card derives concrete cards: the host resolves it for the
-    // holder. Both children are installed on this agent, and the wallet lists
-    // them as concrete cards.
+    // These concrete bounds produce concrete children. The host labels the
+    // result; a template parent alone does not determine the child's kind.
     val template = entry match {
       case WalletCard.Template(card) => card
       case other                     => throw new IllegalStateException(s"the root card is ${PermissionCardKinds.kind(other)}")

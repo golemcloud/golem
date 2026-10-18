@@ -6155,6 +6155,7 @@ fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseQuotaCommitResult>(),
         TypeId::of::<HostResponsePermissionCardDerived>(),
         TypeId::of::<HostResponsePermissionCardLiveness>(),
+        TypeId::of::<HostResponsePermissionCardDecision>(),
         TypeId::of::<HostResponsePermissionCardTransferComplete>(),
         TypeId::of::<HostResponsePermissionWallet>(),
         TypeId::of::<HostResponsePermissionWalletVersion>(),

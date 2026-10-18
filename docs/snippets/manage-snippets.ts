@@ -7,6 +7,7 @@ import remarkMdx from "remark-mdx"
 import { visit } from "unist-util-visit"
 import { toString } from "mdast-util-to-string"
 import crypto from "crypto"
+import { DEFAULT_VERSION, VERSION_SLUGS } from "../src/lib/versions"
 
 // --- Types ---
 
@@ -20,6 +21,9 @@ type CodeBlock = {
 
 type TabContent = {
   label: string
+  sdk: string
+  coverage: "prose-only" | "fenced-unverified"
+  validation: "not-checked"
   markdown: string
   codeBlocks: CodeBlock[]
 }
@@ -58,10 +62,27 @@ type ProgressFile = {
 // --- Constants ---
 
 const DOCS_ROOT = join(import.meta.dir, "..")
-const PAGES_DIR = join(DOCS_ROOT, "src", "pages")
-const PROGRESS_FILE = join(import.meta.dir, "progress.json")
+const option = (name: string, fallback: string) => {
+  const index = process.argv.indexOf(name)
+  return index < 0 ? fallback : (process.argv[index + 1] ?? fallback)
+}
+const scanVersion = option("--version", DEFAULT_VERSION)
+if (!VERSION_SLUGS.includes(scanVersion)) throw new Error(`Unknown version: ${scanVersion}`)
+const PAGES_DIR = join(option("--content-root", join(DOCS_ROOT, "src", "content")), scanVersion)
+const PROGRESS_FILE = option("--progress", join(import.meta.dir, `progress-${scanVersion}.json`))
 
-const ALLOWED_LANG_LABELS = new Set(["typescript", "rust", "scala", "moonbit"])
+const sdkLabel = (label: string) =>
+  ["effect", "effect typescript"].includes(label.toLowerCase().trim())
+    ? "typescript-effect"
+    : label.toLowerCase().trim()
+const ALLOWED_LANG_LABELS = new Set([
+  "typescript",
+  "typescript-effect",
+  "rust",
+  "scala",
+  "moonbit",
+  "go",
+])
 
 const EXCLUDED_DIRS = new Set(["how-to-guides", "rest-api"])
 
@@ -129,11 +150,7 @@ function parseTabsItems(node: any): string[] | null {
 }
 
 function isLanguageTabs(items: string[]): boolean {
-  const normalized = items.map(i => i.toLowerCase())
-  return (
-    normalized.every(i => ALLOWED_LANG_LABELS.has(i)) &&
-    normalized.some(i => i === "typescript" || i === "rust")
-  )
+  return items.length > 0 && items.every(i => ALLOWED_LANG_LABELS.has(sdkLabel(i)))
 }
 
 type HeadingEntry = { depth: number; text: string; line: number }
@@ -242,10 +259,14 @@ async function extractSnippetsFromFile(filePath: string): Promise<SnippetRecord[
     for (let i = 0; i < Math.min(items.length, tabNodes.length); i++) {
       const label = items[i]
       const tabNode = tabNodes[i]
+      const codeBlocks = extractCodeBlocks(tabNode, sourceLines)
       tabs[label] = {
         label,
+        sdk: sdkLabel(label),
+        coverage: codeBlocks.length ? "fenced-unverified" : "prose-only",
+        validation: "not-checked",
         markdown: extractTabMarkdown(tabNode, sourceLines),
-        codeBlocks: extractCodeBlocks(tabNode, sourceLines),
+        codeBlocks,
       }
     }
 
@@ -316,7 +337,7 @@ async function cmdScan(): Promise<void> {
       }
       allSnippets.push(...snippets)
     } catch (e) {
-      console.warn(`  ⚠️  Failed to parse ${relative(DOCS_ROOT, file)}: ${e}`)
+      throw new Error(`Failed to parse ${relative(DOCS_ROOT, file)}: ${e}`)
     }
   }
 
@@ -341,8 +362,8 @@ async function cmdScan(): Promise<void> {
       // Preserve status and metadata, update content
       newProgress.snippets[snippet.id] = {
         ...snippet,
-        status: oldEntry.status,
-        completedAt: oldEntry.completedAt,
+        status: oldEntry.sourceHash === snippet.sourceHash ? oldEntry.status : "pending",
+        completedAt: oldEntry.sourceHash === snippet.sourceHash ? oldEntry.completedAt : undefined,
         note: oldEntry.note,
       }
     } else {
@@ -362,7 +383,8 @@ async function cmdScan(): Promise<void> {
   await saveProgress(newProgress)
 
   updateCounts(newProgress)
-  console.log("\nProgress saved to snippets/progress.json")
+  console.log(`\nProgress saved to ${PROGRESS_FILE}`)
+  console.log("Presence and review status are not compilation or execution evidence.")
   printCounts(newProgress)
 }
 
@@ -459,8 +481,8 @@ function generatePrompt(snippet: SnippetRecord, golemRepoPath: string): string {
     })
     .join("\n\n")
 
-  const missingLangs = ["TypeScript", "Rust", "Scala"].filter(
-    l => !snippet.languagesPresent.includes(l)
+  const missingLangs = ["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"].filter(
+    l => !snippet.languagesPresent.some(p => sdkLabel(p) === sdkLabel(l))
   )
   const missingNote =
     missingLangs.length > 0
@@ -480,7 +502,7 @@ function generatePrompt(snippet: SnippetRecord, golemRepoPath: string): string {
     "https://blog.vigoo.dev/posts/golem15-part10-websocket/",
   ]
 
-  return `Update the following Nextra MDX language-tabs snippet for **Golem 1.5**.
+  return `Update the following Nextra MDX language-tabs snippet for **${scanVersion}**.
 
 **Target file**: \`${snippet.filePath}\`
 **Line range**: ${snippet.lineStart}–${snippet.lineEnd}
@@ -490,13 +512,13 @@ function generatePrompt(snippet: SnippetRecord, golemRepoPath: string): string {
 
 ## Instructions
 
-1. **Check correctness** — Determine whether the existing TypeScript and/or Rust code snippets are still correct for Golem 1.5. Look for API changes, renamed imports, changed type signatures, deprecated patterns, etc.
+1. **Check correctness** — Determine whether every existing SDK example is correct for ${scanVersion}. Presence and review status do not establish compilation or execution validity.
 2. **Use these references** (read them as needed):
-   - How-to guides in this repo: \`src/pages/how-to-guides/\` (these are authoritative for Golem 1.5 patterns)
-   - Golem 1.5 blog posts:
+   - How-to guides in this repo: \`src/content/${scanVersion}/how-to-guides/\`
+   - Historical background (verify every API against the selected version):
 ${blogUrls.map(u => `     - ${u}`).join("\n")}
    - The Golem repository: \`${golemRepoPath}\` — especially test components under \`test-components/\` and SDK code
-3. **Update** any outdated TypeScript or Rust snippets in-place in the MDX file.
+3. **Update** outdated SDK examples in-place in the MDX file.
 4. **Preserve structure** — Keep \`<Tabs>\` / \`<Tabs.Tab>\` structure, \`storageKey\`, surrounding prose, and code block meta (e.g. \`copy\`).
 5. **Keep the same abstraction level** — Don't add unnecessary complexity or remove intentional simplifications from the examples.${missingNote}
 7. **Verify compilation** — For each language version:
@@ -556,12 +578,12 @@ function generateAddLangPrompt(
 
 ## Instructions
 
-1. **Do NOT modify existing tabs** — The existing language tabs (${snippet.languagesPresent.join(", ")}) are already correct. Do not change them.
+1. **Preserve existing tabs** — Presence does not prove correctness. Report problems found in the existing tabs (${snippet.languagesPresent.join(", ")}) rather than assuming they compile.
 2. **Add a \`${language}\` tab** — Add a new \`<Tabs.Tab>\` block for ${language} with equivalent code/content.
 3. **Update the \`<Tabs items={[...]}\` attribute** to include "${language}" in the list.
 4. **Update the \`storageKey\`** attribute to include ${language} (keep the same format: language names separated by \`|\`).
 5. **Use these references** to write correct ${language} code (read them as needed):
-   - How-to guides in this repo: \`src/pages/how-to-guides/\` — look for ${language} examples
+   - How-to guides in this repo: \`src/content/${scanVersion}/how-to-guides/\` — look for ${language} examples
    - The Golem repository: \`${golemRepoPath}\` — especially test components under \`test-components/\` and SDK code for ${language}
 6. **Match the abstraction level** of the existing tabs — if existing tabs show a simple example, keep the ${language} version equally simple.
 7. **Verify compilation** — For the new ${language} tab:
@@ -722,7 +744,7 @@ async function cmdResetMissingLang(language: string): Promise<void> {
   for (const snippet of Object.values(progress.snippets)) {
     if (snippet.removed) continue
     if (snippet.status !== "completed") continue
-    const hasLang = snippet.languagesPresent.some(l => l.toLowerCase() === language.toLowerCase())
+    const hasLang = snippet.languagesPresent.some(l => sdkLabel(l) === sdkLabel(language))
     if (!hasLang) {
       snippet.status = "pending"
       delete snippet.completedAt
@@ -835,6 +857,9 @@ Commands:
   skip <id> [--note ...]      Mark snippet as skipped
 
 Options:
+  --version <slug>            Version to scan (default: current published version)
+  --content-root <path>       Content root (default: src/content)
+  --progress <path>           Progress file (default: snippets/progress-<version>.json)
   --golem-repo <path>         Path to golem repo (default: ../golem)
 `)
   }

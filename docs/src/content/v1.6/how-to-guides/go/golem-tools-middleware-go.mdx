@@ -8,8 +8,6 @@ A middleware wraps the invocations of a tool: it sees a call on its way in, hand
 package policy
 
 import (
-	"errors"
-
 	"myapp/tools/inventory"
 
 	"github.com/golemcloud/golem/sdks/go/golem/tool"
@@ -25,14 +23,14 @@ var Policy = inventory.Tool.Middleware[Params]("inventory-policy", tool.Middlewa
 
 var _ = Policy.Handle(inventory.Adjust, func(ctx *tool.MiddlewareContext[Params], a inventory.AdjustArgs) (int32, error) {
 	if a.By > ctx.Parameters().MaxAdjust {
-		return 0, errors.New("adjustment too large")
+		return 0, tool.ConstraintViolation("adjustment too large")
 	}
 	return Policy.Underlying(ctx, inventory.Adjust).Forward(a)
 })
 ```
 
 - `Tool.Middleware` is **transparent**: it presents and wraps the same tool, and every command it does not `Handle` goes straight to the tool.
-- The handler has a tool handler's shape: it returns the command's result, a declared error with `ErrX.New(payload)`, a rejection with `tool.InvalidInput(...)` or `tool.ConstraintViolation(...)`, or any other error to fail the call as an invalid result. Returning an error from the layer beneath passes it on: the tool's own errors unchanged (so `ErrX.Match` still works for the caller), and a denied, cancelled or exhausted call as a constraint violation.
+- The handler has a tool handler's shape: it returns the command's result, a declared error with `ErrX.New(payload)`, or an SDK rejection with `tool.InvalidInput(...)` or `tool.ConstraintViolation(...)`. Malformed results and undeclared named errors fail as invalid results. An unclassified returned error or an ordinary panic traps the component. Returning an error from the layer beneath passes it on: the tool's own errors unchanged (so `ErrX.Match` still works for the caller), and a denied, cancelled or exhausted call as a constraint violation.
 - `Policy.Underlying(ctx, cmd)` reaches a command of the wrapped tool: `Forward(a)` sends complete arguments unchanged, and `Call(fill)` starts from the command's defaults. Passing a command of another tool is a compile error.
 - `ctx.Parameters()`, `ctx.Principal()`, `ctx.ToolName()` and `ctx.CommandPath()` describe the invocation. Standard input travels in the args struct, so forwarding `a` forwards it.
 
@@ -55,7 +53,7 @@ var _ = Policy.HandleOutput(inventory.Import, func(ctx *tool.MiddlewareOutputCon
 
 - `UnderlyingOutput(...).Forward(a)` passes both outputs through unchanged and returns the result; `Start` returns the running invocation for rewriting them.
 - An output of the running call that the handler does not take — stderr above — passes through to the middleware's own when the handler waits; take it to replace it, or read it into `io.Discard` to drop it.
-- `ctx.Stdout()` and `ctx.Stderr()` are finished when the handler returns a result or a declared error (its own or one passed on from beneath), and failed when it returns any other error or panics. A failure of an output beneath reaches the caller as the same failure.
+- `ctx.Stdout()` and `ctx.Stderr()` are finished independently for returned outcomes, including declared errors, invalid results and SDK rejections. An ordinary panic or unclassified returned error fails each output best effort and traps the component. Implicit cleanup cannot replace the outcome or an explicit output terminal. A failure of an output beneath reaches the caller as the same failure.
 
 ## Adapters
 
@@ -90,7 +88,7 @@ var _ = Audit.Handle(func(ctx *tool.UniversalMiddlewareContext[AuditParams]) (go
 	p := ctx.Parameters()
 	slog.Info("tool call", "channel", p.Channel, "tool", ctx.ToolName(), "command", ctx.CommandPath())
 	if p.Deny {
-		return golem.None[golem.TypedValue](), errors.New("denied by audit policy")
+		return golem.None[golem.TypedValue](), tool.ConstraintViolation("denied by audit policy")
 	}
 	return ctx.Next(ctx.Input()) // forwards stdin, passes stdout and stderr through
 })

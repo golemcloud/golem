@@ -1024,7 +1024,8 @@ are not shared storage. The equivalent environment variables are
 shows the shared volume wiring.
 
 For S3, configure worker-service with the same `initial_agent_files_bucket`,
-`object_prefix`, region, endpoint, and path-style settings as the other services.
+`object_prefix`, `namespace_prefixes`, region, endpoint, and path-style settings as the
+other services.
 Use the complete service configuration for the other required buckets. Grant
 worker-service read access, including ranged reads, and supply credentials through
 your deployment's secret mechanism. InMemory storage is not shared across processes;
@@ -1053,6 +1054,45 @@ Test disconnect/reset through the actual proxy, including while waiting for a
 response head. A client timeout alone does not prove upstream cancellation. Keep
 HTTP/2 enabled: some pending live-file requests over HTTP/1 detect disconnect only
 at the exchange deadline.
+
+### Serving HTTP APIs and MCP on one port
+
+The worker-service custom request port (`custom_request_port`, 9006 by default) chooses
+the deployment by the request's host:
+
+- a domain with an HTTP API deployment is served by its routes, for every path;
+- a domain with an MCP deployment is served by its MCP endpoints: `/mcp`, `/mcp/oauth/*`
+  and `/.well-known/oauth-*`;
+- any other host gets `404`.
+
+A domain holds either an HTTP API deployment or an MCP deployment, not both; the registry
+rejects the second one. Domains are registered in their canonical spelling: a lowercase host
+without a trailing dot (an IPv6 literal in its compressed form, such as `[::1]`), with an
+optional port without leading zeros. Requests are matched against that spelling, so
+`Host: Shop.Example.com.` reaches `shop.example.com`. The MCP port (`mcp_port`, 9007 by default) still serves MCP
+deployments only, so an ingress can keep routing MCP domains to it.
+
+To serve the management API on the same public port, put a router in front that sends the
+management host to the management API and every other host to the custom request port, and
+point every name at the same address in DNS. Reserve the management host in the registry so
+that no environment can register it:
+
+```toml
+[domain_registration]
+reserved_domains = ["api.golem.example.com"]
+```
+
+The single `golem` executable has this router built in: set `router.management_host`
+(`GOLEM__ROUTER__MANAGEMENT_HOST`) to the management host, and the main API port serves the
+management API for that host and the HTTP API and MCP deployments for every other host. It
+reserves the management host itself.
+
+A reserved domain is matched by host, ignoring case, port and a trailing dot. The registry
+checks it when a domain is registered; registrations that exist before the domain is
+reserved stay in place. The proxy in
+front of the port must not buffer server-sent events, must allow long-lived streams, and must
+pass the original host, either in `Host` (or `:authority`) or, from a trusted ingress, in
+`X-Forwarded-Host`. MCP requests use the same trusted ingress rule as HTTP API requests.
 
 ### Setting timeouts and resource budgets
 

@@ -8,7 +8,6 @@ export default {
   "golem-add-config-scala": "Adding Typed Configuration to a Scala Agent",
   "golem-agent-reflection-scala": "Agent Reflection and Client Approaches (Scala)",
   "golem-annotate-agent-scala": "Annotating Agent Methods (Scala)",
-  "golem-atomic-block-scala": "Atomic Blocks and Durability Controls (Scala)",
   "golem-call-tool-scala": "Call a Golem tool from Scala",
   "golem-call-from-external-scala": "Calling Agents from External Applications (Scala)",
   "golem-call-another-agent-scala": "Calling Another Agent (Scala)",

@@ -32,6 +32,12 @@ import scala.scalajs.js.annotation.JSName
 private[golem] sealed trait JsPermissionCardResource extends js.Object
 
 @js.native
+private[golem] sealed trait JsPersistentCard extends js.Object {
+  def tag: String                                   = js.native
+  @JSName("val") def card: JsPermissionCardResource = js.native
+}
+
+@js.native
 private[golem] sealed trait JsPermissionTimestamp extends js.Object {
   def seconds: js.BigInt  = js.native
   def nanoseconds: Double = js.native

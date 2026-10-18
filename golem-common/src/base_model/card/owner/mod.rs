@@ -31,6 +31,97 @@ pub use empty::*;
 pub use environment::*;
 pub use tool::*;
 
+macro_rules! concrete_owner_conversion {
+    ($concrete:ident, $poly:ident, $($slot:pat),* $(,)?) => {
+        impl From<$concrete> for $poly {
+            fn from(owner: $concrete) -> Self { Self::Concrete(owner) }
+        }
+        impl $poly {
+            pub fn as_concrete(&self) -> Option<$concrete> {
+                match self {
+                    Self::Concrete(owner) => Some(owner.clone()),
+                    $($slot => None,)*
+                }
+            }
+        }
+    };
+}
+
+concrete_owner_conversion!(EmptyOwnerPattern, PolymorphicEmptyOwnerPattern,);
+concrete_owner_conversion!(
+    AccountOwnerPattern,
+    PolymorphicAccountOwnerPattern,
+    Self::Account
+);
+concrete_owner_conversion!(
+    ApplicationOwnerPattern,
+    PolymorphicApplicationOwnerPattern,
+    Self::AccountApplications,
+    Self::AccountApplication { .. },
+    Self::App
+);
+concrete_owner_conversion!(
+    EnvironmentOwnerPattern,
+    PolymorphicEnvironmentOwnerPattern,
+    Self::AccountEnvironments,
+    Self::AccountApplicationEnvironments { .. },
+    Self::AccountEnvironment { .. },
+    Self::ApplicationEnvironments,
+    Self::ApplicationEnvironment { .. },
+    Self::Env
+);
+concrete_owner_conversion!(
+    ComponentOwnerPattern,
+    PolymorphicComponentOwnerPattern,
+    Self::AccountComponents,
+    Self::AccountApplicationComponents { .. },
+    Self::AccountEnvironmentComponents { .. },
+    Self::AccountComponent { .. },
+    Self::ApplicationComponents,
+    Self::ApplicationEnvironmentComponents { .. },
+    Self::ApplicationComponent { .. },
+    Self::EnvComponents,
+    Self::EnvComponent { .. },
+    Self::Component
+);
+concrete_owner_conversion!(
+    AgentOwnerPattern,
+    PolymorphicAgentOwnerPattern,
+    Self::AccountAgents,
+    Self::AccountApplicationAgents { .. },
+    Self::AccountEnvironmentAgents { .. },
+    Self::AccountComponentAgents { .. },
+    Self::AccountAgent { .. },
+    Self::ApplicationAgents,
+    Self::ApplicationEnvironmentAgents { .. },
+    Self::ApplicationComponentAgents { .. },
+    Self::ApplicationAgent { .. },
+    Self::EnvAgents,
+    Self::EnvComponentAgents { .. },
+    Self::EnvAgent { .. },
+    Self::ComponentAgents,
+    Self::ComponentAgent { .. },
+    Self::Agent
+);
+concrete_owner_conversion!(
+    ToolOwnerPattern,
+    PolymorphicToolOwnerPattern,
+    Self::AccountTools,
+    Self::AccountApplicationTools { .. },
+    Self::AccountEnvironmentTools { .. },
+    Self::AccountComponentTools { .. },
+    Self::AccountTool { .. },
+    Self::ApplicationTools,
+    Self::ApplicationEnvironmentTools { .. },
+    Self::ApplicationComponentTools { .. },
+    Self::ApplicationTool { .. },
+    Self::EnvTools,
+    Self::EnvComponentTools { .. },
+    Self::EnvTool { .. },
+    Self::ComponentTools,
+    Self::ComponentTool { .. }
+);
+
 #[cfg(feature = "full")]
 pub trait OwnerPattern:
     Debug

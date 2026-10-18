@@ -83,9 +83,14 @@ Tool calls are part of the agent's durable execution. Every tool call executes e
 | `node` | A Node.js-compatible JavaScript runtime |
 | `npm`, `npx` | The npm package manager |
 | `tsc` | The TypeScript compiler |
-| `git` | Local git repositories (no remotes) |
+| `python` | Python scripts and modules in RustPython, with a frozen standard library. Native extensions, subprocesses, and sockets are unavailable. |
+| `git` | Local repositories and HTTP(S) remotes: clone, fetch, push, pull, merge, and linear rebase. SSH, repository hooks, and external credential helpers are unavailable. |
 | `web-fetch` | Read-only HTTP GET of a web page |
 | `path-policy` | Middleware with per-directory read, write, and delete rules for the file tools |
+
+The Git tool supports HTTP(S) remote workflows, not the SSH or `git://` transports. For an authenticated remote, bind an invocation-scoped opaque secret named `authentication` with the fields `origin`, and optional `username`, `password`, `bearer`, or `headers`. The origin limits which server can receive those credentials; the tool does not store them in repository configuration or forward them across an origin-changing redirect. A failed push can have succeeded on the server before its response was lost. Inspect the remote refs and reconcile the result before retrying; external Git servers do not provide Golem's exactly-once invocation guarantee. See the [Git tool contract](https://github.com/golemcloud/golem/blob/main/builtin-tools/README.md) for supported commands and limitations.
+
+To call an existing built-in tool from an agent, follow [Generate typed clients for existing tools](/v1.6/how-to-guides/common/golem-generating-tool-clients). It shows release selection, generation, consumer imports, and the deployment binding. The same guide covers MCP imported tools without copying their schemas.
 
 ## Writing a tool
 
@@ -263,20 +268,34 @@ A binding can also list the configuration keys and secrets a tool may read (`con
 
 **Middleware** wraps tool calls and runs on every call. You configure it in `golem.yaml`, and Golem enforces it; agent code cannot list, remove, or bypass it. Typical middleware approves or rejects calls based on their arguments, waits for human approval before an irreversible action, redacts output, writes audit records, or enforces rate limits. Because middleware runs inside the durable agent, an approval step can wait hours for a person and survive restarts.
 
+Middleware cannot widen what an agent may do. Each call that middleware passes to the next layer is checked against the calling agent's permissions again, with the command and arguments that the next layer receives. If middleware changes a command or its arguments, the agent needs permission for both the command it called and the command the middleware produces.
+
+### Middleware and generated dependency clients
+
+Middleware can present a different tool definition to the caller, including different commands, arguments, results, and errors. For tool dependencies in `components.<name>.dependencies.tools`, `golem build` generates the client from the selected environment's middleware-presented definition. This applies to Rust, TypeScript, Effect TypeScript, Scala, MoonBit, and Go. The generated package keeps the bound tool's name, and calls still use that name to look up the tool at runtime.
+
+The build compiles local middleware components and extracts their metadata before it generates clients for their consumers. Explicit guest bridge requests use the same presented definition as dependency clients. If a local middleware declaration omits `component`, the build discovers its provider from compiled metadata. It must inspect the other components to reject duplicate providers, so this can require building components outside the selection and their dependencies. A known presentation can unlock consumers while discovery continues, but incomplete discovery or a duplicate provider fails the build. Later builds regenerate clients when the presented definition changes, even if the underlying tool does not change.
+
+Middleware scope is available only after compilation. If a component needs a presented client to compile, but that client's middleware metadata can only be extracted from the same blocked component, the build reports an unresolved metadata or build dependency cycle. It does not assume that the middleware is Universal or generate a raw fallback client. A `gen-bridge`-only build requires existing artifacts for its metadata sources and reports missing artifacts instead of silently retaining old clients.
+
+After compilation, the build validates component-baseline bindings and agent overrides, including callers that reach the client through declared tool dependencies. Nested tool calls keep the caller's owner and bindings; an agent RPC starts a new owner. An override must preserve the environment's presented definition. Logging or policy middleware that leaves the definition unchanged is allowed. An override that changes the definition causes the build to fail with the owner, component, and tool names.
+
+For example, suppose the environment wraps `search` with an adapter that presents `find(query: string)` instead of `search(pattern: string)`. The generated dependency client exposes `find`, but calls the tool bound as `search`. An agent override that removes the adapter with `middleware: []` and `middlewareMergeMode: replace` is rejected: that agent would receive `search`, while the generated client expects `find`. A second build does not change this restriction. Put the presentation adapter in the environment binding and keep any component or agent overrides consistent with it.
+
 ## Choosing where code runs
 
 <ThemedImage
   lightSrc="/images/getting-started/execution-ladder-light.webp"
   darkSrc="/images/getting-started/execution-ladder-dark.webp"
-  alt="Three rungs for running code, from the bottom. Rung 1: the agent's own code, in TypeScript, Effect, Rust, Scala, MoonBit, or Go, durable and under the agent's cards. Rung 2: tools in WebAssembly, such as bash, node, npm, tsc, git, web-fetch, and your own tools, a fresh instance per call on the agent's disk when allowed, with durable host calls recorded in the agent's oplog. Rung 3: a VM or remote sandbox driven as a tool through an MCP import or HTTP, for Python, apt, Docker, real browsers, GPUs, and native binaries; egress limited by cards; state inside the remote machine not journaled. An arrow says to move up a rung only when needed."
+  alt="Three rungs for running code, from the bottom. Rung 1: the agent's own code, in TypeScript, Effect, Rust, Scala, MoonBit, or Go, durable and under the agent's cards. Rung 2: tools in WebAssembly, such as bash, node, npm, tsc, git, web-fetch, python, and your own tools, a fresh instance per call on the agent's disk when allowed, with durable host calls recorded in the agent's oplog. Rung 3: a VM or remote sandbox driven as a tool through an MCP import or HTTP, for native extensions, apt, Docker, real browsers, or GPUs; egress limited by cards; state inside the remote machine not journaled. An arrow says to move up a rung only when needed."
   caption="Move up a rung only when the work needs it."
   width={1536}
   height={1024}
 />
 
 1. **The agent's own code** handles logic, state, and model calls.
-2. **Golem tools** handle shell scripts, files, Node.js, npm, TypeScript, and git. The work happens on the agent's durable filesystem, and no separate machine has to stay running between calls.
-3. **A remote sandbox or VM** handles native binaries, Python, system packages, Docker, real browsers, or GPUs. The agent calls it over HTTP or MCP, and its permissions must allow the connection. Golem records the calls and their results, but not the state of the remote machine.
+2. **Golem tools** handle shell scripts, files, Node.js, npm, TypeScript, git, and Python through RustPython. The work happens on the agent's durable filesystem, and no separate machine has to stay running between calls. The Python tool does not support native extensions, subprocesses, or sockets.
+3. **A remote sandbox or VM** handles native binaries and extensions, system packages, Docker, real browsers, or GPUs. Use it for Python workloads that require capabilities the built-in tool does not provide. The agent calls it over HTTP or MCP, and its permissions must allow the connection. Golem records the calls and their results, but not the state of the remote machine.
 
 ## MCP and sharing tools
 

@@ -48,7 +48,7 @@ scope.derive({});
 permissions.Lifespan.of('P1M');
 
 client.takeTemplate({ card: template });
-const derived: PermissionCard = template.derive({}).unwrap();
+const derived: PermissionCard | PolymorphicPermissionCard = template.derive({}).unwrap();
 permissions.deriveScope([template, card, scope], {});
 const expiry: permissions.Timestamp | undefined = scope.expiresAt();
 void [derived, expiry];

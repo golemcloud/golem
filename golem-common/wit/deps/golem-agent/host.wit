@@ -111,6 +111,7 @@ interface host {
 
       /// Triggers the invocation of a remote method with the given parameters,
       /// and returns its final identity immediately.
+      /// Scope lending is not supported: `scope-card` must be `none`.
       invoke: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-metadata, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
@@ -120,11 +121,13 @@ interface host {
       async-invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> async-invocation-with-metadata;
 
       /// Schedules an invocation for later and returns its final identity.
+      /// Scope lending is not supported: `scope-card` must be `none`.
       schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<scheduled-invocation-receipt, rpc-error>;
 
       /// Schedules an invocation for later and returns its final identity and
       /// cancellation capability. Call cancel on the returned resource to
       /// cancel the invocation before the scheduled time.
+      /// Scope lending is not supported: `scope-card` must be `none`.
       schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<cancelable-scheduled-invocation-receipt, rpc-error>;
     }
 

@@ -69,8 +69,11 @@ async function loadPermissions(): Promise<{
   vi.resetModules();
   const host: Host = {
     wallet: [{ tag: 'template', val: fakeCard('template', 1n) }],
-    derive: vi.fn((parent: FakeCard) => fakeCard('child', 3n, [parent.id])),
-    deriveFromWallet: vi.fn(() => fakeCard('wallet-derived', 2n, [1n])),
+    derive: vi.fn((parent: FakeCard) => ({
+      tag: 'concrete',
+      val: fakeCard('child', 3n, [parent.id]),
+    })),
+    deriveFromWallet: vi.fn(() => ({ tag: 'concrete', val: fakeCard('wallet-derived', 2n, [1n]) })),
     deriveScope: vi.fn((parents: FakeCard[]) =>
       fakeCard(
         'scope',
@@ -361,7 +364,7 @@ describe('permission cards', () => {
     const { host, permissions } = await loadPermissions();
     const shared = fakeCard('shared', 21n);
     const held = permissions.deriveFromWallet({}).unwrap();
-    host.deriveFromWallet.mockImplementationOnce(() => shared);
+    host.deriveFromWallet.mockImplementationOnce(() => ({ tag: 'concrete', val: shared }));
     const owner = permissions.deriveFromWallet({}).unwrap();
     const first = fakeCard('first', 22n);
     const last = fakeCard('last', 23n);
@@ -453,6 +456,19 @@ describe('permission cards', () => {
     expect(() => nested.id()).toThrow(/already been released/);
     expect(() => permissions.deriveScope([nested], {})).toThrow(/already been released/);
     expect(scope.isMoved()).toBe(false);
+  });
+
+  it('preserves the host template tag for wallet and child derivation', async () => {
+    const { host, permissions } = await loadPermissions();
+    host.deriveFromWallet.mockReturnValueOnce({ tag: 'template', val: fakeCard('parent', 10n) });
+    host.derive.mockReturnValueOnce({ tag: 'template', val: fakeCard('child', 11n) });
+    const parent = permissions.deriveFromWallet({}).unwrap();
+    const child = parent.derive({}).unwrap();
+    for (const card of [parent, child]) {
+      expect(card).toBeInstanceOf(permissions.PolymorphicPermissionCard);
+      expect(card).not.toBeInstanceOf(permissions.PermissionCard);
+      card.release();
+    }
   });
 
   it('gives template cards the persistent operations, and derives concrete children', async () => {
@@ -656,9 +672,10 @@ describe('permission card non-forgeability', () => {
     const concreteCodec = compileSchema(s.permissionCard({ polymorphic: false }));
     const templateCodec = compileSchema(s.permissionCard({ polymorphic: true }));
     // Only instances of the host resource class lift from a wire value.
-    host.deriveFromWallet.mockImplementationOnce(() =>
-      Object.assign(Object.create(RawPermissionCard.prototype), fakeCard('wire', 5n, [1n])),
-    );
+    host.deriveFromWallet.mockImplementationOnce(() => ({
+      tag: 'concrete',
+      val: Object.assign(Object.create(RawPermissionCard.prototype), fakeCard('wire', 5n, [1n])),
+    }));
     const concrete = permissions.deriveFromWallet({}).unwrap();
     const template = walletCard(permissions, 'template');
 
