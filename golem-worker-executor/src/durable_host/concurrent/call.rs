@@ -806,6 +806,9 @@ pub(crate) struct AccessClaimOptions {
     pub(crate) host_internal_calls: bool,
     /// The invocation id this call records in its `Start`s and claims them by on replay.
     pub(crate) invocation_id: InvocationIdSource,
+    /// The denial a live call records in its `Start` (see [`OplogEntry::Start`]). A call that
+    /// claims a recorded `Start` ignores it and uses the recorded denial.
+    pub(crate) denial: Option<String>,
 }
 
 impl AccessClaimOptions {
@@ -2988,6 +2991,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let parent_start_index = execution_scope.parent_start_index;
                 let observational_owner = execution_scope.observational_owner;
                 let invocation_id = execution_scope.invocation_id;
+                let denial = prepared.claim_options.denial.clone();
                 let span_started = Arc::new(std::sync::Mutex::new((OplogIndex::INITIAL, None)));
                 let built_span = span_started.clone();
                 let span_activity = span_observer.as_ref().map(|_| {
@@ -3061,6 +3065,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                         request: Some(request_payload),
                                         durable_function_type: function_type,
                                         span_started,
+                                        denial,
                                     };
                                     // All fallible preparation is complete. The actor pushes this entry
                                     // without yielding; cleanup enqueued here follows the current job.
@@ -3850,6 +3855,58 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// [`Self::invoke_access`] for a call that the host can deny before it runs. `denial` is the
+    /// live permission decision; it is `None` when the call is allowed or when the decision is
+    /// not available because the call replays. A live denied call records the denial in its
+    /// `Start` and completes with [`DeniablePair::denied`] without running `live_action`. A
+    /// replayed call uses the recorded decision, also when it repairs an incomplete `Start`.
+    pub(crate) async fn invoke_deniable_access<T, D, Ctx, A, E>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        denial: Option<String>,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        Pair: DeniablePair,
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        let denied = denial
+            .as_deref()
+            .map(|denial| Pair::denied(&request, denial));
+        let options = AccessClaimOptions {
+            denial,
+            ..Default::default()
+        };
+        let call = Self::start_access_with_options(store, get_ctx, function_type, options, request)
+            .await?;
+        if call.is_live() {
+            match denied {
+                Some(response) => call
+                    .complete_access(store, get_ctx, response)
+                    .await
+                    .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow())),
+                None => {
+                    call.run_live_action_access(store, get_ctx, live_action)
+                        .await
+                }
+            }
+        } else {
+            match call.replay_access(store, get_ctx).await? {
+                CallReplayOutcome::Replayed(response) => Ok(response),
+                CallReplayOutcome::Incomplete(call) => {
+                    call.run_live_action_access(store, get_ctx, live_action)
+                        .await
+                }
+            }
+        }
+    }
+
     pub(crate) fn host_internal_owner(&self) -> HostInternalCallOwner {
         HostInternalCallOwner {
             start_index: self.start_idx,
@@ -4016,16 +4073,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// than falling back to ambient worker state a sibling could have clobbered once durable calls
     /// overlap.
     pub(crate) async fn complete<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut impl DurableContext<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, TerminalCallError> {
+        self.complete_drained(ctx, response, None).await
+    }
+
+    async fn complete_drained<Ctx: WorkerCtx>(
         mut self,
         ctx: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<Pair::Resp, TerminalCallError> {
         let context = self.trap_context();
         if let Err(err) = ctx.drain().await {
             self.abandon_for_trap();
             return Err(err);
         }
-        self.complete_context(ctx, response, None, None, false)
+        self.complete_context(ctx, response, span_finished, None, false)
             .await
             .map_err(|source| TerminalCallError::new(source, context))
     }
@@ -4197,9 +4263,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Completes a call without publishing its response to the caller. Native callers prepare
     /// the delivery token and consume it at the Rust return, with no intervening await.
     pub(crate) async fn complete_deferred<Ctx: WorkerCtx>(
+        self,
+        access: &mut impl DurableContext<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError> {
+        self.complete_deferred_drained(access, response, None).await
+    }
+
+    async fn complete_deferred_drained<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError> {
         let context = self.trap_context();
         if let Err(err) = access.drain().await {
@@ -4207,7 +4282,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             return Err(err);
         }
         let (response, mut guard) = self
-            .complete_terminal(access, response, None, AccessResultDestination::Guest)
+            .complete_terminal(
+                access,
+                response,
+                span_finished,
+                AccessResultDestination::Guest,
+            )
             .await
             .map_err(|source| TerminalCallError::new(source, context))?;
         Ok((response, guard.take_completion_delivery()))
@@ -4513,12 +4593,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         access: &mut impl DurableContext<Ctx>,
         guard: &mut AccessTerminalGuard<P>,
     ) -> Result<(), WorkerExecutorError> {
-        let result = async {
-            access
-                .finish_scope(self.retry.function_type().clone(), self.begin_index())
-                .await
-        }
-        .await;
+        let function_type = self.retry.function_type().clone();
+        let begin_index = self.begin_index();
+        let result = access.finish_scope(function_type, begin_index).await;
         if result.is_err() {
             // The caller observes this failure; it is not a guest-discarded completion.
             guard.suppress_discard_marker();
@@ -4677,6 +4754,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if let Err(error) = access.publish_direct_replay_tail(self.start_idx).await {
                     self.finished = true;
                     return Err(error);
+                }
+                if let Some((response, span_finished)) =
+                    self.recorded_denied_response(access).await?
+                {
+                    let response = self
+                        .complete_drained(access, response, span_finished)
+                        .await
+                        .map_err(|error| error.source)?;
+                    return Ok(CallReplayOutcome::Replayed(response));
                 }
                 if self.requires_agent_authority {
                     match access.agent_auth_ctx().await {
@@ -4844,6 +4930,27 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if let Err(error) = synchronization {
                     self.abandon_for_trap();
                     return Err(error);
+                }
+                let denied = self
+                    .recorded_denied_response(&mut AccessorContext::new(store, get_ctx))
+                    .await?;
+                if let Some((response, span_finished)) = denied {
+                    if destination != AccessResultDestination::Guest {
+                        self.abandon_for_trap();
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "host-internal Start without a denial",
+                            format!("denied host-internal Start {}", self.start_idx),
+                        ));
+                    }
+                    let response = match span_finished {
+                        Some(span_finished) => {
+                            self.complete_access_with_span(store, get_ctx, response, span_finished)
+                                .await
+                        }
+                        None => self.complete_access(store, get_ctx, response).await,
+                    }
+                    .map_err(|error| error.source)?;
+                    return Ok(CallReplayOutcome::Replayed(response));
                 }
                 Ok(CallReplayOutcome::Incomplete(self))
             }
@@ -5149,6 +5256,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if let Err(error) = synchronization {
                     self.abandon_for_trap();
                     return Err(error);
+                }
+                if let Some((response, span_finished)) =
+                    self.recorded_denied_response(access).await?
+                {
+                    let (response, delivery) = self
+                        .complete_deferred_drained(access, response, span_finished)
+                        .await
+                        .map_err(|error| error.source)?;
+                    return Ok(DeferredCallReplayOutcome::Replayed(response, delivery));
                 }
                 Ok(DeferredCallReplayOutcome::Incomplete(self))
             }
@@ -5546,6 +5662,67 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// The response of an incomplete call whose `Start` records a denial: the host denied the
+    /// call before it ran, so the repair completes the `Start` with the denied response and does
+    /// not run the operation. A `Start` that opens a span gets the span transition that closes it
+    /// as denied, as the live denial does. `None` when the `Start` records no denial.
+    async fn recorded_denied_response<Ctx: WorkerCtx>(
+        &mut self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<
+        Option<(Pair::Resp, Option<golem_common::model::oplog::SpanFinished>)>,
+        WorkerExecutorError,
+    > {
+        let oplog = access.with_ctx(|ctx| ctx.state.oplog.clone());
+        let start_idx = self.start_idx;
+        let result = async {
+            let (request, denial, span_started) = match oplog.read(start_idx).await? {
+                OplogEntry::Start { denial: None, .. } => return Ok(None),
+                OplogEntry::Start {
+                    request: Some(request),
+                    denial: Some(denial),
+                    span_started,
+                    ..
+                } => (request, denial, span_started),
+                entry => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!("denied {} Start with a request", Pair::FQFN),
+                        format!("{entry:?}"),
+                    ));
+                }
+            };
+            let request = oplog.download_payload(request).await.map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to load the request of the denied {} call at {}: {error}",
+                    Pair::FQFN,
+                    start_idx
+                ))
+            })?;
+            let request = Pair::Req::try_from(request).map_err(|actual| {
+                WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN.to_string(), actual)
+            })?;
+            let span_finished =
+                span_started.map(|started| golem_common::model::oplog::SpanFinished {
+                    span_id: started.span_id,
+                    finished_at: Timestamp::now_utc(),
+                    outcome: golem_common::model::oplog::SpanOutcome::Denied,
+                });
+            Pair::denied_response(&request, &denial)
+                .map(|response| Some((response, span_finished)))
+                .ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        format!("{} Start without a denial", Pair::FQFN),
+                        format!("denial at {}: {denial}", start_idx),
+                    )
+                })
+        }
+        .await;
+        if result.is_err() {
+            self.abandon_for_trap();
+        }
+        result
     }
 
     /// Handles a [`ResolutionOutcome::Incomplete`] resolution, shared by every replay variant.
@@ -6256,8 +6433,57 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         request: Pair::Req,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
         let request: HostRequest = request.into();
-        self.start_live_with_host_request_index(ctx, move |_| Ok((request, None)))
+        self.start_live_with_host_request_index(ctx, None, move |_| Ok((request, None)))
             .await
+    }
+
+    /// Records a call that the host denied before it ran: a `Start` that holds the denial and an
+    /// `End` with the pair's denied response. The operation does not run. Recovery of the `Start`
+    /// alone completes it with the same response (see [`HostPayloadPair::denied_response`]).
+    pub(crate) async fn start_live_denied<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        denial: String,
+    ) -> anyhow::Result<Pair::Resp>
+    where
+        Pair: DeniablePair,
+    {
+        let response = Pair::denied(&request, &denial);
+        let request: HostRequest = request.into();
+        let handle = self
+            .start_live_with_host_request_index(ctx, Some(denial), move |_| Ok((request, None)))
+            .await?;
+        Ok(handle.complete(ctx, response).await?)
+    }
+
+    /// [`Self::start_live_denied`] for a call that opens a span: the `Start` records
+    /// `span_started` and the `End` closes the span as denied.
+    pub(crate) async fn start_live_denied_with_span<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        denial: String,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> anyhow::Result<Pair::Resp>
+    where
+        Pair: DeniablePair,
+    {
+        let response = Pair::denied(&request, &denial);
+        let request: HostRequest = request.into();
+        let span_finished = golem_common::model::oplog::SpanFinished {
+            span_id: span_started.span_id.clone(),
+            finished_at: Timestamp::now_utc(),
+            outcome: golem_common::model::oplog::SpanOutcome::Denied,
+        };
+        let handle = self
+            .start_live_with_host_request_index(ctx, Some(denial), move |_| {
+                Ok((request, Some(span_started)))
+            })
+            .await?;
+        Ok(handle
+            .complete_with_span(ctx, response, span_finished)
+            .await?)
     }
 
     pub(crate) async fn start_live_with_span<Ctx: WorkerCtx>(
@@ -6267,8 +6493,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         span_started: golem_common::model::oplog::SpanStarted,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
         let request: HostRequest = request.into();
-        self.start_live_with_host_request_index(ctx, move |_| Ok((request, Some(span_started))))
-            .await
+        self.start_live_with_host_request_index(ctx, None, move |_| {
+            Ok((request, Some(span_started)))
+        })
+        .await
     }
 
     /// Second phase on the live path for requests whose durable identity depends on the exact
@@ -6289,7 +6517,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     where
         Pair::Req: Send + 'static,
     {
-        self.start_live_with_host_request_index(ctx, move |start_index| {
+        self.start_live_with_host_request_index(ctx, None, move |start_index| {
             build(start_index).map(|(request, span)| (request.into(), Some(span)))
         })
         .await
@@ -6298,6 +6526,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     async fn start_live_with_host_request_index<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
+        denial: Option<String>,
         build_request: impl FnOnce(
             OplogIndex,
         ) -> Result<
@@ -6347,6 +6576,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         request: Some(request_payload),
                         durable_function_type: function_type,
                         span_started: span_started.lock().unwrap().take(),
+                        denial,
                     },
                 )
                 .await
@@ -6589,6 +6819,7 @@ mod tests {
                     request: Some(OplogPayload::Inline(Box::new(request.clone().into()))),
                     durable_function_type: DurableFunctionType::ReadLocal,
                     span_started: None,
+                    denial: None,
                 })
                 .await
                 .unwrap();

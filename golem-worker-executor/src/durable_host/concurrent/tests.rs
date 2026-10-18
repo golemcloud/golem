@@ -386,6 +386,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1006,6 +1007,7 @@ async fn tail_gated_token_over_crash_tail(
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1515,6 +1517,7 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1641,6 +1644,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             )))),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();

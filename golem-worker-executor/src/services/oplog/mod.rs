@@ -85,8 +85,10 @@ pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
 
 pub use reader::{OplogReadError, UnreadableOplog};
 
+pub(crate) use reader::OplogReadSource;
+
 #[cfg(test)]
-pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source};
+pub(crate) use reader::{checked_range_end, exact_from_source};
 
 #[cfg(test)]
 pub mod tests;
@@ -1721,6 +1723,7 @@ pub trait OplogOps: Oplog {
             request: Some(request_payload),
             durable_function_type: function_type,
             span_started: None,
+            denial: None,
         };
         let (start_idx, end_idx) = self
             .add_pair(

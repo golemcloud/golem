@@ -705,6 +705,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -731,6 +732,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: Some(OplogPayload::Inline(Box::new(middleware_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -752,6 +754,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -813,6 +816,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
                 attributes: AttributeMap(HashMap::new()),
                 kind: SpanKind::Internal,
             })),
+            denial: None,
         })
         .await
         .unwrap();
@@ -903,6 +907,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: None,
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -938,6 +943,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1013,6 +1019,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: Some(OplogPayload::Inline(Box::new(rejected_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1294,6 +1301,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1314,6 +1322,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             request: Some(OplogPayload::Inline(Box::new(entity_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1361,6 +1370,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
                 request: None,
                 durable_function_type: DurableFunctionType::WriteLocal,
                 span_started: None,
+                denial: None,
             })
             .await
             .unwrap(),
@@ -1713,6 +1723,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             request: Some(cancelled_request_payload),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
