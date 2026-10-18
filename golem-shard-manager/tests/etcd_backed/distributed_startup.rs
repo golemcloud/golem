@@ -60,8 +60,6 @@ use uuid::Uuid;
 inherit_test_dep!(Arc<DockerEtcd>);
 
 const LEASE_TTL: Duration = Duration::from_secs(2);
-/// Long enough that a renewal shows as a rise in the whole seconds etcd reports.
-const LIVE_DUPLICATE_LEASE_TTL: Duration = Duration::from_secs(6);
 /// Two of these must fit inside `LEASE_TTL` or startup refuses to run, so it cannot inherit the
 /// five-second default.
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
@@ -2292,12 +2290,7 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
     etcd: &Arc<DockerEtcd>,
 ) {
     wipe_state(etcd).await;
-    let mut config = distributed_config(etcd);
-    // etcd reports the time left on a lease in whole seconds, rounded up, so a lease that is
-    // renewed every third of two seconds never shows a rise. The TTL must be longer than that.
-    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
-        etcd.leader_lease_ttl = LIVE_DUPLICATE_LEASE_TTL;
-    }
+    let config = distributed_config(etcd);
     let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
     let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
         .await
@@ -2308,7 +2301,7 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
     duplicate.grpc.advertised_port = Some(leader_details.grpc_port);
     let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
     let started = timeout(
-        LIVE_DUPLICATE_LEASE_TTL * 4,
+        LEASE_TTL * 4,
         golem_shard_manager::run(
             &duplicate,
             Deployment::Standalone {

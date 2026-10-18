@@ -974,17 +974,18 @@ impl LeaderElection {
     ///
     /// A key of an earlier process of the same pod also carries this address, but nothing renews
     /// its lease, so the lease only counts down until the key disappears. A live duplicate
-    /// renews its lease, which makes the time left on it go up. The campaign therefore reads the
-    /// time left on the other key's lease at every recheck and refuses the duplicate only after
-    /// it has seen that time go up twice (see [`RenewalEvidence`]); how long the lease would
-    /// otherwise last decides nothing, because a change of etcd's raft leader extends every lease
-    /// and an abandoned key can then outlive any fixed patience. A live replica renews at a third
-    /// of its lease, so it is seen renewing within about one lease.
+    /// renews its lease, which moves its end later. The campaign therefore reads the other key's
+    /// lease at every recheck and refuses the duplicate only after it has seen the end move
+    /// later twice (see [`RenewalEvidence`]); how long the lease would otherwise last decides
+    /// nothing, because a change of etcd's raft leader extends every lease once and an abandoned
+    /// key can then outlive any fixed patience. A live replica renews at a third of its lease,
+    /// so it is seen renewing within about one lease.
     ///
     /// A lease that is already gone is never refused, because its key is about to disappear with
     /// it, and neither is a key whose lease could not be read: the read is tried again on the next
     /// recheck. The recheck comes at most every quarter of this replica's TTL, and at most every
-    /// third of the other lease's granted TTL once that is known, so that renewals are not missed.
+    /// quarter of the other lease's granted TTL once that is known, which bounds how soon a live
+    /// duplicate is found.
     async fn watch_campaign(&self, own_lease: i64, granted_ttl: Duration) -> CampaignInterrupt {
         let Some(mut watch) = self.watch.clone() else {
             return std::future::pending().await;
@@ -1017,10 +1018,13 @@ impl LeaderElection {
                                 })
                             }
                         };
-                        match self.read_lease(other.lease).await {
+                        let sent = Instant::now();
+                        let read = self.read_lease(other.lease).await;
+                        let received = Instant::now();
+                        match read {
                             LeaseRead::Alive { remaining, granted } => {
                                 seen.other_granted_ttl = Some(granted);
-                                if seen.evidence.observe(remaining) {
+                                if seen.evidence.observe(sent, received, remaining) {
                                     return CampaignInterrupt::DuplicateAddress {
                                         address: own.to_string(),
                                         other: other
@@ -1035,7 +1039,7 @@ impl LeaderElection {
                             LeaseRead::Unknown => {}
                         }
                         if let Some(granted) = seen.other_granted_ttl {
-                            recheck = recheck.min(granted / 3);
+                            recheck = recheck.min(granted / 4);
                         }
                     }
                     None => duplicate = None,
@@ -1290,26 +1294,42 @@ enum LeaseRead {
     Unknown,
 }
 
-/// Counts how often the time left on a lease went up between two reads. Only a renewal raises it,
-/// but so does a change of etcd's raft leader, which grants every lease its full time again once.
-/// A single rise therefore proves nothing; two prove that someone renews.
-#[derive(Debug, Default, PartialEq, Eq)]
+/// Counts how often a lease was seen to end later than it could have ended without a renewal.
+///
+/// etcd answers a read of a lease in whole seconds, truncated, so the time left on a lease that is
+/// renewed often can read the same on every read; only its end can be compared. A read sent at
+/// `sent` and answered at `received` with `ttl` says that the lease ends no earlier than
+/// `sent + ttl` and no later than `received + ttl + 1 s`. The end of an abandoned lease is fixed,
+/// so the earliest end that a later read allows can never pass the latest end that an earlier
+/// read allowed. When it does, someone extended the lease: its owner renewed it, or etcd's raft
+/// leader changed, which extends every lease once. One extension therefore proves nothing and two
+/// prove that someone renews.
+#[derive(Debug, Default)]
 pub(crate) struct RenewalEvidence {
-    last_remaining: Option<i64>,
-    rises: u32,
+    /// The latest the lease can end with no further extension, as of the read after the last
+    /// extension that was counted.
+    unextended_end: Option<Instant>,
+    extensions: u32,
 }
 
 impl RenewalEvidence {
-    const RISES_THAT_PROVE_A_RENEWAL: u32 = 2;
+    const EXTENSIONS_THAT_PROVE_A_RENEWAL: u32 = 2;
 
-    /// Records a read of the time left on the lease, in seconds. Returns whether the evidence now
-    /// proves that the lease is renewed.
-    pub(crate) fn observe(&mut self, remaining: i64) -> bool {
-        if self.last_remaining.is_some_and(|last| remaining > last) {
-            self.rises += 1;
+    /// Records a read that was sent at `sent` and answered at `received` with the whole seconds
+    /// `ttl`. Returns whether the evidence now proves that the lease is renewed.
+    pub(crate) fn observe(&mut self, sent: Instant, received: Instant, ttl: i64) -> bool {
+        let ttl = Duration::from_secs(ttl.max(0) as u64);
+        let latest_end = received + ttl + Duration::from_secs(1);
+        match self.unextended_end {
+            None => self.unextended_end = Some(latest_end),
+            // An answer of zero is a lease that ran out and is not yet revoked: it proves nothing.
+            Some(end) if !ttl.is_zero() && sent + ttl > end => {
+                self.extensions += 1;
+                self.unextended_end = Some(latest_end);
+            }
+            Some(_) => {}
         }
-        self.last_remaining = Some(remaining);
-        self.rises >= Self::RISES_THAT_PROVE_A_RENEWAL
+        self.extensions >= Self::EXTENSIONS_THAT_PROVE_A_RENEWAL
     }
 }
 
@@ -1499,33 +1519,59 @@ mod tests {
         assert!(!belief.held());
     }
 
-    #[test]
-    fn two_rises_of_the_time_left_prove_a_renewal() {
+    /// Feeds reads of `(seconds since the start, whole-second answer)` to the evidence, and returns
+    /// the time of the first read that proves a renewal.
+    fn proven_at(reads: &[(f64, i64)]) -> Option<f64> {
+        let start = Instant::now();
         let mut evidence = RenewalEvidence::default();
-        assert!(!evidence.observe(5));
-        assert!(!evidence.observe(3));
-        assert!(
-            !evidence.observe(5),
-            "one rise may be a change of etcd's leader"
+        reads.iter().find_map(|(at, ttl)| {
+            let at_instant = start + Duration::from_secs_f64(*at);
+            evidence
+                .observe(at_instant, at_instant, *ttl)
+                .then_some(*at)
+        })
+    }
+
+    #[test]
+    fn a_lease_renewed_to_a_constant_truncated_answer_is_proven_within_a_few_seconds() {
+        // A two second lease renewed every third of it always reads one: no answer ever rises.
+        let reads: Vec<(f64, i64)> = (0..20).map(|i| (i as f64 * 0.5, 1)).collect();
+        let proven = proven_at(&reads).expect("a renewed lease is proven");
+        assert!(proven <= 3.0, "{proven}");
+    }
+
+    #[test]
+    fn a_lease_that_only_counts_down_is_never_counted() {
+        let reads: Vec<(f64, i64)> = (0..10).map(|i| (i as f64, 9 - i)).collect();
+        assert_eq!(proven_at(&reads), None);
+    }
+
+    #[test]
+    fn a_countdown_with_one_reset_counts_once() {
+        // An etcd leader change grants every lease its full time again, once.
+        let reads = [(0.0, 5), (1.0, 4), (2.0, 10), (3.0, 9), (4.0, 8), (5.0, 7)];
+        assert_eq!(proven_at(&reads), None);
+    }
+
+    #[test]
+    fn an_answer_of_zero_past_the_end_is_not_counted() {
+        // A lease that has run out and is not yet revoked reads zero.
+        assert_eq!(proven_at(&[(0.0, 1), (5.0, 0), (6.0, 0), (7.0, 0)]), None);
+    }
+
+    #[test]
+    fn a_gap_of_failed_reads_followed_by_a_reset_counts_once() {
+        assert_eq!(proven_at(&[(0.0, 5), (10.0, 10), (11.0, 9)]), None);
+    }
+
+    #[test]
+    fn a_low_read_after_an_extension_does_not_count_twice() {
+        // The second read sees an extension; a later read that answers lower, and one after it
+        // that answers as high as the extension allows, must not count as more.
+        assert_eq!(
+            proven_at(&[(0.0, 5), (2.0, 10), (3.0, 3), (3.1, 9), (3.2, 8)]),
+            None
         );
-        assert!(!evidence.observe(4));
-        assert!(evidence.observe(5));
-    }
-
-    #[test]
-    fn a_lease_that_only_counts_down_proves_nothing() {
-        let mut evidence = RenewalEvidence::default();
-        for remaining in [10, 8, 8, 5, 5, 2, 1] {
-            assert!(!evidence.observe(remaining));
-        }
-    }
-
-    #[test]
-    fn a_lease_whose_time_left_stays_equal_is_no_evidence() {
-        let mut evidence = RenewalEvidence::default();
-        for _ in 0..10 {
-            assert!(!evidence.observe(7));
-        }
     }
 
     #[test]
