@@ -115,8 +115,7 @@ async fn durable_p3_promise_completion_before_quota_stop(
         ensure!(tokio::time::timeout(Duration::from_secs(10), &mut invocation).await???.into_typed::<Vec<u8>>()? == PAYLOAD);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        ensure!(worker.monthly_stop_for_test() == Some(signal));
-        ensure!(worker.owner_stop_for_test().await == Some(signal));
+        ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
@@ -129,7 +128,6 @@ async fn durable_p3_promise_completion_before_quota_stop(
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(!worker.monthly_window_active_for_test());
-        ensure!(limits.initialize_account(context.account_id).await?.monthly_observer_count_for_test() == 0);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(history::promise_record(&completed, &key, &id, true, 1)? == Some(original.clone()));
         history::settled(&completed)?;

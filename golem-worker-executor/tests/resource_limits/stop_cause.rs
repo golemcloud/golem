@@ -49,8 +49,8 @@ async fn deletion_cancels_initial_wait_without_acquiring_a_permit(
     Worker::start_if_needed(worker.clone()).await?;
     assert!(worker.is_loading());
     executor.delete_worker(&id).await?;
-    assert!(!worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.resident_generation_for_test(), 0);
+    assert_eq!(worker.permit_acquisitions_for_test(), 0);
+    assert_eq!(worker.observed_creation_count(), 0);
     drop(held);
     let permit = executor.acquire_account_concurrent_agent_permit(id).await;
     drop(permit);

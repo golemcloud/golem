@@ -41,6 +41,7 @@ fn target(
         start_attempt,
         resident_generation: generation,
         active: Mutex::new(true),
+        active_span: Mutex::new(None),
         failure: Mutex::new(None),
     })
 }
@@ -169,7 +170,7 @@ fn trace_context_requires_the_actual_active_monthly_target() {
 }
 
 #[test]
-fn normal_tokio_ticks_are_not_early_and_rearm_after_a_rejected_proposal() {
+fn normal_tokio_ticks_are_not_early_and_retry_after_interrupt_lock_contention() {
     tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)
@@ -197,13 +198,9 @@ fn normal_tokio_ticks_are_not_early_and_rearm_after_a_rejected_proposal() {
             }
 
             let original_tail = owner.tail.lock().unwrap().clone();
-            let mut stale = proposed;
-            stale.policy_revision += 1;
-            {
-                let mut guard = owner.interrupts.lock().await;
-                assert!(owner.register(stale, &mut guard).is_none());
-                assert!(!guard.has_interrupt());
-            }
+            let held = owner.interrupts.lock().await;
+            assert!(owner.interrupts.try_lock().is_none());
+            assert!(!held.has_interrupt());
             assert!(owner.monthly.lock().unwrap().is_none());
             assert!(Arc::ptr_eq(&original_tail, &owner.tail.lock().unwrap()));
 
@@ -220,7 +217,25 @@ fn normal_tokio_ticks_are_not_early_and_rearm_after_a_rejected_proposal() {
             }
             assert_eq!(started.elapsed(), Duration::from_secs(60));
             assert_eq!(owner.sample(), proposed);
-            let mut guard = owner.interrupts.lock().await;
+            assert!(owner.interrupts.try_lock().is_none());
+            assert!(!held.has_interrupt());
+            assert!(owner.monthly.lock().unwrap().is_none());
+            assert!(Arc::ptr_eq(&original_tail, &owner.tail.lock().unwrap()));
+            drop(held);
+            let duration = check.duration();
+            assert_eq!(duration, Duration::from_secs(30));
+            {
+                let wait = check.wait(tokio::time::sleep(duration));
+                tokio::pin!(wait);
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                tokio::time::advance(Duration::from_secs(29)).await;
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                tokio::time::advance(Duration::from_secs(1)).await;
+                assert!(wait.await.is_ok());
+            }
+            assert_eq!(started.elapsed(), Duration::from_secs(90));
+            assert_eq!(owner.sample(), proposed);
+            let mut guard = owner.interrupts.try_lock().unwrap();
             let accepted = owner.register(proposed, &mut guard).unwrap();
             assert!(matches!(accepted.kind, InterruptKind::Suspend(_)));
             assert!(guard.has_interrupt());
@@ -687,6 +702,45 @@ async fn unmetered_window() -> (
 
 #[test]
 #[timeout("5s")]
+async fn owned_window_close_joins_monitor_and_drops_capacity_observer() {
+    use crate::services::resource_limits::tests::assert_capacity_observers;
+
+    let (mut window, held, metrics) = unmetered_window().await;
+    let (entry, owner, _other) = prepaid_stop_owners().await;
+    assert_capacity_observers(&entry, 0);
+    let check = MonthlyMemoryCheck::new(entry.clone(), None);
+    assert_capacity_observers(&entry, 1);
+    let cancelled = CancellationToken::new();
+    let stop = cancelled.clone();
+    let (stopped_tx, stopped_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    window.monitor = Some(MonthlyMonitor {
+        target: owner.target.clone(),
+        cancelled,
+        task: tokio::spawn(async move {
+            let mut check = check;
+            check.wait(stop.cancelled()).await.unwrap();
+            stopped_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            drop(check);
+            Ok(())
+        }),
+    });
+    let closing = window.close(Instant::now() + Duration::from_secs(1));
+    tokio::pin!(closing);
+    assert!(futures::poll!(closing.as_mut()).is_pending());
+    stopped_rx.await.unwrap();
+    assert_capacity_observers(&entry, 1);
+    assert!(held.load(Ordering::Acquire));
+    release_tx.send(()).unwrap();
+    closing.await.unwrap();
+    assert_capacity_observers(&entry, 0);
+    assert!(!held.load(Ordering::Acquire));
+    metrics.assert_finished("accepted_stop", "released");
+}
+
+#[test]
+#[timeout("5s")]
 async fn all_off_ready_close_spawns_no_task_and_releases_its_permit() {
     let (window, held, metrics) = unmetered_window().await;
     let close_tasks = window.close_tasks.clone();
@@ -703,7 +757,7 @@ async fn all_off_ready_close_spawns_no_task_and_releases_its_permit() {
 
 #[test]
 #[timeout("5s")]
-async fn stopping_instance_reports_real_permit_release_before_state_transition() {
+async fn window_releases_its_permit_before_the_stopping_state_changes() {
     let (window, held, metrics) = unmetered_window().await;
     let instance = WorkerInstance::Stopping(super::super::StoppingWorker {
         notify: golem_common::one_shot::OneShotEvent::new(),
@@ -711,10 +765,8 @@ async fn stopping_instance_reports_real_permit_release_before_state_transition()
             startup_failure: None,
         },
         pending_live_invocations: super::super::PendingLiveInvocationDisposition::Preserve,
-        concurrent_agent_permit_held: held.clone(),
     });
     assert!(held.load(Ordering::Acquire));
-    assert!(instance.concurrent_agent_permit_is_held());
     assert_eq!(metrics.pending("accepted_stop", "permit_released"), 1.0);
     assert_eq!(
         metrics.count("accepted_stop", "permit_released", "released"),
@@ -726,7 +778,6 @@ async fn stopping_instance_reports_real_permit_release_before_state_transition()
         .unwrap();
     assert!(matches!(instance, WorkerInstance::Stopping(_)));
     assert!(!held.load(Ordering::Acquire));
-    assert!(!instance.concurrent_agent_permit_is_held());
     metrics.assert_finished("accepted_stop", "released");
     assert_eq!(
         metrics.count("accepted_stop", "permit_released", "released"),
@@ -914,10 +965,10 @@ fn non_running_monthly_lifecycles(
     [WorkerInstance; 4],
     futures::channel::oneshot::Sender<Result<(), WorkerExecutorError>>,
 ) {
-    let WorkerInstance::Running(inner) = &running else {
-        panic!("fixture requires Running");
-    };
-    let held = inner.concurrent_agent_permit_held.clone();
+    assert!(
+        matches!(running, WorkerInstance::Running(_)),
+        "fixture requires Running"
+    );
     let (handle, pending) = super::super::DeletionHandle::new();
     (
         [
@@ -936,7 +987,6 @@ fn non_running_monthly_lifecycles(
                     startup_failure: None,
                 },
                 pending_live_invocations: super::super::PendingLiveInvocationDisposition::Preserve,
-                concurrent_agent_permit_held: held,
             }),
             WorkerInstance::Unloaded {
                 startup_failure: None,

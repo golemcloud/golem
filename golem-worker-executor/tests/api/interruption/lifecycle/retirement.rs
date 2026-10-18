@@ -151,7 +151,7 @@ async fn stop_order(
         }
     })
     .await??;
-    let generation = worker.resident_generation_for_test();
+    let generation = worker.observed_creation_count();
     let acquisitions = worker.permit_acquisitions_for_test();
     let mode = if durable {
         AgentMode::Durable
@@ -196,18 +196,15 @@ async fn stop_order(
             .expect("accepted user stop");
     }
     let initial = worker.current_monthly_proposal_for_test();
-    let account = limits.initialize_account(context.account_id).await?;
+    limits.initialize_account(context.account_id).await?;
     let mut updates = limits
         .subscribe_capacity_updates_for_test(context.account_id)
         .await?;
     drop(updates.borrow_and_update());
-    assert_eq!(account.monthly_observer_count_for_test(), 2);
+    let mut attempts = crate::monthly_acceptance::observe(initial.fingerprint);
     policy.available_memory_gb_seconds = 0;
     registry.set_policy(policy);
-    let refresh = tokio::spawn({
-        let limits = limits.clone();
-        async move { limits.run_batch_for_test().await }
-    });
+    let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
     tokio::time::timeout(Duration::from_secs(10), updates.changed()).await??;
     let applied = worker.current_monthly_proposal_for_test();
     assert_eq!(applied.exhaustion, Some("monthly memory exhausted"));
@@ -220,15 +217,17 @@ async fn stop_order(
     assert_eq!(applied.resident_generation, initial.resident_generation);
     assert_eq!(applied.diagnostic_window_id, initial.diagnostic_window_id);
     drop(updates);
-    assert_eq!(account.monthly_observer_count_for_test(), 1);
     assert!(worker.concurrent_agent_permit_is_held().await);
-    tokio::time::timeout(Duration::from_secs(10), worker.drain_lifecycle_for_test()).await??;
+    let processed = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+        .await?
+        .context("monthly capacity request was not processed")?;
+    assert_eq!(processed.proposal, applied);
+    assert_eq!(processed.accepted, first == FirstStop::Quota);
     if first == FirstStop::Quota {
         tokio::time::timeout(Duration::from_secs(10), &mut selected)
             .await
             .context("quota selected before deletion")??;
     }
-    let accepted_quota_stop = worker.monthly_stop_for_test();
     if first == FirstStop::Quota {
         deleting = Some(delete());
     }
@@ -322,15 +321,8 @@ async fn stop_order(
         );
     }
     refresh.await?;
-    assert_eq!(worker.resident_generation_for_test(), generation);
+    assert_eq!(worker.observed_creation_count(), generation);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    assert_eq!(
-        limits
-            .initialize_account(context.account_id)
-            .await?
-            .monthly_observer_count_for_test(),
-        0
-    );
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty
@@ -379,7 +371,6 @@ async fn stop_order(
         .filter(|e| matches!(e, OplogEntry::Interrupted { .. }))
         .count();
     if first == FirstStop::Quota {
-        assert_eq!(accepted_quota_stop, Some(cause));
         assert!(matches!(cause, InterruptKind::Suspend(_)));
         assert_eq!(interrupts, 0);
         assert_eq!(suspends, usize::from(durable));
@@ -392,10 +383,6 @@ async fn stop_order(
             );
         }
     } else {
-        assert_eq!(
-            accepted_quota_stop, None,
-            "quota was accepted after {first:?} already owned the stop"
-        );
         assert!(matches!(cause, InterruptKind::Interrupt(_)));
         if first == FirstStop::User {
             assert_eq!(cause, user);

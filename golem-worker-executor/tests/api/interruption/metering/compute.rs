@@ -224,15 +224,13 @@ async fn pending_compute(
         .context("committed invocation prefix is empty")?
         .0;
     let account = limits.initialize_account(context.account_id).await?;
+    let mut resource_events = crate::resource_limit_observations::observe(&account);
     let prepaid = worker.current_monthly_proposal_for_test();
     assert!(
         prepaid.fuel_generation.is_some(),
         "the parked Store must publish its real reservation"
     );
-    assert_eq!(
-        prepaid.fuel_generation,
-        account.settled_fuel_generation_for_test()
-    );
+    assert!(!account.prepaid_fuel_is_exhausted(mode, prepaid.fuel_generation));
     assert!(
         account.monthly_capacity_is_exhausted_for_test(mode),
         "the Store prepaid the remaining account fuel"
@@ -248,7 +246,6 @@ async fn pending_compute(
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut raw = worker.raw_interrupt_for_test();
     assert!(worker.monthly_window_active_for_test());
-    assert_eq!(account.monthly_observer_count_for_test(), 2);
     let mut next_flush = async || {
         loop {
             let (window, _) = flushes.recv().await.context("owner usage flusher closed")?;
@@ -268,8 +265,11 @@ async fn pending_compute(
         .context("monitor did not finish its check and begin the next wait")??;
     assert!(!capacity_updates.has_changed()?);
     drop(capacity_updates);
-    assert_eq!(account.monthly_observer_count_for_test(), 1);
-    worker.drain_lifecycle_for_test().await?;
+    assert!(
+        worker
+            .monthly_checks()
+            .contains(&(prepaid.diagnostic_window_id, prepaid.policy_revision,))
+    );
     assert!(
         attempts.try_recv().is_err(),
         "a real monitor tick must preserve this Store's prepaid generation"
@@ -304,7 +304,10 @@ async fn pending_compute(
         Some("monthly compute exhausted")
     );
     assert!(attempt.accepted);
-    assert!(account.settled_fuel_generation_for_test() > prepaid.fuel_generation);
+    resource_events.assert_policy_advanced_after(
+        registry.current_limits().monthly_policy_revision,
+        prepaid.fuel_generation,
+    )?;
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(30), raw.recv()).await??,
         InterruptKind::Suspend(_)
@@ -323,7 +326,6 @@ async fn pending_compute(
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     refresh.await?;
-    assert_eq!(account.monthly_observer_count_for_test(), 0);
     assert!(!worker.monthly_window_active_for_test());
     let entries = worker
         .oplog()

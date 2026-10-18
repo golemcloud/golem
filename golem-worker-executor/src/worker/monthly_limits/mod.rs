@@ -1,6 +1,4 @@
 use super::{PendingWorkerInterrupt, UnloadReason, UnloadRequest, Worker, WorkerInstance};
-#[cfg(feature = "test-utils")]
-use crate::services::HasActiveAgents;
 use crate::services::HasConfig;
 use crate::services::resource_limits::MonthlyCapacity;
 use crate::services::resource_usage_metering::{
@@ -89,6 +87,7 @@ pub(super) struct MonthlyWindowTarget {
     start_attempt: Uuid,
     resident_generation: u64,
     active: Mutex<bool>,
+    active_span: Mutex<Option<tracing::Span>>,
     failure: Mutex<Option<MonthlyMonitorFailure>>,
 }
 
@@ -220,35 +219,6 @@ fn queue_monthly_capacity(
     Some(pending)
 }
 
-#[cfg(feature = "test-utils")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MonthlyProposalForTest {
-    pub diagnostic_window_id: u64,
-    pub fingerprint: AgentFingerprint,
-    pub start_attempt: Uuid,
-    pub resident_generation: u64,
-    pub policy_revision: u64,
-    pub period: golem_common::model::account_usage::AccountUsagePeriod,
-    pub fuel_generation: Option<u64>,
-    pub exhaustion: Option<&'static str>,
-}
-
-#[cfg(feature = "test-utils")]
-impl MonthlyProposalForTest {
-    fn new(target: &Arc<MonthlyWindowTarget>, capacity: MonthlyCapacity) -> Self {
-        Self {
-            diagnostic_window_id: target.diagnostic_window_id,
-            fingerprint: target.fingerprint,
-            start_attempt: target.start_attempt,
-            resident_generation: target.resident_generation,
-            policy_revision: capacity.policy_revision,
-            period: capacity.period,
-            fuel_generation: capacity.fuel_generation,
-            exhaustion: capacity.exhaustion.map(|value| value.reason()),
-        }
-    }
-}
-
 pub(super) struct ExecutionWindow {
     window: Option<ResourceUsageMeteringWindow>,
     monitor: Option<MonthlyMonitor>,
@@ -311,6 +281,7 @@ impl ExecutionWindow {
             start_attempt,
             resident_generation,
         );
+        span.record("worker_shell", Arc::as_ptr(worker) as usize as u64);
         span.record(
             "agent_id",
             tracing::field::display(&worker.owned_agent_id.agent_id),
@@ -336,6 +307,10 @@ impl ExecutionWindow {
                 worker
                     .owner_runtime_resources
                     .register_resource_usage_flusher(flusher);
+                worker.owner_runtime_resources.trace_usage_flushers(
+                    &worker.owned_agent_id,
+                    "primary_registered",
+                );
             }
             let target = Arc::new(MonthlyWindowTarget {
                 diagnostic_window_id,
@@ -344,12 +319,27 @@ impl ExecutionWindow {
                 start_attempt,
                 resident_generation,
                 active: Mutex::new(true),
+                active_span: Mutex::new(Some(tracing::debug_span!(
+                    target: golem_common::tracing::target::NATIVE_WAIT, parent: None,
+                    "monthly_horizon", window_id = diagnostic_window_id,
+                    worker_shell = Arc::as_ptr(worker) as usize as u64,
+                    fingerprint_high = (worker.initial_worker_metadata.fingerprint.0.as_u128() >> 64) as u64,
+                    fingerprint_low = worker.initial_worker_metadata.fingerprint.0.as_u128() as u64,
+                ))),
                 failure: Mutex::new(None),
             });
+            tracing::debug!(
+                execution_event = "monthly_horizon_registered",
+                fingerprint = %worker.initial_worker_metadata.fingerprint,
+                worker_shell = Arc::as_ptr(worker) as usize as u64,
+                trace_enabled = target.active_span.lock().unwrap().as_ref().is_some_and(|span| !span.is_disabled()),
+                "Registered monthly horizon lifetime"
+            );
             *worker.monthly_window.lock().unwrap() = Some(target.clone());
             let cancelled = CancellationToken::new();
             let stop = cancelled.clone();
             let target_task = target.clone();
+            let diagnostic_task = diagnostic.clone();
             let weak_worker = Arc::downgrade(worker);
             let actor = worker.state_actor.clone();
             let memory = window.monthly_memory_tracker();
@@ -405,6 +395,7 @@ impl ExecutionWindow {
                                 capacity,
                             )?;
                         }
+                        diagnostic_task.event("monthly_checked", Some(capacity), None);
                     }
                     if let Some(worker) = weak_worker.upgrade() {
                         worker.owner_runtime_resources.settle_resource_usage();
@@ -578,7 +569,10 @@ fn close_owned_window(
 
 fn stop_monitor(monitor: &Option<MonthlyMonitor>) {
     if let Some(monitor) = monitor {
-        *monitor.target.active.lock().unwrap() = false;
+        let mut active = monitor.target.active.lock().unwrap();
+        *active = false;
+        drop(monitor.target.active_span.lock().unwrap().take());
+        drop(active);
         monitor.cancelled.cancel();
     }
 }
@@ -672,168 +666,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             return;
         }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn current_monthly_proposal_for_test(&self) -> MonthlyProposalForTest {
-        let target = self
-            .monthly_window
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("monthly window");
-        self.owner_runtime_resources
-            .with_monthly_capacity(self.agent_mode(), |capacity| {
-                MonthlyProposalForTest::new(&target, capacity)
-            })
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn drain_lifecycle_for_test(&self) -> Result<(), WorkerExecutorError> {
-        self.state_actor.drain_lifecycle().await
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn has_unload_cleanup_for_test(&self) -> bool {
-        self.unload_cleanup.lock().unwrap().is_some()
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn retained_cleanup_for_test(&self) -> Result<(), WorkerExecutorError> {
-        self.wait_for_unload_cleanup().await
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn cleanup_failure_for_test(&self) -> Option<WorkerExecutorError> {
-        match self.instance.lock().await.deletion_runtime() {
-            WorkerInstance::CleanupFailed(error) => Some(error.clone()),
-            _ => None,
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn pending_stop_for_test(&self) -> Option<InterruptKind> {
-        match &*self.interrupt_signal.lock().await {
-            super::WorkerInterruptState::Pending(pending) => Some(pending.kind),
-            _ => None,
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn terminal_interrupt_pending_for_test(&self) -> bool {
-        *self.terminal_interrupt().borrow()
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn terminal_stop_claimed_for_test(&self) -> bool {
-        matches!(
-            *self.interrupt_signal.lock().await,
-            super::WorkerInterruptState::TerminalClaimed
-        )
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn monthly_window_active_for_test(&self) -> bool {
-        let target = self.monthly_window.lock().unwrap().clone();
-        target.is_some_and(|target| *target.active.lock().unwrap())
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn selected_owner_failure_for_test(&self) -> Option<String> {
-        let active = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await?;
-        active
-            .execution()
-            .tool_operations()
-            .selected_owner_failure()
-            .map(|winner| format!("{winner:?}"))
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn join_accepted_stops_for_test(&self) -> Result<(), WorkerExecutorError> {
-        self.join_interrupt_establishment().await
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn await_interrupt_for_test(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
-        self.execution_status
-            .read()
-            .unwrap()
-            .create_await_interrupt_signal()
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn raw_interrupt_for_test(&self) -> tokio::sync::broadcast::Receiver<InterruptKind> {
-        match &*self.execution_status.read().unwrap() {
-            crate::model::ExecutionStatus::Loading {
-                interrupt_signal, ..
-            }
-            | crate::model::ExecutionStatus::Running {
-                interrupt_signal, ..
-            } => interrupt_signal.subscribe(),
-            _ => panic!("expected a Loading or Running interrupt sender"),
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn owner_stop_for_test(&self) -> Option<InterruptKind> {
-        let active = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await?;
-        match active
-            .execution()
-            .tool_operations()
-            .selected_owner_failure()
-        {
-            Some(crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(kind)) => {
-                Some(kind)
-            }
-            _ => None,
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn monthly_stop_for_test(&self) -> Option<InterruptKind> {
-        self.monthly_stop
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|(kind, _)| *kind)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn monthly_stop_reason_for_test(&self) -> Option<&'static str> {
-        self.monthly_stop
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|(_, exhaustion)| exhaustion.reason())
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn startup_attempt_for_test(&self) -> Result<Option<Uuid>, WorkerExecutorError> {
-        self.startup_attempt.current()
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn resident_generation_for_test(&self) -> u64 {
-        self.resident_generation
-            .load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn hold_interrupt_lock_for_test(&self) -> impl Send + '_ {
-        self.interrupt_signal.lock().await
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn concurrent_agent_permit_is_held(&self) -> bool {
-        self.instance.lock().await.concurrent_agent_permit_is_held()
     }
 
     pub(crate) fn monthly_failure(

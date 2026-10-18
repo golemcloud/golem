@@ -116,6 +116,7 @@ pub struct ConcurrentAgentPermit {
     held: Option<Arc<AtomicBool>>,
     release_receipts: Vec<crate::metrics::resource_release::ReleaseReceipt>,
     window_span: Option<tracing::Span>,
+    permit_span: Option<tracing::Span>,
 }
 
 impl ConcurrentAgentPermit {
@@ -131,6 +132,7 @@ impl ConcurrentAgentPermit {
             held: None,
             release_receipts: Vec::new(),
             window_span: None,
+            permit_span: None,
         }
     }
 
@@ -143,6 +145,7 @@ impl ConcurrentAgentPermit {
             held: None,
             release_receipts: Vec::new(),
             window_span: None,
+            permit_span: None,
         }
     }
 
@@ -175,6 +178,26 @@ impl ConcurrentAgentPermit {
         self.held = Some(held);
         self
     }
+
+    pub(crate) fn observe_owner(
+        mut self,
+        fingerprint: golem_common::model::AgentFingerprint,
+        worker_shell: u64,
+    ) -> Self {
+        self.permit_span = Some(tracing::debug_span!(
+            target: golem_common::tracing::target::NATIVE_WAIT, parent: None,
+            "concurrent_agent_permit", worker_shell,
+            fingerprint_high = (fingerprint.0.as_u128() >> 64) as u64,
+            fingerprint_low = fingerprint.0.as_u128() as u64,
+            physical_release = tracing::field::Empty,
+        ));
+        debug!(target: "golem_worker_executor::worker::permit",
+            %fingerprint, worker_shell,
+            execution_event = "permit_registered",
+            trace_enabled = !self.permit_span.as_ref().unwrap().is_disabled(),
+            "Worker registered a concurrent-agent permit lifetime");
+        self
+    }
 }
 
 impl Drop for ConcurrentAgentPermit {
@@ -184,6 +207,10 @@ impl Drop for ConcurrentAgentPermit {
         crate::metrics::resource_release::ReleaseReceipt::complete_all(&self.release_receipts);
         if let Some(held) = self.held.take() {
             held.store(false, Ordering::Release);
+        }
+        if let Some(span) = self.permit_span.take() {
+            span.record("physical_release", true);
+            drop(span);
         }
         if let Some(span) = self.window_span.take() {
             span.record("physical_release", true);
@@ -202,6 +229,7 @@ impl Default for ConcurrentAgentsScheduler {
 mod tracing_tests {
     use super::*;
     use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
+    use std::sync::atomic::AtomicUsize;
     use test_r::test;
     use tracing_subscriber::layer::{Context, SubscriberExt};
     use tracing_subscriber::registry::LookupSpan;
@@ -209,23 +237,25 @@ mod tracing_tests {
 
     struct ReleasedSpan {
         semaphore: Arc<tokio::sync::Semaphore>,
-        closed: Arc<AtomicBool>,
+        closed: Arc<AtomicUsize>,
     }
     impl<S> Layer<S> for ReleasedSpan
     where
         S: tracing::Subscriber + for<'a> LookupSpan<'a>,
     {
         fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
-            if ctx
-                .span(&id)
-                .is_some_and(|span| span.metadata().name() == "execution_window")
-            {
+            if ctx.span(&id).is_some_and(|span| {
+                matches!(
+                    span.metadata().name(),
+                    "execution_window" | "concurrent_agent_permit"
+                )
+            }) {
                 assert_eq!(
                     self.semaphore.available_permits(),
                     1,
                     "span close cannot stand in for physical release"
                 );
-                self.closed.store(true, Ordering::SeqCst);
+                self.closed.fetch_add(1, Ordering::SeqCst);
             }
         }
     }
@@ -234,7 +264,7 @@ mod tracing_tests {
     async fn execution_window_span_closes_after_the_actual_permit_is_returned(_tracing: &Tracing) {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
         let raw = semaphore.clone().acquire_owned().await.unwrap();
-        let closed = Arc::new(AtomicBool::new(false));
+        let closed = Arc::new(AtomicUsize::new(0));
         let _subscriber =
             tracing::subscriber::set_default(Registry::default().with(ReleasedSpan {
                 semaphore: semaphore.clone(),
@@ -245,12 +275,13 @@ mod tracing_tests {
             uuid::Uuid::new_v4(),
             1,
         );
-        let mut permit = ConcurrentAgentPermit::unlimited(raw);
+        let mut permit = ConcurrentAgentPermit::unlimited(raw)
+            .observe_owner(golem_common::model::AgentFingerprint::new(), 17);
         permit.observe_window(span);
         assert_eq!(semaphore.available_permits(), 0);
-        assert!(!closed.load(Ordering::SeqCst));
+        assert_eq!(closed.load(Ordering::SeqCst), 0);
         drop(permit);
-        assert!(closed.load(Ordering::SeqCst));
+        assert_eq!(closed.load(Ordering::SeqCst), 2);
     }
 }
 
@@ -562,9 +593,15 @@ mod release_tests {
             assert_eq!(metrics.pending("unload", "permit_released"), 1.0);
             assert_eq!(metrics.count("unload", "permit_released", "released"), 0.0);
             metrics.advance(500);
+            let next = scheduler.acquire(account, agent.clone());
+            tokio::pin!(next);
+            if limit == 1 {
+                assert!(futures::poll!(next.as_mut()).is_pending());
+                assert_eq!(metrics.pending("unload", "permit_released"), 1.0);
+            }
             drop(permit);
             metrics.assert_finished("unload", "released");
-            assert!(scheduler.acquire(account, agent).now_or_never().is_some());
+            assert!(next.now_or_never().is_some());
         }
     }
 }

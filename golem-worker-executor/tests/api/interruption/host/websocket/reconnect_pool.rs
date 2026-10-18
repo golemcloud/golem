@@ -11,7 +11,11 @@ pub(super) enum Path {
 }
 
 macro_rules! reconnect_case {
-    ($name:ident, $resource:ident, $path:ident) => {
+    ($name:ident, Storage, $path:ident) => {
+        reconnect_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $path:ident) => {
+        $(#[$attr])*
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -43,7 +47,7 @@ reconnect_case!(
     Accessor
 );
 reconnect_case!(
-    durable_websocket_reconnect_pool_receive_scripted_storage_quota,
+    durable_websocket_reconnect_pool_receive_managed_xfs_storage_quota,
     Storage,
     Accessor
 );
@@ -58,7 +62,7 @@ reconnect_case!(
     Direct
 );
 reconnect_case!(
-    durable_websocket_reconnect_pool_close_scripted_storage_quota,
+    durable_websocket_reconnect_pool_close_managed_xfs_storage_quota,
     Storage,
     Direct
 );
@@ -181,12 +185,16 @@ async fn pending_reconnect(
         shutdown,
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
         limits.clone(),
         Arc::new(move |config| {
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
             config.limits.fuel_to_borrow = FUEL_BUDGET;
             config.max_websocket_connections = 1;
         }),
@@ -219,9 +227,10 @@ async fn pending_reconnect(
     if resource == Resource::Compute {
         limits.run_batch_for_test().await;
     }
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let worker = Worker::get_or_create_suspended(
         seed.all(),
-        &OwnedAgentId::new(context.default_environment_id, &id),
+        &owned,
         None,
         vec![],
         None,
@@ -230,15 +239,6 @@ async fn pending_reconnect(
         Principal::anonymous(),
     )
     .await?;
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    if resource == Resource::Storage {
-        worker
-            .owner_runtime_resources()
-            .set_scripted_filesystem_usage_for_test(source.clone());
-    }
     let pool = worker.websocket_connection_pool();
     let mut peer = if path == Path::Direct {
         Peer::start_allowing_close().await?
@@ -311,14 +311,15 @@ async fn pending_reconnect(
         tokio::time::timeout(Duration::from_secs(10), async { while holder.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; } }).await?;
         ensure!(holder.is_loaded().await, "holder must stay loaded idle");
         if resource == Resource::Compute {
-            limits.run_batch_for_test().await;
             let account = limits.initialize_account(context.account_id).await?;
-            let unreserved = account.effective_fuel_for_test();
+            let mut receipts = crate::resource_limit_observations::observe(&account);
+            limits.run_batch_for_test().await;
+            let unreserved = receipts.take("policy_applied", registry.current_limits().monthly_policy_revision).last().context("pre-start refresh receipt")?.effective_fuel.context("refresh fuel")?;
             ensure!(unreserved > FUEL_BUDGET && unreserved <= policy.available_fuel);
             policy.available_fuel -= unreserved - FUEL_BUDGET;
             registry.set_policy(policy.clone());
             applied_refresh(&limits, &registry, context.account_id).await?.await?;
-            ensure!(account.effective_fuel_for_test() == FUEL_BUDGET, "one full prepayment remains before target startup");
+            ensure!(receipts.take("policy_applied", registry.current_limits().monthly_policy_revision).last().context("adjusted fuel policy receipt")?.effective_fuel == Some(FUEL_BUDGET), "one full prepayment remains before target startup");
         }
         {
             let acquire = pool.acquire(); tokio::pin!(acquire);
@@ -347,6 +348,7 @@ async fn pending_reconnect(
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && holder.is_loaded().await);
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
         peer.assert_counts(2, 2)?;
         info!(?path, ?resource, %start, ?key, "real target reconnect pool acquire Pending; historical Connect already completed; holder owns sole socket");
         if completion_first {
@@ -379,13 +381,13 @@ async fn pending_reconnect(
         }
         let mut raw = worker.raw_interrupt_for_test();
         if resource == Resource::Compute {
-            ensure!(initial.fuel_generation.is_some() && initial.fuel_generation == account.settled_fuel_generation_for_test());
+            ensure!(initial.fuel_generation.is_some() && !account.prepaid_fuel_is_exhausted(AgentMode::Durable, initial.fuel_generation));
             ensure!(account.monthly_capacity_is_exhausted_for_test(AgentMode::Durable), "target Store prepaid fuel");
             ensure!(attempts.try_recv().is_err(), "zero unreserved fuel cannot stop prepaid Store");
             ensure!(worker.current_monthly_proposal_for_test() == initial);
         }
         if resource == Resource::Storage {
-            source.set(FilesystemUsage::Authoritative { allocated_bytes: 1 << 30, filesystem_objects: 1 });
+            allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, true).await?;
         }
         let mut exhausted = policy.clone();
         match resource {
@@ -397,14 +399,14 @@ async fn pending_reconnect(
         let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
             .await.context("monthly proposal")?.context("acceptance observer closed")?;
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
+        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1 + u64::from(resource == Resource::Storage));
         ensure!(attempt.proposal.period == initial.period && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == initial.resident_generation && attempt.proposal.start_attempt == initial.start_attempt);
         ensure!(attempt.proposal.fingerprint == initial.fingerprint && attempt.proposal.fuel_generation == initial.fuel_generation);
         ensure!(attempt.proposal.exhaustion == Some(resource.reason(true)));
         ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
-        ensure!(matches!(signal, InterruptKind::Suspend(_)) && worker.monthly_stop_for_test() == Some(signal));
+        ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await);
         peer.assert_counts(2, 2)?;
         info!(?path, ?resource, %start, ?signal, "typed monthly stop accepted while target native acquire Pending and holder still loaded");
@@ -416,7 +418,6 @@ async fn pending_reconnect(
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(pending.state() == WaitState::Dropped);
-        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await);
         {
             let acquire = pool.acquire(); tokio::pin!(acquire);
@@ -431,19 +432,18 @@ async fn pending_reconnect(
         ensure!(!entries.values().any(|entry| matches!(entry, OplogEntry::Error { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Exited { .. })));
         ensure!(!invocation.as_ref().unwrap().is_finished());
         executor.wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10)).await?;
-        let observations = source.observations();
-        limits.run_batch_for_test().await;
+        flush_stopped_usage(&limits, &registry, resource).await?;
         let updates = registry.applied_updates();
         check_accounting(&updates[target_updates_start..], resource, true, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
         let count = updates.len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         limits.run_batch_for_test().await;
-        ensure!(source.observations() == observations, "closed window sampled filesystem");
+        if resource == Resource::Storage { assert_storage_deleted(&owned)?; }
         for update in &registry.applied_updates()[count..] {
             ensure!(update.fuel_delta == 0 && update.memory_gb_seconds_delta == 0 && update.memory_byte_nanoseconds_remainder == 0 && update.durable_storage_byte_seconds_delta == 0 && update.durable_storage_byte_nanoseconds_remainder == 0 && update.ephemeral_storage_byte_seconds_delta == 0 && update.ephemeral_storage_byte_nanoseconds_remainder == 0, "closed window accrued: {update:?}");
         }
         if resource == Resource::Storage { ensure!(!account.monthly_capacity_is_exhausted_for_test(AgentMode::Ephemeral)); }
-        if resource == Resource::Compute { ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation); }
+        if resource == Resource::Compute { resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?; }
 
         evict_holder(&holder, &pool, &mut peer, true).await?;
         let mut grant = policy;

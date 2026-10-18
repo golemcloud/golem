@@ -6961,6 +6961,80 @@ async fn unlimited_unmanaged_usage_opens_a_memory_only_window() {
 
 #[test]
 #[timeout("5s")]
+async fn allocation_timeout_retains_the_read_and_permit_until_close_and_stops_sampling() {
+    use crate::services::resource_usage_metering::{
+        MeteringCloseError, MeteringFault, close_window_retaining_permit,
+        wait_for_enforcement_failure,
+    };
+    use std::sync::atomic::AtomicBool;
+
+    let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+    let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
+        provisioning,
+        scratch_directory().await,
+        agent_id(),
+        ResolvedStorageLimits::Unlimited,
+        None,
+        AgentAccounting::Development,
+    )
+    .await
+    .unwrap();
+    let (account, entry) = account();
+    let reconstructing = bind_resource_usage_metering(created, account).unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
+    let reconstructing = finish_replay(reconstructing).await.unwrap();
+    control.push_observe_allocation(Ok(allocation(100, 1)));
+    let filesystem = finish_reconstruction(reconstructing).await.unwrap();
+    control.push_observe_allocation(Ok(allocation(100, 1)));
+    control.push_observe_allocation(Ok(allocation(100, 1)));
+    let observation = control.block("observe_allocation");
+    let mut window = open_resource_usage_window(&filesystem, permit(&entry).await)
+        .await
+        .unwrap();
+    let held = Arc::new(AtomicBool::new(false));
+    window.track_permit_for_test(held.clone());
+    let mut health = window.subscribe_enforcement_failure();
+    observation.wait_started().await;
+
+    assert_eq!(
+        wait_for_enforcement_failure(&mut health).await,
+        MeteringFault::FilesystemObservationTimeout
+    );
+    assert!(held.load(Ordering::Acquire));
+    let observations = call_count(&control, "observe_allocation(");
+    let mut closing =
+        close_window_retaining_permit(window, Instant::now() + Duration::from_secs(1));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), closing.as_mut())
+            .await
+            .is_err(),
+        "closing must retain the pending allocation read"
+    );
+    assert!(held.load(Ordering::Acquire));
+    assert_eq!(call_count(&control, "observe_allocation("), observations);
+    observation.release();
+    observation.wait_completed().await;
+    let (result, permit) = closing.await;
+    assert!(matches!(result, Err(MeteringCloseError::Faulted(_))));
+    assert!(held.load(Ordering::Acquire));
+    drop(permit);
+    assert!(!held.load(Ordering::Acquire));
+
+    let observations = call_count(&control, "observe_allocation(");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(call_count(&control, "observe_allocation("), observations);
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("5s")]
 async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(

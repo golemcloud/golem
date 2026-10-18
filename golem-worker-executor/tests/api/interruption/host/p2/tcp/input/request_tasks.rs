@@ -27,7 +27,7 @@ pub(super) async fn start_refresh(
     let revision = registry.current_limits().monthly_policy_revision;
     *task = Some(AbortOnDropHandle::new(tokio::spawn({
         let limits = limits.clone();
-        async move { limits.run_batch_for_test().await }
+        async move { limits.release_registry_reply().await }
     })));
     tokio::time::timeout(Duration::from_secs(30), async {
         while limits.initialized_policy_revision_for_test(account).await != Some(revision) {

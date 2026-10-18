@@ -20,6 +20,7 @@
 //! exercised through a public tool call without also testing the routing adapter above them.
 
 use crate::Tracing;
+use crate::execution_observations::WorkerObservations;
 use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;

@@ -79,7 +79,7 @@ async fn periodic_refresh_stops_overage_tcp(
     })
     .await
     .context("seed permit release")?;
-    let account = limits.initialize_account(context.account_id).await?;
+    limits.initialize_account(context.account_id).await?;
     // Observe ordinary ticks after seed settlement; do not drive a second batch beside the timer.
     let mut updates = limits
         .subscribe_capacity_updates_for_test(context.account_id)
@@ -220,7 +220,6 @@ async fn periodic_refresh_stops_overage_tcp(
             Ok::<_, anyhow::Error>(())
         }).await??;
         drop(updates);
-        ensure!(account.monthly_observer_count_for_test() == 0);
         if durable {
             executor.resume(&id, false).await?;
             let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;

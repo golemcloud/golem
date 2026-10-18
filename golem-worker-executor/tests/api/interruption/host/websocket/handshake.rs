@@ -4,7 +4,11 @@ use golem_worker_executor::workerctx::default::Context;
 use test_r::test;
 
 macro_rules! handshake_case {
-    ($name:ident, $resource:ident, $mode:ident) => {
+    ($name:ident, Storage, $mode:ident) => {
+        handshake_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+        $(#[$attr])*
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -42,12 +46,12 @@ handshake_case!(
     Ephemeral
 );
 handshake_case!(
-    durable_websocket_handshake_scripted_storage_quota,
+    durable_websocket_handshake_managed_xfs_storage_quota,
     Storage,
     Durable
 );
 handshake_case!(
-    ephemeral_websocket_handshake_scripted_storage_quota,
+    ephemeral_websocket_handshake_managed_xfs_storage_quota,
     Storage,
     Ephemeral
 );
@@ -71,12 +75,16 @@ async fn pending_handshake(
         shutdown,
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
         limits.clone(),
         Arc::new(move |config| {
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
             config.limits.fuel_to_borrow = FUEL_BUDGET;
             config.max_websocket_connections = 1;
         }),
@@ -142,16 +150,6 @@ async fn pending_handshake(
         Principal::anonymous(),
     )
     .await?;
-    // Script only authoritative allocation, not filesystem deletion, metering or permit release.
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    if resource == Resource::Storage {
-        worker
-            .owner_runtime_resources()
-            .set_scripted_filesystem_usage_for_test(source.clone());
-    }
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let pool = worker.websocket_connection_pool();
@@ -204,6 +202,7 @@ async fn pending_handshake(
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(pending.invocation_key.as_ref() == Some(&key) && pending.start == connect);
         ensure!(pending.runtime == initial, "native Pending belongs to another runtime");
@@ -220,7 +219,7 @@ async fn pending_handshake(
 
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
-            ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
+            ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
             ensure!(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
@@ -235,10 +234,7 @@ async fn pending_handshake(
         ensure!(!invocation.is_finished());
         peer.assert_effects(1, 0, 0)?;
         if resource == Resource::Storage {
-            source.set(FilesystemUsage::Authoritative {
-                allocated_bytes: 1 << 30,
-                filesystem_objects: 1,
-            });
+            allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable).await?;
         }
         let mut exhausted = policy.clone();
         match resource {
@@ -253,7 +249,7 @@ async fn pending_handshake(
             .await.context("monthly proposal")?.context("acceptance observer closed")?;
         ensure!(
             attempt.proposal.policy_revision
-                == initial.policy_revision + 1
+                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
         );
         ensure!(attempt.proposal.period == initial.period);
         ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
@@ -265,10 +261,9 @@ async fn pending_handshake(
         ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        ensure!(worker.monthly_stop_for_test() == Some(signal));
         info!(?resource, ?mode, proposal = ?attempt.proposal, ?signal, "Accepted matching monthly WebSocket stop and published typed signal");
         if resource == Resource::Compute {
-            ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
+            resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
         }
         if resource == Resource::Storage {
             let other = if durable {
@@ -294,7 +289,6 @@ async fn pending_handshake(
         drop(released_slot);
         ensure!(pending.state() == WaitState::Dropped);
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &key, 0)?;
         ensure!(pool::connect_start(&stopped, 0, 0)? == connect);
@@ -357,8 +351,7 @@ async fn pending_handshake(
         executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         info!(?resource, ?mode, ?errors, suspends, "Handshake stop retained one unfinished method with mode-specific lifecycle outcome");
-        let observations = source.observations();
-        limits.run_batch_for_test().await;
+        flush_stopped_usage(&limits, &registry, resource).await?;
         let settled = registry.applied_updates();
         let target_updates = &settled[target_updates_start..];
         check_accounting(
@@ -372,10 +365,7 @@ async fn pending_handshake(
         let settled_count = settled.len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         limits.run_batch_for_test().await;
-        ensure!(
-            source.observations() == observations,
-            "closed generation must stop sampling"
-        );
+        if resource == Resource::Storage { assert_storage_deleted(&owned)?; }
         // Idle policy refreshes may still emit updates, but cannot charge a closed window.
         for update in &registry.applied_updates()[settled_count..] {
             ensure!(

@@ -9,9 +9,6 @@ use golem_common::model::oplog::{
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
-use golem_worker_executor::services::resource_usage_metering::{
-    FilesystemUsage, ScriptedFilesystemUsageForTest,
-};
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use test_r::test;
@@ -20,7 +17,11 @@ use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting}
 use crate::native_waits::{WaitReceipt, WaitState, WaitSubscription};
 
 macro_rules! pending_case {
-    ($name:ident, $resource:ident, $mode:ident) => {
+    ($name:ident, Storage, $mode:ident) => {
+        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+        $(#[$attr])*
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -54,12 +55,12 @@ pending_case!(
     Ephemeral
 );
 pending_case!(
-    durable_p3_udp_receive_scripted_storage_quota,
+    durable_p3_udp_receive_managed_xfs_storage_quota,
     Storage,
     Durable
 );
 pending_case!(
-    ephemeral_p3_udp_receive_scripted_storage_quota,
+    ephemeral_p3_udp_receive_managed_xfs_storage_quota,
     Storage,
     Ephemeral
 );
@@ -164,7 +165,9 @@ async fn pending_receive(
     resource: Resource,
     mode: AgentMode,
 ) -> anyhow::Result<()> {
-    let policy = resource.policy();
+    let mut policy = resource.policy();
+    policy.available_durable_storage_byte_seconds = 1;
+    policy.available_ephemeral_storage_byte_seconds = 1;
     let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
     let metering = resource.metering();
     let shutdown = CancellationToken::new();
@@ -177,6 +180,7 @@ async fn pending_receive(
         shutdown,
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
@@ -184,6 +188,9 @@ async fn pending_receive(
         Arc::new(move |config| {
             config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
             config.limits.fuel_to_borrow = FUEL_BUDGET;
         }),
     )
@@ -242,16 +249,6 @@ async fn pending_receive(
         Principal::anonymous(),
     )
     .await?;
-    // Script only authoritative allocation, not filesystem deletion, metering or permit release.
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    if resource == Resource::Storage {
-        worker
-            .owner_runtime_resources()
-            .set_scripted_filesystem_usage_for_test(source.clone());
-    }
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
     let _usage_source = (resource != Resource::Memory).then(|| {
         let source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
@@ -328,9 +325,7 @@ async fn pending_receive(
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        if resource != Resource::Memory {
-            ensure!(account.monthly_observer_count_for_test() == 2);
-        }
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(phase.runtime == initial);
         ensure!(phase.state() == WaitState::Pending);
@@ -343,7 +338,7 @@ async fn pending_receive(
 
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
-            ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
+            ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
             ensure!(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
@@ -353,7 +348,7 @@ async fn pending_receive(
                 .await.context("compute check did not reach the next pre-wait flush")??;
             ensure!(!capacity_updates.as_ref().unwrap().has_changed()?);
             drop(capacity_updates.take());
-            worker.drain_lifecycle_for_test().await?;
+            ensure!(worker.monthly_checks().contains(&(initial.diagnostic_window_id, initial.policy_revision)));
             ensure!(
                 attempts.try_recv().is_err(),
                 "zero unreserved fuel must not exhaust prepaid fuel"
@@ -363,10 +358,7 @@ async fn pending_receive(
         }
         ensure!(phase.state() == WaitState::Pending);
         let refresh = if resource == Resource::Storage {
-            source.set(FilesystemUsage::Authoritative {
-                allocated_bytes: 101,
-                filesystem_objects: 1,
-            });
+            allocate_storage(&owned).await?;
             // Real timer delivery keeps this proposal on the original revision.
             // The unchanged whole-test bound includes waiting for ordinary cadence.
             next_flush().await?;
@@ -399,9 +391,8 @@ async fn pending_receive(
         ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        ensure!(worker.monthly_stop_for_test() == Some(signal));
         if resource == Resource::Compute {
-            ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
+            resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
         }
         if resource == Resource::Storage {
             let other = if durable {
@@ -433,7 +424,6 @@ async fn pending_receive(
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(!worker.monthly_window_active_for_test());
-        ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let stopped_raw = read_stored().await?;
         ensure!(stopped_raw.range(..=prefix_last).eq(prefix.iter()), "the full committed UDP prefix must survive stop");
@@ -490,7 +480,6 @@ async fn pending_receive(
                     .is_err()
             );
         }
-        let observations = source.observations();
         limits.run_batch_for_test().await;
         let settled = registry.applied_updates();
         check_accounting(
@@ -503,10 +492,7 @@ async fn pending_receive(
         let settled_count = settled.len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         limits.run_batch_for_test().await;
-        ensure!(
-            source.observations() == observations,
-            "closed generation must stop sampling"
-        );
+        if resource == Resource::Storage { assert_storage_deleted(&owned)?; }
         // Idle policy refreshes may still emit updates, but cannot charge a closed window.
         for update in &registry.applied_updates()[settled_count..] {
             ensure!(

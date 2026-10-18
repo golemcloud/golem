@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::execution_observations::WorkerObservations;
+use crate::execution_observations::{ExecutorObservations, WorkerObservations};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use axum::Router;
@@ -55,7 +55,7 @@ use golem_test_framework::dsl::{
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::FilesystemStorageMode;
 use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
-use golem_worker_executor::services::resource_limits::{ResourceLimits, ResourceLimitsGrpc};
+use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::{
@@ -121,6 +121,7 @@ struct MutableResourceLimitsRegistry {
     limits: Mutex<golem_service_base::model::ResourceLimits>,
     delayed_policy: Mutex<Option<DelayedPolicy>>,
     applied_updates: Mutex<Vec<ResourceUsageUpdate>>,
+    batch_control: Mutex<Option<Arc<interruption::periodic_limits::BatchControl>>>,
 }
 
 struct DelayedPolicy {
@@ -135,6 +136,7 @@ impl MutableResourceLimitsRegistry {
             limits: Mutex::new(resource_limits_response(policy, 0)),
             delayed_policy: Mutex::new(None),
             applied_updates: Mutex::new(Vec::new()),
+            batch_control: Mutex::new(None),
         }
     }
 
@@ -286,6 +288,10 @@ impl RegistryService for MutableResourceLimitsRegistry {
         &self,
         updates: HashMap<AccountId, ResourceUsageUpdate>,
     ) -> Result<AccountResourceLimits, RegistryServiceError> {
+        let control = self.batch_control.lock().unwrap().clone();
+        if let Some(control) = control {
+            control.receive_batch().await;
+        }
         self.applied_updates
             .lock()
             .unwrap()

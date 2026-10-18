@@ -1673,16 +1673,6 @@ impl TestWorkerExecutor {
             .await
     }
 
-    pub async fn concurrent_agent_permit_is_held(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        if let Some(active) = self.active_agent(owned_agent_id).await {
-            active.primary().concurrent_agent_permit_is_held().await
-        } else if let Some(active) = self.production_active_agent(owned_agent_id).await {
-            active.primary().concurrent_agent_permit_is_held().await
-        } else {
-            false
-        }
-    }
-
     pub async fn production_active_agent(
         &self,
         owned_agent_id: &OwnedAgentId,

@@ -521,6 +521,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             break 'outer;
                         }
                         permit = &mut permit => {
+                            let permit = permit.observe_owner(
+                                self.parent.initial_worker_metadata.fingerprint,
+                                Arc::as_ptr(&self.parent) as usize as u64,
+                            );
                             debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
                                 worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
                                 execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
@@ -1067,6 +1071,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some(error) => unloading.cleanup.with_failure(error.clone()),
                 None => unloading.cleanup.clone(),
             });
+            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
+                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
+                execution_event = "unload_cleanup_retained",
+                "Worker retained final unload cleanup");
             let unload_failure = unloading.await;
             debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
                 worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
@@ -1771,9 +1779,21 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let phase = agent_phase_span!(self, "create_instance");
         async {
             debug!("Creating the worker instance");
-            self.parent
+            let generation = self
+                .parent
                 .resident_generation
-                .fetch_add(1, Ordering::AcqRel);
+                .fetch_add(1, Ordering::AcqRel)
+                + 1;
+            let (start_attempt_hi, start_attempt_lo) = self.start_attempt.as_u64_pair();
+            debug!(
+                execution_event = "resident_creation_started",
+                fingerprint = %self.parent.get_initial_worker_metadata().fingerprint,
+                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
+                start_attempt_hi,
+                start_attempt_lo,
+                generation,
+                "Starting resident creation"
+            );
             if let super::WorkerInstance::Running(running) =
                 self.parent.instance.lock().await.deletion_runtime_mut()
             {
@@ -2609,6 +2629,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     return Ok(PermitAcquisition::CommandChannelClosed);
                 }
             };
+            let permit = permit.observe_owner(
+                self.parent.initial_worker_metadata.fingerprint,
+                Arc::as_ptr(&self.parent) as usize as u64,
+            );
             debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
                 worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
                 execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
@@ -3848,6 +3872,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             },
             None => RetryDecision::None,
         };
+        if let RetryDecision::TryStop(timestamp) = decision {
+            let timestamp: prost_types::Timestamp = timestamp.into();
+            debug!(
+                execution_event = "invocation_suspension_recorded",
+                fingerprint = %self.parent.get_initial_worker_metadata().fingerprint,
+                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
+                idempotency_key = %idempotency_key,
+                interrupt_seconds = timestamp.seconds,
+                interrupt_nanos = timestamp.nanos,
+                "Recorded invocation suspension"
+            );
+        }
         // A lost shard writes nothing more: a terminal streaming-session failure would end an
         // invocation the shard's new owner resumes.
         if shard_lost {
@@ -5613,7 +5649,6 @@ mod tests {
                     startup_failure: None,
                 },
                 pending_live_invocations: PendingLiveInvocationDisposition::Preserve,
-                concurrent_agent_permit_held: Arc::new(AtomicBool::new(false)),
             },
             final_state,
         );

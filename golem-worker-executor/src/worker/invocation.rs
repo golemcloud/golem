@@ -673,6 +673,8 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
         let drain_started = drain_started.clone();
         let root_tracker = tracker.clone();
         let runtime = runtime.clone();
+        let owner_id = owner_id.clone();
+        let root_key = root_key.clone();
         async move |accessor: &Accessor<Ctx>| {
             if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
                 runtime.certify_root(activity);
@@ -693,9 +695,15 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
             result
         }
     };
-    let mut settled = move |_store: StoreContextMut<'_, Ctx>| {
+    let mut settled = |_store: StoreContextMut<'_, Ctx>| {
         let active = tracker.active_count();
-        tracing::debug!("invocation tail-work settlement check: {active} spawned task(s) active");
+        debug!(
+            owner_id = %owner_id,
+            idempotency_key = root_key.as_ref().map(|key| key.value.as_str()),
+            primary,
+            active_tail_tasks = active,
+            "Guest call tail-work settlement check"
+        );
         tail_work_settled(active)
     };
     let tail_work_deadline = store
@@ -715,6 +723,15 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     };
     let interrupted = store.data().durable_ctx().is_interrupting()
         || store.data().durable_ctx().invocation_deadline_exceeded();
+    debug!(
+        owner_id = %owner_id,
+        idempotency_key = root_key.as_ref().map(|key| key.value.as_str()),
+        primary,
+        active_tail_tasks = tracker_for_error.active_count(),
+        succeeded = result.is_ok(),
+        interrupted,
+        "Guest call tail-work settlement completed"
+    );
     let tail_timeout = if tail_work_deadline.exceeded() && !interrupted {
         Some((
             tail_work_deadline.duration(),

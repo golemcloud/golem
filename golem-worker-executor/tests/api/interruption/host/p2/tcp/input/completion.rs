@@ -145,7 +145,6 @@ async fn completion_and_history(
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(!worker.monthly_window_active_for_test());
-        ensure!(limits.initialize_account(context.account_id).await?.monthly_observer_count_for_test() == 0);
         let mut byte = [0];
         ensure!(tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await?? == 0);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;

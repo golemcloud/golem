@@ -66,7 +66,9 @@ pub mod permission_cards_scala;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
+mod resource_limit_observations;
 pub mod resource_limits;
+mod resource_producers;
 pub mod retry_lifecycle;
 pub mod retry_policies;
 pub mod revert;
@@ -184,6 +186,8 @@ impl Tracing {
                     scheduler_waits::layer(),
                     entity_fence_waits::layer(),
                     execution_observations::layer(),
+                    resource_producers::layer(),
+                    resource_limit_observations::layer(),
                     tail_roots::layer(),
                     monthly_acceptance::layer(),
                 ],

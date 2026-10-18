@@ -132,7 +132,7 @@ mod initialization {
                 .iter()
                 .any(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationStarted(_)))
         );
-        let generation = worker.resident_generation_for_test();
+        let generation = worker.observed_creation_count();
         let acquisitions = worker.permit_acquisitions_for_test();
         let mut attempts =
             crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
@@ -150,9 +150,7 @@ mod initialization {
             .context("monthly proposal during core initialization")?;
         assert_eq!(attempt.proposal.resident_generation, generation);
         assert!(attempt.accepted);
-        let quota_stop = worker
-            .monthly_stop_for_test()
-            .expect("monthly accepted during core initializer");
+        let quota_stop = worker.await_interrupt_for_test().await;
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
         assert!(worker.concurrent_agent_permit_is_held().await);
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
@@ -186,15 +184,8 @@ mod initialization {
         .context("preparation physical unload")?;
         worker.retained_cleanup_for_test().await?;
         refresh.await?;
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        assert_eq!(
-            limits
-                .initialize_account(context.account_id)
-                .await?
-                .monthly_observer_count_for_test(),
-            0
-        );
         let entries = worker
             .oplog()
             .read_exact(
@@ -338,6 +329,9 @@ mod loaded_compute_admission {
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
+        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL)
+            .await
+            .context("constructor Finished must commit before installing the setup append gate")?;
         tokio::time::timeout(
             Duration::from_secs(10),
             worker.await_ready_to_process_commands(),
@@ -419,21 +413,16 @@ mod loaded_compute_admission {
                 .pending_invocations
                 .is_empty()
         );
-        worker.drain_lifecycle_for_test().await?;
         assert!(worker.is_loaded().await);
-        let generation = worker.resident_generation_for_test();
+        let generation = worker.observed_creation_count();
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let mut exhausted = policy.clone();
         exhausted.available_fuel = 0;
         registry.set_policy(exhausted.clone());
         tokio::time::timeout(Duration::from_secs(10), limits.run_batch_for_test()).await?;
-        worker.drain_lifecycle_for_test().await?;
         assert!(worker.is_loaded().await);
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert!(!worker.concurrent_agent_permit_is_held().await);
-        assert_eq!(entry.monthly_observer_count_for_test(), 0);
-        assert_eq!(worker.monthly_stop_for_test(), None);
-        assert_eq!(worker.pending_stop_for_test().await, None);
         assert_eq!(worker.selected_owner_failure_for_test().await, None);
         let key = IdempotencyKey::fresh();
         let before = executor.oplog_max_index(&id).await?;
@@ -453,9 +442,8 @@ mod loaded_compute_admission {
         .await
         .context("compute admission must physically stop without entering the queued invocation")?;
         worker.retained_cleanup_for_test().await?;
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions + 1);
-        assert_eq!(entry.monthly_observer_count_for_test(), 0);
         let stopped_prefix = executor.stored_oplog(&id).await;
         let entries = worker
             .oplog()
@@ -509,7 +497,7 @@ mod loaded_compute_admission {
             worker.get_initial_worker_metadata().fingerprint,
             fingerprint
         );
-        assert!(worker.resident_generation_for_test() > generation);
+        assert!(worker.observed_creation_count() > generation);
         let recovered = worker
             .oplog()
             .read_exact(

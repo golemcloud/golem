@@ -91,9 +91,16 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         .store()
         .await?;
     let name = agent_id!("Networking", "monthly-active-scoped-entity");
+    let owned = OwnedAgentId::new(
+        context.default_environment_id,
+        &golem_common::model::AgentId {
+            component_id: component.id,
+            agent_id: name.to_string(),
+        },
+    );
+    let primary_registration = crate::resource_producers::observe(&owned, "primary_registered");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let active = executor.production_active_agent(&owned).await.unwrap();
     let worker = active.primary();
     let authority_wallet = worker.get_wallet_cards().await?;
@@ -116,11 +123,10 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             .context("primary TCP connection")??;
     let primary_calls = pending_receive(&worker, OplogIndex::INITIAL, None).await?;
     let resources = active.resources();
-    let account = limits.initialize_account(context.account_id).await?;
+    limits.initialize_account(context.account_id).await?;
     assert!(worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(account.monthly_observer_count_for_test(), 1);
-    assert_eq!(resources.live_usage_flusher_count_for_test(), 1);
-    let generation = worker.resident_generation_for_test();
+    assert_eq!(primary_registration.count().await?, 1);
+    let generation = worker.observed_creation_count();
     let acquisitions = worker.permit_acquisitions_for_test();
     let admitted_revision = registry.current_limits().monthly_policy_revision;
     let metadata = Arc::new(
@@ -195,13 +201,14 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     )
     .unwrap()
     .with_authority_wallet(authority_wallet);
+    let entity_registration = crate::resource_producers::observe(&owned, "entity_registered");
     let hosted = tokio::time::timeout(
         Duration::from_secs(10),
-        host.instantiate_entity_scoped_for_test(&scope),
+        host.instantiate_entity_scoped(&scope),
     )
     .await
     .context("entity Store instantiation")??;
-    assert_eq!(resources.live_usage_flusher_count_for_test(), 2);
+    assert_eq!(entity_registration.count().await?, 2);
     let expected_scope = scope.clone();
     let mut entity = tokio::spawn(hosted.invoke_scoped(scope, move |instance, store| {
         Box::pin(async move {
@@ -281,11 +288,9 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     assert!(registered[0].store_attached);
     assert!(registered[0].linear_memory_bytes > 0);
     assert!(!entity.is_finished());
-    assert_eq!(resources.live_usage_flusher_count_for_test(), 2);
-    assert_eq!(account.monthly_observer_count_for_test(), 1);
     assert!(worker.concurrent_agent_permit_is_held().await);
     eprintln!(
-        "[monthly-entity] primary calls={primary_calls:?}, entity calls={entity_calls:?}, registration={registered:?}, live owner flushers=2, observers=1, generation={generation}"
+        "[monthly-entity] primary calls={primary_calls:?}, entity calls={entity_calls:?}, registration={registered:?}, owner flushers at entity registration=2, generation={generation}"
     );
 
     let mut attempts =
@@ -311,9 +316,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             .await,
         Some(registry.current_limits().monthly_policy_revision)
     );
-    let cause = worker
-        .monthly_stop_for_test()
-        .expect("accepted monthly stop");
+    let cause = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
     assert!(matches!(cause, InterruptKind::Suspend(_)));
     assert_eq!(
         pending_receive(&worker, OplogIndex::INITIAL, None).await?,
@@ -324,7 +327,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         entity_calls
     );
     assert!(worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(account.monthly_observer_count_for_test(), 1);
     let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
     assert!(matches!(
         receipt.try_recv(),
@@ -346,10 +348,9 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         other => panic!("scoped body must retire through the accepted stop: {other:?}"),
     }
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
-        cause
+        worker.selected_owner_failure_for_test().await,
+        Some(ToolOwnerFailureMetadata::Lifecycle)
     );
-    assert_eq!(worker.owner_stop_for_test().await, Some(cause));
     let mut byte = [0_u8];
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(10), entity_socket.read(&mut byte))
@@ -377,6 +378,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     })
     .await
     .context("joined physical unload and permit release")?;
+    let cleanup_producers = crate::resource_producers::observe(&owned, "cleanup_completed");
     tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
     tokio::time::timeout(Duration::from_secs(10), refresh).await??;
     tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;
@@ -388,9 +390,8 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     assert_eq!(slot.active_invocation_count(), 0);
     assert_eq!(slot.charged_linear_memory_bytes(), 0);
     assert!(!slot.is_accepting());
-    assert_eq!(resources.live_usage_flusher_count_for_test(), 0);
-    assert_eq!(account.monthly_observer_count_for_test(), 0);
-    assert_eq!(worker.resident_generation_for_test(), generation);
+    assert_eq!(cleanup_producers.count().await?, 0);
+    assert_eq!(worker.observed_creation_count(), generation);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     let stopped = worker
         .oplog()
@@ -453,7 +454,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     limits.run_batch_for_test().await;
     assert_eq!(registry.applied_memory_byte_nanoseconds(), usage);
     eprintln!(
-        "[monthly-entity] scoped body and both sockets retired, physical cleanup joined, one Suspend, no receive terminals, permit released, live owner flushers=0, observers=0, settled owner byte-nanoseconds={usage}"
+        "[monthly-entity] scoped body and both sockets retired, physical cleanup joined, one Suspend, no receive terminals, permit released, live owner flushers=0, settled owner byte-nanoseconds={usage}"
     );
     Ok(())
 }

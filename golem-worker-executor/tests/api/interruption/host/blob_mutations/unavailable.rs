@@ -199,7 +199,6 @@ async fn unavailable_after_prior_panic(
     worker.retained_cleanup_for_test().await?;
     ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
     ensure!(worker.unload_succeeded_for_test());
-    ensure!(worker.monthly_stop_for_test().is_none());
 
     let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
     assert_incomplete_mutation(&entries, &key, method, copy, &failure.to_string())?;

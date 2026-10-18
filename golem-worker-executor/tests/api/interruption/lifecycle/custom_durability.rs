@@ -215,7 +215,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
         .await
         .context("custom owner not cached")?
         .primary();
-    let generation = worker.resident_generation_for_test();
+    let generation = worker.observed_creation_count();
     let key = IdempotencyKey::fresh();
     let inputs = (first.clone(), second.clone());
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
@@ -267,7 +267,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
             .into_typed::<Vec<String>>()?,
         vec!["first", "second"]
     );
-    assert!(worker.resident_generation_for_test() > generation);
+    assert!(worker.observed_creation_count() > generation);
     assert_completed(&history(&worker).await?, &original, &key);
     let after = executor.stored_oplog(&id).await;
     assert!(after.len() >= prefix.len());
@@ -349,7 +349,7 @@ async fn quota_custom_finish(
         .await
         .context("custom owner not cached")?
         .primary();
-    let generation = worker.resident_generation_for_test();
+    let generation = worker.observed_creation_count();
     let key = IdempotencyKey::fresh();
     let inputs = (first.clone(), second.clone());
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
@@ -405,6 +405,7 @@ async fn quota_custom_finish(
         )??;
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
+    let interrupt = worker.await_interrupt_for_test();
     let mut exhausted = available.clone();
     exhausted.available_memory_gb_seconds = 0;
     registry.set_policy(exhausted);
@@ -414,15 +415,13 @@ async fn quota_custom_finish(
         .context("monthly stop acceptance while custom End is held")?
         .context("quota acceptance during custom finish")?;
     assert!(attempt.accepted);
-    let kind = worker
-        .monthly_stop_for_test()
-        .context("accepted custom-finish quota stop")?;
+    let kind = tokio::time::timeout(Duration::from_secs(10), interrupt).await?;
     assert!(matches!(
         kind,
         golem_service_base::error::worker_executor::InterruptKind::Suspend(_)
     ));
     assert_eq!(
-        worker.monthly_stop_reason_for_test(),
+        attempt.proposal.exhaustion,
         Some("monthly memory exhausted")
     );
     assert!(worker.concurrent_agent_permit_is_held().await);
@@ -471,7 +470,7 @@ async fn quota_custom_finish(
             .into_typed::<Vec<String>>()?,
         vec!["first", "second"]
     );
-    assert!(worker.resident_generation_for_test() > generation);
+    assert!(worker.observed_creation_count() > generation);
     let after = history(&worker).await?;
     assert_completed(&after, &original, &key);
     assert_eq!(

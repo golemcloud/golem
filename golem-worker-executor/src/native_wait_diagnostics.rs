@@ -59,6 +59,7 @@ impl WindowTrace {
         let span = tracing::debug_span!(target: NATIVE_WAIT, parent: None,
             "execution_window", window_id = id,
             agent_id = tracing::field::Empty, environment_id = tracing::field::Empty,
+            worker_shell = tracing::field::Empty,
             fingerprint_high = (fingerprint.0.as_u128() >> 64) as u64,
             fingerprint_low = fingerprint.0.as_u128() as u64,
             start_attempt_high = (start_attempt.as_u128() >> 64) as u64,

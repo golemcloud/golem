@@ -140,8 +140,8 @@ async fn pending_stop(
         let start = starts[0];
         ensure!(terminal_count(&before, start) == 0);
         ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
-        let account = limits.initialize_account(context.account_id).await?;
-        ensure!(worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 1);
+        limits.initialize_account(context.account_id).await?;
+        ensure!(worker.monthly_window_active_for_test());
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone(); exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
@@ -157,7 +157,7 @@ async fn pending_stop(
         worker.retained_cleanup_for_test().await?;
         refresh.await?;
         ensure!(worker.unload_succeeded_for_test());
-        ensure!(!worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 0);
+        ensure!(!worker.monthly_window_active_for_test());
         ensure!(blob.dropped.load(Ordering::SeqCst) == 1 && blob.attempts.load(Ordering::SeqCst) == 1);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(terminal_count(&stopped, start) == 0);

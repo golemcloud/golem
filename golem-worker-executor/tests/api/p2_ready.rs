@@ -33,7 +33,12 @@ async fn silent_tcp_ready(
     durable: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()

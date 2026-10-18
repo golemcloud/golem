@@ -246,7 +246,7 @@ async fn write_and_reconstruct(
         .await
         .context("existing durable owner")?;
     let worker = active.primary();
-    let resources = active.resources();
+    let entity_registration = crate::resource_producers::observe(&owner, "entity_registered");
     let key = IdempotencyKey::fresh();
     let principal = Principal::GolemUser(GolemUserPrincipal {
         account_id: context.account_id,
@@ -286,7 +286,7 @@ async fn write_and_reconstruct(
     ensure!(registered.len() == 1 && registered[0].store_attached);
     ensure!(registered[0].linear_memory_bytes > 0);
     ensure!(active.execution().lane().metadata().active_invocation_count == 2);
-    ensure!(resources.live_usage_flusher_count_for_test() == 2);
+    ensure!(entity_registration.count().await? == 2);
     let mut competing = Box::pin(service.write_data(
         limits.clone(),
         environment_id,
@@ -299,6 +299,7 @@ async fn write_and_reconstruct(
     let stopped = if fence {
         executor.interrupt(&id).await?;
         worker.join_accepted_stops_for_test().await?;
+        let cleanup_producers = crate::resource_producers::observe(&owner, "cleanup_completed");
         worker.retained_cleanup_for_test().await?;
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
         ensure!(worker.unload_succeeded_for_test());
@@ -306,7 +307,7 @@ async fn write_and_reconstruct(
         ensure!(slot.active_invocation_count() == 0 && slot.charged_linear_memory_bytes() == 0);
         ensure!(!slot.is_accepting());
         ensure!(active.execution().lane().metadata().active_invocation_count == 0);
-        ensure!(resources.live_usage_flusher_count_for_test() == 0);
+        ensure!(cleanup_producers.count().await? == 0);
         ensure!(
             storage.dropped.load(Ordering::SeqCst) == 0,
             "whole ComponentEntityRunner cancellation dropped the reserved provider"
@@ -423,6 +424,7 @@ async fn write_and_reconstruct(
     .context("completed owner did not become idle for final eviction")?;
     ensure!(primary.stop_if_evictable(EvictionClass::LoadedIdle).await);
     primary.await_ready_to_process_commands().await?;
+    let cleanup_producers = crate::resource_producers::observe(&owner, "cleanup_completed");
     primary.retained_cleanup_for_test().await?;
     executor.shutdown_and_wait_for_invocation_loops().await?;
     ensure!(!reconstructed_owner.primary().is_loaded().await);
@@ -446,12 +448,7 @@ async fn write_and_reconstruct(
             .active_invocation_count
             == 0
     );
-    ensure!(
-        reconstructed_owner
-            .resources()
-            .live_usage_flusher_count_for_test()
-            == 0
-    );
+    ensure!(cleanup_producers.count().await? == 0);
     Ok(())
 }
 

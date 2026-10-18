@@ -247,12 +247,6 @@ impl OwnerExecution {
         self.primary_tail_work.clone()
     }
 
-    /// Reads the real primary tracker without exposing its task-registration interface.
-    #[cfg(feature = "test-utils")]
-    pub fn primary_tail_work_active_count_for_test(&self) -> usize {
-        self.primary_tail_work.active_count()
-    }
-
     pub(crate) fn deferred_tool_admission(&self) -> Arc<DeferredAdmissionTable> {
         self.deferred_tool_admission.clone()
     }
@@ -534,9 +528,6 @@ pub struct OwnerRuntimeResources {
     fuel_reservations: Mutex<Vec<Weak<Mutex<Option<u64>>>>>,
     fuel_transaction: Arc<Mutex<()>>,
     usage_flushers: Mutex<Vec<Weak<dyn ResourceUsageFlusher>>>,
-    #[cfg(feature = "test-utils")]
-    pub(super) scripted_filesystem_usage:
-        Mutex<Option<crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest>>,
 }
 
 impl OwnerRuntimeResources {
@@ -551,17 +542,7 @@ impl OwnerRuntimeResources {
             fuel_reservations: Mutex::new(Vec::new()),
             fuel_transaction: Arc::new(Mutex::new(())),
             usage_flushers: Mutex::new(Vec::new()),
-            #[cfg(feature = "test-utils")]
-            scripted_filesystem_usage: Mutex::new(None),
         }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn set_scripted_filesystem_usage_for_test(
-        &self,
-        source: crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest,
-    ) {
-        *self.scripted_filesystem_usage.lock().unwrap() = Some(source);
     }
 
     pub fn resource_limits(&self) -> Arc<AtomicResourceEntry> {
@@ -618,14 +599,20 @@ impl OwnerRuntimeResources {
         }
     }
 
-    #[cfg(feature = "test-utils")]
-    pub fn live_usage_flusher_count_for_test(&self) -> usize {
-        self.usage_flushers
+    pub(crate) fn trace_usage_flushers(&self, owner: &OwnedAgentId, stage: &'static str) {
+        let live_usage_flushers = self
+            .usage_flushers
             .lock()
             .unwrap()
             .iter()
             .filter(|entry| entry.strong_count() > 0)
-            .count()
+            .count();
+        tracing::debug!(
+            owner_id = %owner,
+            stage,
+            live_usage_flushers,
+            "Owner resource usage producers"
+        );
     }
 
     pub(crate) fn settle_resource_usage(&self) {
@@ -640,7 +627,7 @@ impl OwnerRuntimeResources {
         }
     }
 
-    pub(crate) fn with_monthly_capacity<R>(
+    pub fn with_monthly_capacity<R>(
         &self,
         mode: golem_common::model::agent::AgentMode,
         read: impl FnOnce(MonthlyCapacity) -> R,
@@ -975,15 +962,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         self.instantiate_entity_with_scope(None).await
     }
 
-    #[cfg(feature = "test-utils")]
-    pub async fn instantiate_entity_scoped_for_test(
-        &self,
-        scope: &EntityInvocationScope,
-    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
-        self.instantiate_entity_scoped(scope).await
-    }
-
-    pub(crate) async fn instantiate_entity_scoped(
+    pub async fn instantiate_entity_scoped(
         &self,
         scope: &EntityInvocationScope,
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {

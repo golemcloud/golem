@@ -2,7 +2,6 @@ use crate::Tracing;
 use golem_common::model::account_usage::AccountUsagePeriod;
 use golem_common::model::{AgentFingerprint, IdempotencyKey, OplogIndex};
 use golem_common::tracing::target::NATIVE_WAIT;
-use golem_worker_executor::worker::MonthlyProposalForTest;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use test_r::test;
@@ -43,25 +42,6 @@ pub struct WindowReceipt {
     pub period: AccountUsagePeriod,
     pub fuel_generation: Option<u64>,
     pub exhaustion: Option<&'static str>,
-}
-
-impl PartialEq<MonthlyProposalForTest> for WindowReceipt {
-    fn eq(&self, other: &MonthlyProposalForTest) -> bool {
-        self.diagnostic_window_id == other.diagnostic_window_id
-            && self.fingerprint == other.fingerprint
-            && self.start_attempt == other.start_attempt
-            && self.resident_generation == other.resident_generation
-            && self.policy_revision == other.policy_revision
-            && self.period == other.period
-            && self.fuel_generation == other.fuel_generation
-            && self.exhaustion == other.exhaustion
-    }
-}
-
-impl PartialEq<WindowReceipt> for MonthlyProposalForTest {
-    fn eq(&self, other: &WindowReceipt) -> bool {
-        other == self
-    }
 }
 
 #[derive(Clone, Debug)]

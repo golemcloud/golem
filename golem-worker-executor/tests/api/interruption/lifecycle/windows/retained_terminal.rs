@@ -99,7 +99,7 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         .await
         .context("owner not cached")?;
     let worker = active.primary();
-    let generation = worker.resident_generation_for_test();
+    let generation = worker.observed_creation_count();
     let key = IdempotencyKey::fresh();
     let (outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     executor
@@ -113,7 +113,7 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         .await?;
     tokio::time::timeout(Duration::from_secs(10), outcome).await??;
     let requested = InterruptKind::Suspend(Timestamp::now_utc());
-    assert_eq!(worker.pending_stop_for_test().await, None);
+    assert!(!worker.terminal_interrupt_pending_for_test());
     assert!(worker.concurrent_agent_permit_is_held().await);
     let acquisitions = worker.permit_acquisitions_for_test();
 
@@ -127,15 +127,11 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         .set_interrupting(requested)
         .await?
         .context("accepted stop has no receipt")?;
-    assert_eq!(worker.pending_stop_for_test().await, Some(requested));
-    assert!(!worker.terminal_stop_claimed_for_test().await);
     assert!(worker.terminal_interrupt_pending_for_test());
 
     let mut joined = Box::pin(worker.join_accepted_stops_for_test());
     tokio::time::timeout(Duration::from_secs(10), &mut joined).await??;
     assert_eq!(signal.recv().await?, requested);
-    assert_eq!(worker.pending_stop_for_test().await, Some(requested));
-    assert!(!worker.terminal_stop_claimed_for_test().await);
     assert!(worker.terminal_interrupt_pending_for_test());
     // The ordinary status no longer keeps the old raw sender after notification.
     assert_eq!(
@@ -176,7 +172,10 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         signal.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Closed)
     );
-    assert_eq!(worker.owner_stop_for_test().await, Some(requested));
+    assert_eq!(
+        worker.selected_owner_failure_for_test().await,
+        Some(ToolOwnerFailureMetadata::Lifecycle)
+    );
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     tokio::time::timeout(
         Duration::from_secs(10),
@@ -196,9 +195,8 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
     assert!(!worker.is_loaded().await);
     assert!(!worker.concurrent_agent_permit_is_held().await);
     assert!(worker.unload_succeeded_for_test());
-    assert_eq!(worker.resident_generation_for_test(), generation);
+    assert_eq!(worker.observed_creation_count(), generation);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    assert_eq!(worker.pending_stop_for_test().await, None);
     let entries = worker
         .oplog()
         .read_exact(
@@ -281,8 +279,9 @@ async fn retained_terminal(
         .await
         .context("owner not cached")?;
     let worker = active.primary();
-    let generation = worker.resident_generation_for_test();
+    let generation = worker.observed_creation_count();
     let key = IdempotencyKey::fresh();
+    let prior_requests = worker.interrupt_establishment_receipts().len();
     executor
         .invoke_agent_with_key(
             &component,
@@ -305,10 +304,33 @@ async fn retained_terminal(
         worker.join_accepted_stops_for_test(),
     )
     .await??;
-    let automatic = worker
-        .owner_stop_for_test()
-        .await
-        .context("automatic suspension cause was not established")?;
+    let suspensions = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let suspensions = worker.invocation_suspension_receipts();
+            if suspensions
+                .iter()
+                .any(|(invocation, _)| *invocation == key.to_string())
+            {
+                break suspensions;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("automatic invocation suspension completion")?;
+    let automatic: Vec<_> = suspensions
+        .iter()
+        .filter(|(invocation, _)| *invocation == key.to_string())
+        .collect();
+    let [(_, automatic)] = automatic.as_slice() else {
+        anyhow::bail!("expected one completed automatic suspension for {key}: {suspensions:?}");
+    };
+    let automatic = *automatic;
+    assert_eq!(
+        worker.interrupt_establishment_receipts().len(),
+        prior_requests
+    );
+    let next_request = prior_requests;
     ensure!(matches!(automatic, InterruptKind::Suspend(_)));
     // Exact written-terminal claim, internal acknowledgement and retained-drain phases
     // belong to the actual bodies. This native path observes physical release and completion.
@@ -316,8 +338,7 @@ async fn retained_terminal(
     assert!(!worker.is_loaded().await);
     assert!(!worker.concurrent_agent_permit_is_held().await);
     assert!(worker.unload_succeeded_for_test());
-    assert_eq!(worker.resident_generation_for_test(), generation);
-    assert_eq!(worker.pending_stop_for_test().await, None);
+    assert_eq!(worker.observed_creation_count(), generation);
     let acquisitions = worker.permit_acquisitions_for_test();
     // The old resident is physically gone. A real account permit now keeps only the next
     // startup waiting; no private pre-fence phase is needed to distinguish their markers.
@@ -358,8 +379,11 @@ async fn retained_terminal(
     let attempt = Worker::start_if_needed(worker.clone())
         .await?
         .context("new startup attempt missing")?;
-    assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
-    assert_eq!(worker.resident_generation_for_test(), generation);
+    assert_eq!(
+        Worker::start_if_needed(worker.clone()).await?,
+        Some(attempt)
+    );
+    assert_eq!(worker.observed_creation_count(), generation);
     let first = if next == NextStart::RestartFollower {
         InterruptKind::Restart
     } else {
@@ -373,8 +397,11 @@ async fn retained_terminal(
         tokio::time::timeout(Duration::from_secs(10), observe).await??;
         assert!(worker.is_loaded().await);
         assert!(worker.concurrent_agent_permit_is_held().await);
-        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(
+            Worker::start_if_needed(worker.clone()).await?,
+            Some(attempt)
+        );
+        assert_eq!(worker.observed_creation_count(), generation);
     } else {
         assert!(!worker.is_loaded().await);
         assert!(!worker.concurrent_agent_permit_is_held().await);
@@ -394,8 +421,11 @@ async fn retained_terminal(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
-        assert_eq!(worker.resident_generation_for_test(), generation);
-        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
+        assert_eq!(worker.observed_creation_count(), generation);
+        assert_eq!(
+            Worker::start_if_needed(worker.clone()).await?,
+            Some(attempt)
+        );
         assert!(!worker.concurrent_agent_permit_is_held().await);
         // Initial stops queue until permit grant. The old Suspend must not settle
         // this receipt either before the handoff or before the new owner starts.
@@ -409,13 +439,13 @@ async fn retained_terminal(
         worker.join_accepted_stops_for_test(),
     )
     .await??;
-    assert_eq!(worker.resident_generation_for_test(), generation);
-    // Admission is still held before resident creation. No loop can consume this stop yet.
-    assert_eq!(worker.pending_stop_for_test().await, Some(first));
-    assert!(
-        !worker.terminal_stop_claimed_for_test().await,
-        "the previous resident writer must not consume this startup stop"
-    );
+    assert_eq!(worker.observed_creation_count(), generation);
+    let requests = worker.interrupt_establishment_receipts();
+    let [(request, kind)] = &requests[next_request..] else {
+        anyhow::bail!("expected one new startup stop establishment: {requests:?}");
+    };
+    assert_ne!(*request, 0);
+    assert_eq!(*kind, first);
     assert_eq!(
         worker.terminal_interrupt_pending_for_test(),
         next != NextStart::RestartFollower
@@ -424,7 +454,10 @@ async fn retained_terminal(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ));
-    assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
+    assert_eq!(
+        Worker::start_if_needed(worker.clone()).await?,
+        Some(attempt)
+    );
 
     {
         // The native loop takes the published request before checking admission again.
@@ -434,11 +467,12 @@ async fn retained_terminal(
             .send(())
             .map_err(|_| anyhow!("startup admission gate was lost"))?;
         tokio::time::timeout(Duration::from_secs(10), continued).await??;
-        assert_eq!(worker.pending_stop_for_test().await, None);
-        assert!(!worker.terminal_stop_claimed_for_test().await);
         assert!(!worker.terminal_interrupt_pending_for_test());
-        assert_eq!(worker.resident_generation_for_test(), generation);
-        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
+        assert_eq!(worker.observed_creation_count(), generation);
+        assert_eq!(
+            Worker::start_if_needed(worker.clone()).await?,
+            Some(attempt)
+        );
         if next == NextStart::RestartFollower {
             tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;
         } else {
@@ -450,12 +484,9 @@ async fn retained_terminal(
         let later = InterruptKind::Interrupt(Timestamp::now_utc());
         let later_receipt = worker.set_interrupting(later).await?;
         assert_eq!(later_receipt.is_some(), next != NextStart::RestartFollower);
-        assert_eq!(worker.pending_stop_for_test().await, Some(later));
         worker.join_accepted_stops_for_test().await?;
-        assert_eq!(worker.pending_stop_for_test().await, Some(later));
         assert!(worker.terminal_interrupt_pending_for_test());
-        assert!(!worker.terminal_stop_claimed_for_test().await);
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         let mut stopped = Box::pin(worker.await_ready_to_process_commands());
         assert!((&mut stopped).now_or_never().is_none());
         release_continuation
@@ -497,19 +528,28 @@ async fn retained_terminal(
             .to_string()
             .contains("Worker stopped before startup completed")
     );
-    assert!(
-        worker
-            .startup_attempt_for_test()
-            .unwrap_err()
-            .to_string()
-            .contains("Worker stopped before startup completed")
-    );
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     assert!(!worker.is_loaded().await);
-    assert!(!worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.pending_stop_for_test().await, None);
-    assert_eq!(worker.resident_generation_for_test(), generation);
+    // A no-Store stop completes startup before the invocation-loop task drops its permit.
+    // Require the actual scheduler return and its matching lifetime close, not that notification.
+    let returned = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.acquire_account_concurrent_agent_permit(AgentId {
+            component_id: component.id,
+            agent_id: agent_id!("Counter", "retained-terminal-release-probe").to_string(),
+        }),
+    )
+    .await?;
+    drop(returned);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker.concurrent_agent_permit_is_held().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("stopped startup scheduler permit lifetime did not close")?;
+    assert_eq!(worker.observed_creation_count(), generation);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions + 1);
     let entries = worker
         .oplog()

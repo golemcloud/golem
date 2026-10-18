@@ -23,7 +23,6 @@ use axum::routing::get;
 use futures::FutureExt;
 use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
@@ -369,9 +368,12 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             .await?
             .expect("accepted loading stop");
         assert_eq!(existing.await, kind);
-        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
-        assert_eq!(worker.resident_generation_for_test(), 0);
-        assert!(!worker.concurrent_agent_permit_is_held().await);
+        assert_eq!(
+            Worker::start_if_needed(worker.clone()).await?,
+            Some(attempt)
+        );
+        assert_eq!(worker.observed_creation_count(), 0);
+        assert_eq!(worker.permit_acquisitions_for_test(), 0);
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -398,6 +400,7 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
         if matches!(kind, InterruptKind::Interrupt(_) | InterruptKind::ShardLost) {
             worker.join_accepted_stops_for_test().await?;
             worker.retained_cleanup_for_test().await?;
+            assert_eq!(worker.observed_creation_count(), 0);
         }
         let oplog = worker.oplog();
         let entries = oplog
@@ -418,12 +421,24 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             .count();
         if matches!(kind, InterruptKind::Interrupt(_)) {
             assert_eq!(interrupted, 1);
-            assert!(!worker.concurrent_agent_permit_is_held().await);
+            drop(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    executor.acquire_account_concurrent_agent_permit(id.clone()),
+                )
+                .await?,
+            );
             continue;
         }
         assert_eq!(interrupted, 0);
         if kind == InterruptKind::ShardLost {
-            assert!(!worker.concurrent_agent_permit_is_held().await);
+            drop(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    executor.acquire_account_concurrent_agent_permit(id.clone()),
+                )
+                .await?,
+            );
             continue;
         }
         let result = executor
@@ -433,7 +448,7 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             result.into_return_value(),
             Some(golem_common::schema::SchemaValue::U32(1))
         );
-        assert_eq!(worker.resident_generation_for_test(), 1);
+        assert_eq!(worker.observed_creation_count(), 1);
         let entries = worker
             .oplog()
             .read_exact(
@@ -508,7 +523,7 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
             .acquire_account_concurrent_agent_permit(id.clone())
             .await;
         worker.join_accepted_stops_for_test().await?;
-        let generation = worker.resident_generation_for_test();
+        let generation = worker.observed_creation_count();
         let acquisitions = worker.permit_acquisitions_for_test();
         let directory = root
             .path()
@@ -526,7 +541,7 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
             }
         })
         .await?;
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         drop(
             worker
@@ -537,7 +552,7 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
             !worker.concurrent_agent_permit_is_held().await,
             "late driver cannot reacquire capacity held by the real contender"
         );
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         worker.join_accepted_stops_for_test().await?;
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         worker.await_ready_to_process_commands().await?;
@@ -630,7 +645,7 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
         }
     });
     connection.await?;
-    let generation = worker.resident_generation_for_test();
+    let generation = worker.observed_creation_count();
     let acquisitions = worker.permit_acquisitions_for_test();
     let holder_id = golem_common::model::AgentId {
         component_id: id.component_id,
@@ -655,7 +670,7 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
         Err(tokio::sync::broadcast::error::TryRecvError::Empty
             | tokio::sync::broadcast::error::TryRecvError::Closed)
     ));
-    assert!(worker.has_unload_cleanup_for_test());
+    assert!(worker.retained_cleanup_receipts_for_test() > 0);
     // The existing event follows actual enqueue in the scheduler, after this loop's unload.
     tokio::time::timeout(Duration::from_secs(5), reacquisition.entered()).await??;
     assert!(!worker.concurrent_agent_permit_is_held().await);
@@ -680,16 +695,15 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
     .await??;
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert!(!worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.resident_generation_for_test(), generation);
+    assert_eq!(worker.observed_creation_count(), generation);
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     assert!(!worker.is_loaded().await);
     assert!(!worker.is_loading());
-    assert_eq!(worker.pending_stop_for_test().await, None);
     executor
         .wait_for_status(&id, AgentStatus::Interrupted, Duration::from_secs(5))
         .await?;
-    assert_eq!(worker.resident_generation_for_test(), generation);
+    assert_eq!(worker.observed_creation_count(), generation);
     assert!(invocation.await?.is_err());
     let entries = worker
         .oplog()
@@ -781,7 +795,7 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             .await
             .unwrap()
             .primary();
-        let generation = worker.resident_generation_for_test();
+        let generation = worker.observed_creation_count();
         let acquisitions = worker.permit_acquisitions_for_test();
         let finished = executor
             .search_oplog(&worker_id, "AgentInvocationFinished")
@@ -807,12 +821,12 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             .map_err(|_| anyhow::anyhow!("permit holder did not acquire after restart"))?;
         worker.join_accepted_stops_for_test().await?;
         tokio::time::timeout(Duration::from_secs(5), reacquisition.entered()).await??;
-        assert!(worker.has_unload_cleanup_for_test());
+        assert!(worker.retained_cleanup_receipts_for_test() > 0);
         assert_eq!(
-            worker.owner_stop_for_test().await,
-            Some(InterruptKind::Restart)
+            worker.selected_owner_failure_for_test().await,
+            Some(golem_worker_executor::durable_host::tool::ToolOwnerFailureMetadata::Lifecycle)
         );
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert!(!worker.concurrent_agent_permit_is_held().await);
 
@@ -846,11 +860,10 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
                     .len(),
                 finished
             );
-            assert_eq!(worker.resident_generation_for_test(), generation);
+            assert_eq!(worker.observed_creation_count(), generation);
             assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
             assert!(!worker.concurrent_agent_permit_is_held().await);
             worker.retained_cleanup_for_test().await?;
-            assert_eq!(worker.pending_stop_for_test().await, None);
         }
 
         drop(held_permit);

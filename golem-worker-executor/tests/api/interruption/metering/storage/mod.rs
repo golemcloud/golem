@@ -3,9 +3,6 @@ use anyhow::Context as _;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::services::resource_usage_metering::{
-    FilesystemUsage, ScriptedFilesystemUsageForTest,
-};
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use pretty_assertions::assert_eq;
@@ -14,29 +11,33 @@ use tokio::io::AsyncReadExt;
 
 mod nonmatching;
 
+#[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
-async fn durable_pending_scripted_storage_suspends_and_recovers(
+async fn durable_pending_managed_xfs_storage_suspends_and_recovers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    pending_scripted_storage(last_unique_id, deps, host_api_tests, AgentMode::Durable).await
+    pending_managed_xfs_storage(last_unique_id, deps, host_api_tests, AgentMode::Durable).await
 }
 
+#[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
-async fn ephemeral_pending_scripted_storage_fails_with_matching_resource_error(
+async fn ephemeral_pending_managed_xfs_storage_fails_with_matching_resource_error(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    pending_scripted_storage(last_unique_id, deps, host_api_tests, AgentMode::Ephemeral).await
+    pending_managed_xfs_storage(last_unique_id, deps, host_api_tests, AgentMode::Ephemeral).await
 }
 
-async fn pending_scripted_storage(
+async fn pending_managed_xfs_storage(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     host_api_tests: &PrecompiledComponent,
@@ -68,6 +69,7 @@ async fn pending_scripted_storage(
         shutdown.clone(),
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
@@ -75,6 +77,7 @@ async fn pending_scripted_storage(
         Arc::new(move |config| {
             config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
+            config.filesystem_storage.mode = filesystem.clone().unwrap();
         }),
     )
     .await?;
@@ -85,7 +88,7 @@ async fn pending_scripted_storage(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("Networking", "scripted-storage-seed"),
+            agent_id!("Networking", "managed-xfs-storage-seed"),
         )
         .await?;
     let seed = executor
@@ -103,9 +106,9 @@ async fn pending_scripted_storage(
     .context("seed permit release")?;
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "scripted-storage")
+        agent_id!("Networking", "managed-xfs-storage")
     } else {
-        agent_id!("EphemeralNetworking", "scripted-storage")
+        agent_id!("EphemeralNetworking", "managed-xfs-storage")
     };
     let key = IdempotencyKey::fresh();
     let physical = if durable {
@@ -128,15 +131,6 @@ async fn pending_scripted_storage(
         Principal::anonymous(),
     )
     .await?;
-    // Only the allocation observation is scripted. Worker startup, the permit, the meter,
-    // filesystem generation deletion and cooperative TCP teardown remain real.
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    worker
-        .owner_runtime_resources()
-        .set_scripted_filesystem_usage_for_test(source.clone());
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
     let usage_source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
         owner: Arc::downgrade(&worker),
@@ -211,24 +205,9 @@ async fn pending_scripted_storage(
     assert_eq!(initial.exhaustion, None);
     assert!(worker.concurrent_agent_permit_is_held().await);
     let account = limits.initialize_account(context.account_id).await?;
-    assert_eq!(account.monthly_observer_count_for_test(), 2);
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
     assert!(!invocation.is_finished());
-    let observations_before_allocation = source.observations();
-    source.set(FilesystemUsage::Authoritative {
-        allocated_bytes: 101,
-        filesystem_objects: 1,
-    });
-    // The system-clock sampler must accept the nonzero scripted observation and accrue usage.
-    // Registry still grants one byte-second, not zero.
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while source.observations() == observations_before_allocation {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .context("positive scripted observation")?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    allocate_storage(&owned).await?;
     assert!(
         !invocation.is_finished(),
         "no Store checkpoint runs while TCP is pending"
@@ -285,8 +264,6 @@ async fn pending_scripted_storage(
     assert!(!worker.monthly_window_active_for_test());
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert!(worker.unload_succeeded_for_test());
-    assert_eq!(account.monthly_observer_count_for_test(), 0);
-    let observations = source.observations();
     limits.run_batch_for_test().await;
     let settled = registry.applied_updates();
     // System-clock allocation time includes measured overshoot beyond the one-byte-second cap.
@@ -317,11 +294,7 @@ async fn pending_scripted_storage(
     }
     tokio::time::sleep(Duration::from_millis(150)).await;
     limits.run_batch_for_test().await;
-    assert_eq!(
-        source.observations(),
-        observations,
-        "closed generations must stop sampling"
-    );
+    assert_storage_deleted(&owned)?;
     let entries = worker
         .oplog()
         .read_exact(

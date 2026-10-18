@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::execution_observations::WorkerObservations;
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};

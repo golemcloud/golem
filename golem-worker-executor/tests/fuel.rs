@@ -173,7 +173,10 @@ async fn zero_fuel_suspends_and_unloads_runnable_constructor(
         0,
         "zero fuel must prevent constructor completion, not suspend after it succeeds"
     );
-    assert_eq!(entry.effective_fuel_for_test(), 0);
+    assert!(
+        !entry.borrow_fuel(1),
+        "no account fuel may remain after suspension"
+    );
     assert!(
         !executor.worker_is_loaded(&owned_agent_id).await,
         "mandatory fuel suspension must actually unload the instance"

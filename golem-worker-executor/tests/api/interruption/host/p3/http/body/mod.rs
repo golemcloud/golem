@@ -6,9 +6,6 @@ use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::services::resource_usage_metering::{
-    FilesystemUsage, ScriptedFilesystemUsageForTest,
-};
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use test_r::test;
@@ -19,7 +16,11 @@ use history::{assert_invocation, pending_body, recovered_body};
 use peer::Peer;
 
 macro_rules! pending_case {
-    ($name:ident, $resource:ident, $mode:ident) => {
+    ($name:ident, Storage, $mode:ident) => {
+        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+        $(#[$attr])*
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -49,12 +50,12 @@ pending_case!(
     Ephemeral
 );
 pending_case!(
-    durable_p3_http_body_scripted_storage_quota,
+    durable_p3_http_body_managed_xfs_storage_quota,
     Storage,
     Durable
 );
 pending_case!(
-    ephemeral_p3_http_body_scripted_storage_quota,
+    ephemeral_p3_http_body_managed_xfs_storage_quota,
     Storage,
     Ephemeral
 );
@@ -79,12 +80,16 @@ async fn pending_response_body(
         shutdown,
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
         limits.clone(),
         Arc::new(move |config| {
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
             config.limits.fuel_to_borrow = FUEL_BUDGET;
             config.http_client = HttpClientConfig::Enabled(HttpClientEnabledConfig {
                 max_idle_per_host: 1,
@@ -146,16 +151,6 @@ async fn pending_response_body(
         Principal::anonymous(),
     )
     .await?;
-    // Script only authoritative allocation, not filesystem deletion, metering or permit release.
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    if resource == Resource::Storage {
-        worker
-            .owner_runtime_resources()
-            .set_scripted_filesystem_usage_for_test(source.clone());
-    }
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut peer = Peer::start().await?;
@@ -198,6 +193,7 @@ async fn pending_response_body(
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         peer.assert_counts(1, 0, 0)?;
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
@@ -209,7 +205,7 @@ async fn pending_response_body(
 
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
-            ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
+            ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
             ensure!(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
@@ -224,10 +220,7 @@ async fn pending_response_body(
         ensure!(!invocation.is_finished());
         peer.assert_counts(1, 0, 0)?;
         if resource == Resource::Storage {
-            source.set(FilesystemUsage::Authoritative {
-                allocated_bytes: 1 << 30,
-                filesystem_objects: 1,
-            });
+            allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable).await?;
         }
         let mut exhausted = policy.clone();
         match resource {
@@ -242,7 +235,7 @@ async fn pending_response_body(
             .await.context("monthly proposal")?.context("acceptance observer closed")?;
         ensure!(
             attempt.proposal.policy_revision
-                == initial.policy_revision + 1
+                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
         );
         ensure!(attempt.proposal.period == initial.period);
         ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
@@ -254,11 +247,10 @@ async fn pending_response_body(
         ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        ensure!(worker.monthly_stop_for_test() == Some(signal));
-        ensure!(worker.owner_stop_for_test().await == Some(signal));
+        ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
         info!(?resource, ?mode, proposal = ?attempt.proposal, ?signal, "Accepted matching monthly HTTP stop and published typed signal");
         if resource == Resource::Compute {
-            ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
+            resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
         }
         if resource == Resource::Storage {
             let other = if durable {
@@ -289,7 +281,6 @@ async fn pending_response_body(
         drop(first.finish_body);
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &key, 0)?;
         ensure!(pending_body(&stopped, &key)? == Some(original), "stop changed the retained body prefix: {stopped:#?}");
@@ -354,8 +345,7 @@ async fn pending_response_body(
         executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         info!(?resource, ?mode, ?errors, suspends, "HTTP stop retained one unfinished method with mode-specific lifecycle outcome");
-        let observations = source.observations();
-        limits.run_batch_for_test().await;
+        flush_stopped_usage(&limits, &registry, resource).await?;
         let settled = registry.applied_updates();
         check_accounting(
             &settled,
@@ -368,10 +358,7 @@ async fn pending_response_body(
         let settled_count = settled.len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         limits.run_batch_for_test().await;
-        ensure!(
-            source.observations() == observations,
-            "closed generation must stop sampling"
-        );
+        if resource == Resource::Storage { assert_storage_deleted(&owned)?; }
         // Idle policy refreshes may still emit updates, but cannot charge a closed window.
         for update in &registry.applied_updates()[settled_count..] {
             ensure!(
@@ -447,7 +434,7 @@ async fn pending_response_body(
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
             let stored = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent(&component, &name, "stored_send_error", data_value!())).await??;
             ensure!(stored.into_typed::<String>()? == "none");
-            ensure!(worker.resident_generation_for_test() > reconstructed.resident_generation);
+            ensure!(worker.observed_creation_count() > reconstructed.resident_generation);
             peer.assert_counts(2, 1, 1)?;
             let completed_history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             recovered_body(&completed_history, &key, original, repaired_pending)?;

@@ -72,7 +72,7 @@ mod completed_history {
             }
         })
         .await?;
-        let generation = worker.resident_generation_for_test();
+        let generation = worker.observed_creation_count();
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let original = worker
             .oplog()
@@ -89,7 +89,7 @@ mod completed_history {
             .await
             .context("completed invocation input must be held during actual reconstruction")??;
         assert!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
-        assert!(worker.resident_generation_for_test() > generation);
+        assert!(worker.observed_creation_count() > generation);
 
         let acknowledged =
             tokio::time::timeout(Duration::from_secs(10), worker.resume_replay()).await;
@@ -222,7 +222,7 @@ mod completed_history {
         .context("initial idle permit release")?;
         assert!(worker.is_loaded().await);
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-        let initial_generation = worker.resident_generation_for_test();
+        let initial_generation = worker.observed_creation_count();
         let original_tip = worker.oplog().current_oplog_index().await;
         let original = worker
             .oplog()
@@ -273,7 +273,7 @@ mod completed_history {
             .await
             .context("completed invocation input acquisition during replay after Restart")??;
         let replay_indices = (replay_start, replay_finished);
-        let generation = worker.resident_generation_for_test();
+        let generation = worker.observed_creation_count();
         assert!(generation > initial_generation);
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(
@@ -281,8 +281,7 @@ mod completed_history {
             fingerprint
         );
         let acquisitions = worker.permit_acquisitions_for_test();
-        let account = limits.initialize_account(context.account_id).await?;
-        assert_eq!(account.monthly_observer_count_for_test(), 1);
+        limits.initialize_account(context.account_id).await?;
         eprintln!(
             "[monthly-replay] committed key={key:?}, indices={replay_indices:?}, result={result}, fingerprint={fingerprint:?}, generation={initial_generation}->{generation}"
         );
@@ -302,14 +301,10 @@ mod completed_history {
             .context("monthly proposal while completed replay is held")?;
         assert_eq!(attempt.proposal.resident_generation, generation);
         assert!(attempt.accepted);
-        let monthly = worker
-            .monthly_stop_for_test()
-            .expect("accepted monthly stop");
+        let monthly = worker.await_interrupt_for_test().await;
         assert!(matches!(monthly, InterruptKind::Suspend(_)));
-        assert_eq!(worker.pending_stop_for_test().await, Some(monthly));
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert!(worker.concurrent_agent_permit_is_held().await);
-        assert_eq!(account.monthly_observer_count_for_test(), 1);
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
@@ -350,9 +345,8 @@ mod completed_history {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        assert_eq!(account.monthly_observer_count_for_test(), 0);
         let stopped = worker
             .oplog()
             .read_exact(
@@ -493,10 +487,10 @@ mod completed_history {
             worker.get_initial_worker_metadata().fingerprint,
             fingerprint
         );
-        assert!(worker.resident_generation_for_test() > generation);
+        assert!(worker.observed_creation_count() > generation);
         eprintln!(
-            "[monthly-replay] recovered generation={}, new key={new_key:?}, result=2 once, original fingerprint={fingerprint:?}",
-            worker.resident_generation_for_test()
+            "[monthly-replay] observed creations={}, new key={new_key:?}, result=2 once, original fingerprint={fingerprint:?}",
+            worker.observed_creation_count()
         );
         shutdown.cancel();
         Ok(())
@@ -626,8 +620,7 @@ mod post_export {
         .context("initial idle permit release")?;
         let key = IdempotencyKey::fresh();
         let mut root_event = crate::tail_roots::root_returned(&owned, &key);
-        let primary_execution = active.execution();
-        let tail_count = || primary_execution.primary_tail_work_active_count_for_test();
+        let mut settled_tail = crate::tail_roots::tail_settled(&owned, &key);
         executor
             .invoke_agent_with_key(
                 &component,
@@ -645,16 +638,14 @@ mod post_export {
             .context("spawned HTTP request entered held handler")??;
         let (started, chunk) = pending_tail(&worker, &key).await?;
         let prefix = executor.stored_oplog(&id).await;
-        assert!(tail_count() > 0);
+        assert!(root_snapshot > 0);
         assert!(worker.concurrent_agent_permit_is_held().await);
-        let generation = worker.resident_generation_for_test();
+        let generation = worker.observed_creation_count();
         let acquisitions = worker.permit_acquisitions_for_test();
-        let account = limits.initialize_account(context.account_id).await?;
-        assert_eq!(account.monthly_observer_count_for_test(), 1);
+        limits.initialize_account(context.account_id).await?;
         let admitted_revision = registry.current_limits().monthly_policy_revision;
         eprintln!(
-            "[monthly-tail] root completion diagnostic, root snapshot={root_snapshot}, active tail tasks={}, method Start={started}, HTTP chunk Start={chunk}, response body held, permit held, generation={generation}",
-            tail_count()
+            "[monthly-tail] root snapshot={root_snapshot}, method Start={started}, HTTP chunk Start={chunk}, response body held, permit held, generation={generation}"
         );
 
         let mut attempts =
@@ -679,14 +670,11 @@ mod post_export {
                 .await,
             Some(registry.current_limits().monthly_policy_revision)
         );
-        let cause = worker
-            .monthly_stop_for_test()
-            .expect("accepted monthly stop");
+        let cause = worker.await_interrupt_for_test().await;
         assert!(matches!(cause, InterruptKind::Suspend(_)));
         assert_eq!(pending_tail(&worker, &key).await?, (started, chunk));
         assert!(worker.concurrent_agent_permit_is_held().await);
-        assert_eq!(account.monthly_observer_count_for_test(), 1);
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.observed_creation_count(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
@@ -694,22 +682,20 @@ mod post_export {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
         eprintln!(
-            "[monthly-tail] accepted {cause:?}, tail tasks={}, peer response and terminal append held, permit held, receipt pending",
-            tail_count()
+            "[monthly-tail] accepted {cause:?}, peer response and terminal append held, permit held, receipt pending"
         );
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             cause
         );
-        assert_eq!(worker.owner_stop_for_test().await, Some(cause));
+        assert_eq!(
+            worker.selected_owner_failure_for_test().await,
+            Some(ToolOwnerFailureMetadata::Lifecycle)
+        );
         // Keep peer bytes unavailable until the tracked HTTP task has cooperatively retired.
         // Release the peer even on timeout so a failed stop leaves a bounded diagnostic.
-        let tail_retired = tokio::time::timeout(Duration::from_secs(10), async {
-            while tail_count() != 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
+        let tail_retired =
+            tokio::time::timeout(Duration::from_secs(10), settled_tail.returned()).await;
         let _ = release_response.send(());
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
         release_outcome.send(false).unwrap();
@@ -734,10 +720,11 @@ mod post_export {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
-        tail_retired.context("tracked HTTP tail retires without peer body bytes")?;
-        assert_eq!(tail_count(), 0);
-        assert_eq!(account.monthly_observer_count_for_test(), 0);
-        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(
+            tail_retired.context("tracked HTTP tail retires without peer body bytes")??,
+            0
+        );
+        assert_eq!(worker.observed_creation_count(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         let stopped = worker
@@ -801,7 +788,7 @@ mod post_export {
         limits.run_batch_for_test().await;
         assert_eq!(registry.applied_memory_byte_nanoseconds(), usage);
         eprintln!(
-            "[monthly-tail] cleanup joined, receipt once, one Suspend, keyed method unfinished, no false HTTP cancellation, tail inactive, permit released, observers=0, settled byte-nanoseconds={usage}; oplog={stopped:#?}"
+            "[monthly-tail] cleanup joined, receipt once, one Suspend, keyed method unfinished, no false HTTP cancellation, tail inactive, permit released, settled byte-nanoseconds={usage}; oplog={stopped:#?}"
         );
         server_shutdown.cancel();
         tokio::time::timeout(Duration::from_secs(10), server).await???;

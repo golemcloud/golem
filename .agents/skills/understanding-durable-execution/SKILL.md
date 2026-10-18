@@ -628,9 +628,9 @@ The default 10 ms epoch increment still does not wake pending host futures. Real
 cover monthly-memory detection by both the local tick and applied Registry update, cooperative
 socket closure, durable reconstruction and ephemeral resource failure. The P2 TCP input
 `subscribe().block()` tests in `tests/api/interruption/host/p2/tcp/poll.rs` cover memory, prepaid compute and
-mode-matching scripted storage in both modes. They verify physical unload and permit release
-before peer readiness, then repair the original poll Start for durable agents. Scripted allocation
-proves Worker orchestration, not native managed-XFS measurement. These tests do not establish a
+mode-matching managed-XFS storage in both modes. They verify physical unload and permit release
+before peer readiness, then repair the original poll Start for durable agents. Storage cases write
+and sync a real allocation and run in the privileged managed-XFS suite. These tests do not establish a
 bound for other host waits; preserve the permit-owned billing window.
 
 P2 TCP `start_connect` re-executes natively on reconstruction. A completed connect poll must drive
@@ -880,7 +880,7 @@ unloaded Worker. Deterministic peer data is required to reproduce the recorded i
 this does not provide exactly-once TCP consumption.
 
 `tests/api/interruption/host/p2/tcp/input/mod.rs` covers each export with memory, prepaid compute and matching
-scripted storage in both modes. Its test-only structured subscriber reads the production trace's
+managed-XFS storage in both modes. Its test-only structured subscriber reads the production trace's
 actual first `Poll::Pending` and return/drop fields across spawns without gating native progress.
 Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
 cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
@@ -919,12 +919,12 @@ future's first Pending through standard tracing for same-socket and cross-socket
 tracing adds no `check_write` preflight. The precise writable-output/blocked-input proof belongs to
 the actual native-body test below, not a provider-internal phase inferred from the Worker trace.
 Both configurations exposed accepted-stop physical-teardown failures.
-Each now has memory, prepaid-compute and matching scripted-storage cases in both agent modes.
+Each now has memory, prepaid-compute and matching managed-XFS storage cases in both agent modes.
 They check socket closure and joined Store/permit/window cleanup before any input byte, durable
 same-key reconnection or ephemeral terminal/probe, and completion-first cached success. The
 cross-socket tests require both sockets to close and later count a byte consumed on A and emitted
 on B. Memory accounting uses a drained seed and isolated target account interval, not a per-worker
-billing key or an exact parked-duration charge. Scripted storage is not native managed-XFS evidence.
+billing key or an exact parked-duration charge. Storage cases use native managed-XFS measurement.
 
 TCP/TCP splice constructs the same `NativeIoWait` as raw read/skip. Colocated tests call the actual
 WASI `HostOutputStream::blocking_splice` on separate input/output resources. Writable memory output
@@ -963,7 +963,7 @@ around the native live receive. `run_read_access` leaves an interrupted
 bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
 
 `tests/api/interruption/host/p3/udp/mod.rs` covers explicitly bound, unconnected receive in both modes with
-memory, prepaid compute and matching scripted storage. A test-utils-only observer reports the
+memory, prepaid compute and matching managed-XFS storage. A test-side tracing subscriber observes the
 real receive future's first Pending and native local address, then distinguishes return from drop.
 The guest binds loopback port zero and never reads that varying port. After physical unload,
 rebinding the observed address proves socket retirement; UDP has no EOF. Reconstruction binds
@@ -1008,7 +1008,7 @@ gains End then CompletionDelivered, with one new handshake and no historical rep
 and withholds the third TCP Upgrade response after the target's actual reconnect `connect_async`
 reports Pending. The typed stop closes that socket and frees the slot before the peer supplies
 101; recovery repairs the same operation Start on a fourth TCP connection. Receive and Close
-have durable memory, prepaid compute and scripted durable-storage cases and completion-first
+have durable memory, prepaid compute and managed-XFS durable-storage cases and completion-first
 controls for each wait. Both post-permit handshakes use the composed interrupt signal.
 Completed-connect replay is not available to ephemeral agents, which cannot resume or invoke a
 reconstructed incarnation. Entity-local cancellation, a native ready/stop tie, timed receive,
@@ -1024,8 +1024,8 @@ still withheld, durable same-key repair of the original timed Start and ephemera
 with a fresh Worker probe. A separate one-second timeout-first control returns `None` before
 any monthly exhaustion, then preserves its cached result. The existing frame select already
 interrupted; no production RED or timeout/stop tie is claimed. The reader mutex acquisition
-**precedes** that select, so these tests do not cover lock contention. Scripted storage proves
-Worker orchestration, not native managed-XFS measurement.
+**precedes** that select, so these tests do not cover lock contention. Storage cases run against
+real allocation measurement in the privileged managed-XFS suite.
 
 A second timed receive on the **same** guest WebSocket can reach the reader mutex while an
 untimed receive holds it in its native frame read. `tests/api/interruption/host/websocket/reader_lock.rs`

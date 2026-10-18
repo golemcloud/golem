@@ -2,9 +2,11 @@ use super::*;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
+#[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
-async fn durable_pending_nonmatching_scripted_storage_remains_running(
+async fn durable_pending_nonmatching_managed_xfs_storage_remains_running(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -13,9 +15,11 @@ async fn durable_pending_nonmatching_scripted_storage_remains_running(
     nonmatching_storage(last_unique_id, deps, host_api_tests, AgentMode::Durable).await
 }
 
+#[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
-async fn ephemeral_pending_nonmatching_scripted_storage_remains_running(
+async fn ephemeral_pending_nonmatching_managed_xfs_storage_remains_running(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -56,6 +60,7 @@ async fn nonmatching_storage(
         shutdown.clone(),
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
@@ -63,6 +68,7 @@ async fn nonmatching_storage(
         Arc::new(move |config| {
             config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
+            config.filesystem_storage.mode = filesystem.clone().unwrap();
         }),
     )
     .await?;
@@ -121,13 +127,6 @@ async fn nonmatching_storage(
         Principal::anonymous(),
     )
     .await?;
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    worker
-        .owner_runtime_resources()
-        .set_scripted_filesystem_usage_for_test(source.clone());
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
     let usage_source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
         owner: Arc::downgrade(&worker),
@@ -139,7 +138,6 @@ async fn nonmatching_storage(
     let mut capacity_updates = limits
         .subscribe_capacity_updates_for_test(context.account_id)
         .await?;
-    let capacity_version = *capacity_updates.borrow_and_update();
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -206,24 +204,29 @@ async fn nonmatching_storage(
     let acquisitions = worker.permit_acquisitions_for_test();
     let mut raw = worker.raw_interrupt_for_test();
     let account = limits.initialize_account(context.account_id).await?;
-    assert_eq!(account.monthly_observer_count_for_test(), 2);
     assert_eq!(initial.exhaustion, None);
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
     assert!(!account.monthly_capacity_is_exhausted_for_test(other));
 
-    let observations_before_allocation = source.observations();
-    source.set(FilesystemUsage::Authoritative {
-        allocated_bytes: 101,
-        filesystem_objects: 1,
-    });
+    allocate_storage(&owned).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while source.observations() == observations_before_allocation {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        loop {
+            limits.run_batch_for_test().await;
+            if registry.applied_updates().iter().any(|update| {
+                if durable {
+                    update.durable_storage_byte_seconds_delta > 0
+                } else {
+                    update.ephemeral_storage_byte_seconds_delta > 0
+                }
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
         }
     })
     .await
-    .context("positive scripted observation")?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    .context("positive managed XFS storage usage")?;
+    let capacity_version = *capacity_updates.borrow_and_update();
     let mut opposite_exhausted = policy;
     if durable {
         opposite_exhausted.available_ephemeral_storage_byte_seconds = 0;
@@ -251,8 +254,7 @@ async fn nonmatching_storage(
     assert!(account.monthly_capacity_is_exhausted_for_test(other));
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
 
-    // Positive matching byte-time proves the scripted filesystem meter was actually enabled.
-    // These are scripted observations, not native-XFS allocation measurements.
+    // Positive matching byte-time proves the managed XFS filesystem meter was enabled.
     let updates = registry.applied_updates();
     assert!(updates.iter().any(|update| {
         update.monthly_policy_revision == initial.policy_revision
@@ -288,7 +290,11 @@ async fn nonmatching_storage(
     assert!(update_started.elapsed() >= Duration::from_secs(30));
     assert!(!capacity_updates.has_changed()?);
     drop(capacity_updates);
-    worker.drain_lifecycle_for_test().await?;
+    assert!(
+        worker
+            .monthly_checks()
+            .contains(&(initial.diagnostic_window_id, revision))
+    );
     let sampled = worker.current_monthly_proposal_for_test();
     assert_eq!(sampled.policy_revision, revision);
     assert_eq!(sampled.period, initial.period);
@@ -305,7 +311,6 @@ async fn nonmatching_storage(
         raw.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ));
-    assert_eq!(worker.monthly_stop_for_test(), None);
     let mut byte = [0];
     assert!(
         tokio::time::timeout(Duration::from_millis(100), socket.read(&mut byte))
@@ -316,7 +321,6 @@ async fn nonmatching_storage(
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert!(worker.monthly_window_active_for_test());
-    assert_eq!(account.monthly_observer_count_for_test(), 1);
     assert!(!invocation.is_finished());
     executor.commit_oplog(&id).await?;
     let pending = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -353,7 +357,6 @@ async fn nonmatching_storage(
     tokio::time::timeout(Duration::from_secs(10), refresh).await??;
     assert!(attempts.try_recv().is_err());
     assert!(!worker.monthly_window_active_for_test());
-    assert_eq!(account.monthly_observer_count_for_test(), 0);
     let stopped_raw = read_stored().await?;
     assert_eq!(
         stopped_raw.range(..=prefix_last).collect::<Vec<_>>(),

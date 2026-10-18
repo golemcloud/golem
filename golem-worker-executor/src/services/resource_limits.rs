@@ -322,16 +322,16 @@ fn retain_unaccepted_delivery(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MonthlyCapacity {
-    pub(crate) policy_status: golem_service_base::model::MonthlyResourcePolicyStatus,
-    pub(crate) exhaustion: Option<MonthlyResourceExhaustion>,
-    pub(crate) policy_revision: u64,
-    pub(crate) period: AccountUsagePeriod,
-    pub(crate) fuel_generation: Option<u64>,
+pub struct MonthlyCapacity {
+    pub policy_status: golem_service_base::model::MonthlyResourcePolicyStatus,
+    pub exhaustion: Option<MonthlyResourceExhaustion>,
+    pub policy_revision: u64,
+    pub period: AccountUsagePeriod,
+    pub fuel_generation: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MonthlyResourceExhaustion {
+pub enum MonthlyResourceExhaustion {
     Compute,
     Memory,
     DurableStorage,
@@ -360,7 +360,7 @@ impl MonthlyResourceCapacityError {
 }
 
 impl MonthlyResourceExhaustion {
-    pub(crate) const fn reason(self) -> &'static str {
+    pub const fn reason(self) -> &'static str {
         match self {
             Self::Compute => "monthly compute exhausted",
             Self::Memory => "monthly memory exhausted",
@@ -1090,7 +1090,11 @@ impl AtomicResourceEntry {
         .then(|| self.effective_storage_byte_nanoseconds_with_revision_state(revision_state, mode))
     }
 
-    fn record_hard_limit_memory_overshoot(revision_state: &mut UsageRevisionState, amount: u128) {
+    fn record_hard_limit_memory_overshoot(
+        &self,
+        revision_state: &mut UsageRevisionState,
+        amount: u128,
+    ) {
         if amount == 0 {
             return;
         }
@@ -1107,6 +1111,17 @@ impl AtomicResourceEntry {
             .entry(key)
             .or_default();
         *overshoot = overshoot.saturating_add(amount);
+        debug!(
+            resource_entry = self as *const Self as u64,
+            resource_event = "memory_overshoot",
+            policy_revision = revision_state.current_policy_revision,
+            amount_byte_nanoseconds = amount,
+            memory_overshoot_byte_nanoseconds = gate
+                .hard_limit_memory_overshoot_byte_nanoseconds
+                .values()
+                .sum::<u128>(),
+            "Settled memory usage beyond the hard limit"
+        );
     }
 
     fn record_hard_limit_storage_overshoot(
@@ -1290,6 +1305,15 @@ impl AtomicResourceEntry {
                 })
                 .ok();
             record_fuel_borrow(borrowed);
+            debug!(
+                resource_entry = self as *const Self as u64,
+                resource_event = "fuel_borrowed",
+                borrowed,
+                effective_fuel = self.effective_fuel_with_revision_state(&revision_state),
+                policy_revision = revision,
+                settled_fuel_generation = generation,
+                "Reserved account fuel"
+            );
             FuelBorrow::Borrowed {
                 amount: borrowed,
                 revision,
@@ -1309,37 +1333,11 @@ impl AtomicResourceEntry {
         self.metering.compute || self.metering.memory || self.metering.filesystem
     }
 
-    #[cfg(feature = "test-utils")]
-    pub fn effective_fuel_for_test(&self) -> u64 {
-        let state = self.usage_revision_state.lock().unwrap();
-        self.effective_fuel_with_revision_state(&state)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn monthly_capacity_is_exhausted_for_test(&self, mode: AgentMode) -> bool {
-        self.with_monthly_capacity(mode, None, |capacity| capacity.exhaustion.is_some())
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn settled_fuel_generation_for_test(&self) -> Option<u64> {
-        self.usage_revision_state
-            .lock()
-            .unwrap()
-            .monthly_policy
-            .as_ref()
-            .map(|gate| gate.settled_generation)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn monthly_observer_count_for_test(&self) -> usize {
-        self.capacity_updates.receiver_count()
-    }
-
-    pub(crate) fn subscribe_capacity_updates(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub fn subscribe_capacity_updates(&self) -> tokio::sync::watch::Receiver<u64> {
         self.capacity_updates.subscribe()
     }
 
-    pub(crate) fn with_monthly_capacity<R>(
+    pub fn with_monthly_capacity<R>(
         &self,
         agent_mode: AgentMode,
         fuel_generation: Option<u64>,
@@ -1634,6 +1632,14 @@ impl AtomicResourceEntry {
                 ephemeral_memory_gb_seconds_delta: 0,
             });
         }
+        debug!(
+            resource_entry = self as *const Self as u64,
+            resource_event = "fuel_settled",
+            fuel_delta,
+            effective_fuel = self.effective_fuel_with_revision_state(&revision_state),
+            policy_revision = revision,
+            "Settled account fuel consumption or refund"
+        );
     }
 
     pub fn max_memory_limit(&self) -> usize {
@@ -1816,7 +1822,7 @@ impl AtomicResourceEntry {
         let mut accumulator = accumulator.lock().unwrap();
         if self.metering.memory {
             let overshoot = accumulator.add_memory_settlement(mode, memory, memory_limit);
-            Self::record_hard_limit_memory_overshoot(&mut revision_state, overshoot);
+            self.record_hard_limit_memory_overshoot(&mut revision_state, overshoot);
         }
         if self.metering.filesystem {
             Self::record_storage_settlement_locked(
@@ -2429,6 +2435,20 @@ impl AtomicResourceEntry {
         if let Some(captured) = retry {
             revision_state.pending.push_front(captured);
         }
+        debug!(
+            resource_entry = self as *const Self as u64,
+            resource_event = "policy_applied",
+            policy_revision = revision_state.current_policy_revision,
+            settled_fuel_generation = generation,
+            effective_fuel = self.effective_fuel_with_revision_state(&revision_state),
+            memory_overshoot_byte_nanoseconds =
+                revision_state.monthly_policy.as_ref().map_or(0, |gate| {
+                    gate.hard_limit_memory_overshoot_byte_nanoseconds
+                        .values()
+                        .sum::<u128>()
+                }),
+            "Applied monthly resource policy"
+        );
         drop(revision_state);
         self.capacity_updates
             .send_modify(|version| *version = version.wrapping_add(1));
@@ -2565,20 +2585,6 @@ impl AtomicResourceEntry {
             captured.update.memory_gb_seconds_delta,
             captured.update.durable_storage_byte_seconds_delta,
         )
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn hard_limit_memory_overshoot_for_test(&self) -> u128 {
-        self.usage_revision_state
-            .lock()
-            .unwrap()
-            .monthly_policy
-            .as_ref()
-            .map_or(0, |gate| {
-                gate.hard_limit_memory_overshoot_byte_nanoseconds
-                    .values()
-                    .sum()
-            })
     }
 
     pub fn record_memory_gb_seconds(&self, mode: AgentMode, amount: i64) {
@@ -3205,37 +3211,6 @@ impl ResourceLimitsGrpc {
         .await
     }
 
-    #[cfg(feature = "test-utils")]
-    pub async fn run_batch_for_test(&self) {
-        self.send_batch(0).await;
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn subscribe_capacity_updates_for_test(
-        &self,
-        account_id: AccountId,
-    ) -> Result<tokio::sync::watch::Receiver<u64>, WorkerExecutorError> {
-        Ok(self
-            .initialize_account(account_id)
-            .await?
-            .subscribe_capacity_updates())
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn initialized_policy_revision_for_test(&self, account_id: AccountId) -> Option<u64> {
-        let cell = self
-            .entries
-            .read_async(&account_id, |_, entry| entry.clone())
-            .await?;
-        let entry = cell.get()?.clone();
-        let revision = entry
-            .usage_revision_state
-            .lock()
-            .unwrap()
-            .current_policy_revision;
-        Some(revision)
-    }
-
     async fn update_last_known_limits(
         &self,
         account_id: AccountId,
@@ -3439,8 +3414,12 @@ impl ResourceLimits for ResourceLimitsDisabled {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn assert_capacity_observers(entry: &AtomicResourceEntry, expected: usize) {
+        assert_eq!(entry.capacity_updates.receiver_count(), expected);
+    }
 
     #[test]
     fn unavailable_policy_acknowledges_usage_without_installing_fake_capacity() {
@@ -8794,7 +8773,6 @@ mod tests {
         assert_eq!(*observed_disk_limits.lock().unwrap(), vec![8_192]);
     }
 
-    #[cfg(feature = "test-utils")]
     #[test]
     async fn monthly_refresh_finishes_before_pending_filesystem_limit_target() {
         let account_id = account_id();
@@ -8802,15 +8780,12 @@ mod tests {
         mock.set_get_limits_response(service_limits(monthly_policy(1), 0, 8_192, 16_384));
         let svc = make_grpc(Arc::clone(&mock));
         let entry = svc.initialize_account(account_id).await.unwrap();
-        let mut updates = svc
-            .subscribe_capacity_updates_for_test(account_id)
-            .await
-            .unwrap();
+        let mut updates = entry.subscribe_capacity_updates();
         assert_eq!(
             monthly_resource_admission(&entry, AgentMode::Durable),
             MonthlyResourceAdmission::Admit
         );
-        assert_eq!(entry.monthly_observer_count_for_test(), 1);
+        assert_eq!(entry.capacity_updates.receiver_count(), 1);
         let entered = Arc::new(tokio::sync::Semaphore::new(0));
         let release = Arc::new(tokio::sync::Semaphore::new(0));
         let completed = Arc::new(tokio::sync::Semaphore::new(0));
@@ -8846,7 +8821,7 @@ mod tests {
         ));
         let refresh = tokio::spawn({
             let svc = svc.clone();
-            async move { svc.run_batch_for_test().await }
+            async move { svc.send_batch(0).await }
         });
         entered.acquire().await.unwrap().forget();
         updates.changed().await.unwrap();
@@ -8864,7 +8839,7 @@ mod tests {
             "batch completion must not claim filesystem completion"
         );
         drop(updates);
-        assert_eq!(entry.monthly_observer_count_for_test(), 0);
+        assert_eq!(entry.capacity_updates.receiver_count(), 0);
         release.add_permits(1);
         tokio::time::timeout(Duration::from_secs(2), completed.acquire())
             .await

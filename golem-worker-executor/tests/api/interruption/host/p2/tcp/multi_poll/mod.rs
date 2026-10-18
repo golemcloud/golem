@@ -7,9 +7,6 @@ use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry, PublicOplogEntryWithIndex};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::services::resource_usage_metering::{
-    FilesystemUsage, ScriptedFilesystemUsageForTest,
-};
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use test_r::test;
@@ -21,7 +18,11 @@ use history::*;
 use peers::*;
 
 macro_rules! pending_case {
-    ($name:ident, $resource:ident, $mode:ident) => {
+    ($name:ident, Storage, $mode:ident) => {
+        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+        $(#[$attr])*
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -55,12 +56,12 @@ pending_case!(
     Ephemeral
 );
 pending_case!(
-    durable_p2_multi_poll_scripted_storage_quota,
+    durable_p2_multi_poll_managed_xfs_storage_quota,
     Storage,
     Durable
 );
 pending_case!(
-    ephemeral_p2_multi_poll_scripted_storage_quota,
+    ephemeral_p2_multi_poll_managed_xfs_storage_quota,
     Storage,
     Ephemeral
 );
@@ -85,6 +86,7 @@ async fn pending_multi_poll(
         shutdown,
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
@@ -92,6 +94,9 @@ async fn pending_multi_poll(
         Arc::new(move |config| {
             config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
             config.limits.fuel_to_borrow = FUEL_BUDGET;
         }),
     )
@@ -147,16 +152,6 @@ async fn pending_multi_poll(
         Principal::anonymous(),
     )
     .await?;
-    // Script only authoritative allocation, not filesystem deletion, metering or permit release.
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    if resource == Resource::Storage {
-        worker
-            .owner_runtime_resources()
-            .set_scripted_filesystem_usage_for_test(source.clone());
-    }
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
@@ -195,6 +190,7 @@ async fn pending_multi_poll(
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(phase.runtime == initial && phase.state() == WaitState::Pending);
         ensure!(effects.accepts == [1, 1] && effects.sent == [0, 0]);
@@ -207,7 +203,7 @@ async fn pending_multi_poll(
 
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some());
-            ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
+            ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
             ensure!(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
@@ -221,12 +217,9 @@ async fn pending_multi_poll(
         }
         ensure!(phase.state() == WaitState::Pending);
         let stop_started = tokio::time::Instant::now();
-        let allocation_observations = source.observations();
         if resource == Resource::Storage {
-            source.set(FilesystemUsage::Authoritative {
-                allocated_bytes: 1 << 30,
-                filesystem_objects: 1,
-            });
+            allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable)
+                .await?;
         }
         let mut exhausted = policy.clone();
         match resource {
@@ -241,7 +234,10 @@ async fn pending_multi_poll(
             .await
             .context("monthly proposal")?
             .context("acceptance observer closed")?;
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
+        ensure!(
+            attempt.proposal.policy_revision
+                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
+        );
         ensure!(attempt.proposal.fingerprint == initial.fingerprint);
         ensure!(attempt.proposal.start_attempt == initial.start_attempt);
         ensure!(attempt.proposal.period == initial.period);
@@ -252,10 +248,15 @@ async fn pending_multi_poll(
         ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        ensure!(worker.monthly_stop_for_test() == Some(signal));
-        ensure!(worker.owner_stop_for_test().await == Some(signal));
+        ensure!(
+            worker.selected_owner_failure_for_test().await
+                == Some(ToolOwnerFailureMetadata::Lifecycle)
+        );
         if resource == Resource::Compute {
-            ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
+            resource_events.assert_policy_advanced_after(
+                registry.current_limits().monthly_policy_revision,
+                initial.fuel_generation,
+            )?;
         }
         if resource == Resource::Storage {
             let other = if durable {
@@ -285,13 +286,10 @@ async fn pending_multi_poll(
             refresh.await?;
         }
         if resource == Resource::Storage {
-            // A policy update can stop observation before the allocation read completes.
-            // Ordinary cleanup still joins that read before releasing the filesystem.
-            ensure!(source.observations() > allocation_observations);
+            assert_storage_deleted(&owned)?;
         }
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(
             phase.state() == WaitState::Dropped,
             "native poll returned: {phase:?}"
@@ -349,8 +347,7 @@ async fn pending_multi_poll(
                     .is_err()
             );
         }
-        let observations = source.observations();
-        limits.run_batch_for_test().await;
+        flush_stopped_usage(&limits, &registry, resource).await?;
         let settled = registry.applied_updates();
         check_accounting(
             &settled,
@@ -362,10 +359,9 @@ async fn pending_multi_poll(
         let settled_count = settled.len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         limits.run_batch_for_test().await;
-        ensure!(
-            source.observations() == observations,
-            "closed generation must stop sampling"
-        );
+        if resource == Resource::Storage {
+            assert_storage_deleted(&owned)?;
+        }
         // Idle policy refreshes may still emit updates, but cannot charge a closed window.
         for update in &registry.applied_updates()[settled_count..] {
             ensure!(

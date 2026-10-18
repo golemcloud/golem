@@ -315,7 +315,8 @@ surviving production protocol to reproduce.
 Completion-first cases do not need a virtual timer when real native completion, the required host
 records and an entered invocation-outcome append already establish the scenario. Let the monitor
 use its ordinary timer. After the existing actual monitor and physical-cleanup joins, require the
-monthly target to be inactive and capacity subscriptions to be gone. A virtual clock's receiver
+registered monthly horizon to have closed. Exact capacity receiver counts are checked in the
+colocated owned-window close test. A virtual clock's receiver
 count is not an additional physical-release guarantee. The P2 input/splice/multi-poll and P3
 promise/UDP completion cases retain their other oracles unchanged without those unused freezes.
 
@@ -323,8 +324,8 @@ The provider, transaction and quiet-stdin cases also use ordinary timers. Their 
 provider/session checkpoint, active monthly target and capacity-watch subscriber establish the
 pre-update prerequisite. `MonthlyMemoryCheck::new` subscribes before spawning the monitor, so an
 applied update remains observable even before its first sleep poll. At an entered effect, keep the
-target active and subscribed. After the real cleanup joins, require an inactive target and zero
-subscriptions. These checks replace unused virtual-sleep observations only; they do not establish
+target active and subscribed. After the real cleanup joins, require the registered horizon to have
+closed. These checks replace unused virtual-sleep observations only; they do not establish
 native filesystem metadata Pending or change the entered-effect and session proofs.
 
 ### Monitor cadence with the normal timer
@@ -335,13 +336,12 @@ completion and verify rearming after an applied update and a rejected proposal. 
 existing queue function, not a copied monitor loop. This keeps two-period timing proofs independent
 of native test setup time.
 
-The real-Worker retry case uses actual interrupt-lock contention, two rejected applied revisions
-with unchanged exhausted amounts, then one normal timer tick. The accepted tick must have the exact
-latest rejected window/policy snapshot, with no intervening revision. Its elapsed lower bound comes
-from the final update, not an ordering sleep. Exact tick-rejection cadence belongs to the colocated
-proof; the native case proves applied-check rejection followed by real-timer retry, accounting,
-terminal ownership, physical release and same-key recovery within its original timeout. It also
-retains the complete stored raw prefix and checks invocation counts independently of the result.
+The colocated contention test holds the actual Interrupts lock across two ordinary virtual Tokio
+periods, then releases it and accepts unchanged capacity on the next ordinary period. The native
+case instead checks continuation across healthy capacity updates, a completed ordinary check after
+at least 30 seconds, then exhaustion in the same window. It retains accounting, terminal ownership,
+physical release, the complete stored raw prefix and same-key recovery. Registry updates release
+one pending reply each; draining all usage is a separate post-cleanup operation.
 
 Join Registry refresh tasks without treating them as physical filesystem completion. A batch
 publishes policy and queues the desired limit; the existing Worker can still owe its reply while an
@@ -369,26 +369,25 @@ input to the production timer, not a new clock, scheduling sleep or forced tick.
 The prepaid-compute cases observe the ordinary timer through a test-owned weak usage flusher,
 registered before invocation. It reports the exact active window ID, so startup flushes cannot
 masquerade as the parked invocation's check. Await that window's initial pre-wait flush, its real
-post-wake flush, then the next pre-wait flush and lifecycle FIFO drainage. The post-wake flush alone
+post-wake flush, then its correlated completed `monthly_checked` receipt. The post-wake flush alone
 precedes the capacity read and is insufficient. Initial readiness and post-wake checking retain
 their original bounds; the unchanged whole-test bound includes waiting for real cadence.
 
-A temporary existing capacity watch starts before invocation and must remain unchanged. Its extra
-reader is explicit while alive and is dropped before the original monitor-only/final-zero checks.
+A temporary existing capacity watch starts before invocation and must remain unchanged. Drop it
+before physical cleanup. Exact receiver counts belong to the colocated owned-window close test,
+which holds the monitor join and checks the final receiver drop after close completes.
 The native prepaid generation, no false stop, later authoritative compute exhaustion, typed result,
 fuel refund, disabled meters and physical cleanup stay strict. Actual-mode stored prefixes survive
-stop and recovery. Precise cadence remains on the actual paused-Tokio primitive tests. This adds no
-runtime field, event or timer interface. Both native modes and the small real-timer/tail composition
-batch pass, as do scoped strict lint and formatting.
+stop and recovery. Precise cadence remains on the actual paused-Tokio primitive tests. The ordinary
+`monthly_checked` diagnostic follows the settled-capacity read; it does not control the timer.
 
-The matching scripted-storage cases reuse that same test-owned flusher. Observe the exact
+The matching managed-XFS storage cases reuse that same test-owned flusher. Observe the exact
 active window's initial pre-wait and actual post-wake callbacks, then require the original exact
 acceptance on the unchanged revision within its existing proposal bound. A temporary capacity watch
-must remain unchanged and is dropped before final subscription checks. This does not replace the
+must remain unchanged and is dropped before physical cleanup. This does not replace the
 real timer with a policy update. Keep opposite-class availability, exact outcomes, overshoot and
 disabled-meter accounting, closed-generation sampling, physical release and ordinary recovery.
-Stored prefixes use the actual agent mode. The matching/nonmatching matrix, compute/retry/tail
-composition, scoped strict lint, formatting and assertion audit pass for this consumer slice.
+Stored prefixes use the actual agent mode.
 
 The nonmatching-storage cases also remove their virtual clock, while retaining GOL-617's native
 applied-update plus completed-periodic-check conjunction. The shared test flusher carries window ID
@@ -447,9 +446,13 @@ coverage or native managed-XFS measurement.
 
 The monitor has no alternate test clock, Worker clock field or clock setter. Both builds use the same
 Tokio sleep. Per-export host matrices apply a real exhausted policy after their native peer, promise
-or RPC dependency establishes the wait. Positive storage accounting belongs to that newly applied
-revision. Only the matching storage cap changes. The scripted allocation is one GiB so a real short
-interval produces a positive whole-unit charge; it does not claim a native XFS allocation.
+or RPC dependency establishes the wait. Storage tests first write and sync a real one-MiB allocation
+through ManagedXfs, apply a healthy billing revision and require positive whole-unit usage at that
+exact revision. They then exhaust only the matching storage cap and require acceptance at the next
+exact revision. Immediate teardown can legitimately add no whole-unit usage at the exhausted
+revision. After physical cleanup, deliver queued whole and fractional settlements through a newly
+observed current-revision batch before checking that later batches add no usage. These cases run in
+the privileged managed-XFS suite; memory and compute cases remain in the ordinary suite.
 
 Keep exact original effects, keys, durable records, typed outcomes, refunds, disabled-meter zeros,
 physical release and reconstruction assertions. Shared native metering cases above retain real
@@ -477,17 +480,18 @@ invocation key and primary flag identify the call; its count is only a snapshot.
 `task.return` and the later idle-settlement predicate do not establish this boundary.
 
 Capture the diagnostic only in the integration binary, with exact fields and one-shot, token-safe
-interests. Retain the actual `OwnerExecution` before invoking the primary. Its read-only test count
-uses the existing primary tracker without exposing task registration. At the held HTTP chunk,
-require a live positive count; after cooperative retirement and physical cleanup, require zero on
-that same owner. Never substitute the event's sampled count for either live assertion.
+interests installed before invoking the primary. Require a positive root-completion count and a
+real held HTTP chunk. Keep peer response bytes withheld through quota acceptance, then require
+zero active tasks at the correlated "Guest call tail-work settlement completed" boundary before
+releasing those bytes. The idle predicate need not run while HTTP is pending. Neither receipt is
+a current-state getter; do not reconstruct current task counts from old events.
 
-The dual baseline compares these observations with the old returned tracker before deleting the
-Worker sender, observer methods and root-wrapper producer. The observer-free source keeps the
-ordinary tail deadline, Notify, acceptance and cleanup owners. Exact request and invocation identity,
-incomplete chunk history, one Suspend, accounting and receipts remain, with the complete stored
-prefix and no-Jump checks added. Separate producer-free capture/native, custom-suspension/real-timer
-regression, library, strict lint, production, formatting and browser checks pass.
+The primary-tracker getter, Worker sender, observer methods and root-wrapper producer are removed.
+The ordinary tail deadline, Notify, acceptance and cleanup owners remain. Exact request and
+invocation identity, incomplete chunk history, one Suspend, accounting, receipts, the complete
+stored prefix and no-Jump checks still apply. Scoped entity tests similarly subscribe before
+registration and joined cleanup to observe actual owner usage-producer counts at those boundaries,
+without exposing the private weak-flusher registry.
 
 ### Idle health with distinct success boundaries
 
@@ -682,11 +686,11 @@ never poll even a ready acquisition when a request already waits.
 
 The all-meters-off late-stop test subscribes in test code to the scheduler's existing exact queue
 event for its account and agent. The event follows actual enqueue. Await it after the external FIFO
-contender acquires capacity, then require the original loop's permit flag to be released before
+contender acquires capacity, then require the original permit's registered lifetime to close before
 issuing the later stop. This proves reacquisition without treating establishment as physical unload,
 calling a cleanup API that requires the loop to have stopped, or adding a Worker observer. The
-capture stores only active subscriptions and removes them before delivery. It adds no production
-instrumentation, scheduler branch or wait hook.
+queue capture stores only active subscriptions and removes them before delivery. The permit
+diagnostic closes after physical scheduler release; it does not add a scheduler wait hook.
 
 `entity_fence_keeps_attached_store_and_registration_until_the_body_exits` polls the real
 `EntityFence::drain` Pending with an attached EntitySlot and observable Store. Verify cancellation,
@@ -752,8 +756,8 @@ rejections and a later acceptance before removing the Worker transport.
 
 Use diagnostic window ID, fingerprint, attempt and generation for native same-window/replacement
 comparisons. The ID belongs to the actual window, not a test-side reconstruction of its Arc address.
-Colocated tests retain literal Arc matching. The read-only current-window snapshot remains separate
-from the removed observer field and producer. Missing or mismatched events fail the test; capture
+Colocated tests retain literal Arc matching. Subscribe before the action and require its exact
+transition receipt rather than reconstructing current state from the last event. Missing or mismatched events fail the test; capture
 must never create synthetic proposals or results.
 
 The monthly acceptance gate field, setter and pre-validation await producer are removed. Its existing
@@ -777,10 +781,10 @@ full batches before any Worker exists, then retains silent-I/O liveness and clea
 live-window stale-message delivery. `same_cached_worker_replaces_monthly_window_and_accepts_current_quota`
 keeps the cached owner, replaces its actual window/attempt/generation and accepts a current proposal.
 Old-target rejection belongs to the body predicate, not a fabricated old completion or late false ack.
-Its test-side acceptance subscription is installed after the old monitor joins and lifecycle FIFO drains,
+Its test-side acceptance subscription is installed after the old monitor joins,
 not filtered to discard old events. Retirement cases retain first-cause/history/cleanup facts without
-claiming particular late actor-message processing. The retry case remains a timer/rearm proof under
-its existing interrupt-lock hold, not a new watch or notification checkpoint.
+claiming particular late actor-message processing. Interrupt-lock retry is tested colocated with the
+actual lock and ordinary virtual Tokio periods, not a native Worker test hook.
 
 The service publishes applied monthly capacity and queues desired filesystem limits without waiting
 for physical application. A replay, terminal append or deletion hold can delay the existing Worker
@@ -788,7 +792,8 @@ reply, but cannot hold the batch or later refresh cadence. Subscribe and mark th
 seen before each controlled refresh; await a changed version and check exact capacity, revision,
 period, fuel generation, exhaustion and runtime/target identity. Watch version is not policy revision
 or refresh generation, and batch completion does not prove physical quota application. Drop the
-temporary reader before exact one-monitor/final-zero counts; two readers while it lives is explicit.
+temporary reader before physical cleanup. Exact monitor receiver counts are checked by the colocated
+owned-window close test, separately from native cleanup observations.
 Release real dependency holds and join physical cleanup separately. These are read-only dependency
 observations, not a new Worker interface.
 

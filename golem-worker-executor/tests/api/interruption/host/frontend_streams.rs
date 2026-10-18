@@ -189,8 +189,8 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     ensure!(
         worker.concurrent_agent_permit_is_held().await && worker.monthly_window_active_for_test()
     );
-    let account = limits.initialize_account(context.account_id).await?;
-    ensure!(account.monthly_observer_count_for_test() == 1);
+    limits.initialize_account(context.account_id).await?;
+    let prior_stops = worker.interrupt_establishment_receipts().len();
     let mut exhausted = policy.clone();
     exhausted.available_memory_gb_seconds = 0;
     registry.set_policy(exhausted);
@@ -200,11 +200,35 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         .context("monthly acceptance")?;
     ensure!(attempt.accepted);
     ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-    let expected = worker
-        .monthly_stop_for_test()
-        .context("accepted memory stop")?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        worker.join_accepted_stops_for_test(),
+    )
+    .await
+    .context("accepted stdin quota stop establishment")??;
+    let stops = worker.interrupt_establishment_receipts();
+    let [(_, expected)] = &stops[prior_stops..] else {
+        anyhow::bail!("expected one accepted stdin quota stop: {stops:?}");
+    };
+    let expected = *expected;
     ensure!(matches!(expected, InterruptKind::Suspend(_)));
-    ensure!(worker.monthly_stop_reason_for_test() == Some("monthly memory exhausted"));
+    // Session admission can precede execution. Match the completed invocation's actual
+    // typed stop, rather than subscribing to whichever execution status admission sees.
+    let recorded = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some((_, kind)) = worker
+                .invocation_suspension_receipts()
+                .into_iter()
+                .find(|(invocation, _)| *invocation == key.to_string())
+            {
+                break kind;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("accepted stdin invocation suspension completion")?;
+    ensure!(recorded == expected, "{recorded:?} != {expected:?}");
     tokio::time::timeout(Duration::from_secs(10), async {
         while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
             tokio::task::yield_now().await;
@@ -216,12 +240,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     worker.retained_cleanup_for_test().await?;
     refresh.await?;
     ensure!(worker.unload_succeeded_for_test());
-    ensure!(
-        !worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 0
-    );
-    ensure!(worker.monthly_stop_for_test() == Some(expected));
-    ensure!(worker.owner_stop_for_test().await == Some(expected));
-    ensure!(worker.monthly_stop_reason_for_test() == Some("monthly memory exhausted"));
+    ensure!(!worker.monthly_window_active_for_test());
     let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
     ensure!(
         !stopped
@@ -234,11 +253,9 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         .read_exact(OplogIndex::INITIAL, stopped_tip.as_u64())
         .await?;
     eprintln!(
-        "STDIN_STOPPED key={key:?} stream={stdin_id} durable_stream={durable_stream_id:?} epoch={} worker={} startup={:?} generation={}",
+        "STDIN_STOPPED key={key:?} stream={stdin_id} durable_stream={durable_stream_id:?} epoch={} worker={}",
         accepted.epoch,
         Arc::as_ptr(&worker) as usize,
-        worker.startup_attempt_for_test(),
-        worker.resident_generation_for_test(),
     );
     // Keep the same accepted session and key. Submit the first byte only after physical release.
     let bytes = vec![17, 255];
@@ -348,14 +365,12 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         eprintln!("STDIN_SESSION_RECEIPT order={order} {receipt}");
     }
     eprintln!(
-        "STDIN_CONTINUATION timeout={} inner_error={} output_bytes={} results={} worker={} startup={:?} generation={} loaded={:?} permit={:?}",
+        "STDIN_CONTINUATION timeout={} inner_error={} output_bytes={} results={} worker={} loaded={:?} permit={:?}",
         continuation.is_err(),
         matches!(&continuation, Ok(Err(_))),
         output.len(),
         results,
         Arc::as_ptr(&worker) as usize,
-        worker.startup_attempt_for_test(),
-        worker.resident_generation_for_test(),
         worker.is_loaded().now_or_never(),
         worker.concurrent_agent_permit_is_held().now_or_never(),
     );

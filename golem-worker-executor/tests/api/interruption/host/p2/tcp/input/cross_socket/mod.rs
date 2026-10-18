@@ -4,7 +4,11 @@ use super::*;
 use test_r::test;
 
 macro_rules! cross_case {
-    ($name:ident, $resource:ident, $mode:ident) => {
+    ($name:ident, Storage, $mode:ident) => {
+        cross_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+        $(#[$attr])*
         #[test]
         #[timeout("2m")]
         async fn $name(
@@ -42,12 +46,12 @@ cross_case!(
     Ephemeral
 );
 cross_case!(
-    durable_p2_cross_socket_splice_scripted_storage_quota,
+    durable_p2_cross_socket_splice_managed_xfs_storage_quota,
     Storage,
     Durable
 );
 cross_case!(
-    ephemeral_p2_cross_socket_splice_scripted_storage_quota,
+    ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota,
     Storage,
     Ephemeral
 );
@@ -103,6 +107,7 @@ async fn cross_socket_pending(
     );
     let mut refresh = None;
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
@@ -110,6 +115,9 @@ async fn cross_socket_pending(
         Arc::new(move |config| {
             config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
             config.limits.fuel_to_borrow = FUEL_BUDGET;
         }),
     )
@@ -176,15 +184,6 @@ async fn cross_socket_pending(
         Principal::anonymous(),
     )
     .await?;
-    let source_usage = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    if resource == Resource::Storage {
-        worker
-            .owner_runtime_resources()
-            .set_scripted_filesystem_usage_for_test(source_usage.clone());
-    }
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
@@ -229,6 +228,7 @@ async fn cross_socket_pending(
         let acquisitions = worker.permit_acquisitions_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none() && initial == runtime);
         ensure!(phase.state() == WaitState::Pending);
         ensure!(
@@ -239,7 +239,7 @@ async fn cross_socket_pending(
         if resource == Resource::Compute {
             ensure!(
                 initial.fuel_generation.is_some()
-                    && initial.fuel_generation == account.settled_fuel_generation_for_test()
+                    && !account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation)
             );
             ensure!(account.monthly_capacity_is_exhausted_for_test(mode));
             ensure!(
@@ -248,10 +248,8 @@ async fn cross_socket_pending(
             );
         }
         if resource == Resource::Storage {
-            source_usage.set(FilesystemUsage::Authoritative {
-                allocated_bytes: 1 << 30,
-                filesystem_objects: 1,
-            });
+            allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable)
+                .await?;
         }
         let mut exhausted = policy.clone();
         match resource {
@@ -266,7 +264,10 @@ async fn cross_socket_pending(
             .await
             .context("monthly proposal")?
             .context("acceptance observer closed")?;
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
+        ensure!(
+            attempt.proposal.policy_revision
+                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
+        );
         ensure!(
             attempt.proposal.period == initial.period
                 && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id
@@ -276,13 +277,16 @@ async fn cross_socket_pending(
         ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
         ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
+        ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(
-            matches!(signal, InterruptKind::Suspend(_))
-                && worker.monthly_stop_for_test() == Some(signal)
+            worker.selected_owner_failure_for_test().await
+                == Some(ToolOwnerFailureMetadata::Lifecycle)
         );
-        ensure!(worker.owner_stop_for_test().await == Some(signal));
         if resource == Resource::Compute {
-            ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
+            resource_events.assert_policy_advanced_after(
+                registry.current_limits().monthly_policy_revision,
+                initial.fuel_generation,
+            )?;
         }
         if resource == Resource::Storage {
             let other = if durable {
@@ -323,7 +327,6 @@ async fn cross_socket_pending(
             worker.unload_succeeded_for_test()
                 && worker.permit_acquisitions_for_test() == acquisitions
         );
-        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(!worker.monthly_window_active_for_test());
         ensure!(phase.state() == WaitState::Dropped);
         ensure!(
@@ -371,8 +374,7 @@ async fn cross_socket_pending(
                     .is_err()
             );
         }
-        let observations = source_usage.observations();
-        limits.run_batch_for_test().await;
+        flush_stopped_usage(&limits, &registry, resource).await?;
         let updates = registry.applied_updates();
         check_accounting(
             &updates[baseline_updates..],
@@ -383,7 +385,9 @@ async fn cross_socket_pending(
         )?;
         let settled_count = updates.len();
         limits.run_batch_for_test().await;
-        ensure!(source_usage.observations() == observations);
+        if resource == Resource::Storage {
+            assert_storage_deleted(&owned)?;
+        }
         for update in &registry.applied_updates()[settled_count..] {
             ensure!(
                 update.fuel_delta == 0

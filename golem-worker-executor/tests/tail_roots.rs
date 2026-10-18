@@ -12,6 +12,7 @@ test_r::inherit_test_dep!(Tracing);
 
 const TARGET: &str = "golem_worker_executor::worker::invocation";
 const MESSAGE: &str = "Guest call root completed; settling tail work";
+const SETTLED: &str = "Guest call tail-work settlement completed";
 type Key = (String, String);
 
 struct Interest {
@@ -19,17 +20,29 @@ struct Interest {
     send: oneshot::Sender<usize>,
 }
 
-#[derive(Clone, Default)]
-struct Collector(Arc<Mutex<HashMap<Key, Interest>>>);
+#[derive(Clone)]
+struct Collector(Arc<Mutex<HashMap<Key, Interest>>>, &'static str);
+
+impl Default for Collector {
+    fn default() -> Self {
+        Self(Arc::default(), MESSAGE)
+    }
+}
 
 fn collector() -> &'static Collector {
     static COLLECTOR: OnceLock<Collector> = OnceLock::new();
     COLLECTOR.get_or_init(Collector::default)
 }
 
+fn settled_collector() -> &'static Collector {
+    static COLLECTOR: OnceLock<Collector> = OnceLock::new();
+    COLLECTOR.get_or_init(|| Collector(Arc::default(), SETTLED))
+}
+
 pub fn layer() -> Box<dyn Layer<Registry> + Send + Sync> {
     collector()
         .clone()
+        .and_then(settled_collector().clone())
         .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
             metadata.is_event() && metadata.target() == TARGET
         }))
@@ -87,9 +100,13 @@ impl Collector {
 }
 
 /// Observes actual Rust root completion, not guest task.return or the idle settlement predicate.
-/// The count is a snapshot; live tail retirement must read the real owner tracker separately.
+/// The count is a snapshot; retirement is observed at the later settlement boundary.
 pub fn root_returned(owner: &OwnedAgentId, key: &IdempotencyKey) -> Subscription {
     collector().subscribe((owner.to_string(), key.to_string()))
+}
+
+pub fn tail_settled(owner: &OwnedAgentId, key: &IdempotencyKey) -> Subscription {
+    settled_collector().subscribe((owner.to_string(), key.to_string()))
 }
 
 #[derive(Default)]
@@ -137,7 +154,7 @@ impl<S: tracing::Subscriber> Layer<S> for Collector {
         }
         let mut fields = Fields::default();
         event.record(&mut fields);
-        if fields.message.as_deref() != Some(MESSAGE) || fields.primary != Some(true) {
+        if fields.message.as_deref() != Some(self.1) || fields.primary != Some(true) {
             return;
         }
         if let (Some(owner), Some(key), Some(active)) = (fields.owner, fields.key, fields.active)
@@ -210,4 +227,24 @@ fn old_root_subscription_drop_keeps_its_replacement(_tracing: &Tracing) {
     assert!(collector.0.lock().unwrap().contains_key(&key));
     tracing::dispatcher::with_default(&dispatch, || emit("owner", "key", true, 2));
     assert_eq!(replacement.receive.try_recv(), Ok(2));
+}
+
+#[test]
+fn tail_settlement_capture_ignores_root_and_checks(_tracing: &Tracing) {
+    let collector = Collector(Arc::default(), SETTLED);
+    let mut subscription = collector.subscribe(("owner".into(), "key".into()));
+    let subscriber = tracing_subscriber::registry().with(collector);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::debug!(target: TARGET, owner_id = "owner", idempotency_key = "key", primary = true,
+            active_tail_tasks = 0u64, "Guest call tail-work settlement check");
+        tracing::debug!(target: TARGET, owner_id = "owner", idempotency_key = "key", primary = true,
+            active_tail_tasks = 2u64, "Guest call root completed; settling tail work");
+        assert!(matches!(
+            subscription.receive.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        tracing::debug!(target: TARGET, owner_id = "owner", idempotency_key = "key", primary = true,
+            active_tail_tasks = 3u64, "Guest call tail-work settlement completed");
+        assert_eq!(subscription.receive.try_recv(), Ok(3));
+    });
 }

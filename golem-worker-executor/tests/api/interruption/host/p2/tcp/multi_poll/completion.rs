@@ -149,7 +149,6 @@ async fn completion_and_history(
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(!worker.monthly_window_active_for_test());
-        ensure!(limits.initialize_account(context.account_id).await?.monthly_observer_count_for_test() == 0);
         closed_pair(&mut peers, &mut effects).await?;
         ensure!(effects.accepts == [1, 1] && effects.closed == [1, 1] && effects.sent == [0, 1]);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;

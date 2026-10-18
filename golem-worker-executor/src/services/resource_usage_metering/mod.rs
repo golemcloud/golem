@@ -61,93 +61,6 @@ pub(crate) trait FilesystemUsageReader: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>;
 }
 
-#[cfg(feature = "test-utils")]
-type ScriptedObservationSignals = (
-    tokio_util::sync::CancellationToken,
-    tokio_util::sync::CancellationToken,
-);
-
-/// Scripted allocation observations for Worker tests, not native filesystem quota evidence.
-#[cfg(feature = "test-utils")]
-#[derive(Clone)]
-pub struct ScriptedFilesystemUsageForTest {
-    value: Arc<Mutex<FilesystemUsage>>,
-    observations: Arc<AtomicU64>,
-    next_observation: Arc<Mutex<Option<ScriptedObservationSignals>>>,
-}
-
-#[cfg(feature = "test-utils")]
-pub struct ScriptedFilesystemObservationBlockForTest {
-    started: tokio_util::sync::CancellationToken,
-    released: tokio_util::sync::CancellationToken,
-}
-
-#[cfg(feature = "test-utils")]
-impl ScriptedFilesystemObservationBlockForTest {
-    pub async fn wait_started(&self) {
-        self.started.cancelled().await;
-    }
-}
-
-#[cfg(feature = "test-utils")]
-impl Drop for ScriptedFilesystemObservationBlockForTest {
-    fn drop(&mut self) {
-        self.released.cancel();
-    }
-}
-
-#[cfg(feature = "test-utils")]
-impl ScriptedFilesystemUsageForTest {
-    pub fn new(value: FilesystemUsage) -> Self {
-        Self {
-            value: Arc::new(Mutex::new(value)),
-            observations: Arc::new(AtomicU64::new(0)),
-            next_observation: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    pub fn set(&self, value: FilesystemUsage) {
-        *self.value.lock().unwrap() = value;
-    }
-
-    pub fn observations(&self) -> u64 {
-        self.observations.load(Ordering::Acquire)
-    }
-
-    /// Hold one scripted allocation read until the returned guard is dropped.
-    pub fn block_next_observation(&self) -> ScriptedFilesystemObservationBlockForTest {
-        let started = tokio_util::sync::CancellationToken::new();
-        let released = tokio_util::sync::CancellationToken::new();
-        let mut next = self.next_observation.lock().unwrap();
-        assert!(next.is_none(), "a scripted observation is already queued");
-        *next = Some((started.clone(), released.clone()));
-        ScriptedFilesystemObservationBlockForTest { started, released }
-    }
-
-    pub(crate) fn source(self) -> FilesystemUsageSource {
-        FilesystemUsageSource::new(Arc::new(self))
-    }
-}
-
-#[cfg(feature = "test-utils")]
-impl FilesystemUsageReader for ScriptedFilesystemUsageForTest {
-    fn observe(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>
-    {
-        Box::pin(async move {
-            let blocked = self.next_observation.lock().unwrap().take();
-            if let Some((started, released)) = blocked {
-                started.cancel();
-                released.cancelled().await;
-            }
-            let value = *self.value.lock().unwrap();
-            self.observations.fetch_add(1, Ordering::Release);
-            Ok(value)
-        })
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct FilesystemUsageSource {
     reader: Arc<dyn FilesystemUsageReader>,
@@ -215,8 +128,6 @@ pub(crate) struct ResourceUsageAccount {
     entry: Weak<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
     transition: Arc<Mutex<()>>,
-    #[cfg(feature = "test-utils")]
-    pub(crate) scripted_filesystem_usage: Option<ScriptedFilesystemUsageForTest>,
 }
 
 impl ResourceUsageAccount {
@@ -230,8 +141,6 @@ impl ResourceUsageAccount {
             entry: Arc::downgrade(&entry),
             transition: linear_memory.resource_transition(),
             linear_memory,
-            #[cfg(feature = "test-utils")]
-            scripted_filesystem_usage: None,
         }
     }
 

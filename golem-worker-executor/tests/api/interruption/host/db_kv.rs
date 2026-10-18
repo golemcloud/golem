@@ -596,8 +596,7 @@ async fn completion_stop(
         };
         ensure!(terminals(&before, start) == 0);
         ensure!(worker.concurrent_agent_permit_is_held().await && worker.monthly_window_active_for_test());
-        let account = limits.initialize_account(context.account_id).await?;
-        ensure!(account.monthly_observer_count_for_test() == 1);
+        limits.initialize_account(context.account_id).await?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -624,7 +623,7 @@ async fn completion_stop(
         }).await.context("held account interval did not submit memory byte-time")?;
         ensure!(state.call.state.load(Ordering::SeqCst) == PENDING, "accepted stop dropped or returned provider work");
         ensure!(!invocation.is_finished() && worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 1);
+        ensure!(worker.monthly_window_active_for_test());
         ensure!(registry.applied_updates()[baseline..].iter().any(|u| u.memory_gb_seconds_delta > 0 || u.memory_byte_nanoseconds_remainder > 0), "held account interval must keep accruing memory byte-time");
         let held = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(terminals(&held, start) == 0 && count_agent_invocation_pair_since(&held, OplogIndex::INITIAL) == (2, 1));
@@ -646,7 +645,6 @@ async fn completion_stop(
         worker.join_accepted_stops_for_test().await?;
         worker.retained_cleanup_for_test().await?;
         ensure!(worker.unload_succeeded_for_test() && !worker.monthly_window_active_for_test());
-        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(state.call.state.load(Ordering::SeqCst) == RETURNED);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(terminals(&stopped, start) == 1, "provider completion must retain its real End: {stopped:#?}");

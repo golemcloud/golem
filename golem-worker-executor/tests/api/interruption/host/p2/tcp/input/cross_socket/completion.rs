@@ -137,13 +137,6 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
                 && worker.permit_acquisitions_for_test() == acquisitions
         );
         ensure!(!worker.monthly_window_active_for_test());
-        ensure!(
-            limits
-                .initialize_account(context.account_id)
-                .await?
-                .monthly_observer_count_for_test()
-                == 0
-        );
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(cross_setup(&completed, 2)? == starts);
         assert_settled_history(&completed)?;

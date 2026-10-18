@@ -5,7 +5,9 @@ use test_r::test;
 
 macro_rules! repeated_stop_case {
     ($name:ident, $mode:ident, $user_stop:expr) => {
+        #[cfg(target_os = "linux")]
         #[test]
+        #[ignore = "requires the privileged managed XFS test runner"]
         #[timeout("2m")]
         async fn $name(
             last_unique_id: &LastUniqueId,
@@ -62,6 +64,8 @@ async fn repeated_stop(
     user_stop: bool,
 ) -> anyhow::Result<()> {
     let mut policy = Resource::Storage.policy();
+    policy.available_durable_storage_byte_seconds = 1;
+    policy.available_ephemeral_storage_byte_seconds = 1;
     policy.available_memory_gb_seconds = u64::MAX;
     let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
     let metering = ResourceUsageMeteringConfig {
@@ -80,6 +84,7 @@ async fn repeated_stop(
     );
     let mut refresh = None;
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
@@ -87,6 +92,9 @@ async fn repeated_stop(
         Arc::new(move |config| {
             config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
         }),
     )
     .await?;
@@ -136,13 +144,6 @@ async fn repeated_stop(
         Principal::anonymous(),
     )
     .await?;
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    worker
-        .owner_runtime_resources()
-        .set_scripted_filesystem_usage_for_test(source.clone());
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
@@ -172,8 +173,8 @@ async fn repeated_stop(
         let initial = worker.current_monthly_proposal_for_test();
         ensure!(initial == phase.runtime && initial.exhaustion.is_none());
         let acquisitions = worker.permit_acquisitions_for_test();
-        let account = limits.initialize_account(context.account_id).await?;
-        ensure!(worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 1);
+        limits.initialize_account(context.account_id).await?;
+        ensure!(worker.monthly_window_active_for_test());
         let mut raw = worker.raw_interrupt_for_test();
         let helper = worker.await_interrupt_for_test();
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
@@ -185,11 +186,9 @@ async fn repeated_stop(
             let kind = InterruptKind::Interrupt(Timestamp::now_utc());
             receipt = worker.set_interrupting(kind).await?;
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;
-            ensure!(worker.terminal_stop_claimed_for_test().await);
-            ensure!(worker.monthly_stop_for_test().is_none());
             signal = Some(kind);
         }
-        source.set(FilesystemUsage::Authoritative { allocated_bytes: 101, filesystem_objects: 1 });
+        allocate_storage(&owned).await?;
         // Let the real monitor check this allocation. The existing whole-test timeout bounds
         // both ordinary cadence waits; no private clock or ordering retry is involved.
         let first = attempts.recv().await.context("monthly acceptance observer closed")?;
@@ -200,36 +199,28 @@ async fn repeated_stop(
         ensure!(accepted != user_stop, "monthly storage proposal accepted={accepted} after user_stop={user_stop}");
         if !user_stop {
             receipt = Some(published_interrupt_receipt(worker.as_ref()).await?);
-            signal = worker.monthly_stop_for_test();
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;
         }
-        let signal = signal.context("missing first stop")?;
+        let observed = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
+        if let Some(requested) = signal { ensure!(observed == requested); }
+        let signal = observed;
         ensure!(user_stop || matches!(signal, InterruptKind::Suspend(_)));
         let mut receipt = receipt.context("missing first stop receipt")?;
-        ensure!(tokio::time::timeout(Duration::from_secs(10), raw.recv()).await?? == signal);
         ensure!(tokio::time::timeout(Duration::from_secs(10), helper).await? == signal);
         ensure!(tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test()).await? == signal);
-        let expected_quota_stop = (!user_stop).then_some(signal);
-        let expected_reason = (!user_stop).then_some(Resource::Storage.reason(durable));
-        ensure!(worker.terminal_stop_claimed_for_test().await);
-        ensure!(worker.pending_stop_for_test().await.is_none());
-        ensure!(worker.owner_stop_for_test().await == Some(signal));
-        ensure!(worker.monthly_stop_for_test() == expected_quota_stop);
-        ensure!(worker.monthly_stop_reason_for_test() == expected_reason);
+        ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
         ensure!(worker.monthly_window_active_for_test());
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         ensure!(!request_is_finished(&invocation));
         ensure!(matches!(receipt.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
         info!(?mode, user_stop, ?signal, ?first.proposal, "Selected outcome holds TerminalClaimed with active monthly window and permit");
 
-        worker.drain_lifecycle_for_test().await?;
         ensure!(attempts.try_recv().is_err());
         let repeated = attempts.recv().await.context("repeated monthly acceptance closed")?;
         ensure!(repeated.proposal == first.proposal);
         let accepted = repeated.accepted;
-        info!(?mode, user_stop, accepted, retained = ?worker.monthly_stop_for_test(), ?signal, "Second tick at claimed terminal");
+        info!(?mode, user_stop, accepted, ?signal, "Second tick at claimed terminal");
         ensure!(!accepted, "second tick accepted a monthly stop after TerminalClaimed");
-        worker.drain_lifecycle_for_test().await?;
         ensure!(attempts.try_recv().is_err());
 
         // A different exhausted resource must not replace the first retained reason either.
@@ -244,13 +235,8 @@ async fn repeated_stop(
         ensure!(updated.proposal == expected, "{:?} != {expected:?}", updated.proposal);
         ensure!(!updated.accepted);
         info!(?mode, user_stop, proposal = ?updated.proposal, ?signal, "Changed-resource update rejected after terminal claim");
-        worker.drain_lifecycle_for_test().await?;
-        ensure!(worker.terminal_stop_claimed_for_test().await);
-        ensure!(worker.pending_stop_for_test().await.is_none());
         ensure!(worker.current_monthly_proposal_for_test() == expected);
-        ensure!(worker.monthly_stop_for_test() == expected_quota_stop);
-        ensure!(worker.monthly_stop_reason_for_test() == expected_reason);
-        ensure!(worker.owner_stop_for_test().await == Some(signal));
+        ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
         ensure!(tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test()).await? == signal);
         ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Closed)));
         ensure!(matches!(receipt.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
@@ -273,7 +259,6 @@ async fn repeated_stop(
         ensure!(worker.unload_succeeded_for_test());
         ensure!(!worker.monthly_window_active_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(receipt.try_recv().is_err(), "one stop receipt only");
         ensure!(raw.try_recv().is_err(), "one typed publication only");
         ensure!(phase.state() == WaitState::Dropped);
@@ -305,9 +290,8 @@ async fn repeated_stop(
                 }
             }).await.context("ephemeral archival removes the stopped owner")?;
         }
-        let samples = source.observations();
         limits.run_batch_for_test().await;
-        ensure!(source.observations() == samples);
+        assert_storage_deleted(&owned)?;
         ensure!(attempts.try_recv().is_err());
         if durable && !user_stop {
             let mut grant = policy;

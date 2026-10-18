@@ -1,8 +1,8 @@
 use super::*;
 use crate::monthly_acceptance::Acceptance;
+use crate::native_waits::WindowReceipt;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
-use golem_worker_executor::worker::MonthlyProposalForTest;
 use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use test_r::test;
@@ -74,7 +74,7 @@ pub(super) fn observe_usage(
 
 pub(super) async fn usage_flushes(
     flushes: &mut mpsc::UnboundedReceiver<(u64, u64)>,
-    proposal: MonthlyProposalForTest,
+    proposal: WindowReceipt,
     count: usize,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -92,8 +92,8 @@ pub(super) async fn usage_flushes(
 }
 
 pub(super) fn exhausted_proposal(
-    initial: MonthlyProposalForTest,
-    observed: MonthlyProposalForTest,
+    initial: WindowReceipt,
+    observed: WindowReceipt,
 ) -> anyhow::Result<()> {
     let mut expected = initial;
     expected.policy_revision += 1;
@@ -118,29 +118,37 @@ pub(super) async fn entry_count(
     intercepted: &OplogEntry,
     expected: usize,
 ) -> anyhow::Result<()> {
-    worker
-        .commit_oplog_and_update_state(CommitLevel::Always)
-        .await?;
-    let entries = worker
-        .oplog()
-        .read_exact(
-            OplogIndex::INITIAL,
-            worker.oplog().current_oplog_index().await.as_u64(),
-        )
-        .await?;
     // Raw oplog timestamps have millisecond precision on persistence.
     let persisted = intercepted.clone().rounded();
-    let count = entries
-        .values()
-        .cloned()
-        .map(OplogEntry::rounded)
-        .filter(|entry| entry == &persisted)
-        .count();
-    ensure!(
-        count == expected,
-        "intercepted GrowMemory append count {count}, expected {expected}: {intercepted:?}"
-    );
-    Ok(())
+    tokio::time::timeout(STOP_BOUND, async {
+        loop {
+            worker
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
+            let entries = worker
+                .oplog()
+                .read_exact(
+                    OplogIndex::INITIAL,
+                    worker.oplog().current_oplog_index().await.as_u64(),
+                )
+                .await?;
+            let count = entries
+                .values()
+                .cloned()
+                .map(OplogEntry::rounded)
+                .filter(|entry| entry == &persisted)
+                .count();
+            ensure!(
+                count <= expected,
+                "intercepted GrowMemory append count {count}, expected {expected}: {intercepted:?}"
+            );
+            if count == expected {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?
 }
 
 pub(super) async fn physical_cleanup(worker: &Arc<Worker<Context>>) -> anyhow::Result<()> {

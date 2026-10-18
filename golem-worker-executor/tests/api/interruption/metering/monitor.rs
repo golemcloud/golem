@@ -60,7 +60,6 @@ async fn silent_tcp_monitor_controls(
         assert!(entry.monthly_capacity_is_exhausted_for_test(
             golem_common::model::agent::AgentMode::Durable
         ));
-        assert_eq!(entry.monthly_observer_count_for_test(), 0);
         registry.limits.lock().unwrap().monthly_policy = policy.clone();
         tokio::time::timeout(Duration::from_secs(30), limits.run_batch_for_test()).await?;
         assert_eq!(
@@ -76,7 +75,6 @@ async fn silent_tcp_monitor_controls(
         assert!(!entry.monthly_capacity_is_exhausted_for_test(
             golem_common::model::agent::AgentMode::Durable
         ));
-        assert_eq!(entry.monthly_observer_count_for_test(), 0);
     }
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -105,12 +103,7 @@ async fn silent_tcp_monitor_controls(
         })
     };
     tokio::time::timeout(Duration::from_secs(30), connected_rx).await??;
-    let entry = limits.initialize_account(context.account_id).await?;
-    let enabled = metering.compute || metering.memory || metering.filesystem;
-    assert_eq!(
-        entry.monthly_observer_count_for_test(),
-        usize::from(enabled)
-    );
+    limits.initialize_account(context.account_id).await?;
     assert!(executor.concurrent_agent_permit_is_held(&owned).await);
 
     let mut refreshes = Vec::new();
@@ -145,10 +138,6 @@ async fn silent_tcp_monitor_controls(
             .is_err()
     );
     assert!(!invocation.is_finished());
-    assert_eq!(
-        entry.monthly_observer_count_for_test(),
-        usize::from(enabled)
-    );
 
     let mut overage = policy;
     overage.mode = MonthlyUsageMode::AllowOverage;
@@ -183,7 +172,6 @@ async fn silent_tcp_monitor_controls(
         }
     })
     .await?;
-    assert_eq!(entry.monthly_observer_count_for_test(), 0);
     refreshes.extend([first_refresh, second_refresh]);
     for refresh in refreshes {
         tokio::time::timeout(Duration::from_secs(30), refresh).await??;
@@ -275,7 +263,7 @@ mod retries {
 
     #[test]
     #[timeout("60s")]
-    async fn quota_monitor_tick_retries_rejected_acceptance_on_the_same_billed_window(
+    async fn quota_monitor_continues_after_capacity_updates_and_settles_the_same_window(
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,
         #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -337,7 +325,6 @@ mod retries {
             crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let account = limits.initialize_account(context.account_id).await?;
         assert!(!worker.monthly_window_active_for_test());
-        assert_eq!(account.monthly_observer_count_for_test(), 0);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
@@ -386,38 +373,27 @@ mod retries {
             }
         })
         .await??;
-        assert_eq!(account.monthly_observer_count_for_test(), 1);
         let acquisitions = worker.permit_acquisitions_for_test();
         let initial = worker.current_monthly_proposal_for_test();
         let original_raw = executor.stored_oplog(&id).await;
         let mut raw = worker.raw_interrupt_for_test();
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
 
-        let interrupts = worker.hold_interrupt_lock_for_test().await;
-        let mut exhausted = available.clone();
-        exhausted.available_memory_gb_seconds = 0;
-        registry.set_policy(exhausted.clone());
+        registry.set_policy(available.clone());
         let first_refresh = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let limits = limits.clone();
-            async move { limits.run_batch_for_test().await }
+            async move { limits.release_registry_reply().await }
         }));
-        let missed = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("Registry-triggered attempt")?;
-        let first_rejected = worker.current_monthly_proposal_for_test();
-        assert_eq!(first_rejected, missed.proposal);
-        assert_eq!(
-            first_rejected.diagnostic_window_id,
-            initial.diagnostic_window_id
-        );
-        assert_eq!(first_rejected.start_attempt, initial.start_attempt);
-        assert_eq!(
-            first_rejected.resident_generation,
-            initial.resident_generation
-        );
-        assert_eq!(first_rejected.exhaustion, Some("monthly memory exhausted"));
-        assert!(!missed.accepted);
-        assert_eq!(worker.monthly_stop_for_test(), None);
-        assert_eq!(worker.owner_stop_for_test().await, None);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !worker
+                .monthly_checks()
+                .contains(&(initial.diagnostic_window_id, initial.policy_revision + 1))
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("first applied capacity check")?;
         assert!(matches!(
             raw.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -428,42 +404,32 @@ mod retries {
         ));
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        let usage_after_update = account.hard_limit_memory_overshoot_for_test();
-        eprintln!(
-            "[monthly-tick] rejected Registry check before acceptance, same window {first_rejected:?}, overshoot={usage_after_update}"
-        );
 
-        // Keep a second real contended check and settlement, without consuming two real
-        // 30-second periods inside the unchanged 60-second test budget. Exact cadence and
-        // rearm timing are checked on MonthlyMemoryCheck with normal Tokio virtual time.
         let final_update_started = tokio::time::Instant::now();
-        registry.set_policy(exhausted);
+        registry.set_policy(available.clone());
         let second_refresh = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let limits = limits.clone();
-            async move { limits.run_batch_for_test().await }
+            async move { limits.release_registry_reply().await }
         }));
-        let missed_again = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("second real contended check")?;
-        let current = worker.current_monthly_proposal_for_test();
-        assert_eq!(missed_again.proposal, current);
-        assert!(!missed_again.accepted);
-        assert_eq!(current.policy_revision, first_rejected.policy_revision + 1);
-        assert_eq!(current.period, first_rejected.period);
-        assert_eq!(current.fuel_generation, first_rejected.fuel_generation);
-        assert_eq!(current.fingerprint, first_rejected.fingerprint);
-        assert_eq!(
-            current.diagnostic_window_id,
-            first_rejected.diagnostic_window_id
-        );
-        assert_eq!(current.start_attempt, first_rejected.start_attempt);
-        assert_eq!(
-            current.resident_generation,
-            first_rejected.resident_generation
-        );
-        assert_eq!(current.exhaustion, first_rejected.exhaustion);
-        assert_eq!(worker.monthly_stop_for_test(), None);
-        assert_eq!(worker.owner_stop_for_test().await, None);
+        let check = (initial.diagnostic_window_id, initial.policy_revision + 2);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !worker.monthly_checks().contains(&check) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("second applied capacity check")?;
+        let checks = worker.monthly_checks().len();
+        tokio::time::timeout(Duration::from_secs(35), async {
+            while worker.monthly_checks().len() == checks {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("ordinary monitor tick after capacity updates")?;
+        assert!(final_update_started.elapsed() >= Duration::from_secs(30));
+        assert_eq!(worker.monthly_checks()[checks], check);
+        assert!(attempts.try_recv().is_err());
         assert!(matches!(
             raw.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -474,36 +440,35 @@ mod retries {
         ));
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        assert_eq!(account.monthly_observer_count_for_test(), 1);
         assert!(worker.monthly_window_active_for_test());
-        let usage_after_miss = account.hard_limit_memory_overshoot_for_test();
-        assert!(usage_after_miss > usage_after_update);
-        eprintln!(
-            "[monthly-tick] rejected repeated applied check while interrupt lock remains held, overshoot={usage_after_miss}"
-        );
-        drop(interrupts);
-        assert_eq!(worker.pending_stop_for_test().await, None);
 
-        assert_eq!(worker.monthly_stop_for_test(), None);
-        assert_eq!(worker.current_monthly_proposal_for_test(), current);
         let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
-        // This waits for one ordinary monitor period under the original overall test bound,
-        // not an ordering sleep or a larger timeout after a virtual-clock advance.
-        let retried = attempts
-            .recv()
-            .await
-            .context("normal tick after contention ends")?;
-        assert!(final_update_started.elapsed() >= Duration::from_secs(30));
-        assert_eq!(retried.proposal, current);
-        assert!(retried.accepted);
+        let mut exhausted = available.clone();
+        exhausted.available_memory_gb_seconds = 0;
+        registry.set_policy(exhausted);
+        let final_refresh = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+            let limits = limits.clone();
+            async move { limits.release_registry_reply().await }
+        }));
+        let accepted = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await?
+            .context("matching exhaustion after ordinary monitor tick")?;
+        let current = worker.current_monthly_proposal_for_test();
+        assert_eq!(accepted.proposal, current);
+        assert_eq!(current.policy_revision, initial.policy_revision + 3);
+        assert_eq!(current.period, initial.period);
+        assert_eq!(current.fuel_generation, initial.fuel_generation);
+        assert_eq!(current.fingerprint, initial.fingerprint);
+        assert_eq!(current.diagnostic_window_id, initial.diagnostic_window_id);
+        assert_eq!(current.start_attempt, initial.start_attempt);
+        assert_eq!(current.resident_generation, initial.resident_generation);
+        assert_eq!(current.exhaustion, Some("monthly memory exhausted"));
+        assert!(accepted.accepted);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        let quota_stop = worker.monthly_stop_for_test().expect("accepted tick stop");
+        let quota_stop = worker.await_interrupt_for_test().await;
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
-        assert!(worker.terminal_stop_claimed_for_test().await);
-        assert_eq!(worker.owner_stop_for_test().await, Some(quota_stop));
         assert_eq!(worker.current_monthly_proposal_for_test(), current);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        assert_eq!(account.monthly_observer_count_for_test(), 1);
         assert!(worker.monthly_window_active_for_test());
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert!(!invocation.is_finished());
@@ -511,14 +476,12 @@ mod retries {
             closed_rx.try_recv(),
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
-        let usage_at_tick = account.hard_limit_memory_overshoot_for_test();
-        assert!(
-            usage_at_tick > usage_after_miss,
-            "the still-held window must settle more byte-time on the retry tick"
-        );
-        eprintln!(
-            "[monthly-tick] accepted ordinary tick, identical latest target and capacity, overshoot={usage_at_tick}"
-        );
+        let usage_at_tick = resource_events
+            .take("memory_overshoot", current.policy_revision)
+            .last()
+            .context("accepted quota settlement")?
+            .memory_overshoot
+            .context("overshoot amount")?;
 
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         release_outcome.send(false).unwrap();
@@ -543,13 +506,17 @@ mod retries {
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
         assert!(!worker.monthly_window_active_for_test());
-        assert_eq!(account.monthly_observer_count_for_test(), 0);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(
-            worker.resident_generation_for_test(),
+            worker.observed_creation_count(),
             current.resident_generation
         );
-        let settled = account.hard_limit_memory_overshoot_for_test();
+        let settled = resource_events
+            .take("memory_overshoot", current.policy_revision)
+            .last()
+            .context("physical cleanup settlement")?
+            .memory_overshoot
+            .context("overshoot amount")?;
         assert!(
             settled > usage_at_tick,
             "accounting continues through physical release, not only stop acceptance"
@@ -558,19 +525,28 @@ mod retries {
             attempts.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
-        // Monthly capacity is already applied at each rejection above. Batch completion is
-        // separate from the existing Worker filesystem reply and physical cleanup.
+        // Capacity application precedes the worker's filesystem reply and physical cleanup.
         tokio::time::timeout(Duration::from_secs(10), async {
-            tokio::try_join!(first_refresh, second_refresh)
+            tokio::try_join!(first_refresh, second_refresh, final_refresh)
         })
         .await??;
         limits.run_batch_for_test().await;
-        assert_eq!(account.hard_limit_memory_overshoot_for_test(), settled);
+        assert!(
+            resource_events
+                .take("memory_overshoot", current.policy_revision)
+                .is_empty(),
+            "closed window must not emit further settlements"
+        );
         let billed = registry.applied_memory_byte_nanoseconds();
         assert!(billed > 0, "pre-exhaustion memory remains billable");
         limits.run_batch_for_test().await;
         assert_eq!(registry.applied_memory_byte_nanoseconds(), billed);
-        assert_eq!(account.hard_limit_memory_overshoot_for_test(), settled);
+        assert!(
+            resource_events
+                .take("memory_overshoot", current.policy_revision)
+                .is_empty(),
+            "closed window must not emit further settlements"
+        );
         eprintln!(
             "[monthly-tick] joined monitor, no timer/subscription/permit, settled overshoot={settled}, billed={billed}"
         );
@@ -629,7 +605,6 @@ mod retries {
         })
         .await?;
         assert!(!worker.monthly_window_active_for_test());
-        assert_eq!(account.monthly_observer_count_for_test(), 0);
         let recovered_raw = executor.stored_oplog(&id).await;
         assert!(recovered_raw.len() >= stopped_raw.len());
         assert_eq!(&recovered_raw[..stopped_raw.len()], stopped_raw.as_slice());

@@ -5,9 +5,6 @@ use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::services::resource_usage_metering::{
-    FilesystemUsage, ScriptedFilesystemUsageForTest,
-};
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 
@@ -60,12 +57,16 @@ pub(super) async fn pending_sleep(
         shutdown,
     );
     let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
     let executor = start_with_resource_limits_and_configure(
         deps,
         &context,
         limits.clone(),
         Arc::new(move |config| {
             config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
             config.limits.fuel_to_borrow = FUEL_BUDGET;
             // Isolate quota interruption from voluntary scheduling, without changing the guest clock.
             config.suspend.wait_suspend_grace = Duration::from_secs(300);
@@ -123,15 +124,6 @@ pub(super) async fn pending_sleep(
         Principal::anonymous(),
     )
     .await?;
-    let source = ScriptedFilesystemUsageForTest::new(FilesystemUsage::Authoritative {
-        allocated_bytes: 0,
-        filesystem_objects: 0,
-    });
-    if resource == Resource::Storage {
-        worker
-            .owner_runtime_resources()
-            .set_scripted_filesystem_usage_for_test(source.clone());
-    }
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut invocation = tokio::spawn({
@@ -169,6 +161,7 @@ pub(super) async fn pending_sleep(
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
         ensure!(!invocation.is_finished());
@@ -180,16 +173,14 @@ pub(super) async fn pending_sleep(
         tokio::time::timeout(STOP_BOUND, async {
             if resource == Resource::Compute {
                 ensure!(initial.fuel_generation.is_some());
-                ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
+                ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
                 ensure!(account.monthly_capacity_is_exhausted_for_test(mode), "Store must prepay the remaining fuel");
-                worker.drain_lifecycle_for_test().await?;
                 ensure!(attempts.try_recv().is_err(), "zero unreserved fuel cannot exhaust prepaid fuel");
                 ensure!(worker.current_monthly_proposal_for_test() == initial);
                 ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
             }
             if resource == Resource::Storage {
-                // Script authoritative allocation only, not deletion or window settlement.
-                source.set(FilesystemUsage::Authoritative { allocated_bytes: 1 << 30, filesystem_objects: 1 });
+                allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable).await?;
             }
             let mut exhausted = policy.clone();
             match resource {
@@ -201,7 +192,7 @@ pub(super) async fn pending_sleep(
             registry.set_policy(exhausted);
             let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
             let attempt = attempts.recv().await.context("acceptance observer closed")?;
-            ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
+            ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1 + u64::from(resource == Resource::Storage));
             ensure!(attempt.proposal.period == initial.period);
             ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
             ensure!(attempt.proposal.resident_generation == initial.resident_generation);
@@ -212,10 +203,9 @@ pub(super) async fn pending_sleep(
             ensure!(attempt.accepted);
             let signal = raw.recv().await?;
             ensure!(matches!(signal, InterruptKind::Suspend(_)));
-            ensure!(worker.monthly_stop_for_test() == Some(signal));
-            ensure!(worker.owner_stop_for_test().await == Some(signal));
+            ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
             if resource == Resource::Compute {
-                ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
+                resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
             }
             if resource == Resource::Storage {
                 let other = if durable { AgentMode::Ephemeral } else { AgentMode::Durable };
@@ -227,7 +217,6 @@ pub(super) async fn pending_sleep(
             if let Some(refresh) = refresh { refresh.await?; }
             ensure!(worker.unload_succeeded_for_test());
             ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-            ensure!(account.monthly_observer_count_for_test() == 0);
             ensure!(history::unix_nanos() < original.deadline, "quota stop must precede guest readiness");
             info!(?abi, ?resource, ?mode, ?signal, proposal = ?attempt.proposal,
                 stop_elapsed = ?stop_started.elapsed(), remaining_nanos = original.deadline - history::unix_nanos(),
@@ -259,8 +248,7 @@ pub(super) async fn pending_sleep(
             ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await??.is_err());
         }
         executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(5)).await?;
-        let observations = source.observations();
-        limits.run_batch_for_test().await;
+        flush_stopped_usage(&limits, &registry, resource).await?;
         let settled = registry.applied_updates();
         check_accounting(&settled, resource, durable, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
         let settled_count = settled.len();
@@ -276,9 +264,8 @@ pub(super) async fn pending_sleep(
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(source.observations() == observations, "closed generation cannot keep sampling");
+        if resource == Resource::Storage { assert_storage_deleted(&owned)?; }
         limits.run_batch_for_test().await;
         for update in &registry.applied_updates()[settled_count..] {
             ensure!(update.fuel_delta == 0 && update.memory_gb_seconds_delta == 0 && update.memory_byte_nanoseconds_remainder == 0
@@ -298,7 +285,7 @@ pub(super) async fn pending_sleep(
             executor.resume(&id, false).await?;
             let resumed = tokio::time::timeout(Duration::from_secs(5), &mut invocation).await.context("sleep must retain its expired original deadline, not start another duration")???;
             abi.check_result(resumed)?;
-            ensure!(worker.resident_generation_for_test() > initial.resident_generation);
+            ensure!(worker.observed_creation_count() > initial.resident_generation);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(history::sleep_record(&recovered, &key, abi, true)? == Some(original), "replay changed recorded now, duration or original wait identity");
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
@@ -312,11 +299,11 @@ pub(super) async fn pending_sleep(
                 worker.join_accepted_stops_for_test().await?;
                 worker.retained_cleanup_for_test().await
             }).await.context("idle eviction before completed clock replay")??;
-            let generation = worker.resident_generation_for_test();
+            let generation = worker.observed_creation_count();
             let fresh_key = IdempotencyKey::fresh();
             let healthy = tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "healthcheck", data_value!())).await??;
             ensure!(healthy.into_typed::<bool>()?);
-            ensure!(worker.resident_generation_for_test() > generation);
+            ensure!(worker.observed_creation_count() > generation);
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(history::sleep_record(&replayed, &key, abi, true)? == Some(original));
             history::invocation(&replayed, &fresh_key, 1)?;
@@ -362,7 +349,11 @@ mod p2 {
     use test_r::test;
 
     macro_rules! pending_case {
-        ($name:ident, $resource:ident, $mode:ident) => {
+        ($name:ident, Storage, $mode:ident) => {
+            pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        };
+        ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+            $(#[$attr])*
             #[test]
             #[timeout("2m")]
             async fn $name(
@@ -388,9 +379,9 @@ mod p2 {
     pending_case!(ephemeral_p2_sleep_memory_quota, Memory, Ephemeral);
     pending_case!(durable_p2_sleep_compute_quota_prepaid, Compute, Durable);
     pending_case!(ephemeral_p2_sleep_compute_quota_prepaid, Compute, Ephemeral);
-    pending_case!(durable_p2_sleep_scripted_storage_quota, Storage, Durable);
+    pending_case!(durable_p2_sleep_managed_xfs_storage_quota, Storage, Durable);
     pending_case!(
-        ephemeral_p2_sleep_scripted_storage_quota,
+        ephemeral_p2_sleep_managed_xfs_storage_quota,
         Storage,
         Ephemeral
     );
@@ -402,7 +393,11 @@ mod p3 {
     use test_r::test;
 
     macro_rules! pending_case {
-        ($name:ident, $resource:ident, $mode:ident) => {
+        ($name:ident, Storage, $mode:ident) => {
+            pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        };
+        ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+            $(#[$attr])*
             #[test]
             #[timeout("2m")]
             async fn $name(
@@ -428,9 +423,9 @@ mod p3 {
     pending_case!(ephemeral_p3_sleep_memory_quota, Memory, Ephemeral);
     pending_case!(durable_p3_sleep_compute_quota_prepaid, Compute, Durable);
     pending_case!(ephemeral_p3_sleep_compute_quota_prepaid, Compute, Ephemeral);
-    pending_case!(durable_p3_sleep_scripted_storage_quota, Storage, Durable);
+    pending_case!(durable_p3_sleep_managed_xfs_storage_quota, Storage, Durable);
     pending_case!(
-        ephemeral_p3_sleep_scripted_storage_quota,
+        ephemeral_p3_sleep_managed_xfs_storage_quota,
         Storage,
         Ephemeral
     );

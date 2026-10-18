@@ -36,8 +36,6 @@ mod lifecycle;
 mod lifecycle_tests;
 mod monthly_limits;
 mod outcome;
-#[cfg(feature = "test-utils")]
-pub use monthly_limits::MonthlyProposalForTest;
 pub mod owner_lane;
 pub(crate) mod owner_wallet;
 pub mod read_only_cache;
@@ -635,17 +633,6 @@ impl WorkerInstance {
         match self {
             Self::Deleting(deleting) => &deleting.runtime,
             instance => instance,
-        }
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    fn concurrent_agent_permit_is_held(&self) -> bool {
-        match self.deletion_runtime() {
-            Self::Running(running) => running.concurrent_agent_permit_held.load(Ordering::Acquire),
-            Self::Stopping(stopping) => stopping
-                .concurrent_agent_permit_held
-                .load(Ordering::Acquire),
-            _ => false,
         }
     }
 
@@ -2285,7 +2272,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Joins final cleanup after the caller has fenced and stopped the runtime. Unlike the
     /// bounded unload notification, success proves the owned filesystem deletion was verified.
     /// Must be called without lifecycle, cache, or metadata locks held.
-    pub(crate) async fn wait_for_unload_cleanup(&self) -> Result<(), WorkerExecutorError> {
+    pub async fn wait_for_unload_cleanup(&self) -> Result<(), WorkerExecutorError> {
         let instance = self.instance.lock().await;
         let cleanup = self.unload_cleanup.lock().unwrap().clone();
         let missing_cleanup_error = match instance.deletion_runtime() {
@@ -2301,10 +2288,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(error) = missing_cleanup_error {
             return Err(error);
         }
-        match cleanup {
+        let result = match cleanup {
             Some(cleanup) => cleanup.wait().await,
             None => Ok(()),
+        };
+        if let Some(resolved) = self.resolved.get() {
+            resolved.owner_runtime_resources.trace_usage_flushers(
+                &self.owned_agent_id,
+                if result.is_ok() {
+                    "cleanup_completed"
+                } else {
+                    "cleanup_failed"
+                },
+            );
         }
+        result
     }
 
     pub(crate) async fn ensure_created(
@@ -3019,6 +3017,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(meter) = linear_memory.meter_if_enabled() {
             self.owner_runtime_resources
                 .register_resource_usage_flusher(meter.usage_flusher());
+            self.owner_runtime_resources
+                .trace_usage_flushers(&self.owned_agent_id, "entity_registered");
         }
 
         Ctx::create(
@@ -4189,6 +4189,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> JoinHandle<Result<Option<Receiver<()>>, WorkerExecutorError>> {
         let worker = self.clone();
         let establishment = pending.establishment.clone();
+        let (interrupt_kind, interrupt_timestamp): (_, Option<prost_types::Timestamp>) =
+            match pending.kind {
+                InterruptKind::Interrupt(timestamp) => ("interrupt", Some(timestamp.into())),
+                InterruptKind::Suspend(timestamp) => ("suspend", Some(timestamp.into())),
+                InterruptKind::Restart => ("restart", None),
+                InterruptKind::Jump => ("jump", None),
+                InterruptKind::ShardLost => ("shard_lost", None),
+            };
+        debug!(
+            execution_event = "interrupt_establishment_started",
+            fingerprint = %self.get_initial_worker_metadata().fingerprint,
+            worker_shell = Arc::as_ptr(self) as usize as u64,
+            request_id = Arc::as_ptr(&establishment) as usize as u64,
+            interrupt_kind,
+            interrupt_seconds = interrupt_timestamp.as_ref().map(|timestamp| timestamp.seconds),
+            interrupt_nanos = interrupt_timestamp.as_ref().map(|timestamp| timestamp.nanos),
+            "Starting accepted interrupt establishment"
+        );
         let scope = self.release_scope();
         let receipt = scope.accepted_driver();
         tokio::spawn(async move {
@@ -4320,7 +4338,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn join_interrupt_establishment(&self) -> Result<(), WorkerExecutorError> {
+    /// Waits for all previously accepted interrupts to finish fencing and draining entity bodies.
+    /// This does not wait for the primary Store to unload or for final filesystem cleanup.
+    pub async fn join_interrupt_establishment(&self) -> Result<(), WorkerExecutorError> {
         let establishment = self.interrupt_establishment_tail.lock().unwrap().clone();
         establishment.wait().await;
         self.monthly_cleanup_failure().map_or(Ok(()), Err)
@@ -5813,7 +5833,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// A receiver of whether a terminal interrupt request waits for this worker.
-    pub(crate) fn terminal_interrupt(&self) -> tokio::sync::watch::Receiver<bool> {
+    pub fn terminal_interrupt(&self) -> tokio::sync::watch::Receiver<bool> {
         self.interrupt_signal.terminal()
     }
 
@@ -10284,8 +10304,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // drop the running worker, this signals to the invocation loop to start exiting.
                     // `stop()` consumes the RunningWorker and drops everything but
                     // its join handle, releasing its memory grant back to the gate.
-                    #[cfg(any(test, feature = "test-utils"))]
-                    let concurrent_agent_permit_held = running.concurrent_agent_permit_held.clone();
                     let run_loop_handle = running.stop(unload_request);
                     let notify = OneShotEvent::new();
                     crate::metrics::workers::dec_worker_memory_resident();
@@ -10293,8 +10311,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         notify: notify.clone(),
                         final_state,
                         pending_live_invocations,
-                        #[cfg(any(test, feature = "test-utils"))]
-                        concurrent_agent_permit_held,
                     });
                     StopResult::NeedsWaitForLoopExit {
                         run_loop_handle,
@@ -11288,7 +11304,11 @@ impl WaitingWorker {
                     %agent_id,
                     agent_type = %worker_trace.agent_type
                 ))
-                .await;
+                .await
+                .observe_owner(
+                    parent.initial_worker_metadata.fingerprint,
+                    Arc::as_ptr(&parent) as usize as u64,
+                );
             concurrent_agent_permit.observe_release(&release_scope);
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::ConcurrencySlot,
@@ -12651,25 +12671,7 @@ impl RunningWorker {
             linear_memory.clone(),
             Arc::clone(&parent.resource_entry),
         );
-        #[cfg(feature = "test-utils")]
-        let account = {
-            let mut account = account;
-            account.scripted_filesystem_usage = parent
-                .owner_runtime_resources
-                .scripted_filesystem_usage
-                .lock()
-                .unwrap()
-                .clone();
-            account
-        };
         let metering = parent.config().effective_resource_usage_metering();
-        #[cfg(feature = "test-utils")]
-        let metering = crate::services::golem_config::ResourceUsageMeteringConfig {
-            filesystem: metering.filesystem
-                || (parent.config().resource_usage_metering.filesystem
-                    && account.scripted_filesystem_usage.is_some()),
-            ..metering
-        };
         let reconstructing = match bind_configured_resource_usage_metering(
             created, account, metering,
         ) {
@@ -13347,8 +13349,6 @@ struct StoppingWorker {
     notify: OneShotEvent,
     final_state: FinalWorkerState,
     pending_live_invocations: PendingLiveInvocationDisposition,
-    #[cfg(any(test, feature = "test-utils"))]
-    concurrent_agent_permit_held: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -14586,7 +14586,6 @@ mod tests {
                 startup_failure: None,
             },
             pending_live_invocations: PendingLiveInvocationDisposition::Preserve,
-            concurrent_agent_permit_held: Arc::new(AtomicBool::new(false)),
         });
 
         merge_run_loop_failure(&mut instance, error);
@@ -14643,7 +14642,6 @@ mod tests {
             notify: OneShotEvent::new(),
             final_state: FinalWorkerState::Deleting,
             pending_live_invocations: PendingLiveInvocationDisposition::Fail,
-            concurrent_agent_permit_held: Arc::new(AtomicBool::new(false)),
         });
         assert!(runtime.retained_cleanup_failure().is_none());
 
