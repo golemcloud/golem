@@ -129,7 +129,7 @@ The public snippet tests type-check complete TypeScript and Effect examples agai
 ```shell
 # From sdks/ts/
 npx --yes pnpm@10.17.1 install --frozen-lockfile --ignore-scripts
-npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk exec rollup --failAfterWarnings -c
+npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk exec node --max-old-space-size=8192 ./node_modules/rollup/dist/bin/rollup --failAfterWarnings -c
 # From sdks/effect/
 npm ci --ignore-scripts
 npm run build

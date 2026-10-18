@@ -64,7 +64,7 @@ jobs:
         working-directory: sdks/ts
         run: |
           npx --yes pnpm@10.17.1 install --frozen-lockfile --ignore-scripts
-          npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk exec rollup --failAfterWarnings -c
+          npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk exec node --max-old-space-size=8192 ./node_modules/rollup/dist/bin/rollup --failAfterWarnings -c
 
       - name: Prepare in-tree Effect SDK
         working-directory: sdks/effect
