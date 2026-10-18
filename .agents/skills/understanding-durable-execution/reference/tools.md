@@ -93,6 +93,17 @@ or wallet cache in agent status. Each event carries its physical-prefix receipt 
 delivery, including deferral to retained Starts. Revision metadata preparation runs independently
 of delivery; Root installs initial files and metadata when it receives the update. Stale handles
 cannot publish into the replacement generation.
+
+Physical projections and Store-local preparations use `WalletCards`, a persistent ordered map of
+shared immutable card payloads. Cloning a retained prefix shares the tree; a membership edit copies
+only its search path, not the other cards. Unchanged-membership audits share the same tree. Pins
+validate all recorded IDs before removing excluded membership; they do not rebuild the retained
+subset. For N distinct installations with every prefix retained, card payload storage is O(N) and
+membership-node storage is O(N log N), rather than a full wallet per event. This bounds wallet-copy
+amplification, not total replay memory: retained events, pin ID lists and independent entity
+baselines still occupy their own storage. Receipts remain distinct physical-prefix evidence and
+retire at the existing delivery, invocation and entity-settlement boundaries.
+
 Config reads classify a key as local or secret only after durable-call resolution, including an
 incomplete call's live continuation. Classification captured before preparation can miss a new
 secret-hold requirement when an update changes the key's source.

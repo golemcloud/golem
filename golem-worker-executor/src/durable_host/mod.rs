@@ -185,7 +185,7 @@ use crate::worker::invocation::{
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{
-    AuthorityScopeInputs, CardEventBoundary, OwnerAuthoritySnapshot, WalletSnapshot,
+    AuthorityScopeInputs, CardEventBoundary, OwnerAuthoritySnapshot, WalletCards, WalletSnapshot,
 };
 use crate::worker::start_outcome::{self, BaselineRole, SnapshotRecoveryResult};
 use crate::worker::status::{StatusError, calculate_last_known_status_with_checkpoint};
@@ -1709,7 +1709,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         cards
             .iter()
             .filter(|(card_id, _)| !self.state.owner_revoked_card_ids.contains(card_id))
-            .map(|(_, card)| card)
+            .map(|(_, card)| card.as_ref())
     }
 
     fn authority_component_metadata(&self) -> &Component {
@@ -1727,10 +1727,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .snapshot()
                 .cards
                 .values()
-                .cloned()
+                .map(|card| card.as_ref().clone())
                 .collect()
         } else {
-            self.state.agent_wallet_cards.values().cloned().collect()
+            self.state
+                .agent_wallet_cards
+                .values()
+                .map(|card| card.as_ref().clone())
+                .collect()
         }
     }
 
@@ -1895,7 +1899,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .state
             .invocation_scope_root_cards
             .values()
-            .chain(cards.values())
+            .chain(cards.values().map(Arc::as_ref))
             .chain(
                 self.state
                     .inherited_invocation_scope
@@ -2418,7 +2422,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
         let expired_root_ids =
-            expired_wallet_card_ids_at(&self.state.invocation_scope_root_cards, Utc::now());
+            expired_wallet_card_ids_at(self.state.invocation_scope_root_cards.values(), Utc::now());
         if !expired_root_ids.is_empty() {
             self.apply_card_revoked_cascade(
                 self.entity_parent_start_index(),
@@ -6360,7 +6364,7 @@ impl InheritedInvocationScope {
     fn roots_expired(&self, now: DateTime<Utc>) -> bool {
         self.roots
             .as_ref()
-            .is_some_and(|roots| !expired_wallet_card_ids_at(roots, now).is_empty())
+            .is_some_and(|roots| !expired_wallet_card_ids_at(roots.values(), now).is_empty())
     }
 }
 
@@ -6430,13 +6434,13 @@ pub(crate) fn next_drainable_card_events(
 }
 
 pub(crate) fn add_wallet_card(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+    wallet: &mut WalletCards,
     generation: &mut u64,
     card: StoredCard,
 ) -> Result<bool, WorkerExecutorError> {
     let card_id = card.card_id();
     if let Some(existing) = wallet.get(&card_id) {
-        return if existing == &card {
+        return if existing.as_ref() == &card {
             Ok(false)
         } else {
             Err(WorkerExecutorError::runtime(format!(
@@ -6447,12 +6451,12 @@ pub(crate) fn add_wallet_card(
     *generation = generation
         .checked_add(1)
         .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
-    wallet.insert(card_id, card);
+    wallet.insert(card_id, Arc::new(card));
     Ok(true)
 }
 
 pub(crate) fn remove_wallet_card(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+    wallet: &mut WalletCards,
     generation: &mut u64,
     card_id: CardId,
 ) -> Result<bool, WorkerExecutorError> {
@@ -6467,7 +6471,7 @@ pub(crate) fn remove_wallet_card(
 }
 
 pub(crate) fn remove_wallet_cards(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+    wallet: &mut WalletCards,
     generation: &mut u64,
     card_ids: &[CardId],
 ) -> Result<bool, WorkerExecutorError> {
@@ -6479,28 +6483,30 @@ pub(crate) fn remove_wallet_cards(
         .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
 
     for card_id in card_ids {
-        wallet.remove(card_id);
+        if wallet.contains_key(card_id) {
+            wallet.remove(card_id);
+        }
     }
     *generation = next_generation;
     Ok(true)
 }
 
-fn expired_wallet_card_ids_at(
-    wallet: &BTreeMap<CardId, StoredCard>,
+fn expired_wallet_card_ids_at<'a>(
+    cards: impl IntoIterator<Item = &'a StoredCard>,
     now: DateTime<Utc>,
 ) -> Vec<CardId> {
-    wallet
-        .iter()
-        .filter_map(|(card_id, card)| {
+    cards
+        .into_iter()
+        .filter_map(|card| {
             card.expires_at()
                 .filter(|expires_at| *expires_at <= now)
-                .map(|_| *card_id)
+                .map(|_| card.card_id())
         })
         .collect()
 }
 
 pub(crate) fn apply_invocation_wallet_pin(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+    wallet: &mut WalletCards,
     wallet_id_hash: [u8; 32],
     generation: &mut u64,
     wallet_pin: InvocationWalletPin,
@@ -6531,21 +6537,35 @@ pub(crate) fn apply_invocation_wallet_pin(
         ));
     }
 
-    let mut pinned_wallet = BTreeMap::new();
-    for card_id in wallet_pin.pinned_card_ids {
-        let card = wallet.get(&card_id).cloned().ok_or_else(|| {
-            WorkerExecutorError::unexpected_oplog_entry(
+    // Validate the complete pin before changing membership. Retained prefixes share every
+    // unchanged node and payload; rebuilding the pinned map would copy all membership nodes.
+    if wallet
+        .keys()
+        .copied()
+        .eq(wallet_pin.pinned_card_ids.iter().copied())
+    {
+        *generation = wallet_pin.wallet_token.generation;
+        return Ok(false);
+    }
+    for card_id in &wallet_pin.pinned_card_ids {
+        if !wallet.contains_key(card_id) {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
                 "invocation wallet pin backed by replayed card definitions",
                 format!("pinned card {card_id} is missing from the replayed wallet"),
-            )
-        })?;
-        pinned_wallet.insert(card_id, card);
+            ));
+        }
     }
 
-    let membership_changed = wallet.keys().ne(pinned_wallet.keys());
-    *wallet = pinned_wallet;
+    let removed = wallet
+        .keys()
+        .filter(|id| wallet_pin.pinned_card_ids.binary_search(id).is_err())
+        .copied()
+        .collect::<Vec<_>>();
+    for card_id in &removed {
+        wallet.remove(card_id);
+    }
     *generation = wallet_pin.wallet_token.generation;
-    Ok(membership_changed)
+    Ok(!removed.is_empty())
 }
 
 pub(crate) fn adopt_recorded_wallet_generation(
@@ -6566,9 +6586,9 @@ pub(crate) fn adopt_recorded_wallet_generation(
 }
 
 pub(crate) fn replace_wallet_cards(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+    wallet: &mut WalletCards,
     generation: &mut u64,
-    replacement: BTreeMap<CardId, StoredCard>,
+    replacement: WalletCards,
 ) -> Result<bool, WorkerExecutorError> {
     let removed_ids = wallet
         .keys()
@@ -6594,9 +6614,10 @@ pub(crate) fn replace_wallet_cards(
     for card_id in removed_ids {
         wallet.remove(&card_id);
     }
-    for card in replacement.into_values() {
-        let card_id = card.card_id();
-        wallet.entry(card_id).or_insert(card);
+    for (card_id, card) in replacement {
+        if !wallet.contains_key(&card_id) {
+            wallet.insert(card_id, card);
+        }
     }
     *generation = next_generation;
     Ok(true)
@@ -8536,11 +8557,18 @@ mod tests {
         })
     }
 
+    fn wallet_cards(cards: impl IntoIterator<Item = (CardId, StoredCard)>) -> WalletCards {
+        cards
+            .into_iter()
+            .map(|(id, card)| (id, Arc::new(card)))
+            .collect()
+    }
+
     #[test]
     fn wallet_membership_helpers_bump_once_per_effective_change() {
         let card_id = CardId::new();
         let card = concrete_card(card_id);
-        let mut wallet = BTreeMap::new();
+        let mut wallet = WalletCards::new();
         let mut generation = 10;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
@@ -8567,7 +8595,7 @@ mod tests {
         let first = concrete_card(CardId::new());
         let second = concrete_card(CardId::new());
         let retained = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([
+        let mut wallet = wallet_cards([
             (first.card_id(), first.clone()),
             (second.card_id(), second.clone()),
             (retained.card_id(), retained.clone()),
@@ -8583,7 +8611,7 @@ mod tests {
             .unwrap()
         );
         assert_eq!(generation, 11);
-        assert_eq!(wallet, BTreeMap::from([(retained.card_id(), retained)]));
+        assert_eq!(wallet, wallet_cards([(retained.card_id(), retained)]));
 
         assert!(
             !remove_wallet_cards(
@@ -8599,7 +8627,7 @@ mod tests {
     #[test]
     fn wallet_cascade_removal_is_atomic_when_generation_is_exhausted() {
         let card = concrete_card(CardId::new());
-        let original_wallet = BTreeMap::from([(card.card_id(), card.clone())]);
+        let original_wallet = wallet_cards([(card.card_id(), card.clone())]);
         let mut wallet = original_wallet.clone();
         let mut generation = u64::MAX;
 
@@ -8631,7 +8659,7 @@ mod tests {
             Vec::new(),
             vec![Some(AgentVerb::View)],
         );
-        let original_wallet = BTreeMap::from([
+        let original_wallet = wallet_cards([
             (broad_floor.card_id(), broad_floor.clone()),
             (
                 independent_view_floor.card_id(),
@@ -8641,7 +8669,7 @@ mod tests {
         ]);
         let original_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            original_wallet.values(),
+            original_wallet.values().map(Arc::as_ref),
         );
         assert!(original_surface.authorize(&view).unwrap());
         assert!(!original_surface.authorize(&invoke).unwrap());
@@ -8658,7 +8686,7 @@ mod tests {
         );
         let live_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            live_wallet.values(),
+            live_wallet.values().map(Arc::as_ref),
         );
         assert_eq!(live_generation, 13);
         assert!(live_surface.authorize(&view).unwrap());
@@ -8677,7 +8705,7 @@ mod tests {
         adopt_recorded_wallet_generation(&mut replayed_generation, live_generation).unwrap();
         let replayed_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            replayed_wallet.values(),
+            replayed_wallet.values().map(Arc::as_ref),
         );
         assert_eq!(replayed_wallet, live_wallet);
         assert_eq!(replayed_generation, live_generation);
@@ -8706,7 +8734,7 @@ mod tests {
         );
         let released_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            released_wallet.values(),
+            released_wallet.values().map(Arc::as_ref),
         );
         assert_eq!(released_generation, 13);
         assert!(released_surface.authorize(&view).unwrap());
@@ -8716,7 +8744,7 @@ mod tests {
     #[test]
     fn wallet_generation_distinguishes_aba_membership_cycles() {
         let card = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::new();
+        let mut wallet = WalletCards::new();
         let mut generation = 0;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
@@ -8734,7 +8762,7 @@ mod tests {
     #[test]
     fn duplicate_wallet_delivery_does_not_bump_generation() {
         let card = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::new();
+        let mut wallet = WalletCards::new();
         let mut generation = 40;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
@@ -8748,7 +8776,7 @@ mod tests {
     fn expiry_generation_outcome_is_stable_when_replayed() {
         let card = concrete_card(CardId::new());
         let card_id = card.card_id();
-        let mut wallet = BTreeMap::from([(card_id, card)]);
+        let mut wallet = wallet_cards([(card_id, card)]);
         let mut generation = 7;
 
         assert!(remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
@@ -8774,7 +8802,7 @@ mod tests {
             Some(boundary + chrono::Duration::nanoseconds(1)),
         );
         let indefinite = concrete_card(CardId::new());
-        let wallet = BTreeMap::from([
+        let wallet = wallet_cards([
             (elapsed.card_id(), elapsed.clone()),
             (at_boundary.card_id(), at_boundary.clone()),
             (later.card_id(), later),
@@ -8782,7 +8810,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            expired_wallet_card_ids_at(&wallet, boundary)
+            expired_wallet_card_ids_at(wallet.values().map(Arc::as_ref), boundary)
                 .into_iter()
                 .collect::<HashSet<_>>(),
             HashSet::from([elapsed.card_id(), at_boundary.card_id()])
@@ -8800,7 +8828,7 @@ mod tests {
         let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
         let later =
             concrete_card_expiring_at(CardId::new(), Some(boundary + chrono::Duration::hours(1)));
-        let original_wallet = BTreeMap::from([
+        let original_wallet = wallet_cards([
             (elapsed.card_id(), elapsed),
             (at_boundary.card_id(), at_boundary),
             (later.card_id(), later),
@@ -8809,14 +8837,17 @@ mod tests {
         let mut live_wallet = original_wallet.clone();
         let mut live_generation = 7;
         let mut recorded_expiries = Vec::new();
-        for card_id in expired_wallet_card_ids_at(&live_wallet, boundary) {
+        for card_id in expired_wallet_card_ids_at(live_wallet.values().map(Arc::as_ref), boundary) {
             assert!(remove_wallet_card(&mut live_wallet, &mut live_generation, card_id).unwrap());
             recorded_expiries.push((card_id, live_generation));
         }
 
         let mut replayed_wallet = original_wallet;
         let mut replayed_generation = 7;
-        assert!(expired_wallet_card_ids_at(&replayed_wallet, replay_clock).is_empty());
+        assert!(
+            expired_wallet_card_ids_at(replayed_wallet.values().map(Arc::as_ref), replay_clock)
+                .is_empty()
+        );
         for (card_id, recorded_generation) in recorded_expiries {
             assert!(
                 remove_wallet_card(&mut replayed_wallet, &mut replayed_generation, card_id)
@@ -8841,13 +8872,13 @@ mod tests {
             StoredCard::Concrete(card) => card.system_card = true,
             StoredCard::Polymorphic(_) => unreachable!(),
         }
-        let mut wallet = BTreeMap::from([(card_id, card.clone())]);
+        let mut wallet = wallet_cards([(card_id, card.clone())]);
         let mut generation = 10;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, conflicting_payload).is_err());
 
         assert_eq!(generation, 10);
-        assert_eq!(wallet.get(&card_id), Some(&card));
+        assert_eq!(wallet.get(&card_id).map(Arc::as_ref), Some(&card));
     }
 
     #[test]
@@ -8860,11 +8891,11 @@ mod tests {
         }
         let removed = concrete_card(CardId::new());
         let added = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([
+        let mut wallet = wallet_cards([
             (retained.card_id(), retained.clone()),
             (removed.card_id(), removed),
         ]);
-        let replacement = BTreeMap::from([
+        let replacement = wallet_cards([
             (conflicting_retained.card_id(), conflicting_retained),
             (added.card_id(), added),
         ]);
@@ -8873,16 +8904,19 @@ mod tests {
         assert!(replace_wallet_cards(&mut wallet, &mut generation, replacement).unwrap());
         assert_eq!(generation, 22);
         assert_eq!(wallet.len(), 2);
-        assert_eq!(wallet.get(&retained.card_id()), Some(&retained));
+        assert_eq!(
+            wallet.get(&retained.card_id()).map(Arc::as_ref),
+            Some(&retained)
+        );
     }
 
     #[test]
     fn wallet_replacement_is_atomic_when_generation_would_overflow() {
         let removed = concrete_card(CardId::new());
         let added = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([(removed.card_id(), removed)]);
+        let mut wallet = wallet_cards([(removed.card_id(), removed)]);
         let original_wallet = wallet.clone();
-        let replacement = BTreeMap::from([(added.card_id(), added)]);
+        let replacement = wallet_cards([(added.card_id(), added)]);
         let mut generation = u64::MAX - 1;
 
         assert!(replace_wallet_cards(&mut wallet, &mut generation, replacement).is_err());
@@ -8914,7 +8948,7 @@ mod tests {
         let base_card = concrete_card(CardId::new());
         let stale_card = concrete_card(CardId::new());
         let derived_card = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([
+        let mut wallet = wallet_cards([
             (base_card.card_id(), base_card.clone()),
             (stale_card.card_id(), stale_card),
         ]);
@@ -8937,16 +8971,113 @@ mod tests {
             .unwrap()
         );
         assert_eq!(wallet.len(), 1);
-        assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
+        assert_eq!(
+            wallet.get(&base_card.card_id()).map(Arc::as_ref),
+            Some(&base_card)
+        );
         assert_eq!(generation, 1);
         assert!(!wallet.contains_key(&derived_card.card_id()));
 
         assert!(add_wallet_card(&mut wallet, &mut generation, derived_card.clone()).unwrap());
         adopt_recorded_wallet_generation(&mut generation, 2).unwrap();
         assert_eq!(wallet.len(), 2);
-        assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
-        assert_eq!(wallet.get(&derived_card.card_id()), Some(&derived_card));
+        assert_eq!(
+            wallet.get(&base_card.card_id()).map(Arc::as_ref),
+            Some(&base_card)
+        );
+        assert_eq!(
+            wallet.get(&derived_card.card_id()).map(Arc::as_ref),
+            Some(&derived_card)
+        );
         assert_eq!(generation, 2);
+    }
+
+    #[test]
+    fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
+        let original = wallet_cards((0..1024).map(|_| {
+            let card = concrete_card(CardId::new());
+            (card.card_id(), card)
+        }));
+        let hash = [0x42; 32];
+        let ids = original.keys().copied().collect::<Vec<_>>();
+        let pin = |ids, hash, generation| InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: hash,
+                generation,
+            },
+            pinned_card_ids: ids,
+            scope_card_id: None,
+        };
+        let mut missing = ids[1..].to_vec();
+        missing.push(CardId::new());
+        missing.sort_unstable();
+        for invalid in [
+            pin(ids.clone(), [0x43; 32], 8),
+            pin(ids.iter().rev().copied().collect(), hash, 8),
+            pin(vec![ids[0], ids[0]], hash, 8),
+            pin(ids.clone(), hash, 7),
+            pin(missing, hash, 9),
+        ] {
+            let mut wallet = original.clone();
+            let mut generation = 8;
+            assert!(
+                apply_invocation_wallet_pin(&mut wallet, hash, &mut generation, invalid).is_err()
+            );
+            assert!(wallet.ptr_eq(&original));
+            assert_eq!(generation, 8);
+        }
+
+        let mut wallet = original.clone();
+        let mut generation = 8;
+        assert!(
+            !apply_invocation_wallet_pin(
+                &mut wallet,
+                hash,
+                &mut generation,
+                pin(ids.clone(), hash, 9)
+            )
+            .unwrap()
+        );
+        assert!(wallet.ptr_eq(&original));
+        assert_eq!(generation, 9);
+        let mut prefixes = vec![wallet.clone()];
+        for end in (0..ids.len()).rev() {
+            assert!(
+                apply_invocation_wallet_pin(
+                    &mut wallet,
+                    hash,
+                    &mut generation,
+                    pin(ids[..end].to_vec(), hash, 9)
+                )
+                .unwrap()
+            );
+            assert_eq!(wallet.len(), end);
+            prefixes.push(wallet.clone());
+        }
+        let entries = prefixes
+            .iter()
+            .flat_map(|wallet| {
+                wallet
+                    .values()
+                    .map(|card| std::ptr::from_ref(card) as usize)
+            })
+            .collect::<HashSet<_>>();
+        let payloads = prefixes
+            .iter()
+            .flat_map(|wallet| wallet.values().map(|card| Arc::as_ptr(card) as usize))
+            .collect::<HashSet<_>>();
+        assert_eq!(payloads.len(), ids.len());
+        assert!(
+            entries.len() < ids.len() * 128,
+            "pins rebuilt {} membership entries",
+            entries.len()
+        );
+        eprintln!(
+            "wallet pins: prefixes={}, payloads={}, membership entries={}",
+            prefixes.len(),
+            payloads.len(),
+            entries.len()
+        );
     }
 
     fn polymorphic_card(card_id: CardId) -> StoredCard {
@@ -9966,7 +10097,7 @@ struct PrivateDurableWorkerState {
     card_boundary: Weak<CardEventBoundary>,
     replay_applications: VecDeque<Arc<replay_application::ReplayApplication>>,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
-    agent_wallet_cards: BTreeMap<CardId, StoredCard>,
+    agent_wallet_cards: WalletCards,
     invocation_scope_card: Option<ScopeCard>,
     invocation_scope_root_cards: BTreeMap<CardId, StoredCard>,
     invocation_scope_handles: HashMap<u32, Vec<CardId>>,
@@ -10220,7 +10351,7 @@ impl PrivateDurableWorkerState {
                     .clone()
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|card| (card.card_id(), card))
+                    .map(|card| (card.card_id(), Arc::new(card)))
                     .collect(),
                 entity_wallet_generation,
             ),
@@ -10235,7 +10366,7 @@ impl PrivateDurableWorkerState {
                     agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
                 golem_common::model::card::agent_effective_surface_from_wallet(
                     &context,
-                    agent_wallet_cards.values(),
+                    agent_wallet_cards.values().map(Arc::as_ref),
                 )
             }
             (
@@ -10244,7 +10375,7 @@ impl PrivateDurableWorkerState {
             ) => component_baseline_effective_surface_from_wallet(
                 &component_metadata,
                 &owned_agent_id,
-                agent_wallet_cards.values(),
+                agent_wallet_cards.values().map(Arc::as_ref),
             ),
             (OwnerRuntime::Entity(_), ResolvedOwnerContext::Agent(agent_id)) => {
                 let owner_component_metadata = owner_component_metadata
@@ -10257,7 +10388,7 @@ impl PrivateDurableWorkerState {
                 );
                 golem_common::model::card::agent_effective_surface_from_wallet(
                     &context,
-                    agent_wallet_cards.values(),
+                    agent_wallet_cards.values().map(Arc::as_ref),
                 )
             }
             (
@@ -10268,7 +10399,7 @@ impl PrivateDurableWorkerState {
                     .as_deref()
                     .expect("entity Store has owner component metadata"),
                 &owned_agent_id,
-                agent_wallet_cards.values(),
+                agent_wallet_cards.values().map(Arc::as_ref),
             ),
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
