@@ -1731,6 +1731,7 @@ impl Streaming for StreamingImpl {
                 | "finish-after-reader-drop"
                 | "stream-failure-success"
                 | "stdin-or-clock"
+                | "stdin-or-two-clocks"
                 | "stdin-or-spin"
         ) {
             if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
@@ -1772,7 +1773,7 @@ impl Streaming for StreamingImpl {
             "empty" => {}
             // The read of stdin and the work run side by side. The first to end is written to
             // stdout: how stdin ended, or that the work ended first.
-            "stdin-or-clock" | "stdin-or-spin" => {
+            "stdin-or-clock" | "stdin-or-two-clocks" | "stdin-or-spin" => {
                 let read = async {
                     match stdin.next().await {
                         None => "stdin-eof".to_string(),
@@ -1782,19 +1783,34 @@ impl Streaming for StreamingImpl {
                     }
                 };
                 let work = async {
-                    if mode == "stdin-or-clock" {
-                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
-                            .await;
-                        "clock".to_string()
-                    } else {
-                        // Computes without a host call and lets the other task run in between,
-                        // like an interpreter between two commands.
-                        let mut counter: u64 = 0;
-                        loop {
-                            for _ in 0..1_000_000 {
-                                counter = core::hint::black_box(counter.wrapping_add(1));
+                    match mode.as_str() {
+                        "stdin-or-clock" => {
+                            golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                                .await;
+                            "clock".to_string()
+                        }
+                        // A wait that ends, a write, and a wait that does not end: the host
+                        // calls of a script such as `sleep 0.5; echo first; sleep 300`. A stdin
+                        // that ends during the second wait ends it after the first wait and the
+                        // write in the body's call order, and its replay must put it there too.
+                        "stdin-or-two-clocks" => {
+                            golem_rust::wasip3::clocks::monotonic_clock::wait_for(500_000_000)
+                                .await;
+                            write_chunk(&mut stdout, b"first;".to_vec()).await;
+                            golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                                .await;
+                            "clock".to_string()
+                        }
+                        _ => {
+                            // Computes without a host call and lets the other task run in
+                            // between, like an interpreter between two commands.
+                            let mut counter: u64 = 0;
+                            loop {
+                                for _ in 0..1_000_000 {
+                                    counter = core::hint::black_box(counter.wrapping_add(1));
+                                }
+                                golem_rust::wasip3::wit_bindgen::yield_async().await;
                             }
-                            golem_rust::wasip3::wit_bindgen::yield_async().await;
                         }
                     }
                 };

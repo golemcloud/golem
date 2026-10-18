@@ -22263,17 +22263,162 @@ async fn a_cancelled_stdin_is_replayed_after_a_restart(
     .await?;
     let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
     assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
+    the_agent_answers_after_a_restart(deps, cancelled).await
+}
+
+/// Covers a tool body whose stdin is cancelled while it waits on a clock, with no earlier host
+/// call of the body that ended: the wait is dropped at the same place in both runs.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_stdin_cancelled_during_a_single_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-clock",
+        Default::default(),
+    )
+    .await?;
+    let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
+    the_agent_answers_after_a_restart(deps, cancelled).await
+}
+
+/// Covers a tool body that made host calls while it read its stdin, and read the end of its
+/// stdin after some of them ended: a wait that ended, a write, and a wait that was still
+/// pending, as a script `sleep 0.5; echo first; sleep 300` stopped with Ctrl+C makes. The body
+/// read the end of its stdin after the first wait and the write; its replay must give it the
+/// end there, not before the first wait ends. A replay that gives it earlier makes the body
+/// drop a wait that ended and never start the pending one, and the agent never answers again.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_stdin_cancelled_after_a_completed_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    a_stdin_closed_after_a_completed_wait_is_replayed_after_a_restart(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinClose::Cancel,
+        "first;stdin-cancelled",
+    )
+    .await
+}
+
+/// As [`a_stdin_cancelled_after_a_completed_wait_is_replayed_after_a_restart`], with a stdin
+/// that ends cleanly instead of being cancelled.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_stdin_ended_after_a_completed_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    a_stdin_closed_after_a_completed_wait_is_replayed_after_a_restart(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinClose::End,
+        "first;stdin-eof",
+    )
+    .await
+}
+
+async fn a_stdin_closed_after_a_completed_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    close: StdinClose,
+    expected_stdout_after_marker: &str,
+) -> anyhow::Result<()> {
+    let mut call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-two-clocks",
+        Default::default(),
+    )
+    .await?;
+    // The first wait of the body ended and the body wrote `first;`: it is in its second wait
+    // when the client closes the stdin.
+    read_stdout_of_an_external_tool_call_until(&mut call, b"first;").await?;
+    let closed = close_the_stdin_of_an_external_tool_call(call, close).await?;
+    assert_eq!(closed.stdout_after_marker, expected_stdout_after_marker);
+    the_agent_answers_after_a_restart(deps, closed).await
+}
+
+/// Reads the stdout of a running external tool call until what it wrote after the marker ends
+/// with `expected`.
+async fn read_stdout_of_an_external_tool_call_until(
+    call: &mut RunningExternalToolCall,
+    expected: &[u8],
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::invocation_response;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !call.stdout[RUN_MARKER.len()..].ends_with(expected) {
+            match call
+                .responses
+                .message()
+                .await?
+                .map(|response| response.response)
+            {
+                Some(Some(invocation_response::Response::OutputItem(item))) => {
+                    call.stdout.extend(item.packed_u8);
+                }
+                other => anyhow::bail!(
+                    "expected {} on stdout, got {other:?}",
+                    String::from_utf8_lossy(expected)
+                ),
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "waited 60 s for {} on stdout",
+            String::from_utf8_lossy(expected)
+        )
+    })?
+}
+
+/// Restarts the executor of an ended external tool call and calls the agent again. The new
+/// executor has no agent in memory: the call loads the agent, and the load replays the ended
+/// call from the journals. The replay must neither fail the agent nor leave the new call
+/// without an answer.
+async fn the_agent_answers_after_a_restart(
+    deps: &WorkerExecutorTestDependencies,
+    ended: EndedExternalToolCall,
+) -> anyhow::Result<()> {
     let EndedExternalToolCall {
         context,
         environment_state,
         executor,
         worker_id,
         ..
-    } = cancelled;
+    } = ended;
     drop(executor);
 
-    // The new executor has no agent in memory. The next call loads the agent, and the load
-    // replays the cancelled call from the journals.
     let executor = start_with_overrides(
         deps,
         &context,
@@ -22299,7 +22444,7 @@ async fn a_cancelled_stdin_is_replayed_after_a_restart(
         oplog
             .iter()
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
-        "the replay of the cancelled call must not fail"
+        "the replay of the ended call must not fail"
     );
     next_call?;
     Ok(())

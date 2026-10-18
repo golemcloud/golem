@@ -468,8 +468,9 @@ not byte bodies. `AttachmentInputProducer` records consumed payloads through
 actual consumption; host pipe reads commit their observation before handing bytes to transport.
 The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
 stdin uses the same producer adapter. `NativeAttachmentInput` records at the host return boundary.
-The raw session bridge retains its existing durable-stream journal rather than adding attachment
-read payloads. A plain
+The stdin of an external call has no attachment when the body is a component: the body reads the
+durable session input itself, and its guest reads are consumer journal records with the body as
+their observation parent (see the `SessionJournal` paragraphs under Fences and admission). A plain
 `AttachmentConsumer::read_next` or `AttachmentWriter` does not itself journal bytes or operations.
 
 Replay serves historical reads from their payloads and validates regenerated producer arguments
@@ -546,6 +547,23 @@ are independent of the guest lane, so stdin and stdout are configured live and E
 skipped; entity-slot registration, owner-lane acquisition and handoff are unchanged. This avoids
 deadlocking a filesystem-capable body behind a session stream whose progress does not use its
 lane.
+
+The stdin of a `SessionJournal` call has no attachment when the body is a component.
+`NativeToolTask::run` passes the `DurableInputEndpoint` on (`ToolCallStdin::Durable`), and
+`invoke_tool_sidecar` builds the body's stdin reader on it in the body's Store
+(`ToolBodyStdin::Durable`, `DurableToolStdinProducer`). What the body's guest takes is its own
+recorded guest observation, so stdin keeps its place among the body's other recorded calls in a
+replay; `streams.md` has the rules of that reader. There is no host task, no buffer, no
+attachment memory charge and no attachment metadata for this stdin, and `stdin_controller` is
+`None`. A body that forwards this stdin to another tool is read by the host there, with host
+records. A native body (`EntityActivationSource::Host`) keeps the attachment: after acceptance,
+`create_native_underlying_stdin` starts the host task that reads the durable input and fills it.
+That task's reader cancels the input when it is dropped, and a cancel that the client sends
+reaches the tool as `cancelled`, not as a clean end. The records of a component body's reads keep
+the session's attribution, so the scope projection in `has_visible_scope_descendant` does not see
+them; the cursor's decoded `stream_observations` do, and an incomplete body with a recorded read
+of this stdin is run as a started body, not through the empty-scope shortcut of
+`enter_incomplete_live_repair_before_body_access`.
 
 ### Scheduling
 
