@@ -39,7 +39,7 @@ use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
-use golem_service_base::clients::shard_manager_leader::LeaderAddress;
+use golem_service_base::clients::shard_manager_leader::{LeaderAddress, valid_leader_address};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
@@ -628,6 +628,35 @@ mod advertised_host_tests {
     }
 
     #[test]
+    fn a_host_that_is_no_uri_authority_is_refused() {
+        for host in [
+            "shard-manager-1 # r1",
+            "two words",
+            "fe80::1%eth0",
+            "a:b:c",
+            "host:9002",
+            "user@host",
+            "a/b",
+            "a?b",
+        ] {
+            let error = validate_advertised_host(&distributed(Some(host)))
+                .expect_err(&format!("`{host}` must be refused"));
+            assert!(
+                error.to_string().contains("grpc.advertised_host"),
+                "{error}"
+            );
+        }
+        for host in [
+            "10.0.3.7",
+            "shard-manager.golem.svc",
+            "fd00::7",
+            "[fd00::7]",
+        ] {
+            validate_advertised_host(&distributed(Some(host))).expect(host);
+        }
+    }
+
+    #[test]
     fn a_loopback_host_starts_with_a_warning() {
         for host in ["127.0.0.1", "::1", "localhost", "LOCALHOST"] {
             let named = validate_advertised_host(&distributed(Some(host)))
@@ -1090,6 +1119,15 @@ fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Optio
         !ip.is_some_and(|ip| ip.is_unspecified()),
         "grpc.advertised_host is {host}, which names no single host. Set it to the address other \
          processes reach this replica at, such as its pod IP."
+    );
+    anyhow::ensure!(
+        valid_leader_address(
+            host,
+            config.grpc.advertised_port.unwrap_or(config.grpc.port)
+        ),
+        "grpc.advertised_host is {host:?}, which does not form a valid address with the \
+         advertised port: clients build their connection address from it. Set it to a host \
+         name or an IP address, with no spaces, port, user part, path or zone."
     );
     anyhow::ensure!(
         config.grpc.advertised_port != Some(0),
