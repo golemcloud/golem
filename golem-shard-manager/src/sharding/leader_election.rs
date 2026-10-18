@@ -162,32 +162,78 @@ pub struct LeaseLost {
 
 /// Until when this replica may believe that it holds its leadership lease: one TTL after the send
 /// of the last renewal that etcd acknowledged. The keepalive moves it; the gate serves only before
-/// it, so a leader that was paused past its lease (a long GC pause, CPU throttling) serves nothing
-/// after it resumes, even before its keepalive task runs and stops the process.
+/// it, so a leader that was paused past its lease (a long GC pause, CPU throttling, a suspended
+/// virtual machine) serves nothing after it resumes, even before its keepalive task runs and stops
+/// the process.
+///
+/// The deadline is kept on [`belief_clock`], not on the monotonic clock of the runtime: on Linux
+/// the monotonic clock stands still while a machine is suspended, and a leader that woke up would
+/// then still count the time it slept as time left on a lease that etcd expired long ago.
 #[derive(Clone, Debug)]
 pub struct LeaseBelief {
-    deadline: Arc<std::sync::Mutex<Instant>>,
+    deadline: Arc<std::sync::Mutex<Duration>>,
 }
 
 impl LeaseBelief {
     fn new(deadline: Instant) -> Self {
         Self {
-            deadline: Arc::new(std::sync::Mutex::new(deadline)),
+            deadline: Arc::new(std::sync::Mutex::new(on_belief_clock(deadline))),
         }
     }
 
     fn set(&self, deadline: Instant) {
-        *self.deadline.lock().unwrap_or_else(PoisonError::into_inner) = deadline;
+        *self.deadline.lock().unwrap_or_else(PoisonError::into_inner) = on_belief_clock(deadline);
     }
 
     pub fn held(&self) -> bool {
-        Instant::now() < *self.deadline.lock().unwrap_or_else(PoisonError::into_inner)
+        self.held_at(belief_clock::now())
+    }
+
+    /// Whether the belief holds at `now` on [`belief_clock`].
+    fn held_at(&self, now: Duration) -> bool {
+        now < *self.deadline.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A belief that ends at `deadline`. **Tests only.**
     #[doc(hidden)]
     pub fn until(deadline: Instant) -> Self {
         Self::new(deadline)
+    }
+}
+
+/// The time on [`belief_clock`] at which the runtime's monotonic `deadline` falls, measured from
+/// now. A deadline in the past falls now.
+fn on_belief_clock(deadline: Instant) -> Duration {
+    belief_clock::now() + deadline.saturating_duration_since(Instant::now())
+}
+
+/// The clock that the lease belief is measured on. On Linux it is `CLOCK_BOOTTIME`, which counts
+/// the time a machine spends suspended; elsewhere the monotonic clock, which is the best the
+/// platform offers. The watchdog still sleeps on the runtime's monotonic clock: that only decides
+/// when the keepalive task wakes, and the gate's check does not depend on it.
+mod belief_clock {
+    use std::time::Duration;
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn now() -> Duration {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `time` is a valid timespec that outlives the call, and CLOCK_BOOTTIME exists on
+        // every Linux that Golem runs on.
+        let result = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut time) };
+        assert_eq!(result, 0, "CLOCK_BOOTTIME cannot be read");
+        Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn now() -> Duration {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed()
     }
 }
 
@@ -1415,6 +1461,34 @@ mod tests {
             newer_version_behind(&queue_ending_in("1.6.0"), 9, "1.5.0"),
             None
         );
+    }
+
+    #[test]
+    fn the_belief_clock_never_goes_back_and_follows_real_time() {
+        let before = belief_clock::now();
+        std::thread::sleep(Duration::from_millis(30));
+        let after = belief_clock::now();
+        assert!(
+            after >= before + Duration::from_millis(30),
+            "{before:?} {after:?}"
+        );
+    }
+
+    #[test]
+    fn a_belief_lapses_when_the_belief_clock_jumps_past_its_deadline() {
+        // A suspended machine moves the belief clock without moving the runtime's monotonic clock.
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_secs(10));
+        let now = belief_clock::now();
+        assert!(belief.held());
+        assert!(belief.held_at(now + Duration::from_secs(5)));
+        assert!(!belief.held_at(now + Duration::from_secs(11)));
+    }
+
+    #[test]
+    fn a_belief_in_the_past_is_not_held() {
+        let belief = LeaseBelief::until(Instant::now());
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(!belief.held());
     }
 
     #[test]

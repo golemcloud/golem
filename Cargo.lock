@@ -4508,6 +4508,7 @@ dependencies = [
  "itertools 0.14.0",
  "k8s-openapi",
  "kube",
+ "libc",
  "prometheus",
  "prost-types",
  "rustls",

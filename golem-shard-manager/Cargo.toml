@@ -62,6 +62,9 @@ tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 golem-test-framework = { workspace = true }
 test-r = { workspace = true }
