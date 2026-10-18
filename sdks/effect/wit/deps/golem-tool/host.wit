@@ -139,6 +139,11 @@ interface host {
   /// Dropping the reader cancels only this attachment's consumer role.
   create-output: func() -> tuple<own<tool-output>, stream<byte-stream-item>>;
 
+  /// Creates an output target that discards bytes without a reader or retained
+  /// prefix. Writes never wait for a consumer and cannot overflow a collector.
+  /// The invocation still owns and finalizes its ordinary output writer.
+  create-discarded-output: func() -> own<tool-output>;
+
   /// Bounded bytes collected from one output channel. A stream failure is
   /// separate from the tool's structured result. Overflow retains the prefix.
   record collected-output {

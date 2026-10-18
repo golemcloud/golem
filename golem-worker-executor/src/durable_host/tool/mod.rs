@@ -498,6 +498,13 @@ pub struct ToolOutputEntry {
 }
 
 impl ToolOutputEntry {
+    fn discard(memory: AttachmentMemory) -> Self {
+        Self {
+            producer: Some(discard_producer(memory)),
+            completion_only: false,
+        }
+    }
+
     pub(crate) fn into_writer(mut self) -> ToolOutputWriterEntry {
         ToolOutputWriterEntry {
             producer: self
@@ -524,10 +531,7 @@ pub struct ToolOutputWriterEntry {
 
 impl ToolOutputWriterEntry {
     pub(crate) fn discard(memory: AttachmentMemory) -> Self {
-        Self {
-            producer: discard_producer(memory),
-            completion_only: false,
-        }
+        ToolOutputEntry::discard(memory).into_writer()
     }
 
     pub(crate) fn controller(&self) -> AttachmentController {
@@ -6439,6 +6443,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn create_discarded_output(&mut self) -> anyhow::Result<Resource<ToolOutputEntry>> {
+        self.observe_function_call("golem::tool::host", "create-discarded-output");
+        let memory = AttachmentMemory::for_store(
+            self.public_state.worker().active_agents(),
+            self.state.is_live(),
+        );
+        Ok(self.table().push(ToolOutputEntry::discard(memory))?)
+    }
+
     async fn prepare_command(
         &mut self,
         name: String,
@@ -7737,6 +7750,23 @@ mod tests {
         let output = discard.native_writer(tasks.spawner());
         output.writer.write(vec![5; 1024 * 1024]).await.unwrap();
         output.writer.finish().unwrap();
+    }
+
+    #[test]
+    async fn explicit_discard_output_target_retains_no_bytes_and_never_backpressures() {
+        let writer = ToolOutputEntry::discard(AttachmentMemory::inert()).into_writer();
+        assert!(!writer.completion_only());
+        let controller = writer.controller();
+        for _ in 0..8 {
+            writer.producer.write(vec![255; 1024 * 1024]).await.unwrap();
+            let metadata = controller.metadata();
+            assert_eq!(metadata.mode, ToolAttachmentModeMetadata::Discard);
+            assert_eq!(metadata.buffered_bytes, 0);
+            assert_eq!(metadata.charged_bytes, 0);
+            assert!(!metadata.backpressured);
+        }
+        writer.producer.finish().unwrap();
+        assert!(controller.metadata().terminal_selected);
     }
 
     #[test]

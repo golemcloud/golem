@@ -77,6 +77,7 @@ fn middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_und
             "collect-async",
             "create",
             "create-collected-output",
+            "create-discarded-output",
             "create-output",
             "create-stdin",
             "create-stdin-from-stream",

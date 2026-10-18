@@ -70,6 +70,12 @@ declare module 'golem:tool/host@0.1.0' {
    */
   export function createOutput(): [ToolOutput, AsyncIterable<ByteStreamItem>];
   /**
+   * Creates an output target that discards bytes without a reader or retained
+   * prefix. Writes never wait for a consumer and cannot overflow a collector.
+   * The invocation still owns and finalizes its ordinary output writer.
+   */
+  export function createDiscardedOutput(): ToolOutput;
+  /**
    * Reserves the retained prefix before dispatch. The limit is capped by the
    * host's attachment byte limit. Admission failure creates no endpoints.
    * @throws ToolRpcError

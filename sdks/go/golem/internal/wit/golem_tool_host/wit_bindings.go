@@ -21608,6 +21608,16 @@ func CreateOutput() (*ToolOutput, *witTypes.StreamReader[witTypes.Result[[]uint8
 
 }
 
+//go:wasmimport golem:tool/host@0.1.0 create-discarded-output
+func wasm_import_create_discarded_output() int32
+
+func CreateDiscardedOutput() *ToolOutput {
+
+	result := wasm_import_create_discarded_output()
+	return ToolOutputFromOwnHandle(int32(uintptr(result)))
+
+}
+
 //go:wasmimport golem:tool/host@0.1.0 create-collected-output
 func wasm_import_create_collected_output(arg0 int64, arg1 uintptr)
 
