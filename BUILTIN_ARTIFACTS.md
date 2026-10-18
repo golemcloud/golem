@@ -12,7 +12,7 @@ shared build pipeline once. It copies only the stale outputs, so a fresh manual
 replacement of the other output remains unchanged.
 
 The warm check starts no component build,
-Docker container, npm install, or Wizer process. It preserves manually replaced
+npm install, or Wizer process. It preserves manually replaced
 WASMs until their source inputs change. There is no separate build executable,
 fingerprint database, or build receipt. The checks use file modification times.
 After removing source files, changing build toolchains, or changing SDK override

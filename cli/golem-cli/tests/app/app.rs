@@ -8818,7 +8818,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
-                    complex:\s*.*
+                    complex\?:\s*.*
                 \)
                 .*
                 CounterAgent\.get\(name:\s*string\)
@@ -8829,7 +8829,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
-                    complex:\s*.*
+                    complex\?:\s*.*
                 \)
             )
             .*"#
