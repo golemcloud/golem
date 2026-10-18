@@ -122,15 +122,21 @@ const CERTIFICATE_ALERTS: [rustls::AlertDescription; 7] = [
     rustls::AlertDescription::CertificateRequired,
 ];
 
-/// Whether an etcd error is a refused certificate: one that etcd rejected, or one of etcd's that
-/// this replica rejected. Other TLS errors - a damaged record, a non-TLS reply from a proxy during
-/// an outage - are network faults like any other, and stay retriable.
-pub(crate) fn is_certificate_failure(err: &etcd_client::Error) -> bool {
+/// The TLS error under an etcd error: rustls's own, or only its text.
+enum TlsError<'a> {
+    Typed(&'a rustls::Error),
+    /// A refusal that etcd sends after the handshake - a missing or rejected client certificate
+    /// under TLS 1.3 - is read through h2, which keeps only the text of the I/O error's inner
+    /// error.
+    Text(String),
+}
+
+fn tls_error(err: &etcd_client::Error) -> Option<TlsError<'_>> {
     // etcd-client's error does not expose its cause, so the walk starts at what it wraps.
     let start: &(dyn std::error::Error + 'static) = match err {
         etcd_client::Error::GRpcStatus(status) => status,
         etcd_client::Error::TransportError(error) => error,
-        _ => return false,
+        _ => return None,
     };
     let mut current = Some(start);
     while let Some(error) = current {
@@ -144,26 +150,69 @@ pub(crate) fn is_certificate_failure(err: &etcd_client::Error) -> bool {
             .downcast_ref::<rustls::Error>()
             .or_else(|| io_inner.and_then(|inner| inner.downcast_ref::<rustls::Error>()));
         if let Some(rustls_error) = rustls_error {
-            return match rustls_error {
-                rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented => {
-                    true
-                }
-                rustls::Error::AlertReceived(alert) => CERTIFICATE_ALERTS.contains(alert),
-                _ => false,
-            };
+            return Some(TlsError::Typed(rustls_error));
         }
-        // A refusal that etcd sends after the handshake - a missing or rejected client
-        // certificate under TLS 1.3 - is read through h2, which keeps only the text of the I/O
-        // error's inner error. That text is rustls's own for the alert.
         if let Some(inner) = io_inner {
-            let text = inner.to_string();
-            return CERTIFICATE_ALERTS
-                .iter()
-                .any(|alert| text == rustls::Error::AlertReceived(*alert).to_string());
+            return Some(TlsError::Text(inner.to_string()));
         }
         current = error.source();
     }
-    false
+    None
+}
+
+/// Whether an etcd error is a refused certificate: one that etcd rejected, or one of etcd's that
+/// this replica rejected. Other TLS errors - a damaged record, a non-TLS reply from a proxy during
+/// an outage - are network faults like any other, and stay retriable.
+pub(crate) fn is_certificate_failure(err: &etcd_client::Error) -> bool {
+    match tls_error(err) {
+        Some(TlsError::Typed(
+            rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented,
+        )) => true,
+        Some(TlsError::Typed(rustls::Error::AlertReceived(alert))) => {
+            CERTIFICATE_ALERTS.contains(alert)
+        }
+        Some(TlsError::Typed(_)) | None => false,
+        // The text is rustls's own for the alert.
+        Some(TlsError::Text(text)) => CERTIFICATE_ALERTS
+            .iter()
+            .any(|alert| text == rustls::Error::AlertReceived(*alert).to_string()),
+    }
+}
+
+/// When this replica refused etcd's certificate because it is not valid now - expired, or dated
+/// ahead of this node's clock - what is wrong with it. Such a certificate is etcd's to renew, and
+/// nothing in this replica's settings can fix it. An alert from etcd about this replica's own
+/// certificate is not one of these.
+pub(crate) fn etcd_certificate_not_valid_now(err: &etcd_client::Error) -> Option<String> {
+    use rustls::CertificateError;
+
+    let date = |time: rustls::pki_types::UnixTime| {
+        i64::try_from(time.as_secs())
+            .ok()
+            .and_then(|seconds| x509_parser::time::ASN1Time::from_timestamp(seconds).ok())
+            .map_or_else(
+                || format!("{} (UNIX)", time.as_secs()),
+                |date| date.to_string(),
+            )
+    };
+    match tls_error(err)? {
+        TlsError::Typed(rustls::Error::InvalidCertificate(error)) => match error {
+            CertificateError::ExpiredContext { not_after, .. } => Some(format!(
+                "etcd's TLS certificate expired at {}",
+                date(*not_after)
+            )),
+            CertificateError::NotValidYetContext { not_before, .. } => Some(format!(
+                "etcd's TLS certificate is valid only from {}; check this node's clock",
+                date(*not_before)
+            )),
+            CertificateError::Expired => Some("etcd's TLS certificate has expired".to_string()),
+            CertificateError::NotValidYet => {
+                Some("etcd's TLS certificate is not valid yet; check this node's clock".to_string())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 impl IsRetriableError for ShardManagerError {
@@ -277,7 +326,7 @@ impl IsRetriableError for HealthCheckError {
 mod tests {
     use test_r::test;
 
-    use super::{ShardManagerError, is_certificate_failure};
+    use super::{ShardManagerError, etcd_certificate_not_valid_now, is_certificate_failure};
     use crate::sharding::model::ExecutorId;
     use golem_common::retriable_error::IsRetriableError;
 
@@ -374,6 +423,55 @@ mod tests {
             let failure = connect_failure(fault);
             assert!(!is_certificate_failure(&failure), "{failure}");
             assert!(ShardManagerError::EtcdError(failure).is_retriable());
+        }
+    }
+
+    #[test]
+    // etcd's certificate out of its validity is etcd's to renew; etcd's alert about this replica's
+    // own certificate - even an expired one - is this replica's to fix.
+    fn only_an_etcd_certificate_out_of_its_validity_is_etcds_to_fix() {
+        use rustls::pki_types::UnixTime;
+        use rustls::{AlertDescription, CertificateError};
+
+        let at = |seconds| UnixTime::since_unix_epoch(std::time::Duration::from_secs(seconds));
+        let expired = connect_failure(tls(rustls::Error::InvalidCertificate(
+            CertificateError::ExpiredContext {
+                time: at(1_100_000_000),
+                not_after: at(1_009_843_200),
+            },
+        )));
+        assert_eq!(
+            etcd_certificate_not_valid_now(&expired).as_deref(),
+            Some("etcd's TLS certificate expired at Jan  1 00:00:00 2002 +00:00")
+        );
+        for not_valid in [
+            CertificateError::Expired,
+            CertificateError::NotValidYet,
+            CertificateError::NotValidYetContext {
+                time: at(1_000_000_000),
+                not_before: at(1_009_843_200),
+            },
+        ] {
+            let failure = connect_failure(tls(rustls::Error::InvalidCertificate(not_valid)));
+            assert!(
+                etcd_certificate_not_valid_now(&failure).is_some(),
+                "{failure}"
+            );
+        }
+        for ours in [
+            tls(rustls::Error::InvalidCertificate(
+                CertificateError::UnknownIssuer,
+            )),
+            tls(rustls::Error::AlertReceived(
+                AlertDescription::CertificateExpired,
+            )),
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                rustls::Error::AlertReceived(AlertDescription::CertificateExpired).to_string(),
+            ),
+        ] {
+            let failure = connect_failure(ours);
+            assert_eq!(etcd_certificate_not_valid_now(&failure), None, "{failure}");
         }
     }
 

@@ -76,6 +76,7 @@ fn crypto_provider() -> CryptoProvider {
 /// address needs `server_name`.
 struct TestPki {
     dir: tempfile::TempDir,
+    ca: CertifiedIssuer<'static, KeyPair>,
     ca_pem: String,
     server_pem: String,
     server_key_pem: String,
@@ -117,9 +118,24 @@ impl TestPki {
         Self {
             dir,
             ca_pem: ca.pem(),
+            ca,
             server_pem,
             server_key_pem,
         }
+    }
+
+    /// Options for an etcd that requires client certificates, with a new, valid server certificate
+    /// from the same CA: an etcd whose certificate was renewed.
+    fn renewed_mtls_etcd_options(&self) -> DockerEtcdOptions {
+        let (server_pem, server_key_pem) = signed_by(
+            &self.ca,
+            "localhost",
+            ExtendedKeyUsagePurpose::ServerAuth,
+            false,
+        );
+        DockerEtcdOptions::new()
+            .with_tls(server_pem, server_key_pem)
+            .with_client_cert_auth(self.ca_pem.clone())
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -653,22 +669,52 @@ async fn a_replica_with_a_user_waits_for_an_etcd_that_starts_later(
 }
 
 #[test]
-// A fault on etcd's side, but before the campaign the replica has just read its files, so it stops
-// with the reason instead of waiting.
-async fn an_expired_etcd_server_certificate_stops_the_startup(
+// An expired etcd certificate is a fault on etcd's side that nothing in this replica's settings can
+// fix: the startup waits, as for an etcd that is down, and goes on once etcd has a valid one.
+async fn a_replica_waits_while_etcds_certificate_has_expired(
     _tracing: &Tracing,
     _crypto: &CryptoProvider,
 ) {
     let pki = TestPki::with_expired_server_certificate();
-    let etcd = mtls_etcd(&pki).await;
-    let message = refused(tls_config(&etcd.client_url(), pki.mtls())).await;
+    let port = free_port();
+    let expired = DockerEtcd::new_with_options(pki.mtls_etcd_options().with_host_port(port)).await;
+    let (_replica, mut details) = spawn_replica(tls_config(&expired.client_url(), pki.mtls()));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(
+        details.try_recv().is_err(),
+        "While etcd's certificate has expired, the replica must wait, neither starting nor stopping"
+    );
+
+    expired.stop().await;
+    let _renewed =
+        DockerEtcd::new_with_options(pki.renewed_mtls_etcd_options().with_host_port(port)).await;
+    started(details).await;
+}
+
+#[test]
+// With a user, etcd-client logs in while it connects, so the first TLS handshake is in the connect
+// itself, not in the first read: a refused certificate must stop the startup there too.
+async fn a_replica_with_a_user_that_trusts_another_ca_does_not_start(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let etcd = auth_etcd(&pki, pki.etcd_options()).await;
+    let mut config = auth_config(&etcd.client_url(), PASSWORD, &pki);
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.tls
+            .as_mut()
+            .expect("the auth config has TLS")
+            .ca_cert_file = Some(pki.path("other-ca.pem"));
+    }
+    let message = refused(config).await;
     assert!(
         message.contains("TLS handshake with etcd failed"),
         "The refusal should be the handshake, but was: {message}"
     );
     assert!(
-        message.contains("invalid peer certificate: certificate expired"),
-        "The refusal should name the expired certificate, but was: {message}"
+        message.contains("invalid peer certificate: UnknownIssuer"),
+        "The refusal should be the unknown issuer of etcd's certificate, but was: {message}"
     );
 }
 

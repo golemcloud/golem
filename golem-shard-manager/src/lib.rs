@@ -26,7 +26,7 @@ use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
-use crate::sharding::error::is_certificate_failure;
+use crate::sharding::error::{etcd_certificate_not_valid_now, is_certificate_failure};
 use crate::sharding::etcd_connection::{
     EtcdConnectSettings, connect_requests_with, watch_refused_certificates,
 };
@@ -360,11 +360,21 @@ pub(crate) fn ensure_shard_count_matches(
 }
 
 /// Before the campaign, a refused certificate ends the startup with the reason: the files were just
-/// read, so a retry would present the same ones and could only wait.
+/// read, so a retry would present the same ones and could only wait. The exception is an etcd
+/// certificate that is not valid now: etcd's to renew, so the startup waits for it, as for an etcd
+/// that is down, and says why on every attempt.
 fn stop_on_refused_certificate(err: ShardManagerError) -> ShardManagerError {
     match err {
         ShardManagerError::EtcdError(err) if is_certificate_failure(&err) => {
-            ShardManagerError::TlsHandshakeFailed(err)
+            if let Some(reason) = etcd_certificate_not_valid_now(&err) {
+                error!(
+                    reason,
+                    "etcd's TLS certificate is not valid now; waiting until etcd has a valid one"
+                );
+                ShardManagerError::EtcdError(err)
+            } else {
+                ShardManagerError::TlsHandshakeFailed(err)
+            }
         }
         other => other,
     }
