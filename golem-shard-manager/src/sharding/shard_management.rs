@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::error::ShardManagerError;
-use super::healthcheck::{HealthCheck, get_unhealthy_executors};
+use super::healthcheck::{HealthCheck, get_unhealthy_executors_within};
 use super::model::{
     ExecutorAddr, ExecutorAddrs, ExecutorId, RegisterAck, ShardAssignmentPush, ShardEpoch,
     ShardLeaseGrant, ShardLeaseRevision, ShardLeaseState,
@@ -247,24 +247,26 @@ impl ShardManagement {
             HashSet::new()
         } else {
             info!("Initial healthcheck started");
-            let unhealthy = match timeout(
-                initial_health_check_timeout,
-                get_unhealthy_executors(&health_check, &executors),
+            // The executors that answer "unhealthy" within the bound are dropped. The ones that
+            // have not answered when it runs out count as healthy: dropping every executor
+            // because their probes were slow would empty the routing table, and the periodic
+            // health check loop removes the ones that are really gone.
+            let outcome = get_unhealthy_executors_within(
+                &health_check,
+                &executors,
+                Some(initial_health_check_timeout),
             )
-            .await
-            {
-                Ok(unhealthy_executors) => unhealthy_executors,
-                Err(_) => {
-                    // Dropping every executor because their probes were slow would empty the
-                    // routing table; the periodic health check loop removes the ones that are
-                    // really gone.
-                    error!(
-                        timeout = ?initial_health_check_timeout,
-                        "Initial healthcheck timed out, treating all executors as healthy"
-                    );
-                    HashSet::new()
-                }
-            };
+            .await;
+            if outcome.unfinished > 0 {
+                warn!(
+                    timeout = ?initial_health_check_timeout,
+                    unfinished = outcome.unfinished,
+                    unhealthy = outcome.unhealthy.len(),
+                    "Initial healthcheck timed out; the executors that had not answered count as \
+                     healthy"
+                );
+            }
+            let unhealthy = outcome.unhealthy;
             info!("Initial healthcheck finished");
             unhealthy
         };

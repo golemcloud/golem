@@ -1750,6 +1750,63 @@ async fn the_initial_health_check_cannot_pin_startup() {
 }
 
 #[test]
+// The bound on the initial health check lets the executors that did not answer in time count as
+// healthy, because slow probes must not empty the routing table. An executor that has already
+// answered that it is unhealthy is not one of them: it is dropped at startup.
+async fn the_initial_health_check_keeps_the_refusals_it_has_when_the_bound_runs_out() {
+    let refusing_pod = pod(1, 9000);
+    let silent_pod = pod(2, 9001);
+    let shard_state = shard_state_with_executors(
+        4,
+        vec![
+            (executor(1), refusing_pod, "worker-executor-1", &[0, 1]),
+            (executor(2), silent_pod, "worker-executor-2", &[2, 3]),
+        ],
+    );
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let number_of_shards = shard_state.number_of_shards;
+    let persistence = TestPersistence::new(shard_state);
+    let health_check = Arc::new(TestHealthCheck::never_answering_at(silent_pod));
+    health_check
+        .healthy
+        .lock()
+        .await
+        .insert(refusing_pod, false);
+    let mut join_set = JoinSet::new();
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        ShardManagement::new_with_initial_health_check_timeout(
+            Arc::new(persistence.clone()),
+            worker_executors,
+            health_check,
+            0.0,
+            LEASE_TTL,
+            number_of_shards,
+            &mut join_set,
+            Duration::from_millis(500),
+        ),
+    )
+    .await
+    .expect("startup was pinned by the health check that never answers")
+    .expect("failed to create shard management");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while persistence.latest().await.has_executor(executor(1)) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the executor that refused its health check was kept"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        persistence.latest().await.has_executor(executor(2)),
+        "the executor that did not answer in time is kept"
+    );
+    join_set.abort_all();
+}
+
+#[test]
 // A new leader that takes over within the lease of every executor has nothing to learn from a
 // health check: every executor renews to it, and the periodic check finds the dead ones. Waiting
 // on a silent executor would only delay serving.
