@@ -76,6 +76,7 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
+im = { workspace = true }
 include_dir = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }

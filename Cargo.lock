@@ -4654,6 +4654,7 @@ dependencies = [
  "humansize",
  "humantime-serde",
  "ignite-v2-client",
+ "im",
  "include_dir",
  "itertools 0.14.0",
  "lazy_static",
