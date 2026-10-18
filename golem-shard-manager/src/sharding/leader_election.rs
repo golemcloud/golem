@@ -17,7 +17,7 @@
 
 use crate::config::EtcdConfig;
 use crate::metrics;
-use crate::sharding::error::ShardManagerError;
+use crate::sharding::error::{ShardManagerError, is_stale_auth_token};
 use crate::sharding::etcd_connection::{EtcdConnectSettings, connect_election_with};
 use crate::sharding::etcd_retry::retry_retriable_until;
 use etcd_client::{
@@ -366,6 +366,8 @@ pub struct Elected {
 /// so a shutdown can hand over while the keepalive task still renews.
 #[derive(Clone)]
 pub struct LeadershipHandle {
+    /// The election client, to log in again; `lease_client` is one of its sub-clients.
+    client: Client,
     lease_client: LeaseClient,
     lease_id: i64,
     request_timeout: Duration,
@@ -386,8 +388,15 @@ impl LeadershipHandle {
         // lease is left to lapse on its own.
         let lease_id = self.lease_id;
         let mut lease_client = self.lease_client.clone();
-        match bounded(self.request_timeout, lease_client.revoke(lease_id)).await {
-            Ok(_) => {}
+        match revoke_lease(
+            &self.client,
+            &mut lease_client,
+            lease_id,
+            self.request_timeout,
+        )
+        .await
+        {
+            Ok(()) => {}
             Err(err) if is_lease_not_found(&err) => {
                 info!(lease_id, "The leadership lease was already gone");
                 return Ok(());
@@ -513,21 +522,35 @@ impl LeaderElection {
                 return Err(ShardManagerError::ShutdownRequested);
             }
 
-            match self.campaign_once().await {
+            let err = match self.campaign_once().await {
                 Ok(elected) => return Ok(elected),
-                Err(err) if err.is_retriable() => {
-                    metrics::record_campaign_attempt_failure();
-                    warn!(error = %err, retry_in = ?backoff, "Campaign attempt failed; retrying");
-                    tokio::select! {
-                        _ = sleep_until(Instant::now() + backoff) => {}
-                        _ = self.shutdown.cancelled() => {
-                            return Err(ShardManagerError::ShutdownRequested);
-                        }
-                    }
-                    backoff = std::cmp::min(backoff.saturating_mul(2), self.retry_max_delay);
+                Err(err) => err,
+            };
+            if is_stale_auth_token(&err) {
+                // A standby's campaign waits inside etcd with the token it was sent with, and etcd
+                // checks it again when the key ahead goes away: without a new login, every later
+                // attempt would carry the refused token too.
+                warn!(
+                    error = %err,
+                    "etcd's users or roles changed since this replica logged in; logging in again"
+                );
+                if let Err(login_failed) = self.bounded(self.client.refresh_token()).await
+                    && !login_failed.is_retriable()
+                {
+                    return Err(login_failed);
                 }
-                Err(err) => return Err(err),
+            } else if !err.is_retriable() {
+                return Err(err);
             }
+            metrics::record_campaign_attempt_failure();
+            warn!(error = %err, retry_in = ?backoff, "Campaign attempt failed; retrying");
+            tokio::select! {
+                _ = sleep_until(Instant::now() + backoff) => {}
+                _ = self.shutdown.cancelled() => {
+                    return Err(ShardManagerError::ShutdownRequested);
+                }
+            }
+            backoff = std::cmp::min(backoff.saturating_mul(2), self.retry_max_delay);
         }
     }
 
@@ -561,7 +584,14 @@ impl LeaderElection {
                 // server's queue for a full TTL - and once the campaign is won, it is holding the
                 // election itself. The slot is cleared only after the revoke, so an attempt dropped
                 // during it still leaves the lease findable.
-                if let Err(revoke_failed) = self.bounded(lease_client.revoke(lease_id)).await {
+                if let Err(revoke_failed) = revoke_lease(
+                    &self.client,
+                    &mut lease_client,
+                    lease_id,
+                    self.request_timeout,
+                )
+                .await
+                {
                     warn!(
                         error = %revoke_failed,
                         lease_id,
@@ -648,6 +678,7 @@ impl LeaderElection {
             granted_ttl,
             keepalive,
             leadership: LeadershipHandle {
+                client: self.client.clone(),
                 lease_client: lease_client.clone(),
                 lease_id,
                 request_timeout: self.request_timeout,
@@ -743,8 +774,15 @@ impl LeaderElection {
         }
 
         let mut lease_client = self.client.lease_client();
-        match self.bounded(lease_client.revoke(lease_id)).await {
-            Ok(_) => info!(lease_id, "Revoked the lease of an abandoned campaign"),
+        match revoke_lease(
+            &self.client,
+            &mut lease_client,
+            lease_id,
+            self.request_timeout,
+        )
+        .await
+        {
+            Ok(()) => info!(lease_id, "Revoked the lease of an abandoned campaign"),
             Err(err) if is_lease_not_found(&err) => {}
             Err(err) => warn!(
                 error = %err,
@@ -775,6 +813,31 @@ impl LeaderElection {
 }
 
 /// etcd's answer to revoking a lease it no longer holds; the leadership is released either way.
+/// Revokes `lease_id`. When etcd refuses the token because its users or roles changed since the
+/// login, logs in again and sends the revoke once more: the client's sub-clients share its token.
+async fn revoke_lease(
+    client: &Client,
+    lease_client: &mut LeaseClient,
+    lease_id: i64,
+    request_timeout: Duration,
+) -> Result<(), ShardManagerError> {
+    match bounded(request_timeout, lease_client.revoke(lease_id)).await {
+        Err(err) if is_stale_auth_token(&err) => {
+            warn!(
+                error = %err,
+                lease_id,
+                "etcd's users or roles changed since this replica logged in; logging in again to \
+                 revoke the lease"
+            );
+            bounded(request_timeout, client.refresh_token()).await?;
+            bounded(request_timeout, lease_client.revoke(lease_id))
+                .await
+                .map(|_| ())
+        }
+        result => result.map(|_| ()),
+    }
+}
+
 fn is_lease_not_found(err: &ShardManagerError) -> bool {
     matches!(
         err,

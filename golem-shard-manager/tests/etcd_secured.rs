@@ -1211,3 +1211,108 @@ async fn a_replica_with_renewed_files_keeps_running_while_etcds_certificate_has_
         .expect("The standby should lead");
     assert!(standby.leadership.is_some());
 }
+
+/// An etcd with TLS, authentication and JWT tokens, with a leader and a standby queued behind it,
+/// both as `USER`; then a root client adds another user. A JWT token carries the revision of
+/// etcd's users and roles at login, and etcd refuses a token from before any change to them.
+async fn leader_and_standby_after_an_auth_change(
+    pki: &TestPki,
+) -> (
+    DockerEtcd,
+    (JoinHandle<anyhow::Result<()>>, RunDetails),
+    oneshot::Receiver<anyhow::Result<RunDetails>>,
+) {
+    let etcd = auth_etcd(pki, pki.etcd_options().with_jwt_tokens()).await;
+    let config = auth_config(&etcd.client_url(), PASSWORD, pki);
+    let (leader_task, leader_details) = spawn_replica(config.clone());
+    let leader = started(leader_details).await;
+    let (_standby, standby_details) = spawn_replica(config);
+    tokio::time::sleep(STANDBY_SETTLE).await;
+
+    let mut auth = inspection_client_auth(&etcd.client_url(), pki)
+        .await
+        .auth_client();
+    auth.user_add("backup", "backup-password", None)
+        .await
+        .unwrap();
+    (etcd, (leader_task, leader), standby_details)
+}
+
+#[test]
+// Any change to etcd's users or roles - a user added for backups, a rotated password - leaves every
+// replica holding a JWT token that etcd refuses. The leader must still step down, and the standby
+// must take over at once, both by logging in again.
+async fn a_leader_hands_over_after_an_auth_change_with_jwt_tokens(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let (_etcd, (_leader_task, leader), standby_details) =
+        leader_and_standby_after_an_auth_change(&pki).await;
+
+    leader
+        .leadership
+        .as_ref()
+        .expect("A distributed leader has a leadership handle")
+        .step_down()
+        .await
+        .expect("The step-down must log in again after the auth change");
+    let standby = timeout(HANDOVER_BOUND, standby_details)
+        .await
+        .expect("A revoke hands over well inside one lease TTL")
+        .expect("The standby task ended without a result")
+        .expect("The standby should start");
+    assert!(standby.leadership.is_some());
+}
+
+#[test]
+// The same change, then the leader dies without a step-down: once its lease expires, the standby
+// must take over, by logging in again, instead of retrying with the refused token for good.
+async fn a_standby_takes_over_from_a_dead_leader_after_an_auth_change_with_jwt_tokens(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let (_etcd, (leader_task, leader), standby_details) =
+        leader_and_standby_after_an_auth_change(&pki).await;
+
+    drop(leader);
+    leader_task.abort();
+    let standby = timeout(LEASE_TTL + HANDOVER_BOUND, standby_details)
+        .await
+        .expect("The standby must take over once the dead leader's lease expires")
+        .expect("The standby task ended without a result")
+        .expect("The standby should start");
+    assert!(standby.leadership.is_some());
+}
+
+#[test]
+// A campaign that starts after the change, with a token from before it: etcd refuses the
+// campaign's write before the election key exists, and it revokes a lease without keys with no
+// permission check, so only the campaign itself can notice the refused token and log in again.
+async fn a_campaign_that_starts_after_an_auth_change_with_jwt_tokens_logs_in_again(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let etcd = auth_etcd(&pki, pki.etcd_options().with_jwt_tokens()).await;
+    let PersistenceConfig::Etcd(config) =
+        auth_config(&etcd.client_url(), PASSWORD, &pki).persistence
+    else {
+        unreachable!("the auth config is an etcd config");
+    };
+    let election = LeaderElection::connect(&config, LEADER_ELECTION_NAME)
+        .await
+        .expect("The election client should connect");
+    let mut auth = inspection_client_auth(&etcd.client_url(), &pki)
+        .await
+        .auth_client();
+    auth.user_add("backup", "backup-password", None)
+        .await
+        .unwrap();
+
+    timeout(HANDOVER_BOUND, election.campaign_until_elected())
+        .await
+        .expect("The campaign must log in again after the auth change")
+        .expect("The campaign should win an empty election");
+}

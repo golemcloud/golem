@@ -74,6 +74,15 @@ impl DockerEtcdOptions {
         self.extra_flags.push(flag.into());
         self
     }
+
+    /// JWT auth tokens instead of etcd's default simple tokens, signed with the server key of
+    /// [`Self::with_tls`], which must be an ECDSA P-256 key (rcgen's default).
+    pub fn with_jwt_tokens(self) -> Self {
+        self.with_flag(format!(
+            "--auth-token=jwt,priv-key={},sign-method=ES256",
+            DockerEtcd::SERVER_KEY
+        ))
+    }
 }
 
 impl DockerEtcd {

@@ -111,6 +111,23 @@ fn is_denied_by_election(status: &tonic::Status) -> bool {
     status.code() == tonic::Code::Unknown && status.message() == "etcdserver: permission denied"
 }
 
+/// etcd's answer to a token from before a change to its users or roles.
+const STALE_AUTH_TOKEN: &str = "etcdserver: revision of auth store is old";
+
+/// Whether etcd refused the auth token because its users or roles changed since the login. A JWT
+/// token carries the revision of etcd's auth store at login, so after any change - a user added, a
+/// password changed - etcd refuses it: `InvalidArgument`, or `Unknown` through the election
+/// service, which loses the code. etcd-client renews a token only when etcd calls it invalid, so
+/// the caller logs in again itself.
+pub(crate) fn is_stale_auth_token(err: &ShardManagerError) -> bool {
+    matches!(
+        err,
+        ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
+            if matches!(status.code(), tonic::Code::InvalidArgument | tonic::Code::Unknown)
+                && status.message() == STALE_AUTH_TOKEN
+    )
+}
+
 /// The alerts with which a TLS peer refuses a certificate.
 const CERTIFICATE_ALERTS: [rustls::AlertDescription; 7] = [
     rustls::AlertDescription::BadCertificate,
@@ -326,7 +343,10 @@ impl IsRetriableError for HealthCheckError {
 mod tests {
     use test_r::test;
 
-    use super::{ShardManagerError, etcd_certificate_not_valid_now, is_certificate_failure};
+    use super::{
+        ShardManagerError, etcd_certificate_not_valid_now, is_certificate_failure,
+        is_stale_auth_token,
+    };
     use crate::sharding::model::ExecutorId;
     use golem_common::retriable_error::IsRetriableError;
 
@@ -473,6 +493,29 @@ mod tests {
             let failure = connect_failure(ours);
             assert_eq!(etcd_certificate_not_valid_now(&failure), None, "{failure}");
         }
+    }
+
+    #[test]
+    fn a_token_from_before_an_auth_change_is_recognised_from_both_services() {
+        let status = |code, message| {
+            ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(tonic::Status::new(
+                code, message,
+            )))
+        };
+        let stale = "etcdserver: revision of auth store is old";
+        assert!(is_stale_auth_token(&status(
+            tonic::Code::InvalidArgument,
+            stale
+        )));
+        assert!(is_stale_auth_token(&status(tonic::Code::Unknown, stale)));
+        assert!(!is_stale_auth_token(&status(
+            tonic::Code::InvalidArgument,
+            "etcdserver: authentication failed, invalid user ID or password"
+        )));
+        assert!(!is_stale_auth_token(&status(
+            tonic::Code::Unavailable,
+            stale
+        )));
     }
 
     #[test]

@@ -480,7 +480,7 @@ async fn start_distributed_mode(
         etcd.retry_max_delay,
     )
     .await?
-    .with_shutdown(shutdown);
+    .with_shutdown(shutdown.clone());
     if etcd.tls.is_some() {
         join_set.spawn(
             watch_refused_certificates(etcd.clone(), settings, kv.clone(), election.client())
@@ -517,6 +517,20 @@ async fn start_distributed_mode(
         }
         .in_current_span(),
     );
+
+    // The request client logged in at startup, and a standby can wait long enough for etcd's users
+    // or roles to change: a JWT token from before such a change is refused. So the new leader logs
+    // in again before its first read, which costs etcd one password check per election won.
+    if etcd.username.is_some() {
+        retry_retriable(
+            "logging in to etcd again after the election",
+            || async { kv.refresh_token().await.map_err(ShardManagerError::from) },
+            &shutdown,
+            etcd.retry_min_delay,
+            etcd.retry_max_delay,
+        )
+        .await?;
+    }
 
     Ok((kv, elected.fence, leadership))
 }
