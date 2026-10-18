@@ -121,6 +121,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [registry_service.initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
@@ -230,6 +232,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [shard_manager]
 bind_address = "127.0.0.1"
@@ -760,6 +764,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [worker_service.http_session]
 cleanup_timeout = "2s"
@@ -1044,6 +1050,8 @@ type = "Disabled"
 # http2_initial_connection_window_size = 1048576
 # http2_initial_stream_window_size = 1048576
 # http2_max_header_list_size = 65536
+# http2_max_local_error_reset_streams = 1024
+# http2_max_pending_accept_reset_streams = 20
 #
 # [registry_service.initial_accounts.builtin_plugin_owner]
 # email = "builtin-plugin-owner@golem.cloud"
@@ -1153,6 +1161,8 @@ type = "Disabled"
 # http2_initial_connection_window_size = 1048576
 # http2_initial_stream_window_size = 1048576
 # http2_max_header_list_size = 65536
+# http2_max_local_error_reset_streams = 1024
+# http2_max_pending_accept_reset_streams = 20
 #
 # [shard_manager]
 # bind_address = "127.0.0.1"
@@ -1745,6 +1755,8 @@ type = "Disabled"
 # http2_initial_connection_window_size = 1048576
 # http2_initial_stream_window_size = 1048576
 # http2_max_header_list_size = 65536
+# http2_max_local_error_reset_streams = 1024
+# http2_max_pending_accept_reset_streams = 20
 #
 # [worker_service.http_session]
 # cleanup_timeout = "2s"

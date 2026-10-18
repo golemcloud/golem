@@ -193,6 +193,8 @@ Every path into an agent has the same payload limit of 32 MiB: the gRPC message 
 | `http_server.http2_initial_stream_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each request stream |
 | `http_server.http2_initial_connection_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each connection |
 | `http_server.http2_adaptive_window` | worker service, registry service | `false` | Sizes the HTTP/2 windows from the measured bandwidth-delay product, instead of the initial window sizes |
+| `http_server.http2_max_pending_accept_reset_streams` | worker service, registry service | `20` | Streams that the client may reset before the server accepts them, before the server closes the connection (rapid reset protection). Behind a proxy that resets the streams of many clients on a few connections, such as Envoy, a low value closes connections with good requests on them when requests time out. Set it higher there |
+| `http_server.http2_max_local_error_reset_streams` | worker service, registry service | `1024` | Streams that the server may reset because of errors, before it closes the connection |
 | `invocation_session.websocket.max_message_size`, `max_frame_size` | worker service | `33554432` (32 MiB) | Largest WebSocket message and frame of the invocation session. A larger message or frame closes the session with close code 1009 |
 | `invocation_session.websocket.max_write_buffer_size` | worker service | `67108864` (64 MiB) | Outbound bytes that may wait for the client |
 | `connect_websocket.*` | worker service | same as `invocation_session.websocket` | The same limits for the agent event stream (`connect`) |
