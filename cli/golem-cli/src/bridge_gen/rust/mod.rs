@@ -65,7 +65,7 @@ mod type_name;
 mod wire;
 
 pub use config::RustBridgeGeneratorConfig;
-pub use type_name::RustTypeName;
+pub use type_name::{RustRemappedType, RustTypeName};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RustBridgeMode {
@@ -345,6 +345,7 @@ impl RustBridgeGenerator {
                 TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved_names)?
             }
         };
+        validate_remapped_types(&type_naming)?;
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -392,9 +393,9 @@ impl RustBridgeGenerator {
                     "dep:reqwest",
                     "dep:reqwest-middleware",
                     "dep:serde_json",
-                    "dep:uuid",
+                    "uuid/v4",
                 ]);
-                doc["features"]["serde"] = string_array(&["dep:serde"]);
+                doc["features"]["serde"] = string_array(&["dep:serde", "uuid/serde"]);
 
                 doc["dependencies"]["chrono"] = optional_dep("0.4", &[]);
                 doc["dependencies"]["golem-client"] =
@@ -405,7 +406,7 @@ impl RustBridgeGenerator {
                 doc["dependencies"]["reqwest-middleware"] = optional_dep("0.5", &[]);
                 doc["dependencies"]["serde"] = optional_dep("1", &["derive", "std"]);
                 doc["dependencies"]["serde_json"] = optional_dep("1", &[]);
-                doc["dependencies"]["uuid"] = optional_dep("1.18.1", &["v4"]);
+                doc["dependencies"]["uuid"] = dep("1.18.1", &[]);
             }
             RustBridgeMode::GuestWasmRpc => {
                 let sdk_dependency = if self.testing {
@@ -1153,6 +1154,7 @@ impl RustBridgeGenerator {
             let json = serde_json::to_value(&item)?;
             let label = match self.type_naming.type_name_for_type(&item) {
                 Some(RustTypeName::Derived(name)) => name.to_snake_case(),
+                Some(RustTypeName::Remapped(RustRemappedType::Uuid)) => "uuid".to_string(),
                 _ => json["kind"]
                     .as_str()
                     .ok_or_else(|| anyhow!("Missing schema kind"))?
@@ -2759,7 +2761,7 @@ impl RustBridgeGenerator {
 
         for (typ, name) in &types {
             let RustTypeName::Derived(name_str) = name else {
-                bail!("Remapped type names are not supported yet");
+                continue;
             };
             let name_ident = Ident::new(name_str, Span::call_site());
             let resolved = self.resolve_ref_owned(typ);
@@ -2836,7 +2838,7 @@ impl RustBridgeGenerator {
         let mut defs = Vec::new();
         for (typ, name) in &types {
             let RustTypeName::Derived(name_str) = name else {
-                bail!("Remapped type names are not supported yet");
+                continue;
             };
             let name_ident = Ident::new(name_str, Span::call_site());
             let resolved = self.resolve_ref_owned(typ);
@@ -3358,6 +3360,54 @@ impl RustBridgeGenerator {
         self.emit_encode_expr_mode(val, typ, box_recursive, depth, true)
     }
 
+    fn uuid_type_tokens(&self) -> TokenStream {
+        match self.mode {
+            RustBridgeMode::ExternalRest => quote! { uuid::Uuid },
+            RustBridgeMode::GuestWasmRpc => quote! { golem_rust::Uuid },
+        }
+    }
+
+    fn remapped_type_tokens(&self, remapped: &RustRemappedType) -> TokenStream {
+        match remapped {
+            RustRemappedType::Uuid => self.uuid_type_tokens(),
+        }
+    }
+
+    /// The `uuid.Uuid` builtin travels as its schema record of two `u64` halves.
+    fn remapped_encode_expr(remapped: &RustRemappedType, val: &TokenStream) -> TokenStream {
+        match remapped {
+            RustRemappedType::Uuid => quote! {{
+                let (__high, __low) = (#val).as_u64_pair();
+                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record {
+                    fields: vec![
+                        crate::__golem_bridge_runtime::schema::SchemaValue::U64(__high),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::U64(__low),
+                    ],
+                })
+            }},
+        }
+    }
+
+    fn remapped_decode_expr(&self, remapped: &RustRemappedType, val: &TokenStream) -> TokenStream {
+        match remapped {
+            RustRemappedType::Uuid => {
+                let uuid = self.uuid_type_tokens();
+                quote! {
+                    match #val {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields } => match fields.as_slice() {
+                            [
+                                crate::__golem_bridge_runtime::schema::SchemaValue::U64(__high),
+                                crate::__golem_bridge_runtime::schema::SchemaValue::U64(__low),
+                            ] => Ok(#uuid::from_u64_pair(*__high, *__low)),
+                            __other => Err(format!("Expected uuid record of two u64 halves, got {:?}", __other)),
+                        },
+                        __other => Err(format!("Expected uuid record value, got {:?}", __other)),
+                    }
+                }
+            }
+        }
+    }
+
     fn emit_encode_expr_mode(
         &mut self,
         val: TokenStream,
@@ -3366,10 +3416,13 @@ impl RustBridgeGenerator {
         depth: usize,
         streaming: bool,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            let RustTypeName::Derived(n) = name else {
-                bail!("Remapped type names are not supported yet");
-            };
+        let inner = if let Some(RustTypeName::Remapped(remapped)) =
+            self.type_naming.type_name_for_type(typ).cloned()
+        {
+            Self::remapped_encode_expr(&remapped, &val)
+        } else if let Some(RustTypeName::Derived(n)) =
+            self.type_naming.type_name_for_type(typ).cloned()
+        {
             let encode_fn = Ident::new(
                 &if streaming {
                     format!("encode_streaming_{n}")
@@ -3430,10 +3483,13 @@ impl RustBridgeGenerator {
         depth: usize,
         streaming: bool,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            let RustTypeName::Derived(n) = name else {
-                bail!("Remapped type names are not supported yet");
-            };
+        let inner = if let Some(RustTypeName::Remapped(remapped)) =
+            self.type_naming.type_name_for_type(typ).cloned()
+        {
+            self.remapped_decode_expr(&remapped, &val)
+        } else if let Some(RustTypeName::Derived(n)) =
+            self.type_naming.type_name_for_type(typ).cloned()
+        {
             let decode_fn = Ident::new(
                 &if streaming {
                     format!("decode_streaming_{n}")
@@ -4111,8 +4167,9 @@ impl RustBridgeGenerator {
         box_recursive: bool,
     ) -> anyhow::Result<TokenStream> {
         if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            let RustTypeName::Derived(n) = name else {
-                bail!("Remapped type names are not supported yet");
+            let n = match name {
+                RustTypeName::Remapped(remapped) => return Ok(self.remapped_type_tokens(&remapped)),
+                RustTypeName::Derived(n) => n,
             };
             let ident = Ident::new(&n, Span::call_site());
             if box_recursive && self.type_naming.is_recursive_ref(typ) {
@@ -4203,10 +4260,7 @@ impl RustBridgeGenerator {
             )),
             SchemaType::Path { .. } => Ok(quote! { String }),
             SchemaType::Url { .. } => Ok(quote! { String }),
-            SchemaType::Uuid { .. } => Ok(match self.mode {
-                RustBridgeMode::ExternalRest => quote! { uuid::Uuid },
-                RustBridgeMode::GuestWasmRpc => quote! { golem_rust::Uuid },
-            }),
+            SchemaType::Uuid { .. } => Ok(self.uuid_type_tokens()),
             SchemaType::Datetime { .. } => Ok(quote! { String }),
             SchemaType::Duration { .. } => Ok(quote! { i64 }),
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
@@ -4527,6 +4581,40 @@ impl RustBridgeGenerator {
     }
 }
 
+/// A remapped name replaces the generated definition, so its codecs assume the
+/// exact schema body of the builtin it stands for.
+fn validate_remapped_types(type_naming: &TypeNaming<RustTypeName>) -> anyhow::Result<()> {
+    for (typ, name) in type_naming.types() {
+        let RustTypeName::Remapped(RustRemappedType::Uuid) = name else {
+            continue;
+        };
+        let SchemaType::Ref { id, .. } = typ else {
+            bail!("Remapped uuid type is not a reference: {typ:?}");
+        };
+        let body = type_naming
+            .graph()
+            .lookup(id)
+            .map(|def| &def.body)
+            .ok_or_else(|| anyhow!("Missing definition for {}", id.0))?;
+        let is_uuid_record = matches!(
+            body,
+            SchemaType::Record { fields, .. }
+                if fields.len() == 2
+                    && fields[0].name == "high-bits"
+                    && matches!(fields[0].body, SchemaType::U64 { .. })
+                    && fields[1].name == "low-bits"
+                    && matches!(fields[1].body, SchemaType::U64 { .. })
+        );
+        if !is_uuid_record {
+            bail!(
+                "Type {} must be a record of the u64 fields high-bits and low-bits, got {body:?}",
+                id.0
+            );
+        }
+    }
+    Ok(())
+}
+
 // TODO: use published version when available
 enum GolemDependencySource {
     Path(std::path::PathBuf),
@@ -4704,7 +4792,9 @@ mod tests {
         }
         assert!(cargo_toml.contains("[features]"));
         assert!(cargo_toml.contains("default = [\"client\"]"));
-        assert!(cargo_toml.contains("serde = [\"dep:serde\"]"));
+        assert!(cargo_toml.contains("serde = [\"dep:serde\", \"uuid/serde\"]"));
+        assert!(cargo_toml.contains("uuid = \"1.18.1\""));
+        assert!(cargo_toml.contains("\"uuid/v4\""));
         assert!(cargo_toml.contains("optional = true"));
         assert!(!cargo_toml.contains("golem-rust"));
 

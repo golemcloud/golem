@@ -2099,10 +2099,18 @@ cd ../..
 [tasks.build-bash-tool]
 extend = "builtin-artifact-build"
 private = false
-description = "Builds the built-in Bash tool component reproducibly in a pinned container (builtin-tools/bash/build-bash-wasm.sh); needs Docker"
+description = "Builds the built-in Bash tool component"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
+cd builtin-tools/bash
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
+cd ../..
 '''
 
 [tasks.build-python-tool]
