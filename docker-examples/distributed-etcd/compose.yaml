@@ -128,8 +128,8 @@ services:
       # and one replica wins an etcd lease campaign and drives all topology decisions.
       # The endpoint list must be bracketed: unbracketed, it is read as a single string
       # and fails to deserialize. This example's etcd is plaintext, so the endpoint is
-      # http://; for an etcd with TLS or users, see GOLEM__PERSISTENCE__CONFIG__TLS__*,
-      # __USERNAME and __PASSWORD_FILE in this example's README and the deployment guide.
+      # http://; for an etcd with TLS and a user, see compose.tls.yaml and this example's
+      # README.
       GOLEM__PERSISTENCE__TYPE: Etcd
       GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
       # connect_timeout (10s), request_timeout (5s), leader_lease_ttl (10s) and

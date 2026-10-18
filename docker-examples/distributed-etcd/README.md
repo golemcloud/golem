@@ -53,46 +53,50 @@ string and fails to deserialize. The etcd here is plaintext, so the endpoint is 
 
 ### With TLS and an etcd user
 
-For an etcd that requires TLS, client certificates or a user, the shard manager takes the
-certificates as files (or as Base64 values in `__TLS__CA_CERT`, `__TLS__CLIENT_CERT` and
-`__TLS__CLIENT_KEY`) and the password from a file, and every endpoint is `https://`. A user without
-TLS is refused, so switch both on together. The deployment guide has the details.
+`compose.tls.yaml` switches this example's etcd to TLS with client certificates and an etcd user,
+and points the shard manager at it:
 
-```yaml
-services:
-  golem-shard-manager:
-    environment:
-      GOLEM__PERSISTENCE__TYPE: Etcd
-      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
-      GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
-      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
-      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
-      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
-      GOLEM__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
-    volumes:
-      - ./etcd-tls:/etc/etcd-tls:ro
-    secrets:
-      - etcd-password
-  etcd:
-    command:
-      - /usr/local/bin/etcd
-      - --listen-client-urls=https://0.0.0.0:2379
-      - --advertise-client-urls=https://etcd:2379
-      - --cert-file=/etc/etcd-tls/server.pem
-      - --key-file=/etc/etcd-tls/server-key.pem
-      - --trusted-ca-file=/etc/etcd-tls/ca.pem
-      - --client-cert-auth
-    volumes:
-      - ./etcd-tls:/etc/etcd-tls:ro
-
-secrets:
-  etcd-password:
-    file: ./etcd-password.txt
+```sh
+docker compose -f compose.yaml -f compose.tls.yaml up
 ```
 
-etcd's server certificate must name `etcd` (the endpoint host), or set
-`GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME` to a name it holds. The etcd user and its role
-(`readwrite` on `/golem/`) are created with `etcdctl` before authentication is enabled.
+It needs these files beside the compose files:
+
+- `etcd-tls/ca.pem`: the CA that signed the two certificates below.
+- `etcd-tls/server.pem` and `etcd-tls/server-key.pem`: etcd's certificate and key. The certificate
+  must name `etcd`, the endpoint host, or set `GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME` to a
+  name it holds.
+- `etcd-tls/client.pem` and `etcd-tls/client-key.pem`: the shard manager's client certificate and
+  its unencrypted key.
+- `etcd-password.txt`: the etcd user's password; one trailing line ending is removed.
+
+The shard manager's image runs as user 65534, so the client key and the password file must be
+readable by that user (for this local example, `chmod 644`). Instead of files, the certificates can
+also be given as values in `__TLS__CA_CERT`, `__TLS__CLIENT_CERT` and `__TLS__CLIENT_KEY`: the PEM
+in standard Base64 on one line, as `base64 -w0` writes it. A user without TLS is refused, so TLS and
+the user are switched on together.
+
+Create the etcd user and its role once, before the shard manager starts for the first time:
+
+```sh
+etcdctl() {
+  docker compose -f compose.yaml -f compose.tls.yaml exec -T etcd /usr/local/bin/etcdctl \
+    --endpoints=https://etcd:2379 --cacert=/etc/etcd-tls/ca.pem \
+    --cert=/etc/etcd-tls/client.pem --key=/etc/etcd-tls/client-key.pem "$@"
+}
+docker compose -f compose.yaml -f compose.tls.yaml up -d --wait etcd
+etcdctl role add golem-shard-manager
+etcdctl role grant-permission golem-shard-manager --prefix=true readwrite /golem/
+etcdctl user add "golem-shard-manager:$(cat etcd-password.txt)" --interactive=false
+etcdctl user grant-role golem-shard-manager golem-shard-manager
+etcdctl user add "root:<a root password>" --interactive=false
+etcdctl user grant-role root root
+etcdctl auth enable
+```
+
+The client certificate's common name is `golem-shard-manager`, the same as the etcd user, so etcd's
+health check above still passes once authentication is on: etcd takes the user from the certificate
+when no password is sent. The deployment guide has the details of every setting.
 
 ## Limitations of this example
 
