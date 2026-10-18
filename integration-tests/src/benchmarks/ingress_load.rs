@@ -207,6 +207,10 @@ impl HostAddresses {
                 .await
                 .map_err(|err| anyhow::anyhow!("Cannot resolve {host}: {err}"))?
                 .collect::<Vec<_>>();
+            // A dual-stack NLB also has IPv6 addresses; the runner may have no IPv6 route.
+            if addresses.iter().any(SocketAddr::is_ipv4) {
+                addresses.retain(SocketAddr::is_ipv4);
+            }
             addresses.sort();
             addresses.dedup();
             if addresses.is_empty() {
