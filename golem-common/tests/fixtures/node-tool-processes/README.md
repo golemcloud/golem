@@ -462,6 +462,45 @@ passing native test, focused unit tests and artifact identity. They do not prove
 memory-pressure refusal or mid-call cancellation recovery for a complete Node
 adapter. Those remain separate acceptance gates.
 
+### Asynchronous adapter checkpoint
+
+The shared JavaScript adapter also implements `spawn` through `collect-async`.
+It returns before the tool terminal and exposes a writable stdin. The caller can
+wait for `spawn` before writing or ending stdin. The writer serializes native
+write/finish/fail calls. Cleanup closes unused sources, joins the consumer watcher
+and pending writes, and only then drops the borrowed resources. A watcher failure
+cancels the tool instead of leaving collection waiting indefinitely.
+
+`future-invoke-result.admitted` exposes the immutable dispatch decision. It does
+not wait for execution, infer readiness, or change the owner filesystem lane.
+The resource remains admitted after a skipped body terminal. A dispatch refusal
+never emits `spawn`; an admitted command may still report a later execution error.
+The getter reads the resource state reconstructed from ordinary recorded dispatch.
+It does not add an independent durable decision.
+
+Run `cargo make test-javascript-tool-process-backend` for the host-facade tests.
+They exercise binary stdin after `spawn`, distinct outputs, a nonzero command exit,
+allocation refusal, immutable dispatch refusal, a blocked write during cancellation,
+early consumer close, abort, timeout, output overflow, a failed close watcher and
+cleanup after a disposer fails. Invalid cancellation options are rejected before
+discovery. These tests run on host Node; they are not evidence that the new async
+adapter or admission getter works in a Golem component.
+
+The TS, Effect and Scala template sources register the same lazy backend. Built-in
+JavaScript tools inherit it through the TS template. The TS generator was checked
+with the feature compiler and a fresh temporary output directory, without replacing
+the existing wrapper cache. The generated source contains the initializer, backend,
+admission getter and asynchronous collector. This is source-generation evidence,
+not a compiled/Wizer or runtime acceptance result. Effect generation currently
+requires its missing dependency installation and runtime bundles.
+
+Before acceptance, compile and run the new native admission assertions and common
+host-contract test, regenerate the remaining Go/MoonBit bindings, build all three
+SDK templates, and exercise the async adapter in main and fresh runtimes. The
+earlier completion WASM predates `admitted` and must not stand in for that test.
+Shell routing, non-pipe stdio, synchronous deadlines, mid-call recovery, memory
+pressure and controlled tool-performance comparisons remain required gates.
+
 ### Unconfigured backend cost
 
 The [backend microbenchmark](observations-2026-10-17-backend-perf.json) retains both

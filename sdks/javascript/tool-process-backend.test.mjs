@@ -299,3 +299,469 @@ test("invalid input is rejected before tool discovery or admission", () => {
   assert.throws(() => f.backend.spawnSync("tsc", [], { input: 7 }), TypeError);
   assert.deepEqual(f.calls, []);
 });
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+function asyncFixture({
+  admitted = true,
+  completeOnEof = false,
+  blockedWrite = false,
+} = {}) {
+  const f = fixture();
+  const completion = deferred();
+  const consumerClosed = deferred();
+  const writeReady = deferred();
+  const bytes = [];
+  let writing = false;
+  let watching = false;
+  let ended = false;
+  let cancelled = false;
+  let finished = false;
+  const resource = (name, release = () => {}) => {
+    let disposed = false;
+    return {
+      [Symbol.dispose]() {
+        assert.equal(disposed, false, `${name} disposed twice`);
+        assert.equal(
+          writing || watching,
+          false,
+          `${name} disposed during borrowed I/O`,
+        );
+        disposed = true;
+        f.closed.push(name);
+        release();
+      },
+    };
+  };
+  const complete = (value = {}) => {
+    finished = true;
+    writeReady.resolve();
+    consumerClosed.resolve();
+    completion.resolve({
+      bodyExecuted: true,
+      result: { tag: "ok", val: {} },
+      stdout: { bytes: [0, 255] },
+      stderr: { bytes: [128] },
+      ...value,
+    });
+  };
+  const writer = {
+    ...resource("writer"),
+    async write(chunk) {
+      assert.equal(writing, false);
+      writing = true;
+      f.calls.push(["write", [...chunk]]);
+      try {
+        if (blockedWrite) await writeReady.promise;
+        if (finished) throw { tag: "closed" };
+        bytes.push(...chunk);
+      } finally {
+        writing = false;
+      }
+    },
+    async finish() {
+      f.calls.push(["finish"]);
+      ended = true;
+      if (completeOnEof) complete();
+    },
+    async fail(error) {
+      f.calls.push(["fail", error]);
+      consumerClosed.resolve();
+    },
+  };
+  // An unused source must close its consumer watcher before writer cleanup.
+  const source = {
+    [Symbol.dispose]() {
+      f.closed.push("source");
+      consumerClosed.resolve();
+    },
+  };
+  const closed = {
+    ...resource("closed"),
+    async wait() {
+      watching = true;
+      try {
+        await consumerClosed.promise;
+      } finally {
+        watching = false;
+      }
+    },
+  };
+  f.host.createStdin = () => {
+    f.calls.push(["create-stdin"]);
+    return [writer, source, closed];
+  };
+  const future = {
+    ...resource("future"),
+    admitted() {
+      return admitted;
+    },
+    collect() {
+      assert.fail("async spawn called the synchronous collector");
+    },
+    collectAsync(...args) {
+      f.calls.push(["collect-async", ...args]);
+      return completion.promise;
+    },
+    cancel() {
+      f.calls.push(["cancel"]);
+      cancelled = true;
+      complete({
+        bodyExecuted: false,
+        result: { tag: "err", val: { tag: "cancelled" } },
+        stdout: { bytes: [], failure: { tag: "cancelled" } },
+        stderr: { bytes: [], failure: { tag: "cancelled" } },
+      });
+    },
+  };
+  f.host.ToolRpc.prototype.asyncInvokeAndAwait = (...args) => {
+    f.calls.push(["invoke", ...args]);
+    return future;
+  };
+  return {
+    ...f,
+    future,
+    complete,
+    bytes,
+    consumerClosed,
+    get ended() {
+      return ended;
+    },
+    get cancelled() {
+      return cancelled;
+    },
+  };
+}
+
+function observe(child) {
+  const events = [];
+  const errors = [];
+  const stdout = [];
+  const stderr = [];
+  child.stdout.on("data", (chunk) => stdout.push(...chunk));
+  child.stderr.on("data", (chunk) => stderr.push(...chunk));
+  child.stdout.on("end", () => events.push(["stdout-end"]));
+  child.stderr.on("end", () => events.push(["stderr-end"]));
+  child.on("spawn", () => events.push(["spawn"]));
+  child.on("error", (error) => {
+    errors.push(error);
+    events.push(["error"]);
+  });
+  child.on("exit", (...args) => events.push(["exit", ...args]));
+  const closed = new Promise((resolve) =>
+    child.once("close", (...args) => {
+      events.push(["close", ...args]);
+      resolve();
+    }),
+  );
+  return { events, errors, stdout, stderr, closed };
+}
+
+test(
+  "async startup returns before completion and stdin can wait for spawn",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ completeOnEof: true });
+    const child = f.backend.spawn("tsc", ["file.ts"], { maxBuffer: 13 });
+    const observed = observe(child);
+    assert.equal(f.ended, false);
+    assert.deepEqual(f.bytes, []);
+    child.once("spawn", () => child.stdin.end(Buffer.from([0, 128, 255])));
+    await observed.closed;
+    assert.deepEqual(f.bytes, [0, 128, 255]);
+    assert.equal(f.ended, true);
+    assert.deepEqual(observed.stdout, [0, 255]);
+    assert.deepEqual(observed.stderr, [128]);
+    assert.deepEqual(observed.errors, []);
+    assert.deepEqual(observed.events[0], ["spawn"]);
+    assert.deepEqual(observed.events.at(-1), ["close", 7, null]);
+    assert.ok(
+      observed.events.findIndex(([name]) => name === "stdout-end") <
+        observed.events.length - 1,
+    );
+    assert.equal(child.exitCode, 7);
+    assert.equal(child.kill(0), false);
+    assert.deepEqual(f.closed, [
+      "future",
+      "rpc",
+      "closed",
+      "writer",
+      "prepared",
+    ]);
+  },
+);
+
+test(
+  "async allocation failure has no dispatch or spawn and closes unused stdin",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    f.host.createCollectedOutput = () => {
+      throw { tag: "resource-exhausted" };
+    };
+    const child = f.backend.spawn("tsc", []);
+    const observed = observe(child);
+    await observed.closed;
+    assert.equal(observed.errors[0].code, "ENOMEM");
+    assert.equal(
+      f.calls.some(([name]) => name === "invoke"),
+      false,
+    );
+    assert.equal(
+      observed.events.some(([name]) => name === "spawn"),
+      false,
+    );
+    assert.equal(child.pid, undefined);
+    assert.equal(child.kill(), false);
+    assert.deepEqual(f.closed, ["source", "closed", "writer", "prepared"]);
+  },
+);
+
+test(
+  "an immutable dispatch refusal never emits spawn or accepts kill",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ admitted: false });
+    const child = f.backend.spawn("tsc", []);
+    const observed = observe(child);
+    assert.equal(child.kill(0), false);
+    assert.equal(child.kill(), false);
+    f.complete({
+      bodyExecuted: false,
+      result: { tag: "err", val: { tag: "denied" } },
+    });
+    await observed.closed;
+    assert.equal(observed.errors[0].code, "EACCES");
+    assert.equal(
+      observed.events.some(([name]) => name === "spawn"),
+      false,
+    );
+    assert.equal(f.cancelled, false);
+  },
+);
+
+test(
+  "async cancellation joins a blocked write before disposing borrowed resources",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ blockedWrite: true });
+    const child = f.backend.spawn("tsc", []);
+    const observed = observe(child);
+    const written = new Promise((resolve) =>
+      child.stdin.write(Buffer.of(1), (error) => resolve(error)),
+    );
+    await Promise.resolve();
+    assert.deepEqual(f.closed, []);
+    assert.equal(child.kill(0), true);
+    assert.equal(child.kill(15), true);
+    assert.equal(child.kill(), true);
+    await observed.closed;
+    assert.equal((await written).code, "EPIPE");
+    assert.equal(f.calls.filter(([name]) => name === "cancel").length, 1);
+    assert.deepEqual(observed.errors, []);
+    assert.deepEqual(observed.events.at(-1), ["close", null, "SIGTERM"]);
+    assert.equal(child.killed, true);
+  },
+);
+
+test(
+  "async timeout and abort cancel once and a later invocation succeeds",
+  { timeout: 2000 },
+  async () => {
+    for (const mode of ["timeout", "abort"]) {
+      const f = asyncFixture();
+      const controller = new AbortController();
+      const options =
+        mode === "timeout"
+          ? { timeout: 5, killSignal: 2 }
+          : { signal: controller.signal };
+      const child = f.backend.spawn("tsc", [], options);
+      const observed = observe(child);
+      if (mode === "abort") child.once("spawn", () => controller.abort("test"));
+      await observed.closed;
+      assert.equal(f.calls.filter(([name]) => name === "cancel").length, 1);
+      assert.equal(child.signalCode, mode === "timeout" ? "SIGINT" : "SIGTERM");
+      assert.equal(
+        observed.errors[0]?.code,
+        mode === "abort" ? "ABORT_ERR" : undefined,
+      );
+      const next = asyncFixture({ completeOnEof: true });
+      const success = next.backend.spawn("tsc", []);
+      const successObserved = observe(success);
+      success.stdin.end();
+      await successObserved.closed;
+      assert.deepEqual(successObserved.errors, []);
+      assert.equal(success.exitCode, 7);
+    }
+  },
+);
+
+test("invalid async options throw before discovery or effect admission", () => {
+  const f = asyncFixture();
+  for (const options of [
+    { signal: {} },
+    { signal: null },
+    { timeout: -1 },
+    { maxBuffer: -1 },
+    { killSignal: "invalid" },
+  ]) {
+    assert.throws(() => f.backend.spawn("tsc", [], options));
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+test(
+  "an already aborted signal cannot allocate streams or dispatch an effect",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    const controller = new AbortController();
+    controller.abort("before dispatch");
+    const child = f.backend.spawn("tsc", [], { signal: controller.signal });
+    const observed = observe(child);
+    await observed.closed;
+    assert.equal(observed.errors[0].code, "ABORT_ERR");
+    assert.equal(
+      f.calls.some(([name]) => name === "invoke" || name === "create-stdin"),
+      false,
+    );
+    assert.deepEqual(f.closed, ["prepared"]);
+  },
+);
+
+test(
+  "a failed stdin watcher cancels collection instead of hanging",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ blockedWrite: true });
+    const child = f.backend.spawn("tsc", []);
+    const observed = observe(child);
+    child.stdin.write(Buffer.of(1), () => {});
+    f.consumerClosed.reject(new Error("watcher failed"));
+    await observed.closed;
+    assert.equal(f.cancelled, true);
+    assert.equal(observed.errors[0].code, "EIO");
+    assert.deepEqual(observed.events.at(-1), ["close", null, null]);
+  },
+);
+
+test(
+  "async overflow retains each channel prefix and reports a process error",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    const child = f.backend.spawn("tsc", [], { maxBuffer: 2 });
+    const observed = observe(child);
+    f.complete({
+      stdout: { bytes: [0, 255], overflow: true },
+      stderr: { bytes: [128, 1] },
+    });
+    await observed.closed;
+    assert.equal(observed.errors[0].code, "ENOBUFS");
+    assert.deepEqual(observed.stdout, [0, 255]);
+    assert.deepEqual(observed.stderr, [128, 1]);
+    assert.equal(child.exitCode, null);
+  },
+);
+
+test(
+  "failure while attaching an abort listener joins the already started collector",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    const child = f.backend.spawn("tsc", [], {
+      signal: {
+        aborted: false,
+        addEventListener() {
+          throw new Error("listener failed");
+        },
+        removeEventListener() {},
+      },
+    });
+    const observed = observe(child);
+    await observed.closed;
+    assert.equal(f.cancelled, true);
+    assert.equal(observed.errors[0].code, "EIO");
+    assert.match(observed.errors[0].message, /listener failed/);
+    assert.equal(
+      observed.events.some(([name]) => name === "spawn"),
+      false,
+    );
+    assert.deepEqual(f.closed, [
+      "future",
+      "rpc",
+      "closed",
+      "writer",
+      "prepared",
+    ]);
+  },
+);
+
+test(
+  "a pending write that loses its consumer does not turn a command result into a spawn error",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ blockedWrite: true });
+    const child = f.backend.spawn("tsc", []);
+    const observed = observe(child);
+    const written = new Promise((resolve) =>
+      child.stdin.write(Buffer.of(1), (error) => resolve(error)),
+    );
+    await Promise.resolve();
+    f.complete();
+    await observed.closed;
+    assert.equal((await written).code, "EPIPE");
+    assert.equal(f.cancelled, false);
+    assert.deepEqual(observed.errors, []);
+    assert.equal(child.exitCode, 7);
+  },
+);
+
+test(
+  "resource cleanup continues after one disposer fails",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    f.future[Symbol.dispose] = () => {
+      throw new Error("drop failed");
+    };
+    const child = f.backend.spawn("tsc", []);
+    const observed = observe(child);
+    f.complete();
+    await observed.closed;
+    assert.equal(observed.errors[0].code, "EIO");
+    assert.equal(observed.errors[0].cause.message, "drop failed");
+    assert.deepEqual(f.closed, ["rpc", "closed", "writer", "prepared"]);
+  },
+);
+
+test(
+  "async help, disabled and unknown commands remain lazy",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    f.process.env.GOLEM_NODE_TOOL_PROCESSES = "false";
+    assert.equal(f.backend.spawn("tsc", []), undefined);
+    assert.deepEqual(f.calls, []);
+    delete f.process.env.GOLEM_NODE_TOOL_PROCESSES;
+    f.host.prepareCommand = () => undefined;
+    assert.equal(f.backend.spawn("unknown", []), undefined);
+    f.host.prepareCommand = () => ({
+      tag: "output",
+      val: { exitCode: 0, stdout: [104], stderr: [] },
+    });
+    const child = f.backend.spawn("tsc", ["--help"]);
+    const observed = observe(child);
+    await observed.closed;
+    assert.equal(Buffer.from(observed.stdout).toString(), "h");
+    assert.deepEqual(f.calls, []);
+  },
+);
