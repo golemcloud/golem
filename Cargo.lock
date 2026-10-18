@@ -4554,6 +4554,7 @@ dependencies = [
  "golem-service-base",
  "heck",
  "hex",
+ "http 1.5.0",
  "humantime-serde",
  "itertools 0.14.0",
  "jsonwebtoken",
