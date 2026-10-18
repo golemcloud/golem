@@ -17,7 +17,6 @@ use std::fmt::Display;
 use crate::config::StaticRegistryServiceConfig;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use tokio::sync::mpsc;
 use wasmtime::component::Component;
 
 #[derive(Debug, Copy, Clone)]
@@ -47,6 +46,10 @@ pub struct CompiledComponent {
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CompilationError {
+    #[error("Compilation queue is full; skipping precompilation")]
+    QueueFull,
+    #[error("Compilation queue is closed")]
+    QueueClosed,
     #[error("Component not found: {0}")]
     ComponentNotFound(ComponentIdAndRevision),
     #[error("Failed to compile component: {0}")]
@@ -57,10 +60,4 @@ pub enum CompilationError {
     ComponentUploadFailed(String),
     #[error("Unexpected error: {0}")]
     Unexpected(String),
-}
-
-impl<T> From<mpsc::error::SendError<T>> for CompilationError {
-    fn from(_: mpsc::error::SendError<T>) -> Self {
-        CompilationError::Unexpected("Failed to send compilation request".to_string())
-    }
 }
