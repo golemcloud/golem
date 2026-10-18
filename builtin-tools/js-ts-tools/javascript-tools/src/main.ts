@@ -27,7 +27,7 @@ type NpmBundle = {
 };
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
-  .version('0.1.9')
+  .version('0.1.10')
   .doc("Run a JavaScript file or inline expression with Golem's Node-compatible runtime.")
   .annotations({ openWorld: false })
   .body((body) =>
