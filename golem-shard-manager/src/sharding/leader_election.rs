@@ -1274,9 +1274,10 @@ impl LeaderLocator {
 /// if any (the newest of them). The head of the queue never moves: it is about to lead. A version
 /// is newer only when both parse as semantic versions, and then by semantic-version precedence
 /// (build metadata is ignored). A development build announces the `git describe` text of its
-/// last tag, such as `1.6.0-rc2-156-g2917a80d2`, which compares as a pre-release of that tag: it
-/// is older than the release, and two builds of one tag compare by their text, so a count of
-/// commits that gains a digit does not order as a number. A replica that announces nothing, or a
+/// last tag, such as `1.6.0-rc2-156-g2917a80d2`, which compares as a pre-release of the next
+/// release: newer than `1.6.0-rc2` and older than `1.6.0`. A build made after a release tag
+/// (`1.6.0-12-g2917a80d2`) is older than `1.6.0`. Two builds of one tag compare by their text, so
+/// a count of commits that gains a digit does not order as a number. A replica that announces nothing, or a
 /// text that is no semantic version, is never newer and never moves.
 pub(crate) fn newer_version_behind(
     view: &CampaignView,
@@ -1487,7 +1488,7 @@ mod tests {
     }
 
     #[test]
-    fn a_development_build_compares_as_a_pre_release_of_its_last_tag() {
+    fn a_development_build_compares_as_a_pre_release_of_the_next_release() {
         // The form `golem_version()` has on a development build.
         let dev = "1.6.0-rc2-156-g2917a80d2";
         assert_eq!(
@@ -1509,6 +1510,16 @@ mod tests {
             newer_version_behind(&queue_ending_in("1.5.9"), 2, dev),
             None,
             "an older release is older than a development build"
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in(dev), 2, "1.6.0-rc2"),
+            Some(dev.to_string()),
+            "a build after a release candidate is newer than that candidate"
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0-rc2"), 2, dev),
+            None,
+            "the candidate is older than a build after it"
         );
     }
 
