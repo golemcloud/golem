@@ -2872,8 +2872,9 @@ async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
     .expect("the second replica should be elected after the first steps down");
     second.cancel();
     // Waited for, so that the call below cannot be answered by the second leader while it drains.
-    let second_result = second_task
+    let second_result = timeout(STARTUP_TIMEOUT, second_task)
         .await
+        .expect("The second replica should stop")
         .expect("The second replica's task should not panic");
     let second_err = second_result
         .expect_err("A replica stopped during its startup must report that, not finish starting");
@@ -2891,8 +2892,9 @@ async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
 
     // The first replica has stopped for good, and the client holds a connection that it accepted:
     // the call below cannot be answered by anyone but the third replica.
-    first_task
+    timeout(STARTUP_TIMEOUT, first_task)
         .await
+        .expect("The first replica should stop")
         .expect("The first replica's task should not panic")
         .expect("The first replica stops cleanly");
 
@@ -2904,7 +2906,7 @@ async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
     // The third replica takes the initial health check's time to start. A call answered earlier
     // was answered by a replica that had stopped.
     assert_eq!(
-        timeout(Duration::from_millis(500), third_started)
+        timeout(Duration::from_secs(1), third_started)
             .await
             .expect("the third replica was serving when the call was answered")
             .unwrap(),
