@@ -20,9 +20,9 @@ use golem_shard_manager::LEADER_ELECTION_NAME;
 use golem_shard_manager::config::EtcdConfig;
 use golem_shard_manager::{
     CampaignView, Elected, ElectionValue, ElectionWatch, EtcdRoutingTablePersistence, ExecutorAddr,
-    ExecutorId, LeaderElection, LeaderFence, LeaderLocator, LeaseBelief, LeaseKeepAlive,
-    LeaseLossReason, NO_REVISION, RoutingTablePersistence, STATE_KEY, ShardLeaseState,
-    ShardManagerError,
+    ExecutorId, LeaderElection, LeaderFence, LeaderLocator, LeaderView, LeaseBelief,
+    LeaseKeepAlive, LeaseLossReason, NO_REVISION, RoutingTablePersistence, STATE_KEY,
+    ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::net::{IpAddr, Ipv4Addr};
@@ -2022,7 +2022,7 @@ async fn a_leader_value_written_before_the_json_form_is_seen_but_names_no_addres
     let (mut watch, watcher) = election.watch();
     let watcher = tokio::spawn(watcher.run());
     await_view(&mut watch, |view| view.leader().is_some()).await;
-    assert_eq!(watch.leader_value(), Some(None));
+    assert_eq!(watch.leader_value(), LeaderView::NoLeader);
 
     client.lease_revoke(lease).await.unwrap();
     watcher.abort();

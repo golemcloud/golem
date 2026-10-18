@@ -20,7 +20,7 @@
 //! standby answers each call with `UNAVAILABLE` and, once the leader is ready, the leader's
 //! address, which the shard manager client follows.
 
-use crate::sharding::election_watch::ElectionWatch;
+use crate::sharding::election_watch::{ElectionWatch, LeaderView};
 use crate::sharding::leader_election::{ElectionValue, LeaseBelief};
 use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leader_status};
 use std::convert::Infallible;
@@ -36,15 +36,14 @@ use tonic::server::NamedService;
 
 /// Where a standby reads the current leader. A trait so that the gate is testable without etcd.
 pub(crate) trait LeaderLookup: Send + Sync {
-    /// `None` until etcd has answered once; then the leader's value, if one leads and its value
-    /// is readable.
-    fn leader(&self) -> Option<Option<ElectionValue>>;
+    /// What this replica currently knows of the leader.
+    fn leader(&self) -> LeaderView;
     /// Whether etcd answered this replica within `window`.
     fn answered_within(&self, window: Duration) -> bool;
 }
 
 impl LeaderLookup for ElectionWatch {
-    fn leader(&self) -> Option<Option<ElectionValue>> {
+    fn leader(&self) -> LeaderView {
         self.leader_value()
     }
 
@@ -152,17 +151,19 @@ impl<S: Clone> LeaderGate<S> {
 
 /// Names the leader only when its value is ready and is not this replica's own: a replica that
 /// has just won still finds itself here until its startup completes.
-fn standby_answer(leader: Option<Option<ElectionValue>>, own: &LeaderAddress) -> Status {
+fn standby_answer(leader: LeaderView, own: &LeaderAddress) -> Status {
     match leader {
-        None => Status::unavailable(
+        LeaderView::Unread => Status::unavailable(
             "this replica has not read the shard manager leader from etcd yet; retry",
         ),
-        Some(Some(ElectionValue {
+        LeaderView::Leader(ElectionValue {
             ready: true,
             grpc_address: Some(address),
             ..
-        })) if &address != own => not_leader_status(&address),
-        Some(_) => Status::unavailable("no shard manager leader is ready yet; retry"),
+        }) if &address != own => not_leader_status(&address),
+        LeaderView::Leader(_) | LeaderView::NoLeader => {
+            Status::unavailable("no shard manager leader is ready yet; retry")
+        }
     }
 }
 
@@ -254,12 +255,12 @@ mod tests {
     }
 
     struct FixedLeader {
-        leader: Option<Option<ElectionValue>>,
+        leader: LeaderView,
         answered: bool,
     }
 
     impl LeaderLookup for FixedLeader {
-        fn leader(&self) -> Option<Option<ElectionValue>> {
+        fn leader(&self) -> LeaderView {
             self.leader.clone()
         }
 
@@ -295,7 +296,7 @@ mod tests {
         Status::from_header_map(response.headers()).expect("a refusal carries a gRPC status")
     }
 
-    fn standby(leader: Option<Option<ElectionValue>>) -> LeaderGate<Served> {
+    fn standby(leader: LeaderView) -> LeaderGate<Served> {
         let gate = LeaderGate::new();
         gate.stand_by(
             Arc::new(FixedLeader {
@@ -317,32 +318,32 @@ mod tests {
 
     #[test]
     async fn a_standby_sends_the_caller_to_a_ready_leader() {
-        let response = answer(&standby(Some(Some(value(9002, true))))).await;
+        let response = answer(&standby(LeaderView::Leader(value(9002, true)))).await;
         assert_eq!(leader_of(&status(&response)), Some(address(9002)));
     }
 
     #[test]
     async fn a_standby_does_not_name_a_leader_that_is_not_ready() {
-        let response = answer(&standby(Some(Some(value(9002, false))))).await;
+        let response = answer(&standby(LeaderView::Leader(value(9002, false)))).await;
         assert_eq!(status(&response).code(), tonic::Code::Unavailable);
         assert_eq!(leader_of(&status(&response)), None);
     }
 
     #[test]
     async fn a_standby_never_names_itself() {
-        let response = answer(&standby(Some(Some(value(9001, true))))).await;
+        let response = answer(&standby(LeaderView::Leader(value(9001, true)))).await;
         assert_eq!(leader_of(&status(&response)), None);
     }
 
     #[test]
     async fn a_standby_without_a_leader_names_none() {
-        let response = answer(&standby(Some(None))).await;
+        let response = answer(&standby(LeaderView::NoLeader)).await;
         assert_eq!(leader_of(&status(&response)), None);
     }
 
     #[test]
     async fn a_standby_that_has_not_read_etcd_yet_names_no_leader() {
-        let response = answer(&standby(None)).await;
+        let response = answer(&standby(LeaderView::Unread)).await;
         let status = status(&response);
         assert_eq!(status.code(), tonic::Code::Unavailable);
         assert_eq!(leader_of(&status), None);
@@ -355,7 +356,7 @@ mod tests {
 
     #[test]
     async fn a_leader_whose_lease_belief_has_expired_serves_nothing() {
-        let gate = standby(Some(None));
+        let gate = standby(LeaderView::NoLeader);
         gate.serve(
             Served,
             Some(LeaseBelief::until(
@@ -369,7 +370,7 @@ mod tests {
 
     #[test]
     async fn a_leader_within_its_lease_belief_serves() {
-        let gate = standby(Some(None));
+        let gate = standby(LeaderView::NoLeader);
         gate.serve(
             Served,
             Some(LeaseBelief::until(Instant::now() + Duration::from_secs(10))),
@@ -388,7 +389,7 @@ mod tests {
         let quiet = LeaderGate::<Served>::new();
         quiet.stand_by(
             Arc::new(FixedLeader {
-                leader: Some(None),
+                leader: LeaderView::NoLeader,
                 answered: false,
             }),
             address(9001),
@@ -399,7 +400,7 @@ mod tests {
             "a standby that etcd did not answer is not ready"
         );
         assert!(
-            standby(Some(None)).is_ready(),
+            standby(LeaderView::NoLeader).is_ready(),
             "a standby that etcd answered is ready"
         );
 
@@ -424,7 +425,7 @@ mod tests {
 
     #[test]
     async fn a_serving_replica_passes_the_call_through() {
-        let gate = standby(Some(Some(value(9002, true))));
+        let gate = standby(LeaderView::Leader(value(9002, true)));
         gate.serve(Served, None);
         let response = answer(&gate).await;
         assert_eq!(response.headers().get("x-served").unwrap(), "yes");

@@ -40,6 +40,17 @@ pub struct Campaigner {
     pub value: Option<ElectionValue>,
 }
 
+/// What a replica knows of the leader.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LeaderView {
+    /// Etcd has not answered yet.
+    Unread,
+    /// No replica leads, or the leader's value is not a readable `ElectionValue`; the two are
+    /// treated alike.
+    NoLeader,
+    Leader(ElectionValue),
+}
+
 /// Every campaigner, in queue order: etcd hands the leadership to the key with the lowest create
 /// revision.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -92,13 +103,15 @@ impl ElectionWatch {
         self.view.borrow().clone()
     }
 
-    /// `None` until etcd has answered once; then the leader's value, `None` inside when no
-    /// replica leads or its value cannot be read.
-    pub fn leader_value(&self) -> Option<Option<ElectionValue>> {
-        self.view
-            .borrow()
-            .as_ref()
-            .map(|view| view.leader().and_then(|leader| leader.value.clone()))
+    /// What this replica currently knows of the leader.
+    pub fn leader_value(&self) -> LeaderView {
+        match self.view.borrow().as_ref() {
+            None => LeaderView::Unread,
+            Some(view) => match view.leader().and_then(|leader| leader.value.clone()) {
+                Some(value) => LeaderView::Leader(value),
+                None => LeaderView::NoLeader,
+            },
+        }
     }
 
     /// Whether etcd answered this replica's watch within `window`.

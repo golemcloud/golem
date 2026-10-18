@@ -44,7 +44,9 @@ use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
-pub use sharding::election_watch::{CampaignView, Campaigner, ElectionWatch, ElectionWatcher};
+pub use sharding::election_watch::{
+    CampaignView, Campaigner, ElectionWatch, ElectionWatcher, LeaderView,
+};
 pub use sharding::error::{HealthCheckError, ShardManagerError};
 pub use sharding::etcd_retry::{ReadRetry, never_reached_etcd};
 pub use sharding::healthcheck::HealthCheck;
