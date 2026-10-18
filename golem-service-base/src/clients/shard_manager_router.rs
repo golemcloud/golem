@@ -378,7 +378,7 @@ impl LeaderRouter {
                 Err(status) => {
                     if let Some(next) = leader_of(&status) {
                         self.forget_leader(&leader, &status);
-                        return self.follow(description, next, attempts, f).await;
+                        return self.follow(description, next, attempts, skip, f).await;
                     }
                     // The shard manager answers most refusals inside a successful response, but
                     // some with a status such as `InvalidArgument`: those come from a working
@@ -410,7 +410,7 @@ impl LeaderRouter {
                     failed: failed_here,
                 }
             }
-            Some(next) => self.follow(description, next, attempts, f).await,
+            Some(next) => self.follow(description, next, attempts, skip, f).await,
             // The configured address has already spent its own retries.
             None => Routed::Done(Err(status)),
         }
@@ -419,12 +419,15 @@ impl LeaderRouter {
     /// Sends the call to a leader that an answer named, and on to the next one if that replica
     /// names another. A replica that names a leader has not run the call, so this holds for every
     /// call. At most [`MAX_REDIRECT_HOPS`] named leaders are tried in one pass; the last answer
-    /// then counts as a failed follow, which ends a loop of replicas that name each other.
+    /// then counts as a failed follow, which ends a loop of replicas that name each other. A
+    /// leader that `skip` names failed in the previous pass and is not tried in this one, wherever
+    /// in the chain it is named.
     async fn follow<F, R>(
         &self,
         description: &'static str,
         mut leader: LeaderAddress,
         attempts: Attempts,
+        skip: Option<&LeaderAddress>,
         f: &F,
     ) -> Routed<R>
     where
@@ -445,6 +448,12 @@ impl LeaderRouter {
                     }
                     self.forget_leader(&leader, &status);
                     match named {
+                        Some(next) if attempts.replayable() && skip == Some(&next) => {
+                            return Routed::LeaderUnreachable {
+                                status,
+                                failed: None,
+                            };
+                        }
                         Some(next) if hops < MAX_REDIRECT_HOPS => leader = next,
                         _ => {
                             if !attempts.replayable() {

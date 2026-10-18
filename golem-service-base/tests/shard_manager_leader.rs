@@ -964,6 +964,33 @@ async fn a_retried_call_waits_out_a_named_leader_that_refuses_connections() {
 }
 
 #[test]
+// A leader that failed in the last pass is skipped in the next one even when it is named by a
+// replica that was itself named: the chain is not a way around the rule.
+async fn a_leader_that_failed_is_skipped_in_the_next_pass_along_a_chain() {
+    let leader = run_replica(Mode::Leader).await;
+    leader.script([Mode::Fails(tonic::Code::Unavailable)]);
+    let middle = run_replica(Mode::Standby(Some(leader.address()))).await;
+    let first = run_replica(Mode::Standby(Some(middle.address()))).await;
+    let client = client_with_default_config("127.0.0.1", first.addr.port());
+
+    client
+        .get_routing_table()
+        .await
+        .expect("a later pass reaches the leader that failed once");
+
+    assert_eq!(
+        middle.refusals(),
+        3,
+        "the second pass reached the middle replica but did not try the leader it names"
+    );
+    assert_eq!(leader.refusals(), 1);
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    middle.stop().await;
+    first.stop().await;
+}
+
+#[test]
 // Clients reach the leader by its advertised host, a pod IP that the shard managers' certificate
 // does not name. With no server name configured, the client must check the leader's certificate
 // against the host it was configured with, the name the certificate is issued for.
