@@ -20,15 +20,16 @@ use crate::clients::shard_manager::GrpcShardManagerConfig;
 use crate::clients::shard_manager_leader::{LeaderAddress, is_not_leader, leader_of};
 use crate::grpc::client::{
     EnabledGrpcClientTlsConfig, GrpcClient, GrpcClientConfig, GrpcClientTlsConfig,
-    MultiTargetGrpcClient, requires_reconnect,
+    MultiTargetGrpcClient, peer_answered_unavailable, requires_reconnect,
 };
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RetryConfig;
-use golem_common::retries::RetryState;
+use golem_common::retries::{RetryState, get_delay};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::{Code, Status};
@@ -44,6 +45,25 @@ const LEADER_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// only while a leadership change is being observed, so a chain is short; the limit ends a loop
 /// of replicas that disagree.
 const MAX_REDIRECT_HOPS: usize = 3;
+
+/// How long a call that may be repeated keeps asking once the replicas have shown a failover. The
+/// shard manager's default `leader_lease_ttl` is 10 s, and until it passes the replicas keep naming
+/// the dead leader; the new leader then starts up, which skips the executor check while the leases
+/// it reads are valid and otherwise waits at most 3 s. Together that is about 13 s, rounded up.
+const FAILOVER_BUDGET: Duration = Duration::from_secs(15);
+
+/// The backoff between passes while a failover is being waited out: it starts quickly, because a
+/// new leader may be named at any moment, and settles at the longest pause that still notices one
+/// within half a second.
+fn failover_backoff() -> RetryConfig {
+    RetryConfig {
+        max_attempts: u32::MAX,
+        min_delay: Duration::from_millis(100),
+        max_delay: Duration::from_millis(500),
+        multiplier: 2.0,
+        max_jitter_factor: None,
+    }
+}
 
 pub(crate) type Client = ShardManagerServiceClient<OtelGrpcService<Channel>>;
 
@@ -126,6 +146,33 @@ struct LeaderState {
     reported: Option<ReportedLeader>,
 }
 
+/// `f`, noting in `answered_unavailable` whether the call it made ended in `UNAVAILABLE` from a
+/// replica that was reached. The signature is spelled out so that the closure is inferred as
+/// higher-ranked, as in [`LeaderRouter::call`].
+fn observe_answers<'f, F, R>(
+    f: &'f F,
+    answered_unavailable: Arc<AtomicBool>,
+) -> impl for<'a> Fn(&'a mut Client) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
++ Send
++ Sync
++ 'f
+where
+    F: ClientCall<R>,
+    R: 'static,
+{
+    move |client: &mut Client| {
+        let call = f(client);
+        let answered_unavailable = answered_unavailable.clone();
+        Box::pin(async move {
+            let result = call.await;
+            if let Err(status) = &result {
+                answered_unavailable.store(peer_answered_unavailable(status), Ordering::Relaxed);
+            }
+            result
+        })
+    }
+}
+
 /// The outcome of one pass of [`LeaderRouter::call`].
 enum Routed<R> {
     Done(Result<R, Status>),
@@ -203,9 +250,12 @@ impl LeaderRouter {
     /// call that must not be repeated. A failed call to a known leader is not repeated for such a
     /// call, because it may have run; the caller's own schedule tries again.
     ///
-    /// After an ungraceful stop, the replicas name the dead leader until its etcd lease expires. A
-    /// call that may be repeated waits that out with the configured `retries_on_unavailable`, as
-    /// it waited out a closed port before the replicas named their leader.
+    /// After an ungraceful stop, the replicas name the dead leader until its etcd lease expires,
+    /// and then know no leader until the new one is ready. A call that may be repeated waits that
+    /// out: once a named leader cannot be reached, or a replica answers `UNAVAILABLE` itself, it
+    /// keeps asking for [`FAILOVER_BUDGET`] or for the configured `retries_on_unavailable`,
+    /// whichever is longer. A shard manager that cannot be reached at all is no failover and keeps
+    /// the configured retries.
     pub(crate) async fn call<F, R>(
         &self,
         description: &'static str,
@@ -213,6 +263,7 @@ impl LeaderRouter {
         f: F,
     ) -> Result<R, Status>
     where
+        R: 'static,
         F: for<'a> Fn(
                 &'a mut Client,
             ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
@@ -221,25 +272,57 @@ impl LeaderRouter {
     {
         let mut failed_last_pass = None;
         let mut retries = RetryState::new(&self.retries_on_unavailable);
+        let failover_backoff = failover_backoff();
+        let started = Instant::now();
+        let mut failover_passes = 0;
+        // Whether the last answer a replica gave this call was its own `UNAVAILABLE`, as opposed
+        // to a failure to reach one.
+        let answered_unavailable = Arc::new(AtomicBool::new(false));
+        let observing = observe_answers(&f, answered_unavailable.clone());
         loop {
             retries.start_attempt();
             // A named leader that failed is skipped for one pass only. Its failure may have been
             // brief, and skipping it for the rest of the call would fail a call that it could
             // still serve.
             let skip = failed_last_pass.take();
-            match self
-                .route_once(description, attempts, &f, skip.as_ref())
-                .await
-            {
-                Routed::Done(result) => return result,
-                Routed::LeaderUnreachable { status, failed } => {
-                    failed_last_pass = failed;
-                    if attempts.replayable() && retries.failed_attempt().await {
-                        continue;
-                    }
-                    return Err(status);
+            answered_unavailable.store(false, Ordering::Relaxed);
+            let routed = self
+                .route_once(description, attempts, &observing, skip.as_ref())
+                .await;
+            let (status, failed) = match routed {
+                Routed::Done(Ok(result)) => return Ok(result),
+                // The configured address answered `UNAVAILABLE` itself: a replica that works but
+                // knows no leader to name, which is how a failover looks before the new leader is
+                // ready. Anything else from it, such as a failure to connect, is the shard manager
+                // being unreachable and keeps the configured retries.
+                Routed::Done(Err(status))
+                    if attempts.replayable()
+                        && peer_answered_unavailable(&status)
+                        && answered_unavailable.load(Ordering::Relaxed) =>
+                {
+                    (status, None)
                 }
+                Routed::Done(Err(status)) => return Err(status),
+                Routed::LeaderUnreachable { status, failed } => (status, failed),
+            };
+            failed_last_pass = failed;
+            if !attempts.replayable() {
+                return Err(status);
             }
+            // Every pass that ends here has shown a failover, so the larger of the two budgets
+            // applies from the first one on.
+            failover_passes += 1;
+            let remaining = FAILOVER_BUDGET.saturating_sub(started.elapsed());
+            if let Some(delay) = get_delay(&failover_backoff, failover_passes)
+                && !remaining.is_zero()
+            {
+                tokio::time::sleep(delay.min(remaining)).await;
+                continue;
+            }
+            if retries.failed_attempt().await {
+                continue;
+            }
+            return Err(status);
         }
     }
 

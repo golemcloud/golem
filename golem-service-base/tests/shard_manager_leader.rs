@@ -568,9 +568,11 @@ async fn a_standby_naming_an_unreachable_leader_fails_within_the_short_connect_t
     let standby = run_replica(Mode::Standby(Some(unreachable))).await;
     let client = client_for(&standby);
 
+    // A call that is tried once ends at the first connect that fails; a call that may be repeated
+    // keeps waiting for a failover to end.
     let started = Instant::now();
     client
-        .get_routing_table()
+        .deregister(Uuid::new_v4(), BTreeMap::new())
         .await
         .expect_err("nothing serves at the named address");
 
@@ -757,6 +759,107 @@ async fn a_retried_call_rides_out_a_dead_leader_that_is_still_named() {
     assert_eq!(leader.calls(), 1);
     leader.stop().await;
     standby.stop().await;
+}
+
+/// A client with the default client settings, as the services use it: no test-sized retry budget.
+fn client_with_default_config(host: &str, port: u16) -> GrpcShardManager {
+    GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: host.to_string(),
+        port,
+        client_config: GrpcClientConfig::default(),
+        retries: RetryConfig::default(),
+    })
+}
+
+#[test]
+// The replicas name a dead leader until its lease expires, which takes longer than the default
+// retry budget. A call that may be repeated waits that out with the router's own budget.
+async fn a_retried_call_waits_out_a_failover_longer_than_the_default_retries() {
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
+    // The named leader cannot serve for its first six calls. A pass tries it only every other
+    // time, so the call needs twelve passes: about five seconds at the failover backoff.
+    leader.script(std::iter::repeat_n(
+        Mode::Fails(tonic::Code::Unavailable),
+        6,
+    ));
+    let client = client_with_default_config("127.0.0.1", standby.addr.port());
+
+    let started = Instant::now();
+    client
+        .get_routing_table()
+        .await
+        .expect("the call outlasts the time in which the named leader cannot serve");
+
+    assert!(
+        started.elapsed() > Duration::from_secs(3),
+        "the test must outlast the default retries, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// Right after a leader is gone, the replicas may know no leader at all and answer `UNAVAILABLE`.
+// That is an answer from a working replica about a failover, so the call keeps asking for longer
+// than the default retries allow.
+async fn a_retried_call_waits_out_replicas_that_know_no_leader_yet() {
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(None)).await;
+    // The client's own retries ask the standby several times per pass; ten answers last about five
+    // seconds, and the one after names the leader.
+    standby.script(
+        std::iter::repeat_n(Mode::Standby(None), 10)
+            .chain(std::iter::once(Mode::Standby(Some(leader.address())))),
+    );
+    let client = client_with_default_config("127.0.0.1", standby.addr.port());
+
+    let started = Instant::now();
+    client
+        .get_routing_table()
+        .await
+        .expect("the call outlasts the time in which no leader is ready");
+
+    assert!(
+        started.elapsed() > Duration::from_secs(2),
+        "the test must outlast the default retries, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// Only a failover earns the longer budget. A configured address that nothing listens on is the
+// shard manager being unreachable, which keeps the configured retries.
+async fn a_configured_address_that_refuses_connections_fails_within_the_configured_retries() {
+    let (_reserved, port) = refusing_port();
+    // A short connect timeout keeps the test fast where such a port does not refuse at once; the
+    // retries are the default ones.
+    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port,
+        client_config: GrpcClientConfig {
+            connect_timeout: Duration::from_millis(500),
+            ..GrpcClientConfig::default()
+        },
+        retries: RetryConfig::default(),
+    });
+
+    let started = Instant::now();
+    client
+        .get_routing_table()
+        .await
+        .expect_err("nothing listens at the configured address");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "the call waited {:?}, longer than the configured retries",
+        started.elapsed()
+    );
 }
 
 #[test]

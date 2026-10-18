@@ -1135,6 +1135,12 @@ impl<'a> CallAttempts<'a> {
     }
 }
 
+/// Whether a peer that the call reached answered `UNAVAILABLE` itself, as a service does that
+/// refuses work for now. The connection worked: nothing in the status says the transport failed.
+pub(crate) fn peer_answered_unavailable(e: &Status) -> bool {
+    e.code() == Code::Unavailable && !transport_failed(e)
+}
+
 pub(crate) fn requires_reconnect(e: &Status) -> bool {
     // A request that ran out of its own time says nothing about the health of
     // the connection it ran on. Without this the registry client
