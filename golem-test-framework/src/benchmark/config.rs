@@ -306,7 +306,87 @@ pub struct BenchmarkSuite {
     /// benchmarks choose one agent type each, so a suite selects them by name.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skip_ts_agents: bool,
+    /// Settings of the ingress-load benchmark. The other benchmarks ignore them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<IngressSettings>,
     pub benchmarks: Vec<BenchmarkSuiteItem>,
+}
+
+/// How the ingress-load benchmark makes its clients behave. `size` gives the number of
+/// accounts and `length` the target request rate; these give the rest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct IngressSettings {
+    /// How long each step sends requests. Longer than the 600 s TTL of the worker-service
+    /// auth and router caches, so every entry expires at least once during a step.
+    pub step_secs: u64,
+    /// Agents that each account calls, so no single agent limits the rate.
+    pub agents_per_account: usize,
+    /// Requests a client sends before it closes its connection and opens a new one.
+    /// 0 keeps one connection for the whole step.
+    pub requests_per_connection: usize,
+    /// Share of the clients that use HTTP/1.1. The others negotiate HTTP/2.
+    pub http1_percent: usize,
+    /// Share of the requests that go through the HTTP API. The others go to the REST
+    /// invoke endpoint with the token of the account.
+    pub http_api_percent: usize,
+    /// Number of HTTP API domains. Each one has its own environment and component.
+    pub http_api_domains: usize,
+    /// Accounts set up at the same time.
+    pub setup_concurrency: usize,
+    /// The agent methods that the requests call, each with a share of the requests. The
+    /// default is echo only, the least work an invocation can do.
+    pub mix: Vec<IngressMixEntry>,
+}
+
+/// One agent method in the request mix of the ingress-load benchmark.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressMixEntry {
+    pub method: IngressMethod,
+    /// The share of the requests, relative to the weights of the other entries.
+    pub weight: usize,
+    /// For sleep: how long the agent sleeps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub millis: Option<u64>,
+    /// For oplogHeavy: the number of oplog commits. For cpuIntensive: the matrix size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IngressMethod {
+    /// The whole network path to an executor, with the least work there: on the REST share
+    /// GET of the agent's metadata, which worker-service authenticates and passes to the
+    /// executor that owns the agent, and which the executor answers from memory, without
+    /// running the agent; on the HTTP API share GET /openapi.json, which worker-service
+    /// serves from its cache after it resolves the domain and the route.
+    NoInvocation,
+    Echo,
+    Sleep,
+    OplogHeavy,
+    CpuIntensive,
+}
+
+impl Default for IngressSettings {
+    fn default() -> Self {
+        Self {
+            step_secs: 720,
+            agents_per_account: 4,
+            requests_per_connection: 0,
+            http1_percent: 0,
+            http_api_percent: 50,
+            http_api_domains: 8,
+            setup_concurrency: 32,
+            mix: vec![IngressMixEntry {
+                method: IngressMethod::Echo,
+                weight: 1,
+                millis: None,
+                length: None,
+            }],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

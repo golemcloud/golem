@@ -1,0 +1,34 @@
+# Ingress load with a request mix: ingress-load.yaml with methods that do work, not only
+# echo. Echo is the least work an invocation can do, so ingress-load.yaml gives the cost
+# that every request pays. Production requests also wait on outgoing calls, write to the
+# oplog and use CPU.
+#
+# The weights are a guess, not production numbers. Each step calls, in this order of
+# share: echo; sleep 1 s, for a call that waits on an outgoing request; 10 oplog commits,
+# for 10 durable side effects; and a 100 x 100 matrix product, for CPU work.
+#
+# Run it like ingress-load.yaml, with `suite: ingress-load-mix.yaml`. The duration keys
+# name the method: rest-sleep-invocation, http-api-oplog-heavy-invocation and so on.
+
+name: ingress-load-mix
+ingress:
+  stepSecs: 720
+  agentsPerAccount: 4
+  requestsPerConnection: 0
+  http1Percent: 30
+  httpApiPercent: 50
+  httpApiDomains: 8
+  setupConcurrency: 32
+  mix:
+    - { method: echo, weight: 50 }
+    - { method: sleep, weight: 20, millis: 1000 }
+    - { method: oplogHeavy, weight: 20, length: 10 }
+    - { method: cpuIntensive, weight: 10, length: 100 }
+benchmarks:
+  # size   = accounts, each one a client with its own connection and token
+  # length = target requests per second from all accounts together
+  - name: ingress-load
+    iterations: 1
+    clusterSize: [2]
+    size: [1000]
+    length: [250, 500, 1000, 1500]

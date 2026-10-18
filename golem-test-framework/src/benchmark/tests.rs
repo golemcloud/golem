@@ -174,3 +174,63 @@ fn rust_only_cloud_perf_suite_is_cloud_perf_without_ts_agents() {
         .collect();
     assert_eq!(rust_items, without_ts_only);
 }
+
+#[test]
+fn ingress_load_suite_has_its_settings() {
+    let ingress = suite("ingress-load.yaml");
+    let settings = ingress
+        .ingress
+        .expect("the suite sets the ingress settings");
+    assert_eq!(settings.step_secs, 720);
+    assert_eq!(settings.http1_percent, 30);
+    assert_eq!(ingress.benchmarks[0].name, "ingress-load");
+
+    // A suite without the field gets no settings, so the benchmark uses the defaults.
+    assert!(suite("cloud-perf-rust.yaml").ingress.is_none());
+    // Without a mix, every request calls echo.
+    assert_eq!(settings.mix, IngressSettings::default().mix);
+    assert_eq!(settings.mix[0].method, IngressMethod::Echo);
+}
+
+#[test]
+fn ingress_load_network_suite_calls_no_executor() {
+    let suite = suite("ingress-load-network.yaml");
+    let settings = suite.ingress.expect("the suite sets the ingress settings");
+    assert_eq!(settings.mix.len(), 1);
+    assert_eq!(settings.mix[0].method, IngressMethod::NoInvocation);
+    assert_eq!(settings.step_secs, 300);
+    assert_eq!(
+        suite.benchmarks[0].length,
+        vec![2000, 4000, 6000, 8000, 10000]
+    );
+}
+
+#[test]
+fn ingress_load_network_ab_suite_has_the_settings_of_the_network_suite() {
+    let network = suite("ingress-load-network.yaml");
+    let ab = suite("ingress-load-network-ab.yaml");
+    assert_eq!(ab.ingress, network.ingress);
+    assert_eq!(ab.benchmarks[0].size, network.benchmarks[0].size);
+    assert_eq!(ab.benchmarks[0].length, vec![6000, 8000]);
+}
+
+#[test]
+fn ingress_load_mix_suite_has_its_mix() {
+    let mix = suite("ingress-load-mix.yaml")
+        .ingress
+        .expect("the suite sets the ingress settings")
+        .mix;
+    let methods = mix
+        .iter()
+        .map(|entry| (entry.method, entry.weight, entry.millis, entry.length))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        vec![
+            (IngressMethod::Echo, 50, None, None),
+            (IngressMethod::Sleep, 20, Some(1000), None),
+            (IngressMethod::OplogHeavy, 20, None, Some(10)),
+            (IngressMethod::CpuIntensive, 10, None, Some(100)),
+        ]
+    );
+}

@@ -1,0 +1,40 @@
+# Ingress load on the whole network path, from the NLB to an executor: NLB, Envoy proxies,
+# Cilium, worker-service, and the gRPC hop from worker-service to the executor. The
+# executors do as little as they can. ingress-load.yaml calls echo, which runs the agent
+# and writes its oplog, and the executors stop it at about 1900 req/s.
+#
+# The requests (method noInvocation):
+# - REST: GET /v1/components/{component}/workers/{agent}, the metadata of an agent.
+#   worker-service authenticates the token, checks the permission and asks the executor
+#   that owns the agent's shard over gRPC. The executor answers from the agent's status
+#   in memory: no agent code runs, and nothing is written. The warmup calls echo on each
+#   agent once, so all agents are loaded.
+# - HTTP API: GET /openapi.json of the domain. worker-service resolves the domain and the
+#   route, and serves the document from its cache. This share does not reach an executor:
+#   every HTTP API route runs agent code.
+#
+# Run it like ingress-load.yaml, with `suite: ingress-load-network.yaml`. late-starts
+# counts requests that the runner started more than 20 ms late: if it is not near 0, the
+# runner limited the rate, not the cluster.
+
+name: ingress-load-network
+ingress:
+  # The network path has no cache with a TTL to wait out, so shorter steps than
+  # ingress-load.yaml.
+  stepSecs: 300
+  agentsPerAccount: 4
+  requestsPerConnection: 0
+  http1Percent: 30
+  httpApiPercent: 50
+  httpApiDomains: 8
+  setupConcurrency: 32
+  mix:
+    - { method: noInvocation, weight: 1 }
+benchmarks:
+  # size   = accounts, each one a client with its own connection and token
+  # length = target requests per second from all accounts together
+  - name: ingress-load
+    iterations: 1
+    clusterSize: [2]
+    size: [1000]
+    length: [2000, 4000, 6000, 8000, 10000]
