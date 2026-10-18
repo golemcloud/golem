@@ -24,7 +24,7 @@ use crate::grpc::client::{
 };
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RetryConfig;
-use golem_common::retries::{RetryState, get_delay};
+use golem_common::retries::get_delay;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,6 +63,27 @@ fn failover_backoff() -> RetryConfig {
         multiplier: 2.0,
         max_jitter_factor: None,
     }
+}
+
+/// The time that the configured `retries_on_unavailable` schedule takes in all, without jitter.
+fn schedule_total(schedule: &RetryConfig) -> Duration {
+    // The delays settle at `max_delay` long before a schedule of any size ends, so the rest of a
+    // very long one is counted at that rate instead of one attempt at a time.
+    const COUNTED_ONE_BY_ONE: u32 = 10_000;
+    let schedule = RetryConfig {
+        max_jitter_factor: None,
+        ..schedule.clone()
+    };
+    let counted = schedule.max_attempts.min(COUNTED_ONE_BY_ONE);
+    let mut total = Duration::ZERO;
+    for attempt in 1..counted {
+        total = total.saturating_add(get_delay(&schedule, attempt).unwrap_or_default());
+    }
+    total.saturating_add(
+        schedule
+            .max_delay
+            .saturating_mul(schedule.max_attempts.saturating_sub(counted)),
+    )
 }
 
 pub(crate) type Client = ShardManagerServiceClient<OtelGrpcService<Channel>>;
@@ -217,8 +238,8 @@ pub(crate) struct LeaderRouter {
     leaders: MultiTargetGrpcClient<Client>,
     state: Arc<Mutex<LeaderState>>,
     tls: bool,
-    /// The budget for waiting out a leader that the replicas name but nobody can reach.
-    retries_on_unavailable: RetryConfig,
+    /// How long the configured `retries_on_unavailable` schedule takes in all.
+    configured_budget: Duration,
 }
 
 impl LeaderRouter {
@@ -239,7 +260,7 @@ impl LeaderRouter {
             .with_redirect(is_not_leader),
             state: Arc::new(Mutex::new(LeaderState::default())),
             tls: config.client_config.tls_enabled(),
-            retries_on_unavailable: config.client_config.retries_on_unavailable.clone(),
+            configured_budget: schedule_total(&config.client_config.retries_on_unavailable),
         }
     }
 
@@ -253,9 +274,11 @@ impl LeaderRouter {
     /// After an ungraceful stop, the replicas name the dead leader until its etcd lease expires,
     /// and then know no leader until the new one is ready. A call that may be repeated waits that
     /// out: once a named leader cannot be reached, or a replica answers `UNAVAILABLE` itself, it
-    /// keeps asking for [`FAILOVER_BUDGET`] or for the configured `retries_on_unavailable`,
-    /// whichever is longer. A shard manager that cannot be reached at all is no failover and keeps
-    /// the configured retries.
+    /// keeps asking until [`FAILOVER_BUDGET`] or the time that the configured
+    /// `retries_on_unavailable` schedule takes in all has passed since the call began, whichever
+    /// is longer. From then on the signal holds for the whole call, and a pass sends the call to
+    /// the configured address once instead of running its schedule again. A shard manager that
+    /// cannot be reached at all is no failover and keeps the configured retries.
     pub(crate) async fn call<F, R>(
         &self,
         description: &'static str,
@@ -271,34 +294,46 @@ impl LeaderRouter {
             + Sync,
     {
         let mut failed_last_pass = None;
-        let mut retries = RetryState::new(&self.retries_on_unavailable);
         let failover_backoff = failover_backoff();
         let started = Instant::now();
+        // Fixed when the first failover signal is seen, and the end of the wait from then on.
+        let mut deadline: Option<Instant> = None;
         let mut failover_passes = 0;
         // Whether the last answer a replica gave this call was its own `UNAVAILABLE`, as opposed
         // to a failure to reach one.
         let answered_unavailable = Arc::new(AtomicBool::new(false));
         let observing = observe_answers(&f, answered_unavailable.clone());
         loop {
-            retries.start_attempt();
             // A named leader that failed is skipped for one pass only. Its failure may have been
             // brief, and skipping it for the rest of the call would fail a call that it could
             // still serve.
             let skip = failed_last_pass.take();
             answered_unavailable.store(false, Ordering::Relaxed);
             let routed = self
-                .route_once(description, attempts, &observing, skip.as_ref())
+                .route_once(
+                    description,
+                    attempts,
+                    deadline.is_some(),
+                    &observing,
+                    skip.as_ref(),
+                )
                 .await;
             let (status, failed) = match routed {
                 Routed::Done(Ok(result)) => return Ok(result),
                 // The configured address answered `UNAVAILABLE` itself: a replica that works but
                 // knows no leader to name, which is how a failover looks before the new leader is
                 // ready. Anything else from it, such as a failure to connect, is the shard manager
-                // being unreachable and keeps the configured retries.
+                // being unreachable and keeps the configured retries, unless a failover has been
+                // seen already: then the address may be a service that still routes to the
+                // replica that went away, and the wait goes on.
                 Routed::Done(Err(status))
                     if attempts.replayable()
-                        && peer_answered_unavailable(&status)
-                        && answered_unavailable.load(Ordering::Relaxed) =>
+                        && if deadline.is_some() {
+                            status.code() == Code::Unavailable
+                        } else {
+                            peer_answered_unavailable(&status)
+                                && answered_unavailable.load(Ordering::Relaxed)
+                        } =>
                 {
                     (status, None)
                 }
@@ -309,29 +344,27 @@ impl LeaderRouter {
             if !attempts.replayable() {
                 return Err(status);
             }
-            // Every pass that ends here has shown a failover, so the larger of the two budgets
-            // applies from the first one on.
+            let deadline =
+                *deadline.get_or_insert(started + FAILOVER_BUDGET.max(self.configured_budget));
             failover_passes += 1;
-            let remaining = FAILOVER_BUDGET.saturating_sub(started.elapsed());
-            if let Some(delay) = get_delay(&failover_backoff, failover_passes)
-                && !remaining.is_zero()
-            {
-                tokio::time::sleep(delay.min(remaining)).await;
-                continue;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match get_delay(&failover_backoff, failover_passes) {
+                Some(delay) if !remaining.is_zero() => {
+                    tokio::time::sleep(delay.min(remaining)).await;
+                }
+                _ => return Err(status),
             }
-            if retries.failed_attempt().await {
-                continue;
-            }
-            return Err(status);
         }
     }
 
     /// One pass of [`Self::call`]. `skip` is the named leader that the previous pass could not
-    /// reach; while the replicas still name it, this pass ends without trying it again.
+    /// reach; while the replicas still name it, this pass ends without trying it again. In a
+    /// `failover` the configured address is asked once per pass; the pace is the caller's.
     async fn route_once<F, R>(
         &self,
         description: &'static str,
         attempts: Attempts,
+        failover: bool,
         f: &F,
         skip: Option<&LeaderAddress>,
     ) -> Routed<R>
@@ -362,7 +395,10 @@ impl LeaderRouter {
             }
         }
 
-        let status = match self.send_to_configured(description, attempts, f).await {
+        let status = match self
+            .send_to_configured(description, attempts.replayable() && !failover, f)
+            .await
+        {
             Ok(result) => return Routed::Done(Ok(result)),
             Err(status) => status,
         };
@@ -443,14 +479,14 @@ impl LeaderRouter {
     async fn send_to_configured<F, R>(
         &self,
         description: &'static str,
-        attempts: Attempts,
+        retry_the_call: bool,
         f: &F,
     ) -> Result<R, Status>
     where
         F: ClientCall<R>,
     {
         self.configured
-            .call_with_retry(description, attempts.replayable(), f)
+            .call_with_retry(description, retry_the_call, f)
             .await
     }
 
@@ -526,6 +562,38 @@ mod tests {
             GrpcClientTlsConfig::Enabled(enabled) => enabled.server_domain_name.clone(),
             GrpcClientTlsConfig::Disabled(_) => None,
         }
+    }
+
+    #[test]
+    fn the_schedule_total_adds_the_delays_between_attempts() {
+        let schedule = RetryConfig {
+            max_attempts: 4,
+            min_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(250),
+            multiplier: 2.0,
+            max_jitter_factor: Some(0.5),
+        };
+        // 100 ms, 200 ms and the third delay capped at 250 ms.
+        assert_eq!(schedule_total(&schedule), Duration::from_millis(550));
+        assert_eq!(
+            schedule_total(&RetryConfig {
+                max_attempts: 0,
+                ..schedule.clone()
+            }),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn a_very_long_schedule_is_counted_at_its_longest_delay() {
+        let schedule = RetryConfig {
+            max_attempts: 20_000,
+            min_delay: Duration::from_millis(10),
+            max_delay: Duration::from_millis(10),
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        };
+        assert_eq!(schedule_total(&schedule), Duration::from_millis(199_990));
     }
 
     #[test]

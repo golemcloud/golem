@@ -350,22 +350,16 @@ fn signed_by(
     (cert.pem(), key.serialize_pem())
 }
 
-/// A loopback port that refuses connections and that no other process can take while the socket
-/// lives: bound, never listening. A port found by binding a listener and dropping it can be taken
-/// by another process before the test uses it.
-fn refusing_port() -> (socket2::Socket, u16) {
-    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
-        .expect("a TCP socket");
-    socket
-        .bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())
-        .expect("a loopback port");
-    let port = socket
+/// A loopback port that refuses connections at once: it was bound and then released. Another
+/// process could take it before the test uses it, which would make a test fail and could not make
+/// one pass wrongly. A socket that is bound and never listens is no substitute: connects to it get
+/// no answer at all.
+fn closed_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("a loopback port")
         .local_addr()
         .expect("a bound address")
-        .as_socket()
-        .expect("an IP address")
-        .port();
-    (socket, port)
+        .port()
 }
 
 fn client_for(configured: &Running) -> GrpcShardManager {
@@ -586,19 +580,22 @@ async fn a_standby_naming_an_unreachable_leader_fails_within_the_short_connect_t
 }
 
 #[test]
-async fn a_standby_that_knows_no_leader_is_retried_as_before() {
+async fn a_standby_that_names_no_ready_leader_is_waited_out_for_the_failover_budget() {
     let standby = run_replica(Mode::Standby(None)).await;
     let client = client_for(&standby);
 
+    let started = Instant::now();
     client
         .get_routing_table()
         .await
         .expect_err("no replica can serve");
 
     assert!(
-        standby.refusals() > 1,
-        "a plain Unavailable keeps its retries"
+        started.elapsed() >= Duration::from_secs(14) && started.elapsed() < Duration::from_secs(20),
+        "a plain Unavailable from a working replica is waited out for about 15s, took {:?}",
+        started.elapsed()
     );
+    assert!(standby.refusals() > 1);
     standby.stop().await;
 }
 
@@ -731,7 +728,7 @@ async fn a_known_leader_address_that_now_serves_something_else_is_forgotten() {
 // that may be repeated must ride that window out with the client's retry budget, as it rode out a
 // closed port before, instead of failing at the first refused connection.
 async fn a_retried_call_rides_out_a_dead_leader_that_is_still_named() {
-    let (_reserved, dead_port) = refusing_port();
+    let dead_port = closed_port();
     let dead = LeaderAddress {
         host: "127.0.0.1".to_string(),
         port: dead_port,
@@ -836,18 +833,7 @@ async fn a_retried_call_waits_out_replicas_that_know_no_leader_yet() {
 // Only a failover earns the longer budget. A configured address that nothing listens on is the
 // shard manager being unreachable, which keeps the configured retries.
 async fn a_configured_address_that_refuses_connections_fails_within_the_configured_retries() {
-    let (_reserved, port) = refusing_port();
-    // A short connect timeout keeps the test fast where such a port does not refuse at once; the
-    // retries are the default ones.
-    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        client_config: GrpcClientConfig {
-            connect_timeout: Duration::from_millis(500),
-            ..GrpcClientConfig::default()
-        },
-        retries: RetryConfig::default(),
-    });
+    let client = client_with_default_config("127.0.0.1", closed_port());
 
     let started = Instant::now();
     client
@@ -860,6 +846,121 @@ async fn a_configured_address_that_refuses_connections_fails_within_the_configur
         "the call waited {:?}, longer than the configured retries",
         started.elapsed()
     );
+}
+
+fn client_with_schedule(port: u16, retries_on_unavailable: RetryConfig) -> GrpcShardManager {
+    GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port,
+        client_config: GrpcClientConfig {
+            retries_on_unavailable,
+            ..GrpcClientConfig::default()
+        },
+        retries: RetryConfig::default(),
+    })
+}
+
+#[test]
+// A client tuned for a long failover (a lease TTL of 30 s, say) is configured with a schedule that
+// is longer than the router's own budget. The call must wait for the configured schedule's total,
+// and the passes of the failover must not use up its attempts on the way.
+async fn a_schedule_longer_than_the_failover_budget_is_waited_out() {
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
+    // The named leader fails for its first eighteen calls, one in every second pass: about
+    // seventeen seconds of passes, which is more than the failover budget and more than the
+    // twenty attempts of the schedule.
+    leader.script(std::iter::repeat_n(
+        Mode::Fails(tonic::Code::Unavailable),
+        18,
+    ));
+    let client = client_with_schedule(
+        standby.addr.port(),
+        RetryConfig {
+            max_attempts: 20,
+            min_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(1),
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        },
+    );
+
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(40), client.get_routing_table())
+        .await
+        .expect("the call ends")
+        .expect("the configured schedule is longer than the failover");
+
+    assert!(
+        started.elapsed() > Duration::from_secs(15),
+        "the test must outlast the failover budget, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// Neither a long configured schedule nor a pass that runs it may stretch the wait: once a failover
+// is seen, the call ends at the larger of the failover budget and the configured schedule's
+// total, plus the pass that is under way.
+async fn a_failover_is_waited_out_for_a_bounded_time_with_many_configured_attempts() {
+    let standby = run_replica(Mode::Standby(None)).await;
+    // A thousand attempts of 10 ms: a schedule of about ten seconds.
+    let client = client_with_schedule(
+        standby.addr.port(),
+        RetryConfig {
+            max_attempts: 1000,
+            min_delay: Duration::from_millis(10),
+            max_delay: Duration::from_millis(10),
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        },
+    );
+
+    let started = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(40), client.get_routing_table())
+        .await
+        .expect("the call ends within a bounded time");
+
+    result.expect_err("no replica can serve");
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the call took {:?}",
+        started.elapsed()
+    );
+    standby.stop().await;
+}
+
+#[test]
+// A named leader whose port refuses connections at once is the ordinary picture of a crash: the
+// replicas keep naming it until its lease expires. The default client settings must carry the call
+// through.
+async fn a_retried_call_waits_out_a_named_leader_that_refuses_connections() {
+    let dead = LeaderAddress {
+        host: "127.0.0.1".to_string(),
+        port: closed_port(),
+    };
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
+    standby.script(std::iter::repeat_n(Mode::Standby(Some(dead)), 12));
+    let client = client_with_default_config("127.0.0.1", standby.addr.port());
+
+    let started = Instant::now();
+    client
+        .get_routing_table()
+        .await
+        .expect("the call outlasts the time in which the dead leader is still named");
+
+    assert!(
+        started.elapsed() > Duration::from_secs(3),
+        "the test must outlast the default retries, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    standby.stop().await;
 }
 
 #[test]
