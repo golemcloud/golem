@@ -12,8 +12,8 @@ use test_r::test;
 fn every_permission_operation_is_exposed_through_the_typed_api() {
     use golem_rust::permissions::{
         self, Bounds, CardId, CardView, Holder, KernelModule, Lifespan, PatternGrant,
-        PermissionCard, PermissionError, PolymorphicPermissionCard, ScopeCard, ScopeParent,
-        Timestamp, WalletCard, WalletVersionToken,
+        PermissionCard, PermissionError, PersistentCard, PolymorphicPermissionCard, ScopeCard,
+        ScopeParent, Timestamp, WalletCard, WalletVersionToken,
     };
 
     let _: fn(&PermissionCard) -> CardId = PermissionCard::id;
@@ -24,7 +24,7 @@ fn every_permission_operation_is_exposed_through_the_typed_api() {
         &PermissionCard,
         &Bounds,
         Option<&Lifespan>,
-    ) -> Result<PermissionCard, PermissionError> = PermissionCard::derive;
+    ) -> Result<PersistentCard, PermissionError> = PermissionCard::derive;
     let _: fn(PermissionCard) -> Result<u32, PermissionError> = PermissionCard::revoke;
     let _: fn(PermissionCard, &Holder) -> Result<(), PermissionError> = PermissionCard::install;
     let _: fn(&PolymorphicPermissionCard) -> CardId = PolymorphicPermissionCard::id;
@@ -37,7 +37,7 @@ fn every_permission_operation_is_exposed_through_the_typed_api() {
         &PolymorphicPermissionCard,
         &Bounds,
         Option<&Lifespan>,
-    ) -> Result<PermissionCard, PermissionError> = PolymorphicPermissionCard::derive;
+    ) -> Result<PersistentCard, PermissionError> = PolymorphicPermissionCard::derive;
     let _: fn(PolymorphicPermissionCard) -> Result<u32, PermissionError> =
         PolymorphicPermissionCard::revoke;
     let _: fn(PolymorphicPermissionCard, &Holder) -> Result<(), PermissionError> =
@@ -56,8 +56,30 @@ fn every_permission_operation_is_exposed_through_the_typed_api() {
         let _: ScopeParent<'_> = card.into();
     };
     let _: fn() -> WalletVersionToken = permissions::wallet_version;
-    let _: fn(&Bounds, Option<&Lifespan>) -> Result<PermissionCard, PermissionError> =
+    let _: fn(&Bounds, Option<&Lifespan>) -> Result<PersistentCard, PermissionError> =
         permissions::derive_from_wallet;
+    let _: fn(&PersistentCard) -> CardId = PersistentCard::id;
+    let _: fn(&PersistentCard) -> Vec<CardId> = PersistentCard::parents;
+    let _: fn(&PersistentCard) -> Option<Timestamp> = PersistentCard::expires_at;
+    let _: fn(&PersistentCard) -> Result<CardView, PermissionError> = PersistentCard::inspect;
+    let _: fn(
+        &PersistentCard,
+        &Bounds,
+        Option<&Lifespan>,
+    ) -> Result<PersistentCard, PermissionError> = PersistentCard::derive;
+    let _: fn(PersistentCard) -> Result<u32, PermissionError> = PersistentCard::revoke;
+    let _: fn(PersistentCard, &Holder) -> Result<(), PermissionError> = PersistentCard::install;
+    let _ = |card: &PersistentCard| {
+        let _: ScopeParent<'_> = card.into();
+        match card {
+            PersistentCard::Concrete(card) => {
+                let _: &PermissionCard = card;
+            }
+            PersistentCard::Template(card) => {
+                let _: &PolymorphicPermissionCard = card;
+            }
+        }
+    };
     let _: fn(&[ScopeParent<'_>], &Bounds) -> Result<ScopeCard, PermissionError> =
         permissions::derive_scope;
     let _: fn(&ScopeCard) -> CardId = ScopeCard::id;

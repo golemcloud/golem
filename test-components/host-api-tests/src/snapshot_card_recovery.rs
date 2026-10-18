@@ -24,7 +24,7 @@ fn encode_parameters(values: Vec<SchemaValue>) -> golem_rust::schema::wit::wire:
 /// invocation variants that the typed clients never offer, and card ids to
 /// report to the test harness.
 mod raw {
-    use crate::golem_host_api::gated_host_bindings::golem::permissions::{
+    pub use crate::golem_host_api::gated_host_bindings::golem::permissions::{
         derive, inspect, revoke, types, wallet,
     };
     use golem_rust::golem_schema::CardId;
@@ -33,6 +33,13 @@ mod raw {
 
     pub use golem_rust::schema::wit::wire::PermissionCard as Card;
     pub use types::{PatternGrant, PermissionError, WalletCard};
+
+    fn concrete(card: types::PersistentCard) -> Card {
+        match card {
+            types::PersistentCard::Concrete(card) => card,
+            types::PersistentCard::Template(_) => panic!("expected a concrete card"),
+        }
+    }
 
     fn card_id(id: wire::CardId) -> CardId {
         CardId::new(Uuid::from(id.uuid))
@@ -102,14 +109,18 @@ mod raw {
 
     pub fn derive_from_wallet() -> Card {
         let grant = inspect_grant(&template());
-        derive::derive_from_wallet(&[grant], &[], &[], &[], None)
-            .expect("wallet card derivation failed")
+        concrete(
+            derive::derive_from_wallet(&[grant], &[], &[], &[], None)
+                .expect("wallet card derivation failed"),
+        )
     }
 
     pub fn derive_child(parent: &Card) -> Card {
         let grant = inspect_grant(parent);
-        derive::derive(parent, &[grant], &[], &[], &[], None)
-            .expect("persistent card derivation failed")
+        concrete(
+            derive::derive(parent, &[grant], &[], &[], &[], None)
+                .expect("persistent card derivation failed"),
+        )
     }
 
     /// Derives a child of `parent` that retains its card inspection only for `recipient`.
@@ -118,8 +129,10 @@ mod raw {
             recipient: recipient.to_string(),
             ..inspect_grant(parent)
         };
-        derive::derive(parent, &[grant], &[], &[], &[], None)
-            .expect("recipient-restricted card derivation failed")
+        concrete(
+            derive::derive(parent, &[grant], &[], &[], &[], None)
+                .expect("recipient-restricted card derivation failed"),
+        )
     }
 
     pub fn install(
@@ -145,15 +158,17 @@ mod raw {
     pub fn derive_child_with_lifespan(parent: &Card, lifespan: Option<String>) -> Card {
         let grant = inspect_grant(parent);
         let lifespan = lifespan.map(|iso_8601| types::Duration { iso_8601 });
-        derive::derive(parent, &[grant], &[], &[], &[], lifespan.as_ref())
-            .expect("persistent card derivation failed")
+        concrete(
+            derive::derive(parent, &[grant], &[], &[], &[], lifespan.as_ref())
+                .expect("persistent card derivation failed"),
+        )
     }
 
     /// Derives a card from the wallet that grants exactly `grants` in its lower bound.
     pub fn derive_from_wallet_granting(
         grants: &[types::PatternGrant],
     ) -> Result<Card, PermissionError> {
-        derive::derive_from_wallet(grants, &[], &[], &[], None)
+        derive::derive_from_wallet(grants, &[], &[], &[], None).map(concrete)
     }
 
     /// Derives a child of `parent` that retains none of its grants.
@@ -168,7 +183,7 @@ mod raw {
         lifespan: Option<String>,
     ) -> Result<Card, PermissionError> {
         let lifespan = lifespan.map(|iso_8601| types::Duration { iso_8601 });
-        derive::derive(parent, &[], &[], &[], &[], lifespan.as_ref())
+        derive::derive(parent, &[], &[], &[], &[], lifespan.as_ref()).map(concrete)
     }
 
     pub fn error_kind(error: &PermissionError) -> &'static str {
@@ -250,8 +265,13 @@ fn derive_scope_card() -> ScopeCard {
 fn derive_persistent_card_from_wallet() -> PermissionCard {
     let parent = parent_card();
     let grant = retained_inspect_grant(&parent);
-    permissions::derive_from_wallet(&lower_positive(grant), None)
-        .expect("wallet card derivation failed")
+    let permissions::PersistentCard::Concrete(card) =
+        permissions::derive_from_wallet(&lower_positive(grant), None)
+            .expect("wallet card derivation failed")
+    else {
+        panic!("expected a concrete card");
+    };
+    card
 }
 
 fn wallet_card(card_id: &permissions::CardId) -> Option<WalletCard> {
@@ -528,6 +548,15 @@ pub trait ScopeCardAgent {
     /// Uses a received card as `inspect` and as the parent of `derive`, and returns the outcome
     /// of each.
     fn use_received_card(&self, card: PermissionCard) -> Vec<String>;
+
+    fn derive_and_install_template(
+        &self,
+        component_id: ComponentId,
+        target_agent_id: String,
+        source: String,
+    ) -> (CardId, CardId, Vec<(String, bool)>);
+
+    fn installed_template_grants(&self) -> Vec<(CardId, Vec<CardId>, String)>;
 }
 
 /// The cards that `keep_derived_cards` keeps across invocations.
@@ -1000,6 +1029,114 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     fn has_card(&self, card_id: CardId) -> bool {
         raw::wallet_card(&card_id).is_some()
+    }
+
+    fn derive_and_install_template(
+        &self,
+        component_id: ComponentId,
+        target_agent_id: String,
+        source: String,
+    ) -> (CardId, CardId, Vec<(String, bool)>) {
+        let grant = |owner: &str, resource: &str| raw::PatternGrant {
+            class: "env".to_string(),
+            owner: owner.to_string(),
+            recipient: "*".to_string(),
+            verb: "read".to_string(),
+            resource_id: resource.to_string(),
+        };
+        let bounds = [grant("?agent", "GOL905")];
+        let parent = if source == "concrete" {
+            let raw::types::PersistentCard::Concrete(card) = raw::derive::derive_from_wallet(
+                &[grant("*/*/*/*/*", "GOL905")],
+                &[],
+                &[],
+                &[],
+                None,
+            )
+            .expect("concrete parent derivation failed") else {
+                panic!("expected concrete parent");
+            };
+            card
+        } else {
+            raw::template()
+        };
+        let parent_id = raw::id(&parent);
+        let child = if source == "wallet" {
+            raw::derive::derive_from_wallet(&bounds, &[], &[], &[], None)
+        } else {
+            raw::derive::derive(&parent, &bounds, &[], &[], &[], None)
+        }
+        .expect("template derivation failed");
+        let raw::types::PersistentCard::Template(child) = child else {
+            panic!("persistent slots must select a template");
+        };
+        let child_id = raw::id(&child);
+        let inspected = raw::view(&child).unwrap();
+        let mut checks = vec![
+            (
+                "inspection preserves the slot before installation".to_string(),
+                inspected.lower_positive.len() == 1
+                    && inspected.lower_positive[0].owner == "?agent"
+                    && inspected.lower_positive[0].recipient == "*"
+                    && inspected.lower_positive[0].class == "env"
+                    && inspected.lower_positive[0].verb == "read"
+                    && inspected.lower_positive[0].resource_id == "GOL905",
+            ),
+            (
+                "the template retains its parent".to_string(),
+                raw::parents(&child) == vec![parent_id.clone()],
+            ),
+            (
+                "scope derivation rejects slots".to_string(),
+                matches!(
+                    raw::derive::derive_scope(&[&raw::template()], &bounds, &[], &[], &[]),
+                    Err(raw::PermissionError::InvalidPattern(_))
+                ),
+            ),
+        ];
+        let broader = [grant("?agent", "GOL905_OTHER")];
+        checks.push((
+            "an overbroad universal envelope is refused".to_string(),
+            matches!(
+                raw::derive::derive(&parent, &broader, &[], &[], &[], None),
+                Err(raw::PermissionError::LowerBoundTooBroad(_))
+            ),
+        ));
+        checks.push((
+            "a template parent is checked in the caller scope".to_string(),
+            matches!(
+                raw::derive::derive(
+                    &raw::template(),
+                    &[grant("?agent", "GOL905_SCOPED")],
+                    &[],
+                    &[],
+                    &[],
+                    None
+                ),
+                Err(raw::PermissionError::LowerBoundTooBroad(_))
+            ),
+        ));
+        raw::install(child, component_id, target_agent_id).expect("template installation failed");
+        (parent_id, child_id, checks)
+    }
+
+    fn installed_template_grants(&self) -> Vec<(CardId, Vec<CardId>, String)> {
+        let mut grants = raw::labelled_wallet()
+            .into_iter()
+            .filter_map(|(kind, card)| {
+                if kind != "concrete" {
+                    return None;
+                }
+                let grant = raw::view(&card)
+                    .unwrap()
+                    .lower_positive
+                    .into_iter()
+                    .find(|grant| grant.class == "env" && grant.resource_id == "GOL905")?;
+                Some((raw::id(&card), raw::parents(&card), grant.owner))
+            })
+            .collect::<Vec<_>>();
+        grants.sort_by_key(|(id, _, _)| id.uuid);
+        grants
     }
 
     async fn typed_card_scenario(

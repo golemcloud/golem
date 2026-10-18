@@ -23,8 +23,9 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::card::{
-    Card, CardId, CardManagedByRuntimeDerived, PolymorphicCard, PolymorphicPermissionPattern,
-    StoredCard, parse_permission_fields, parse_polymorphic_permission,
+    Card, CardId, CardManagedBy, CardManagedByRuntimeDerived, PolymorphicCard,
+    PolymorphicPermissionPattern, StoredCard, parse_permission_fields,
+    parse_polymorphic_permission,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -474,8 +475,8 @@ impl CardService for ScopeCardService {
 
     async fn create_runtime_card(
         &self,
-        card: StoredCard,
-        _provenance: CardManagedByRuntimeDerived,
+        mut card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
     ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         self.authority
             .create_card_count
@@ -496,6 +497,9 @@ impl CardService for ScopeCardService {
             return Err(WorkerExecutorError::runtime(format!(
                 "Failed creating runtime permission card: parent card {parent_id} not found"
             )));
+        }
+        if let StoredCard::Concrete(card) = &mut card {
+            card.managed_by = Some(CardManagedBy::RuntimeDerived(provenance));
         }
         self.authority.add_card(card.clone());
         if take_one(&self.authority.failing_creations) {
@@ -7551,5 +7555,152 @@ async fn cached_handle_reports_card_expired_after_its_lifespan(
         use_kept_child(&executor, &component, &holder).await?,
         vec!["card-expired", "card-expired"]
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+async fn derived_templates_bind_to_the_install_target_and_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor =
+        moonbit::start_local_card_transfer_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.extend(scope_card_initial_permissions());
+            grants.push(parse_polymorphic_permission("card(*) @ * : install : *").unwrap());
+            grants
+                .push(parse_polymorphic_permission("env(*/*/*/*/*) @ * : read : GOL905").unwrap());
+            grants.push(env_permission("GOL905_SCOPED"));
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "template-deriver");
+    let target = agent_id!("ScopeCardAgent", "template-recipient");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    let mut results = Vec::new();
+    for source in ["concrete", "template", "wallet"] {
+        let key = IdempotencyKey::fresh();
+        let result = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &caller,
+                &key,
+                "derive_and_install_template",
+                data_value!(component.id, target.to_string(), source.to_string()),
+            )
+            .await?
+            .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;
+        for (name, passed) in &result.2 {
+            assert!(passed, "{source}: {name}");
+        }
+        results.push((source.to_string(), key, result));
+    }
+    let installed = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "installed_template_grants",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<(SchemaCardId, Vec<SchemaCardId>, String)>>()?;
+    assert_eq!(installed.len(), 3);
+    for (_, _, (_, template_id, _)) in &results {
+        let (_, parents, owner) = installed
+            .iter()
+            .find(|(_, parents, _)| parents == &vec![template_id.clone()])
+            .expect("installation creates a concrete child of the derived template");
+        assert_eq!(parents, &vec![template_id.clone()]);
+        assert!(
+            owner.ends_with(&target.to_string()),
+            "slot did not bind to B: {owner}"
+        );
+        assert!(
+            !owner.ends_with(&caller.to_string()),
+            "slot bound to caller A"
+        );
+    }
+    let creates = authority.create_card_count.load(Ordering::SeqCst);
+    let audit = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let derived = audit
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardDerived(card) => Some((card.card_id, card.parent_ids.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (_, _, (parent, child, _)) in &results {
+        assert!(derived.iter().any(|(id, parents)| id.0 == child.uuid
+            && parents.iter().map(|id| id.0).collect::<Vec<_>>() == vec![parent.uuid]));
+    }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor =
+        moonbit::start_local_card_transfer_executor(deps, &context, authority.clone()).await?;
+    for (source, key, expected) in results {
+        let actual = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &caller,
+                &key,
+                "derive_and_install_template",
+                data_value!(component.id, target.to_string(), source),
+            )
+            .await?
+            .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;
+        assert_eq!(actual, expected);
+    }
+    let restored = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "installed_template_grants",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<(SchemaCardId, Vec<SchemaCardId>, String)>>()?;
+    assert_eq!(restored, installed);
+    // A fresh call forces reconstruction of the caller, rather than only reading cached results.
+    executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?;
+    assert_eq!(authority.create_card_count.load(Ordering::SeqCst), creates);
+    let replayed = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let replayed_derived = replayed
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardDerived(card) => Some((card.card_id, card.parent_ids.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed_derived, derived);
+    let target_audit = executor
+        .get_oplog(&target_worker, OplogIndex::INITIAL)
+        .await?;
+    for (id, _, _) in installed {
+        assert_eq!(
+            target_audit
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::CardTransferred(card) if card.installed_card_id.0 == id.uuid
+                ))
+                .count(),
+            1
+        );
+    }
     Ok(())
 }
