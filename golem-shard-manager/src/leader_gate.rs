@@ -91,7 +91,8 @@ impl<S> Clone for LeaderGate<S> {
 }
 
 enum Route<S> {
-    Serve(S),
+    /// The service, and the lease belief that must still hold when the call has ended.
+    Serve(S, Option<LeaseBelief>),
     Refuse(Status),
 }
 
@@ -191,7 +192,7 @@ impl<S: Clone> LeaderGate<S> {
             } if !lease.held() => Route::Refuse(Status::unavailable(
                 "this shard manager's leadership lease may have lapsed; retry",
             )),
-            GateState::Serving { service, .. } => Route::Serve(service.clone()),
+            GateState::Serving { service, lease } => Route::Serve(service.clone(), lease.clone()),
             GateState::Standby { leader, own, .. } => {
                 Route::Refuse(standby_answer(leader.leader(), own))
             }
@@ -215,6 +216,12 @@ fn standby_answer(leader: LeaderView, own: &LeaderAddress) -> Status {
             Status::unavailable("no shard manager leader is ready yet; retry")
         }
     }
+}
+
+/// The answer for a call whose lease belief lapsed while it ran. Not marked as refused before
+/// running: the call may have taken effect, and a client must not repeat it blindly.
+fn lapsed_while_running() -> Status {
+    Status::unavailable("this shard manager's leadership lease lapsed while the call ran; retry")
 }
 
 /// The tonic service in front of the shard manager service, under the same name.
@@ -261,9 +268,17 @@ where
         let gate = self.gate.clone();
         Box::pin(async move {
             match gate.route() {
-                Route::Serve(mut service) => {
+                Route::Serve(mut service, lease) => {
                     std::future::poll_fn(|cx| service.poll_ready(cx)).await?;
-                    service.call(request).await
+                    let response = service.call(request).await?;
+                    // The belief can lapse while the call runs, and a new leader may already have
+                    // begun. The answer of a call that ended after that is not handed out as a
+                    // leader's: the caller is told what it is told about a lapsed lease. The call
+                    // may have run, so unlike a refusal before running this is a plain refusal.
+                    if lease.is_some_and(|lease| !lease.held()) {
+                        return Ok(lapsed_while_running().into_http());
+                    }
+                    Ok(response)
                 }
                 Route::Refuse(status) => Ok(status.into_http()),
             }
@@ -274,7 +289,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_service_base::clients::shard_manager_leader::leader_of;
+    use golem_service_base::clients::shard_manager_leader::{leader_of, refused_before_running};
     use test_r::test;
     use tokio::time::Instant;
 
@@ -357,6 +372,76 @@ mod tests {
             Duration::from_secs(10),
         );
         gate
+    }
+
+    /// Answers after a pause, so that the lease belief can lapse while the call runs.
+    #[derive(Clone)]
+    struct SlowServed(Duration);
+
+    impl NamedService for SlowServed {
+        const NAME: &'static str = "test.SlowServed";
+    }
+
+    impl Service<http::Request<Body>> for SlowServed {
+        type Response = http::Response<Body>;
+        type Error = Infallible;
+        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Infallible>> + Send>>;
+
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _: http::Request<Body>) -> Self::Future {
+            let pause = self.0;
+            Box::pin(async move {
+                tokio::time::sleep(pause).await;
+                let mut response = http::Response::new(Body::default());
+                response
+                    .headers_mut()
+                    .insert("x-served", http::HeaderValue::from_static("yes"));
+                Ok(response)
+            })
+        }
+    }
+
+    #[test]
+    async fn a_call_that_outlasts_the_lease_belief_is_not_answered_as_served() {
+        let gate: LeaderGate<SlowServed> = LeaderGate::new();
+        gate.serve(
+            SlowServed(Duration::from_millis(300)),
+            Some(LeaseBelief::until(
+                Instant::now() + Duration::from_millis(100),
+            )),
+        );
+        let response = GatedService::new(gate.clone())
+            .call(http::Request::new(Body::default()))
+            .await
+            .unwrap();
+        assert!(
+            response.headers().get("x-served").is_none(),
+            "the answer of a call that ended after the belief lapsed must not be handed out"
+        );
+        let refusal = status(&response);
+        assert_eq!(refusal.code(), tonic::Code::Unavailable);
+        assert!(
+            !refused_before_running(&refusal),
+            "the call ran, so the refusal must not say that it did not"
+        );
+        assert_eq!(leader_of(&refusal), None);
+    }
+
+    #[test]
+    async fn a_call_that_ends_within_the_lease_belief_is_answered() {
+        let gate: LeaderGate<SlowServed> = LeaderGate::new();
+        gate.serve(
+            SlowServed(Duration::from_millis(50)),
+            Some(LeaseBelief::until(Instant::now() + Duration::from_secs(10))),
+        );
+        let response = GatedService::new(gate)
+            .call(http::Request::new(Body::default()))
+            .await
+            .unwrap();
+        assert_eq!(response.headers().get("x-served").unwrap(), "yes");
     }
 
     #[test]
