@@ -40,6 +40,11 @@ use tracing::{debug, info};
 /// the configured address can name its successor.
 const LEADER_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How many leaders that an answer named one call follows in one pass. Replicas name each other
+/// only while a leadership change is being observed, so a chain is short; the limit ends a loop
+/// of replicas that disagree.
+const MAX_REDIRECT_HOPS: usize = 3;
+
 pub(crate) type Client = ShardManagerServiceClient<OtelGrpcService<Channel>>;
 
 /// One call on a shard manager client, in the form the gRPC clients take it. Written once here:
@@ -292,32 +297,48 @@ impl LeaderRouter {
         }
     }
 
+    /// Sends the call to a leader that an answer named, and on to the next one if that replica
+    /// names another. A replica that names a leader has not run the call, so this holds for every
+    /// call. At most [`MAX_REDIRECT_HOPS`] named leaders are tried in one pass; the last answer
+    /// then counts as a failed follow, which ends a loop of replicas that name each other.
     async fn follow<F, R>(
         &self,
         description: &'static str,
-        leader: LeaderAddress,
+        mut leader: LeaderAddress,
         attempts: Attempts,
         f: &F,
     ) -> Routed<R>
     where
         F: ClientCall<R>,
     {
-        // Two calls redirected by different replicas can race here; a stale leader that wins is
-        // forgotten at its first failure.
-        self.remember_leader(leader.clone());
-        match self.send_to_leader(description, &leader, attempts, f).await {
-            Ok(result) => Routed::Done(Ok(result)),
-            Err(status) if leader_of(&status).is_some() || leader_failed(&status) => {
-                self.forget_leader(&leader, &status);
-                if !attempts.replayable() {
-                    return Routed::Done(Err(status));
-                }
-                Routed::LeaderUnreachable {
-                    status,
-                    failed: Some(leader),
+        let mut hops = 0;
+        loop {
+            hops += 1;
+            // Two calls redirected by different replicas can race here; a stale leader that wins
+            // is forgotten at its first failure.
+            self.remember_leader(leader.clone());
+            match self.send_to_leader(description, &leader, attempts, f).await {
+                Ok(result) => return Routed::Done(Ok(result)),
+                Err(status) => {
+                    let named = leader_of(&status);
+                    if named.is_none() && !leader_failed(&status) {
+                        return Routed::Done(Err(status));
+                    }
+                    self.forget_leader(&leader, &status);
+                    match named {
+                        Some(next) if hops < MAX_REDIRECT_HOPS => leader = next,
+                        _ => {
+                            if !attempts.replayable() {
+                                return Routed::Done(Err(status));
+                            }
+                            return Routed::LeaderUnreachable {
+                                status,
+                                failed: Some(leader),
+                            };
+                        }
+                    }
                 }
             }
-            Err(status) => Routed::Done(Err(status)),
         }
     }
 

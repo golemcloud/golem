@@ -430,6 +430,52 @@ async fn a_one_try_call_through_a_standby_reaches_the_leader() {
 }
 
 #[test]
+// A standby that names a leader which itself stands by and names another is an answer, not a
+// failure: the call has not run anywhere yet, so the chain is followed even for a one-try call.
+async fn a_one_try_call_follows_a_chain_of_standbys_to_the_leader() {
+    let leader = run_replica(Mode::Leader).await;
+    let middle = run_replica(Mode::Standby(Some(leader.address()))).await;
+    let first = run_replica(Mode::Standby(Some(middle.address()))).await;
+    let client = client_for(&first);
+
+    client
+        .deregister(Uuid::new_v4(), BTreeMap::new())
+        .await
+        .expect("each standby names the next replica, and the last one leads");
+
+    assert_eq!(leader.calls(), 1, "the call ran exactly once");
+    assert_eq!(first.refusals(), 1);
+    assert_eq!(middle.refusals(), 1);
+    leader.stop().await;
+    middle.stop().await;
+    first.stop().await;
+}
+
+#[test]
+// Two replicas that name each other must not keep the call going: it follows a bounded number of
+// answers and then returns the last one.
+async fn a_one_try_call_stops_following_standbys_that_name_each_other() {
+    let first = run_replica(Mode::Standby(None)).await;
+    let second = run_replica(Mode::Standby(None)).await;
+    first.set(Mode::Standby(Some(second.address())));
+    second.set(Mode::Standby(Some(first.address())));
+    let client = client_for(&first);
+
+    client
+        .deregister(Uuid::new_v4(), BTreeMap::new())
+        .await
+        .expect_err("no replica leads");
+
+    assert_eq!(
+        first.refusals() + second.refusals(),
+        4,
+        "the configured address, then three followed answers"
+    );
+    first.stop().await;
+    second.stop().await;
+}
+
+#[test]
 // A call that must not be repeated may have reached the leader before it failed, so a known
 // leader's failure goes back to the caller instead of being sent again to anyone.
 async fn a_one_try_call_to_a_known_leader_that_fails_is_not_sent_again() {
