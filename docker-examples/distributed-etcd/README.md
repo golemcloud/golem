@@ -72,7 +72,7 @@ at, here its own service name. On Kubernetes that is the pod IP; see the deploym
 example.
 
 Use two probes on the HTTP port (`GOLEM__HTTP_PORT`). Readiness is `/readyz`: it answers 200 while the replica
-serves, or, for a standby, while etcd has answered it within one lease TTL. Liveness is `/healthcheck`.
+serves, or, for a standby or a just-elected leader still starting, while etcd has answered it within one lease TTL. A replica is also not ready until it has reached its own advertised address, so a wrong `GOLEM__GRPC__ADVERTISED_HOST` keeps it unready, with a warning that names the address. Liveness is `/healthcheck`.
 The shard manager image has neither `curl` nor `wget`, so this example defines no container healthcheck.
 
 Each replica's `GOLEM__GRPC__ADVERTISED_HOST` is its own service name. It must stay unique: a replica that
@@ -81,9 +81,8 @@ finds another live replica advertising its address refuses to start.
 During a failover no replica serves. A graceful handover takes milliseconds for the election. After a kill or
 a partition, a standby is elected within `leader_lease_ttl` (10s by default). The new leader then runs its
 startup: it serves almost at once when every stored executor lease is still valid, and otherwise checks the
-executors for at most `initial_health_check_timeout` (3s by default). A worker executor or worker service must
-retry for that long. To survive a crash failover, set `GOLEM__SHARD_MANAGER__RETRIES_ON_UNAVAILABLE__MAX_ATTEMPTS`
-and the related delays so the budget covers about 15s; the default budget is a few seconds.
+executors for at most `initial_health_check_timeout` (3s by default). The worker executors and the worker
+service wait a failover out by themselves, for about 15s, so no client setting needs tuning for it.
 
 `/metrics` on the HTTP port distinguishes the roles: `shard_manager_is_serving` is 1 on the replica
 that takes calls, and `shard_manager_is_leader` is 1 on the replica that holds the leadership lease.
