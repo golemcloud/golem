@@ -444,7 +444,48 @@ pub struct BenchmarkSuite {
     /// benchmarks choose one agent type each, so a suite selects them by name.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skip_ts_agents: bool,
+    /// Settings of the ingress-load benchmark. The other benchmarks ignore them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<IngressSettings>,
     pub benchmarks: Vec<BenchmarkSuiteItem>,
+}
+
+/// How the ingress-load benchmark makes its clients behave. `size` gives the number of
+/// accounts and `length` the target request rate; these give the rest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct IngressSettings {
+    /// How long each step sends requests. Longer than the 600 s TTL of the worker-service
+    /// auth and router caches, so every entry expires at least once during a step.
+    pub step_secs: u64,
+    /// Agents that each account calls, so no single agent limits the rate.
+    pub agents_per_account: usize,
+    /// Requests a client sends before it closes its connection and opens a new one.
+    /// 0 keeps one connection for the whole step.
+    pub requests_per_connection: usize,
+    /// Share of the clients that use HTTP/1.1. The others negotiate HTTP/2.
+    pub http1_percent: usize,
+    /// Share of the requests that go through the HTTP API. The others go to the REST
+    /// invoke endpoint with the token of the account.
+    pub http_api_percent: usize,
+    /// Number of HTTP API domains. Each one has its own environment and component.
+    pub http_api_domains: usize,
+    /// Accounts set up at the same time.
+    pub setup_concurrency: usize,
+}
+
+impl Default for IngressSettings {
+    fn default() -> Self {
+        Self {
+            step_secs: 720,
+            agents_per_account: 4,
+            requests_per_connection: 0,
+            http1_percent: 0,
+            http_api_percent: 50,
+            http_api_domains: 8,
+            setup_concurrency: 32,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

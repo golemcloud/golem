@@ -174,3 +174,15 @@ fn rust_only_cloud_perf_suite_is_cloud_perf_without_ts_agents() {
         .collect();
     assert_eq!(rust_items, without_ts_only);
 }
+
+#[test]
+fn ingress_load_suite_has_its_settings() {
+    let ingress = suite("ingress-load.yaml");
+    let settings = ingress.ingress.expect("the suite sets the ingress settings");
+    assert_eq!(settings.step_secs, 720);
+    assert_eq!(settings.http1_percent, 30);
+    assert_eq!(ingress.benchmarks[0].name, "ingress-load");
+
+    // A suite without the field gets no settings, so the benchmark uses the defaults.
+    assert!(suite("cloud-perf-rust.yaml").ingress.is_none());
+}
