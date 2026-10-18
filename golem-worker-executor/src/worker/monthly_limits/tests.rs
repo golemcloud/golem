@@ -927,7 +927,7 @@ fn non_running_monthly_lifecycles(
                 completed_stage: super::super::WorkerDeletionStage::Claimed,
             }),
             WorkerInstance::WaitingForPermit(super::super::WaitingWorker {
-                handle: Mutex::new(None),
+                handle: None,
                 start_attempt: attempt,
             }),
             WorkerInstance::Stopping(super::super::StoppingWorker {

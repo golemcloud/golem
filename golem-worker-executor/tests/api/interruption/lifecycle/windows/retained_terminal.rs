@@ -365,36 +365,30 @@ async fn retained_terminal(
     } else {
         automatic
     };
-    let handoff = if next != NextStart::Waiting {
-        let (observe, release) = pause_admission(&admission_pause, &id);
-        drop(held_permit);
+    let mut held_permit = Some(held_permit);
+    let mut waiting_handoff = None;
+    let (observe, release) = pause_admission(&admission_pause, &id);
+    if next != NextStart::Waiting {
+        drop(held_permit.take());
         tokio::time::timeout(Duration::from_secs(10), observe).await??;
         assert!(worker.is_loaded().await);
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
         assert_eq!(worker.resident_generation_for_test(), generation);
-        Some(release)
     } else {
         assert!(!worker.is_loaded().await);
         assert!(!worker.concurrent_agent_permit_is_held().await);
-        // Keep the account slot occupied through waiting-task finalization.
-        None
-    };
-    let waiting_marker = if next == NextStart::Waiting {
-        Some(executor.gate_next_invocation_outcome_append(&id).await)
-    } else {
-        None
-    };
+        waiting_handoff = Some(observe);
+    }
     let mut signal = worker.raw_interrupt_for_test();
     let stopping = tokio::spawn({
         let worker = worker.clone();
         async move { worker.set_interrupting(first).await }
     });
-    let mut receipt;
-    if let Some((at_marker, release_marker)) = waiting_marker {
-        tokio::time::timeout(Duration::from_secs(10), at_marker).await??;
-        assert!(!stopping.is_finished());
-        receipt = published_interrupt_receipt(worker.as_ref()).await?;
+    let mut receipt = stopping
+        .await??
+        .context("new startup stop receipt missing")?;
+    if let Some(observe) = waiting_handoff {
         assert_eq!(signal.recv().await?, first);
         assert!(matches!(
             receipt.try_recv(),
@@ -402,49 +396,41 @@ async fn retained_terminal(
         ));
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
-        release_marker.send(false).unwrap();
-        let mut returned = stopping
-            .await??
-            .context("new startup stop receipt missing")?;
-        returned.recv().await?;
-        assert_eq!(
-            returned.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Closed)
-        );
+        assert!(!worker.concurrent_agent_permit_is_held().await);
+        // Initial stops queue until permit grant. The old Suspend must not settle
+        // this receipt either before the handoff or before the new owner starts.
+        drop(held_permit.take());
+        tokio::time::timeout(Duration::from_secs(10), observe).await??;
     } else {
-        receipt = stopping
-            .await??
-            .context("new startup stop receipt missing")?;
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            worker.join_accepted_stops_for_test(),
-        )
-        .await??;
         assert_eq!(signal.recv().await?, first);
-        assert_eq!(worker.resident_generation_for_test(), generation);
-        // Admission is still held before resident creation. No loop can consume this stop yet.
-        assert_eq!(worker.pending_stop_for_test().await, Some(first));
-        assert!(
-            !worker.terminal_stop_claimed_for_test().await,
-            "the previous resident writer must not consume this startup stop"
-        );
-        assert_eq!(
-            worker.terminal_interrupt_pending_for_test(),
-            next != NextStart::RestartFollower
-        );
-        assert!(matches!(
-            receipt.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
-        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
     }
-    worker.join_accepted_stops_for_test().await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        worker.join_accepted_stops_for_test(),
+    )
+    .await??;
+    assert_eq!(worker.resident_generation_for_test(), generation);
+    // Admission is still held before resident creation. No loop can consume this stop yet.
+    assert_eq!(worker.pending_stop_for_test().await, Some(first));
+    assert!(
+        !worker.terminal_stop_claimed_for_test().await,
+        "the previous resident writer must not consume this startup stop"
+    );
+    assert_eq!(
+        worker.terminal_interrupt_pending_for_test(),
+        next != NextStart::RestartFollower
+    );
+    assert!(matches!(
+        receipt.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+    assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
 
-    if let Some(release_handoff) = handoff {
+    {
         // The native loop takes the published request before checking admission again.
         // An older Suspend preserves the later start; Restart acknowledges and retries.
         let (continued, release_continuation) = pause_admission(&admission_pause, &id);
-        release_handoff
+        release
             .send(())
             .map_err(|_| anyhow!("startup admission gate was lost"))?;
         tokio::time::timeout(Duration::from_secs(10), continued).await??;
@@ -463,7 +449,7 @@ async fn retained_terminal(
         }
         let later = InterruptKind::Interrupt(Timestamp::now_utc());
         let later_receipt = worker.set_interrupting(later).await?;
-        assert_eq!(later_receipt.is_some(), next == NextStart::BeforeOwner);
+        assert_eq!(later_receipt.is_some(), next != NextStart::RestartFollower);
         assert_eq!(worker.pending_stop_for_test().await, Some(later));
         worker.join_accepted_stops_for_test().await?;
         assert_eq!(worker.pending_stop_for_test().await, Some(later));
@@ -505,38 +491,26 @@ async fn retained_terminal(
         }),
     )
     .await??;
-    if next == NextStart::Waiting {
-        assert!(
-            matches!(startup_result, Err(WorkerExecutorError::Interrupted { kind }) if kind == automatic)
-        );
-        assert!(
-            matches!(worker.startup_attempt_for_test(), Err(WorkerExecutorError::Interrupted { kind }) if kind == automatic)
-        );
-    } else {
-        assert!(
-            startup_result
-                .unwrap_err()
-                .to_string()
-                .contains("Worker stopped before startup completed")
-        );
-        assert!(
-            worker
-                .startup_attempt_for_test()
-                .unwrap_err()
-                .to_string()
-                .contains("Worker stopped before startup completed")
-        );
-    }
+    assert!(
+        startup_result
+            .unwrap_err()
+            .to_string()
+            .contains("Worker stopped before startup completed")
+    );
+    assert!(
+        worker
+            .startup_attempt_for_test()
+            .unwrap_err()
+            .to_string()
+            .contains("Worker stopped before startup completed")
+    );
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     assert!(!worker.is_loaded().await);
     assert!(!worker.concurrent_agent_permit_is_held().await);
     assert_eq!(worker.pending_stop_for_test().await, None);
     assert_eq!(worker.resident_generation_for_test(), generation);
-    assert_eq!(
-        worker.permit_acquisitions_for_test(),
-        acquisitions + usize::from(next != NextStart::Waiting)
-    );
+    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions + 1);
     let entries = worker
         .oplog()
         .read_exact(
@@ -560,7 +534,7 @@ async fn retained_terminal(
             .values()
             .filter(|entry| matches!(entry, OplogEntry::Interrupted { .. }))
             .count(),
-        usize::from(next != NextStart::Waiting)
+        1
     );
     assert!(
         !entries

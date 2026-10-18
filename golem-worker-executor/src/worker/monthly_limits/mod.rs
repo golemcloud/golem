@@ -670,7 +670,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false,
                 UnloadRequest::ordinary(UnloadReason::Failure),
             ) {
-                drop(self.start_interrupt_establishment(pending, None, true));
+                drop(self.start_interrupt_establishment(pending, true));
             }
             return;
         }
@@ -953,7 +953,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ) else {
                     return false;
                 };
-                drop(self.start_interrupt_establishment(pending, None, true));
+                drop(self.start_interrupt_establishment(pending, true));
                 true
             })
     }

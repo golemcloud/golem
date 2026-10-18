@@ -4227,7 +4227,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         unload_reason: UnloadReason,
         allow_deleting: bool,
     ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
-        let Some((pending, waiting, was_running)) = self
+        let Some((pending, was_running)) = self
             .queue_interrupt(
                 interrupt_kind,
                 reacquire_permits,
@@ -4238,7 +4238,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
-        self.start_interrupt_establishment(pending, waiting, was_running)
+        self.start_interrupt_establishment(pending, was_running)
             .await
             .expect("worker interruption establishment task failed")
     }
@@ -4246,7 +4246,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     fn start_interrupt_establishment(
         self: &Arc<Self>,
         pending: PendingWorkerInterrupt,
-        waiting: Option<(Uuid, Option<JoinHandle<()>>)>,
         was_running: bool,
     ) -> JoinHandle<Result<Option<Receiver<()>>, WorkerExecutorError>> {
         let worker = self.clone();
@@ -4254,9 +4253,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let scope = self.release_scope();
         let receipt = scope.accepted_driver();
         tokio::spawn(async move {
-            let result = worker
-                .establish_queued_interrupt(pending, waiting, &scope)
-                .await;
+            let result = worker.establish_queued_interrupt(pending, &scope).await;
             if result.is_err() {
                 scope.fail(
                     crate::metrics::resource_release::Stage::EndToEnd,
@@ -4275,7 +4272,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn establish_queued_interrupt(
         self: &Arc<Self>,
         pending: PendingWorkerInterrupt,
-        waiting: Option<(Uuid, Option<JoinHandle<()>>)>,
         scope: &crate::metrics::resource_release::ReleaseScope,
     ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
         let interrupt_kind = pending.kind;
@@ -4317,54 +4313,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(active_agent) = active_agent {
             active_agent.drain_fenced_entity_bodies().await;
         }
-        if let Some((attempt, task)) = waiting {
-            let waiting_receipt = scope.accepted_join();
-            let stopped = match self
-                .finish_waiting_stop(attempt, task, &pending, scope, waiting_receipt)
-                .await
-            {
-                Ok(stopped) => stopped,
-                Err(error) => {
-                    self.complete_startup(attempt, Err(error.clone()));
-                    self.stop_internal(
-                        false,
-                        Some(error.clone()),
-                        UnloadRequest::ordinary(UnloadReason::Failure),
-                        FinalWorkerState::CleanupFailed(error.clone()),
-                        PendingLiveInvocationDisposition::Fail,
-                    )
-                    .await;
-                    let _lifecycle = self.instance.lock().await;
-                    acknowledge_no_store_interruption(
-                        &mut self.execution_status.write().unwrap(),
-                        None,
-                    );
-                    return Err(error);
-                }
-            };
-            if let Some((attempt, kind, receipt)) = stopped {
-                self.complete_startup(attempt, Err(WorkerExecutorError::Interrupted { kind }));
-                {
-                    let mut status = self.execution_status.write().unwrap();
-                    if matches!(&*status, ExecutionStatus::Interrupting { await_interruption, .. } if Arc::ptr_eq(await_interruption, &receipt))
-                    {
-                        *status = ExecutionStatus::Suspended {
-                            agent_mode: status.agent_mode(),
-                            timestamp: Timestamp::now_utc(),
-                        };
-                    }
-                }
-                let _ = receipt.send(());
-                if matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                    let worker = self.clone();
-                    let established = establishment.clone();
-                    tokio::spawn(async move {
-                        established.wait().await;
-                        let _ = Worker::start_if_needed(worker).await;
-                    });
-                }
-            }
-        }
         Ok(receiver)
     }
 
@@ -4402,11 +4350,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         reacquire_permits: bool,
         unload_reason: UnloadReason,
         allow_deleting: bool,
-    ) -> Option<(
-        PendingWorkerInterrupt,
-        Option<(Uuid, Option<JoinHandle<()>>)>,
-        bool,
-    )> {
+    ) -> Option<(PendingWorkerInterrupt, bool)> {
         loop {
             let lifecycle = self.instance.lock().await;
             if !allow_deleting && lifecycle.ensure_not_deleting().is_err() {
@@ -4420,15 +4364,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     reacquire_permits,
                     UnloadRequest::ordinary(unload_reason),
                 )?;
-                let waiting = match lifecycle.deletion_runtime() {
-                    WorkerInstance::WaitingForPermit(waiting) => {
-                        Some((waiting.start_attempt, waiting.handle.lock().unwrap().take()))
-                    }
-                    _ => None,
-                };
                 let was_running =
                     matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(_));
-                return Some((pending, waiting, was_running));
+                return Some((pending, was_running));
             }
             drop(lifecycle);
             tokio::task::yield_now().await;
@@ -4441,80 +4379,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if observed {
             self.interrupt_signal.claim_observed_terminal(kind).await;
         }
-    }
-
-    async fn finish_waiting_stop(
-        &self,
-        attempt: Uuid,
-        task: Option<JoinHandle<()>>,
-        request: &PendingWorkerInterrupt,
-        scope: &crate::metrics::resource_release::ReleaseScope,
-        waiting_receipt: crate::metrics::resource_release::ReleaseReceipt,
-    ) -> Result<
-        Option<(Uuid, InterruptKind, Arc<tokio::sync::broadcast::Sender<()>>)>,
-        WorkerExecutorError,
-    > {
-        if let Some(task) = task {
-            join_waiting_task(task, scope, waiting_receipt).await?;
-        } else {
-            // The predecessor owns the exact task and has already joined it.
-            waiting_receipt.complete();
-        }
-        let mut lifecycle = self.instance.lock().await;
-        if !matches!(lifecycle.deletion_runtime(), WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == attempt)
-        {
-            return Ok(None);
-        }
-        let mut interrupts = self.interrupt_signal.lock().await;
-        if !matches!(&*interrupts, WorkerInterruptState::Pending(pending)
-            if Arc::ptr_eq(&pending.establishment, &request.establishment))
-        {
-            return Ok(None);
-        }
-        let Some(pending) = interrupts.take() else {
-            return Ok(None);
-        };
-        drop(interrupts);
-        let kind = pending.kind;
-        let receipt = match &*self.execution_status.read().unwrap() {
-            ExecutionStatus::Interrupting {
-                await_interruption, ..
-            } => await_interruption.clone(),
-            _ => {
-                return Err(WorkerExecutorError::runtime(
-                    "Waiting stop lost its receipt",
-                ));
-            }
-        };
-        match kind {
-            InterruptKind::Suspend(_) => {
-                self.add_and_commit_oplog(OplogEntry::suspend()).await?;
-            }
-            InterruptKind::Interrupt(_) => {
-                self.add_and_commit_oplog(OplogEntry::interrupted()).await?;
-            }
-            InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => {}
-        }
-        let disposition = if matches!(kind, InterruptKind::Interrupt(_)) {
-            PendingLiveInvocationDisposition::Fail
-        } else {
-            PendingLiveInvocationDisposition::Preserve
-        };
-        let result = self
-            .stop_internal_locked(
-                &mut lifecycle,
-                false,
-                None,
-                pending.unload_request,
-                FinalWorkerState::Unloaded {
-                    startup_failure: None,
-                },
-                disposition,
-            )
-            .await;
-        drop(lifecycle);
-        self.handle_stop_result(result).await;
-        Ok(Some((attempt, kind, receipt)))
     }
 
     async fn join_interrupt_establishment(&self) -> Result<(), WorkerExecutorError> {
@@ -11228,14 +11092,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
-                let mut interrupt = this.interrupt_signal.lock().await;
-                if waiting_worker.handle.lock().unwrap().is_none()
-                    || matches!(&*interrupt, WorkerInterruptState::Pending(pending) if pending.is_terminal())
-                {
-                    return;
-                }
-                interrupt.reset_terminal_for_new_generation();
-                drop(interrupt);
+                this.interrupt_signal
+                    .reset_terminal_for_new_generation()
+                    .await;
                 let running = RunningWorker::new(
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
@@ -11420,7 +11279,7 @@ pub struct WorkerTrace {
 
 #[derive(Debug)]
 struct WaitingWorker {
-    handle: StdMutex<Option<JoinHandle<()>>>,
+    handle: Option<JoinHandle<()>>,
     start_attempt: Uuid,
 }
 
@@ -11541,7 +11400,7 @@ impl WaitingWorker {
         });
 
         WaitingWorker {
-            handle: StdMutex::new(Some(handle)),
+            handle: Some(handle),
             start_attempt,
         }
     }
@@ -11549,54 +11408,10 @@ impl WaitingWorker {
 
 impl Drop for WaitingWorker {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.lock().unwrap().take() {
+        if let Some(handle) = self.handle.take() {
             handle.abort();
         }
     }
-}
-
-async fn join_waiting_task(
-    task: JoinHandle<()>,
-    scope: &crate::metrics::resource_release::ReleaseScope,
-    waiting_receipt: crate::metrics::resource_release::ReleaseReceipt,
-) -> Result<(), WorkerExecutorError> {
-    use crate::metrics::resource_release::{Failure, Stage};
-    task.abort();
-    let joined = task.await;
-    let joined_at = scope.now();
-    if let Err(error) = &joined
-        && !error.is_cancelled()
-    {
-        scope.fail(
-            Stage::EndToEnd,
-            if error.is_panic() {
-                Failure::Panic
-            } else {
-                Failure::Other
-            },
-        );
-    }
-    if ![
-        Stage::PrimaryStoreDrop,
-        Stage::FilesystemDeleted,
-        Stage::PermitReleased,
-    ]
-    .into_iter()
-    .any(|stage| scope.has_receipt(stage))
-    {
-        scope
-            .receipt(Stage::PermitWaitJoined)
-            .complete_at(joined_at);
-    }
-    waiting_receipt.complete_at(joined_at);
-    if let Err(error) = joined
-        && !error.is_cancelled()
-    {
-        return Err(WorkerExecutorError::runtime(format!(
-            "Waiting worker failed: {error}"
-        )));
-    }
-    Ok(())
 }
 
 #[derive(Debug)]

@@ -303,7 +303,7 @@ async fn concurrent_agent_limit_allows_rpc_progress(
 #[test]
 #[timeout("2m")]
 #[test_r::tag(group5)]
-async fn waiting_start_restart_receipt_precedes_permit_release(
+async fn initial_wait_processes_interrupt_after_permit_grant(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -313,8 +313,7 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::{OplogEntry, OplogIndex};
     use golem_service_base::error::worker_executor::InterruptKind;
-    use golem_worker_executor::services::events::Event;
-    use golem_worker_executor::services::{HasEvents, HasOplog, UsesAllDeps};
+    use golem_worker_executor::services::{HasOplog, UsesAllDeps};
     use golem_worker_executor::worker::Worker;
 
     let context = TestContext::new(last_unique_id);
@@ -331,10 +330,6 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
         .await
         .unwrap()
         .primary();
-    let held = executor
-        .acquire_account_concurrent_agent_permit(seed_id)
-        .await;
-    let mut stopped = Vec::new();
     for (kind, drop_requester) in [
         (InterruptKind::Restart, false),
         (InterruptKind::Jump, false),
@@ -342,8 +337,12 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
             InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc()),
             false,
         ),
+        (InterruptKind::ShardLost, false),
         (InterruptKind::Restart, true),
     ] {
+        let held = executor
+            .acquire_account_concurrent_agent_permit(seed_id.clone())
+            .await;
         let name = agent_id!("Counter", format!("waiting-stop-{kind:?}-{drop_requester}"));
         let id = golem_common::model::AgentId {
             component_id: component.id,
@@ -361,7 +360,6 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
             Principal::anonymous(),
         )
         .await?;
-        let mut events = worker.events().subscribe();
         let attempt = Worker::start_if_needed(worker.clone()).await?.unwrap();
         assert!(worker.is_loading());
         let existing = worker.await_interrupt_for_test();
@@ -369,33 +367,37 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
             .set_interrupting(kind)
             .await?
             .expect("accepted loading stop");
+        assert_eq!(existing.await, kind);
+        assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
+        assert_eq!(worker.resident_generation_for_test(), 0);
+        assert!(!worker.concurrent_agent_permit_is_held().await);
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        let entries = worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await?;
+        assert!(!entries.values().any(|entry| matches!(
+            entry,
+            OplogEntry::Suspend { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::AgentInvocationFinished { .. }
+        )));
+        drop(held);
         if drop_requester {
             drop(receipt);
         } else {
-            tokio::time::timeout(Duration::from_secs(5), receipt.recv())
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "{kind:?} receipt waited for the held permit, attempt {attempt}"
-                    )
-                })??;
+            tokio::time::timeout(Duration::from_secs(5), receipt.recv()).await??;
         }
-        assert_eq!(existing.await, kind);
-        let loaded = tokio::time::timeout(
-            Duration::from_secs(5),
-            events.wait_for(|event| match event {
-                Event::WorkerLoaded {
-                    agent_id,
-                    start_attempt,
-                    result,
-                } if agent_id == &id && *start_attempt == attempt => Some(result.clone()),
-                _ => None,
-            }),
-        )
-        .await??;
-        assert!(
-            matches!(loaded, Err(golem_service_base::error::worker_executor::WorkerExecutorError::Interrupted { kind: actual }) if actual == kind)
-        );
+        if matches!(kind, InterruptKind::Interrupt(_) | InterruptKind::ShardLost) {
+            worker.join_accepted_stops_for_test().await?;
+            worker.retained_cleanup_for_test().await?;
+        }
         let oplog = worker.oplog();
         let entries = oplog
             .read_exact(
@@ -403,37 +405,26 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
                 oplog.current_oplog_index().await.as_u64(),
             )
             .await?;
-        assert!(!entries.values().any(|entry| matches!(
-            entry,
-            OplogEntry::Suspend { .. } | OplogEntry::AgentInvocationFinished { .. }
-        )));
+        if matches!(kind, InterruptKind::Interrupt(_) | InterruptKind::ShardLost) {
+            assert!(!entries.values().any(|entry| matches!(
+                entry,
+                OplogEntry::Suspend { .. } | OplogEntry::AgentInvocationFinished { .. }
+            )));
+        }
         let interrupted = entries
             .values()
             .filter(|entry| matches!(entry, OplogEntry::Interrupted { .. }))
             .count();
         if matches!(kind, InterruptKind::Interrupt(_)) {
             assert_eq!(interrupted, 1);
-            assert!(worker.startup_attempt_for_test().is_err());
+            assert!(!worker.concurrent_agent_permit_is_held().await);
             continue;
         }
         assert_eq!(interrupted, 0);
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if let Ok(Some(next)) = worker.startup_attempt_for_test()
-                    && next != attempt
-                    && worker.is_loading()
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
-        assert!(worker.is_loading());
-        stopped.push((worker, name));
-    }
-    drop(held);
-    for (worker, name) in stopped {
+        if kind == InterruptKind::ShardLost {
+            assert!(!worker.concurrent_agent_permit_is_held().await);
+            continue;
+        }
         let result = executor
             .invoke_and_await_agent(&component, &name, "increment", data_value!())
             .await?;

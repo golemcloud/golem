@@ -45,7 +45,7 @@ labels!(Stage {
     PrimaryStoreDrop => "primary_store_drop", MemoryGrantRelease => "memory_grant_release",
     FilesystemDrained => "filesystem_drained", WindowPrepared => "window_prepared",
     FilesystemDeleted => "filesystem_deleted", PermitReleased => "permit_released",
-    PermitWaitJoined => "permit_wait_joined", HostOperationExit => "host_operation_exit",
+    HostOperationExit => "host_operation_exit",
     EndToEnd => "end_to_end"
 });
 labels!(Cause {
@@ -270,10 +270,6 @@ impl ReleaseScope {
         completion
     }
 
-    pub(crate) fn accepted_join(&self) -> ReleaseReceipt {
-        self.receipt_for(Stage::EndToEnd, true, true)
-    }
-
     pub(crate) fn accepted_driver(&self) -> ReleaseReceipt {
         let _start = PendingStart::new(self);
         let at = self.now();
@@ -375,6 +371,7 @@ impl ReleaseScope {
             id,
         }
     }
+    #[cfg(test)]
     pub(crate) fn has_receipt(&self, stage: Stage) -> bool {
         self.0.metrics.0.ledger.lock().unwrap().scopes[&self.0.id]
             .stages
@@ -929,28 +926,6 @@ pub(crate) mod tests {
         assert!(export.contains("golem_agent_resource_release_seconds_sum"));
         assert!(export.contains("stage=\"permit_released\"} 1.25"));
         assert!(!export.contains("le=\"0.025\""));
-    }
-
-    #[test]
-    fn failed_driver_cannot_complete_an_unjoined_startup_task() {
-        let metrics = TestMetrics::new();
-        let scope = metrics.scope();
-        let driver = scope.accepted_driver();
-        let waiting = scope.accepted_join();
-        scope.freeze_cause(Cause::Interrupt);
-        scope.fail(Stage::EndToEnd, Failure::StopDriver);
-        scope.seal();
-        driver.complete();
-        drop(waiting);
-        assert_eq!(metrics.pending("accepted_stop", "end_to_end"), 1.0);
-        assert_eq!(
-            metrics.count("accepted_stop", "end_to_end", "released_with_failure"),
-            0.0
-        );
-        assert_eq!(
-            metrics.count("accepted_stop", "permit_wait_joined", "released"),
-            0.0
-        );
     }
 
     #[test]

@@ -3,40 +3,6 @@ use test_r::{test, timeout};
 
 #[test]
 #[timeout("5s")]
-async fn captured_waiting_task_join_stays_pending_until_entered_io_finishes() {
-    use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut backend, _) = listener.accept().unwrap();
-    let (started, entered) = tokio::sync::oneshot::channel();
-    let task = tokio::task::spawn_blocking(move || {
-        started.send(()).unwrap();
-        backend.read_exact(&mut [0u8]).unwrap();
-    });
-    entered.await.unwrap();
-    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
-    let scope = metrics.scope();
-    let driver = scope.accepted_driver();
-    scope.freeze_cause(crate::metrics::resource_release::Cause::Interrupt);
-    let waiting = scope.accepted_join();
-    let mut joining = Box::pin(join_waiting_task(task, &scope, waiting));
-    assert!(futures::poll!(joining.as_mut()).is_pending());
-    assert_eq!(
-        metrics.count("accepted_stop", "permit_wait_joined", "released"),
-        0.0
-    );
-    peer.write_all(&[1]).unwrap();
-    joining.await.unwrap();
-    driver.complete();
-    scope.seal();
-    assert_eq!(
-        metrics.count("accepted_stop", "permit_wait_joined", "released"),
-        1.0
-    );
-}
-
-#[test]
-#[timeout("5s")]
 async fn entity_fence_keeps_attached_store_and_registration_until_the_body_exits() {
     use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
     use crate::services::active_agents::EntityFence;
