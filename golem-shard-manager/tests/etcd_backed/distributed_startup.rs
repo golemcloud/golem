@@ -60,6 +60,8 @@ use uuid::Uuid;
 inherit_test_dep!(Arc<DockerEtcd>);
 
 const LEASE_TTL: Duration = Duration::from_secs(2);
+/// Long enough that a renewal shows as a rise in the whole seconds etcd reports.
+const LIVE_DUPLICATE_LEASE_TTL: Duration = Duration::from_secs(6);
 /// Two of these must fit inside `LEASE_TTL` or startup refuses to run, so it cannot inherit the
 /// five-second default.
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
@@ -2290,7 +2292,12 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
     etcd: &Arc<DockerEtcd>,
 ) {
     wipe_state(etcd).await;
-    let config = distributed_config(etcd);
+    let mut config = distributed_config(etcd);
+    // etcd reports the time left on a lease in whole seconds, rounded up, so a lease that is
+    // renewed every third of two seconds never shows a rise. The TTL must be longer than that.
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.leader_lease_ttl = LIVE_DUPLICATE_LEASE_TTL;
+    }
     let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
     let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
         .await
@@ -2301,7 +2308,7 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
     duplicate.grpc.advertised_port = Some(leader_details.grpc_port);
     let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
     let started = timeout(
-        LEASE_TTL * 4,
+        LIVE_DUPLICATE_LEASE_TTL * 4,
         golem_shard_manager::run(
             &duplicate,
             Deployment::Standalone {
@@ -2312,7 +2319,7 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
         ),
     )
     .await
-    .expect("the duplicate replica must stop within two lease TTLs and some slack");
+    .expect("the duplicate replica must stop within a few lease TTLs");
     join_set.abort_all();
     let message = match started {
         Ok(_) => panic!("a replica that duplicates a live replica's address must not start"),
@@ -2331,7 +2338,7 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
 // A restarted process finds the key of its own previous process, which carries the same address
 // until its lease expires. That key is no duplicate: the replica must wait it out and lead.
 async fn an_earlier_process_key_with_the_same_address_is_waited_out(etcd: &Arc<DockerEtcd>) {
-    wait_out_an_earlier_process_key(etcd, LEASE_TTL).await;
+    wait_out_an_earlier_process_key(etcd, LEASE_TTL, None).await;
 }
 
 #[test]
@@ -2340,12 +2347,28 @@ async fn an_earlier_process_key_with_the_same_address_is_waited_out(etcd: &Arc<D
 // can outlive the new replica's own patience several times over. Nothing renews it, so it still
 // goes away, and the replica must wait for that instead of taking the key for a live replica.
 async fn an_earlier_process_key_with_a_longer_lease_is_waited_out(etcd: &Arc<DockerEtcd>) {
-    wait_out_an_earlier_process_key(etcd, LEASE_TTL * 4).await;
+    wait_out_an_earlier_process_key(etcd, LEASE_TTL * 4, None).await;
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A change of etcd's raft leader extends every lease once, abandoned ones too, so a key that
+// nothing renews can outlive any fixed patience. One extension is no sign of a live replica: the
+// replica must still wait the key out instead of refusing it.
+async fn an_earlier_process_key_whose_lease_was_extended_once_is_waited_out(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wait_out_an_earlier_process_key(etcd, LEASE_TTL * 2, Some(LEASE_TTL + LEASE_TTL / 2)).await;
 }
 
 /// Leaves a key with a replica's address under a lease of `earlier_ttl` that nothing renews, and
-/// expects a replica started over it to lead once the lease expires.
-async fn wait_out_an_earlier_process_key(etcd: &Arc<DockerEtcd>, earlier_ttl: Duration) {
+/// expects a replica started over it to lead once the lease expires. With `extend_once_after`, the
+/// lease is kept alive a single time after that long, as an etcd leader change would do.
+async fn wait_out_an_earlier_process_key(
+    etcd: &Arc<DockerEtcd>,
+    earlier_ttl: Duration,
+    extend_once_after: Option<Duration>,
+) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
     let mut config = distributed_config(etcd);
@@ -2382,6 +2405,12 @@ async fn wait_out_an_earlier_process_key(etcd: &Arc<DockerEtcd>, earlier_ttl: Du
         .unwrap();
 
     let (replica, ports) = spawn_replica(config, CancellationToken::new());
+    if let Some(after) = extend_once_after {
+        tokio::time::sleep(after).await;
+        let (mut keeper, mut answers) = client.lease_keep_alive(lease).await.unwrap();
+        keeper.keep_alive().await.unwrap();
+        answers.message().await.unwrap();
+    }
     timeout(STARTUP_TIMEOUT, ports)
         .await
         .expect("the replica leads once the earlier key's lease expires")

@@ -915,31 +915,30 @@ impl LeaderElection {
     }
 
     /// Ends a waiting campaign when the watched view shows that it must not go on: a campaigner
-    /// of a newer version queues behind this replica (see [`newer_version_behind`]),
-    /// or another live campaigner advertises this replica's address. Never returns without a
-    /// watch.
+    /// of a newer version queues behind this replica (see [`newer_version_behind`]), or another
+    /// live campaigner advertises this replica's address. Never returns without a watch.
     ///
     /// A key of an earlier process of the same pod also carries this address, but nothing renews
-    /// its lease, so it is gone within one TTL of that lease after its last renewal, which was
-    /// before this replica first saw the key. That TTL is the earlier process's own, not this
-    /// replica's: the operator may have shortened the configured one before the restart, so the
-    /// patience is the lifetime of the other key's lease, read from etcd when the key is first
-    /// seen, plus this replica's granted TTL as the margin for etcd's expiry scan and the delay of
-    /// the watch. A live duplicate renews its lease and is still there after that.
+    /// its lease, so the lease only counts down until the key disappears. A live duplicate
+    /// renews its lease, which makes the time left on it go up. The campaign therefore reads the
+    /// time left on the other key's lease at every recheck and refuses the duplicate only after
+    /// it has seen that time go up twice (see [`RenewalEvidence`]); how long the lease would
+    /// otherwise last decides nothing, because a change of etcd's raft leader extends every lease
+    /// and an abandoned key can then outlive any fixed patience. A live replica renews at a third
+    /// of its lease, so it is seen renewing within about one lease.
     ///
-    /// A key whose lease lifetime could not be read, or whose lease is already gone, is never
-    /// refused: the first is missing information, and the second key is about to disappear with
-    /// its lease. The read is tried again on the next recheck.
+    /// A lease that is already gone is never refused, because its key is about to disappear with
+    /// it, and neither is a key whose lease could not be read: the read is tried again on the next
+    /// recheck. The recheck comes at most every quarter of this replica's TTL, and at most every
+    /// third of the other lease's granted TTL once that is known, so that renewals are not missed.
     async fn watch_campaign(&self, own_lease: i64, granted_ttl: Duration) -> CampaignInterrupt {
         let Some(mut watch) = self.watch.clone() else {
             return std::future::pending().await;
         };
         let own = &self.value.grpc_address;
         let mut duplicate: Option<SeenDuplicate> = None;
-        // Wakes the loop with no change in the view, so that the patience is measured.
-        let mut recheck = interval(granted_ttl / 4);
-        recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
+            let mut recheck = granted_ttl / 4;
             if let Some(view) = watch.view() {
                 if let Some(newer) = newer_version_behind(&view, own_lease, &self.value.version) {
                     return CampaignInterrupt::YieldToNewer {
@@ -959,40 +958,47 @@ impl LeaderElection {
                                 );
                                 duplicate.insert(SeenDuplicate {
                                     key: other.key.clone(),
-                                    since: Instant::now(),
-                                    lease_lifetime: None,
+                                    evidence: RenewalEvidence::default(),
+                                    other_granted_ttl: None,
                                 })
                             }
                         };
-                        if seen.lease_lifetime.is_none() {
-                            seen.lease_lifetime = self.lease_lifetime(other.lease).await;
+                        match self.read_lease(other.lease).await {
+                            LeaseRead::Alive { remaining, granted } => {
+                                seen.other_granted_ttl = Some(granted);
+                                if seen.evidence.observe(remaining) {
+                                    return CampaignInterrupt::DuplicateAddress {
+                                        address: own.to_string(),
+                                        other: other
+                                            .value
+                                            .as_ref()
+                                            .map(|value| value.identity.clone())
+                                            .unwrap_or_default(),
+                                    };
+                                }
+                            }
+                            LeaseRead::Gone => seen.evidence = RenewalEvidence::default(),
+                            LeaseRead::Unknown => {}
                         }
-                        if let Some(lifetime) = seen.lease_lifetime
-                            && seen.since.elapsed() >= lifetime.saturating_add(granted_ttl)
-                        {
-                            return CampaignInterrupt::DuplicateAddress {
-                                address: own.to_string(),
-                                other: other
-                                    .value
-                                    .as_ref()
-                                    .map(|value| value.identity.clone())
-                                    .unwrap_or_default(),
-                            };
+                        if let Some(granted) = seen.other_granted_ttl {
+                            recheck = recheck.min(granted / 3);
                         }
                     }
                     None => duplicate = None,
                 }
             }
+            // A zero wait would spin.
+            let recheck = recheck.max(Duration::from_millis(50));
             tokio::select! {
                 _ = watch.changed() => {}
-                _ = recheck.tick() => {}
+                _ = sleep(recheck) => {}
             }
         }
     }
 
-    /// The lifetime etcd granted to `lease`, or `None` when it cannot be told: the read failed, or
-    /// the lease no longer exists.
-    async fn lease_lifetime(&self, lease: i64) -> Option<Duration> {
+    /// What etcd says about `lease`: the time left on it and the lifetime it was granted, or that
+    /// it no longer exists, or nothing when the read failed.
+    async fn read_lease(&self, lease: i64) -> LeaseRead {
         let mut lease_client = self.client.lease_client();
         match self.bounded(lease_client.time_to_live(lease, None)).await {
             Ok(response) if response.ttl() < 0 => {
@@ -1000,16 +1006,19 @@ impl LeaderElection {
                     lease,
                     "The lease of a duplicate key is gone; its key is about to disappear"
                 );
-                None
+                LeaseRead::Gone
             }
-            Ok(response) => Some(Duration::from_secs(response.granted_ttl().max(0) as u64)),
+            Ok(response) => LeaseRead::Alive {
+                remaining: response.ttl(),
+                granted: Duration::from_secs(response.granted_ttl().max(0) as u64),
+            },
             Err(err) => {
                 warn!(
                     lease,
                     error = %err,
-                    "Cannot read the lifetime of a duplicate key's lease; trying again"
+                    "Cannot read a duplicate key's lease; trying again"
                 );
-                None
+                LeaseRead::Unknown
             }
         }
     }
@@ -1212,12 +1221,42 @@ pub(crate) fn newer_version_behind(
         .map(|(_, version)| version.clone())
 }
 
-/// The key of another campaigner that advertises this replica's address, when it was first seen,
-/// and the lifetime of its lease once that has been read.
+/// The key of another campaigner that advertises this replica's address, what has been seen of
+/// its lease renewing, and the lifetime that lease was granted once that has been read.
 struct SeenDuplicate {
     key: Vec<u8>,
-    since: Instant,
-    lease_lifetime: Option<Duration>,
+    evidence: RenewalEvidence,
+    other_granted_ttl: Option<Duration>,
+}
+
+/// One read of another campaigner's lease.
+enum LeaseRead {
+    Alive { remaining: i64, granted: Duration },
+    Gone,
+    Unknown,
+}
+
+/// Counts how often the time left on a lease went up between two reads. Only a renewal raises it,
+/// but so does a change of etcd's raft leader, which grants every lease its full time again once.
+/// A single rise therefore proves nothing; two prove that someone renews.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RenewalEvidence {
+    last_remaining: Option<i64>,
+    rises: u32,
+}
+
+impl RenewalEvidence {
+    const RISES_THAT_PROVE_A_RENEWAL: u32 = 2;
+
+    /// Records a read of the time left on the lease, in seconds. Returns whether the evidence now
+    /// proves that the lease is renewed.
+    pub(crate) fn observe(&mut self, remaining: i64) -> bool {
+        if self.last_remaining.is_some_and(|last| remaining > last) {
+            self.rises += 1;
+        }
+        self.last_remaining = Some(remaining);
+        self.rises >= Self::RISES_THAT_PROVE_A_RENEWAL
+    }
 }
 
 /// Another campaigner that advertises `own`. The own key is told apart by its lease.
@@ -1376,6 +1415,35 @@ mod tests {
             newer_version_behind(&queue_ending_in("1.6.0"), 9, "1.5.0"),
             None
         );
+    }
+
+    #[test]
+    fn two_rises_of_the_time_left_prove_a_renewal() {
+        let mut evidence = RenewalEvidence::default();
+        assert!(!evidence.observe(5));
+        assert!(!evidence.observe(3));
+        assert!(
+            !evidence.observe(5),
+            "one rise may be a change of etcd's leader"
+        );
+        assert!(!evidence.observe(4));
+        assert!(evidence.observe(5));
+    }
+
+    #[test]
+    fn a_lease_that_only_counts_down_proves_nothing() {
+        let mut evidence = RenewalEvidence::default();
+        for remaining in [10, 8, 8, 5, 5, 2, 1] {
+            assert!(!evidence.observe(remaining));
+        }
+    }
+
+    #[test]
+    fn a_lease_whose_time_left_stays_equal_is_no_evidence() {
+        let mut evidence = RenewalEvidence::default();
+        for _ in 0..10 {
+            assert!(!evidence.observe(7));
+        }
     }
 
     #[test]
