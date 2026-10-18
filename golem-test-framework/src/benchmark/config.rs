@@ -495,6 +495,12 @@ pub struct IngressMixEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum IngressMethod {
+    /// Requests that worker-service answers itself, without an executor: on the REST share
+    /// an invoke-agent request with constructor parameters of the wrong type, which
+    /// worker-service authenticates, resolves and then refuses with 400; on the HTTP API
+    /// share GET /openapi.json, which it serves from its cache. For the load on the
+    /// network path up to worker-service.
+    NoInvocation,
     Echo,
     Sleep,
     OplogHeavy,

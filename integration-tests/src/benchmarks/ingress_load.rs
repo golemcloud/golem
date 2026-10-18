@@ -68,6 +68,9 @@ const MAX_IN_FLIGHT_PER_CLIENT: usize = 64;
 /// Failure messages kept per path and step. The counts include all failures.
 const MAX_FAILURE_MESSAGES: usize = 100;
 const WARMUP_ATTEMPTS: usize = 3;
+/// A request that starts this much after it was due shows that the runner, not the
+/// cluster, could not keep the rate.
+const LATE_START: Duration = Duration::from_millis(20);
 
 pub struct IngressLoad {
     config: RunConfig,
@@ -99,13 +102,26 @@ struct Account {
 
 /// The requests of one entry of the mix, for each agent of an account.
 struct AccountCall {
-    /// The request body for each agent, for the REST invoke endpoint.
-    rest_bodies: Vec<bytes::Bytes>,
+    /// The REST request for each agent.
+    rest_targets: Vec<RestTarget>,
     /// The request for each HTTP API agent.
     http_api_targets: Vec<HttpApiTarget>,
 }
 
+struct RestTarget {
+    /// The body for the invoke endpoint.
+    body: bytes::Bytes,
+    /// worker-service refuses the request before it calls an executor, and that answer
+    /// counts as success. See `IngressMethod::NoInvocation`.
+    refused: bool,
+}
+
+/// What worker-service answers to constructor parameters of the wrong type.
+const REFUSED_STATUS: reqwest::StatusCode = reqwest::StatusCode::BAD_REQUEST;
+const REFUSED_MESSAGE: &str = "constructor parameters type error";
+
 struct HttpApiTarget {
+    get: bool,
     url: Url,
     /// The Host header, outside the cloud.
     host: Option<String>,
@@ -196,6 +212,9 @@ struct StepStats {
     http_api: PathStats,
     dropped: AtomicU64,
     clients_created: AtomicU64,
+    /// Requests that the runner started more than LATE_START after they were due.
+    late_starts: AtomicU64,
+    max_start_lag_micros: AtomicU64,
 }
 
 impl StepStats {
@@ -259,6 +278,7 @@ fn agent(name: String) -> ParsedAgentId {
 /// The name of the method in result keys and failure messages.
 fn method_label(method: IngressMethod) -> &'static str {
     match method {
+        IngressMethod::NoInvocation => "no-invocation",
         IngressMethod::Echo => "echo",
         IngressMethod::Sleep => "sleep",
         IngressMethod::OplogHeavy => "oplog-heavy",
@@ -277,7 +297,7 @@ fn check_mix(mix: &[IngressMixEntry]) -> Result<(), String> {
             return Err(format!("{label} has weight 0"));
         }
         let missing = match entry.method {
-            IngressMethod::Echo => None,
+            IngressMethod::NoInvocation | IngressMethod::Echo => None,
             IngressMethod::Sleep => entry.millis.is_none().then_some("millis"),
             IngressMethod::OplogHeavy | IngressMethod::CpuIntensive => {
                 entry.length.is_none().then_some("length")
@@ -449,14 +469,16 @@ impl IngressLoad {
         Ok(())
     }
 
-    fn rest_body(
+    fn rest_target(
         owner_email: &str,
         app_name: &str,
         env_name: &str,
         agent_id: &ParsedAgentId,
         entry: &IngressMixEntry,
-    ) -> anyhow::Result<bytes::Bytes> {
+    ) -> anyhow::Result<RestTarget> {
+        let refused = entry.method == IngressMethod::NoInvocation;
         let (method_name, parameters) = match entry.method {
+            IngressMethod::NoInvocation => ("echo", data_value!("benchmark")),
             IngressMethod::Echo => ("echo", data_value!("benchmark")),
             IngressMethod::Sleep => ("sleep", data_value!(entry.millis.unwrap_or_default())),
             IngressMethod::OplogHeavy => (
@@ -472,8 +494,13 @@ impl IngressLoad {
             app_name: app_name.to_string(),
             env_name: env_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
-                .map_err(anyhow::Error::msg)?,
+            // The agent takes a string; a number is refused before any executor sees it.
+            parameters: if refused {
+                ExternalSchemaValue::try_from(data_value!(0u32).into_parts().1)
+            } else {
+                ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+            }
+            .map_err(anyhow::Error::msg)?,
             phantom_id: agent_id.phantom_id,
             config: None,
             method_name: method_name.to_string(),
@@ -485,7 +512,10 @@ impl IngressLoad {
             deployment_revision: None,
             owner_account_email: Some(owner_email.to_string()),
         };
-        Ok(bytes::Bytes::from(serde_json::to_vec(&request)?))
+        Ok(RestTarget {
+            body: bytes::Bytes::from(serde_json::to_vec(&request)?),
+            refused,
+        })
     }
 
     /// The HTTP API request of a mix entry for the agent `name`, on the domain at `base`.
@@ -495,7 +525,16 @@ impl IngressLoad {
         name: &str,
         entry: &IngressMixEntry,
     ) -> anyhow::Result<HttpApiTarget> {
+        if entry.method == IngressMethod::NoInvocation {
+            return Ok(HttpApiTarget {
+                get: true,
+                url: Url::parse(&format!("{base}/openapi.json"))?,
+                host: host.clone(),
+                body: None,
+            });
+        }
         let (path, body) = match entry.method {
+            IngressMethod::NoInvocation => unreachable!(),
             IngressMethod::Echo => ("echo/load", None),
             // The HTTP API takes a u64 only as a string.
             IngressMethod::Sleep => (
@@ -509,6 +548,7 @@ impl IngressLoad {
             IngressMethod::CpuIntensive => ("cpu-intensive", Some(json!({"length": entry.length}))),
         };
         Ok(HttpApiTarget {
+            get: false,
             url: Url::parse(&format!("{base}/rust/{name}/{path}"))?,
             host: host.clone(),
             body: body.map(|body| bytes::Bytes::from(body.to_string())),
@@ -532,10 +572,14 @@ async fn send(
             .post(rest_url.clone())
             .bearer_auth(&account.bearer)
             .header("Content-Type", "application/json; charset=utf-8")
-            .body(call.rest_bodies[agent].clone()),
+            .body(call.rest_targets[agent].body.clone()),
         Path::HttpApi => {
             let target = &call.http_api_targets[agent];
-            let mut request = client.post(target.url.clone());
+            let mut request = if target.get {
+                client.get(target.url.clone())
+            } else {
+                client.post(target.url.clone())
+            };
             if let Some(host) = &target.host {
                 request = request.header("Host", host);
             }
@@ -559,6 +603,10 @@ async fn send(
         Ok(response) => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            let refused = matches!(path, Path::Rest) && call.rest_targets[agent].refused;
+            if refused && status == REFUSED_STATUS && body.contains(REFUSED_MESSAGE) {
+                return Ok(());
+            }
             Err(format!(
                 "{status}: {}",
                 body.chars().take(300).collect::<String>()
@@ -647,6 +695,13 @@ async fn drive(
                         break;
                     }
                     tokio::time::sleep_until(due).await;
+                    let lag = due.elapsed();
+                    if lag > LATE_START {
+                        stats.late_starts.fetch_add(1, Ordering::Relaxed);
+                    }
+                    stats
+                        .max_start_lag_micros
+                        .fetch_max(lag.as_micros() as u64, Ordering::Relaxed);
                     let path = path_of(n, http_api_percent);
                     let agent = (n as usize / 2) % agents;
                     // The two requests of a pair (one per path at 50%) call the same method,
@@ -839,10 +894,10 @@ impl Benchmark for IngressLoad {
                     let (base, host) = &domain_bases[index % domain_bases.len()];
                     let mut calls = Vec::new();
                     for entry in &settings.mix {
-                        let mut rest_bodies = Vec::new();
+                        let mut rest_targets = Vec::new();
                         let mut http_api_targets = Vec::new();
                         for n in 0..settings.agents_per_account.max(1) {
-                            rest_bodies.push(Self::rest_body(
+                            rest_targets.push(Self::rest_target(
                                 owner_email,
                                 app_name,
                                 env_name,
@@ -857,7 +912,7 @@ impl Benchmark for IngressLoad {
                             )?);
                         }
                         calls.push(AccountCall {
-                            rest_bodies,
+                            rest_targets,
                             http_api_targets,
                         });
                     }
@@ -922,7 +977,7 @@ impl Benchmark for IngressLoad {
             .iter()
             .enumerate()
             .flat_map(|(index, account)| {
-                (0..account.calls[call].rest_bodies.len()).flat_map(move |agent| {
+                (0..account.calls[call].rest_targets.len()).flat_map(move |agent| {
                     [(index, Path::Rest, agent), (index, Path::HttpApi, agent)]
                 })
             })
@@ -1017,13 +1072,22 @@ impl Benchmark for IngressLoad {
         );
         recorder.count(&ResultKey::primary("dropped"), dropped);
         recorder.count(
+            &ResultKey::primary("late-starts"),
+            stats.late_starts.load(Ordering::Relaxed),
+        );
+        recorder.count(
+            &ResultKey::secondary("max-start-lag-ms"),
+            stats.max_start_lag_micros.load(Ordering::Relaxed) / 1000,
+        );
+        recorder.count(
             &ResultKey::secondary("clients-created"),
             context.accounts.len() as u64 + stats.clients_created.load(Ordering::Relaxed),
         );
         info!(
-            "Step done: {succeeded} succeeded, {dropped} dropped, {} REST and {} HTTP API failures",
+            "Step done: {succeeded} succeeded, {dropped} dropped, {} REST and {} HTTP API failures, {} late starts",
             stats.rest.failed.load(Ordering::Relaxed),
-            stats.http_api.failed.load(Ordering::Relaxed)
+            stats.http_api.failed.load(Ordering::Relaxed),
+            stats.late_starts.load(Ordering::Relaxed)
         );
         Ok(())
     }
@@ -1119,6 +1183,7 @@ mod tests {
             length,
         };
         assert!(check_mix(&[entry(IngressMethod::Echo, None, None)]).is_ok());
+        assert!(check_mix(&[entry(IngressMethod::NoInvocation, None, None)]).is_ok());
         assert!(check_mix(&[]).is_err());
         assert!(check_mix(&[entry(IngressMethod::Sleep, None, None)]).is_err());
         assert!(check_mix(&[entry(IngressMethod::OplogHeavy, None, Some(10))]).is_ok());
