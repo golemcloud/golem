@@ -285,6 +285,61 @@ mod lease_timing_tests {
 }
 
 #[cfg(test)]
+mod lease_health_tests {
+    use super::{
+        ShardManagerServiceImpl, ShardManagerServiceServer, report_not_serving_once_lapsed,
+    };
+    use crate::sharding::leader_election::LeaseBelief;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::time::Instant;
+    use tonic_health::pb::HealthCheckRequest;
+    use tonic_health::pb::health_check_response::ServingStatus;
+    use tonic_health::pb::health_client::HealthClient;
+
+    const SERVICE: &str = "golem.shardmanager.v1.ShardManagerService";
+
+    async fn status(client: &mut HealthClient<tonic::transport::Channel>) -> i32 {
+        client
+            .check(HealthCheckRequest {
+                service: SERVICE.to_string(),
+            })
+            .await
+            .expect("the health service answers")
+            .into_inner()
+            .status
+    }
+
+    #[test]
+    async fn the_service_is_not_serving_once_the_lease_belief_lapses() {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = HealthClient::new(channel);
+
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_millis(600));
+        tokio::spawn(report_not_serving_once_lapsed(belief, reporter));
+
+        assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(status(&mut client).await, ServingStatus::NotServing as i32);
+    }
+}
+
+#[cfg(test)]
 mod startup_supervision_tests {
     use super::unless_a_task_fails;
     use test_r::test;
@@ -1077,6 +1132,11 @@ pub async fn run(
             anyhow::Ok(())
         })
         .await?;
+        if let Some(belief) = lease_belief.clone() {
+            join_set.spawn(
+                report_not_serving_once_lapsed(belief, health_reporter.clone()).in_current_span(),
+            );
+        }
 
         // After `serve`: a standby names this leader from the moment its value is ready, and the
         // leader must already serve by then.
@@ -1116,6 +1176,29 @@ pub async fn run(
         grpc_port,
         leadership,
     })
+}
+
+/// Sets the health entry of the shard manager service to NOT_SERVING once the lease belief has
+/// lapsed, which is when the gate starts to refuse calls. Without it a health probe would keep
+/// reporting a leader that serves nothing until the lost lease stops the process. It sleeps until
+/// the deadline and reads it again after each wake, because every renewal moves it. It never
+/// returns, so that the task set does not take it for a stopped task: a lapsed belief ends the
+/// replica, so the entry is not set back.
+async fn report_not_serving_once_lapsed(
+    belief: LeaseBelief,
+    health_reporter: tonic_health::server::HealthReporter,
+) -> anyhow::Result<()> {
+    loop {
+        let remaining = belief.remaining();
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(remaining).await;
+    }
+    health_reporter
+        .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+        .await;
+    std::future::pending().await
 }
 
 /// A failed revoke is never propagated: the lease expires on its own, so failing the shutdown

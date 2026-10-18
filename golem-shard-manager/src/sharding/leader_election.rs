@@ -189,6 +189,14 @@ impl LeaseBelief {
         self.held_at(belief_clock::now())
     }
 
+    /// How long the belief still holds; zero once it has lapsed.
+    pub(crate) fn remaining(&self) -> Duration {
+        self.deadline
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .saturating_sub(belief_clock::now())
+    }
+
     /// Whether the belief holds at `now` on [`belief_clock`].
     fn held_at(&self, now: Duration) -> bool {
         now < *self.deadline.lock().unwrap_or_else(PoisonError::into_inner)
