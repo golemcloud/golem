@@ -79,6 +79,11 @@ pub fn record_serving() {
     IS_SERVING.set(1.0);
 }
 
+/// This replica no longer takes calls, though it may not have given up the leadership yet.
+pub fn record_not_serving() {
+    IS_SERVING.set(0.0);
+}
+
 pub fn record_elected(elected_at_epoch_secs: f64) {
     IS_LEADER.set(1.0);
     LEADER_SINCE.set(elected_at_epoch_secs);

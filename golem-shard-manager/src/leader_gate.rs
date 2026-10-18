@@ -64,6 +64,8 @@ enum GateState<S> {
         /// A standby that etcd has not answered for this long is not ready: one lease TTL.
         ready_window: Duration,
     },
+    /// The replica is on its way out, whatever it was: every call is refused and it is not ready.
+    Stopped,
     Serving {
         service: S,
         /// The leader's lease belief; `None` in local mode, which has no lease.
@@ -125,6 +127,13 @@ impl<S: Clone> LeaderGate<S> {
         });
     }
 
+    /// From now on every call gets `UNAVAILABLE` and the replica is not ready. Called at the start
+    /// of every way a replica stops, before it gives up the leadership: a connection that was
+    /// accepted earlier would otherwise be served by a leader that another replica is replacing.
+    pub fn stop(&self) {
+        self.set(GateState::Stopped);
+    }
+
     pub fn serve(&self, service: S, lease: Option<LeaseBelief>) {
         self.set(GateState::Serving { service, lease });
     }
@@ -143,7 +152,7 @@ impl<S: Clone> LeaderGate<S> {
             return false;
         }
         match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
-            GateState::Starting => false,
+            GateState::Starting | GateState::Stopped => false,
             GateState::Standby {
                 leader,
                 ready_window,
@@ -157,6 +166,9 @@ impl<S: Clone> LeaderGate<S> {
         match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
             GateState::Starting => {
                 Route::Refuse(Status::unavailable("the shard manager is starting; retry"))
+            }
+            GateState::Stopped => {
+                Route::Refuse(Status::unavailable("the shard manager is stopping; retry"))
             }
             GateState::Serving {
                 lease: Some(lease), ..
@@ -424,6 +436,30 @@ mod tests {
         );
         leader.own_address_reached();
         assert!(leader.is_ready());
+    }
+
+    #[test]
+    async fn a_stopping_replica_refuses_every_call_without_naming_a_leader() {
+        let leading = standby(LeaderView::NoLeader);
+        leading.serve(
+            Served,
+            Some(LeaseBelief::until(Instant::now() + Duration::from_secs(10))),
+        );
+        assert!(leading.is_ready());
+        leading.stop();
+        let response = answer(&leading).await;
+        assert!(response.headers().get("x-served").is_none());
+        assert_eq!(status(&response).code(), tonic::Code::Unavailable);
+        assert_eq!(leader_of(&status(&response)), None);
+        assert!(
+            !leading.is_ready(),
+            "a leader whose lease belief still holds is not ready once it stops"
+        );
+
+        let named = standby(LeaderView::Leader(value(9002, true)));
+        named.stop();
+        assert_eq!(leader_of(&status(&answer(&named).await)), None);
+        assert!(!named.is_ready());
     }
 
     #[test]

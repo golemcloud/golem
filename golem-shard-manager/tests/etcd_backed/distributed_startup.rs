@@ -1159,6 +1159,7 @@ async fn a_step_down_whose_lease_is_already_gone_still_exits_cleanly(etcd: &Arc<
         http_port: 0,
         grpc_port: 0,
         leadership: Some(elected.leadership),
+        stop: None,
     };
 
     let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
@@ -2754,6 +2755,47 @@ async fn the_client_rides_out_an_ungraceful_failover_without_any_tuning(etcd: &A
         .expect("the standby was elected by the time the call was answered")
         .expect("the standby's startup reports its ports");
     standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A leader that stops gives up the leadership at once, but a connection that it accepted before
+// would go on being served until its lease belief lapsed: for a moment two replicas answered. A
+// stopped replica must answer nothing, on old connections too.
+async fn a_leader_that_stops_answers_nothing_on_the_connections_it_had_accepted(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let shutdown = CancellationToken::new();
+    let (replica, started) = spawn_serving_replica(distributed_config(etcd), shutdown.clone());
+    let port = timeout(STARTUP_TIMEOUT, started).await.unwrap().unwrap();
+
+    // One channel, made before the stop, so that the call after it really rides the old connection.
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+        .expect("The replica's address is a valid endpoint")
+        .connect()
+        .await
+        .expect("The leader accepts the connection");
+    let mut client = ShardManagerServiceClient::new(channel);
+    client
+        .get_routing_table(GetRoutingTableRequest {})
+        .await
+        .expect("The leader serves before it stops");
+
+    shutdown.cancel();
+    timeout(STARTUP_TIMEOUT, replica)
+        .await
+        .expect("The replica should stop")
+        .expect("The replica should not panic")
+        .expect("A replica stopped by its shutdown token exits cleanly");
+
+    // Well inside the lease TTL, so a lease belief that still holds cannot be the reason.
+    let answer = client.get_routing_table(GetRoutingTableRequest {}).await;
+    assert!(
+        answer.is_err(),
+        "a stopped replica answered a call on a connection that it had accepted before"
+    );
 }
 
 #[test]

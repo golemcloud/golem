@@ -545,6 +545,45 @@ pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
     pub leadership: Option<LeadershipHandle>,
+    /// What the replica's stop acts on; see [`serve_until_stopped`].
+    pub stop: Option<ServerStop>,
+}
+
+/// The parts of a replica that its stop acts on, in the order it acts on them: the gate stops
+/// answering, then the leadership is released.
+#[derive(Clone)]
+pub struct ServerStop {
+    gate: LeaderGate<ShardManagerGrpcService>,
+    health_reporter: tonic_health::server::HealthReporter,
+}
+
+impl ServerStop {
+    /// The replica answers no call, reports not ready and not serving. Done first, so that no
+    /// replica serves from a connection it accepted earlier once another may be leading.
+    async fn refuse_calls(&self) {
+        self.gate.stop();
+        self.health_reporter
+            .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        metrics::record_not_serving();
+    }
+}
+
+/// Stops a replica in the order that keeps two replicas from serving: no more answers, the tasks
+/// finished, the leadership released.
+///
+/// Every task is awaited before the lease is released, so no executor command can be in flight
+/// once another replica may be leading.
+async fn stop_replica(
+    stop: Option<&ServerStop>,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+    leadership: Option<&LeadershipHandle>,
+) {
+    if let Some(stop) = stop {
+        stop.refuse_calls().await;
+    }
+    join_set.shutdown().await;
+    release_leadership(leadership).await;
 }
 
 /// Startup's persistence wiring; the leadership handle is present only in distributed mode.
@@ -1108,6 +1147,10 @@ pub async fn run(
     let listener = golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
     let grpc_port = listener.local_addr()?.port();
 
+    let stop = ServerStop {
+        gate: gate.clone(),
+        health_reporter: health_reporter.clone(),
+    };
     join_set.spawn({
         let mut server = Server::builder();
 
@@ -1326,8 +1369,7 @@ pub async fn run(
     if let Err(err) = started {
         // Awaited, not just requested: a task still running could reach an executor after a
         // standby has taken over.
-        join_set.shutdown().await;
-        release_leadership(leadership.as_ref()).await;
+        stop_replica(Some(&stop), join_set, leadership.as_ref()).await;
         return Err(err);
     }
 
@@ -1337,6 +1379,7 @@ pub async fn run(
         http_port,
         grpc_port,
         leadership,
+        stop: Some(stop),
     })
 }
 
@@ -1391,38 +1434,36 @@ async fn release_leadership(leadership: Option<&LeadershipHandle>) {
 }
 
 /// Runs the shard manager until a task fails, until every task has finished, or until `shutdown`
-/// fires, releasing the leadership on the way out of all three.
-///
-/// Every path stops the tasks and *waits* for them before the lease is released, so no executor
-/// command can be in flight once another replica may be leading.
+/// fires, and stops the replica on the way out of all three, in the order of [`stop_replica`]:
+/// the gate refuses calls first, the tasks are stopped and awaited, the leadership is released,
+/// and the server closes its connections.
 pub async fn serve_until_stopped(
     details: RunDetails,
     mut join_set: JoinSet<anyhow::Result<()>>,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
+    let stop = details.stop.as_ref();
+    let leadership = details.leadership.as_ref();
     loop {
         tokio::select! {
             joined = join_set.join_next() => match joined {
                 Some(Ok(Ok(()))) => warn!("A shard manager task finished"),
                 Some(Ok(Err(err))) => {
-                    join_set.shutdown().await;
-                    release_leadership(details.leadership.as_ref()).await;
+                    stop_replica(stop, &mut join_set, leadership).await;
                     return Err(err.context("a shard manager task failed"));
                 }
                 Some(Err(panicked)) => {
-                    join_set.shutdown().await;
-                    release_leadership(details.leadership.as_ref()).await;
+                    stop_replica(stop, &mut join_set, leadership).await;
                     return Err(anyhow::Error::new(panicked)
                         .context("a shard manager task panicked"));
                 }
                 None => {
-                    release_leadership(details.leadership.as_ref()).await;
+                    stop_replica(stop, &mut join_set, leadership).await;
                     return Ok(());
                 }
             },
             _ = shutdown.cancelled() => {
-                join_set.shutdown().await;
-                release_leadership(details.leadership.as_ref()).await;
+                stop_replica(stop, &mut join_set, leadership).await;
                 return Ok(());
             }
         }
