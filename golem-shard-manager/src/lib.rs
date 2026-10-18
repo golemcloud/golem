@@ -823,7 +823,7 @@ fn advertised_address(
     })
 }
 
-/// How long one attempt to reach the replica's own advertised address may take.
+/// How long one attempt to reach one address of the replica's own advertised host may take.
 const OWN_ADDRESS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
 /// The pause between two attempts to reach the replica's own advertised address.
 const OWN_ADDRESS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -837,11 +837,43 @@ const OWN_ADDRESS_WARNING_INTERVAL: Duration = Duration::from_secs(30);
 /// answers at the address. With server TLS it stops at the TCP connect: a TLS client would need
 /// the CA certificate that clients are given, which this process does not hold.
 async fn reach_own_address(own: &LeaderAddress, tls: bool) -> anyhow::Result<()> {
+    // A name may resolve to several addresses, some of which this replica cannot reach; each one
+    // gets its own short attempt, and one that works is enough.
+    let mut last_error = anyhow::anyhow!("{own} resolves to no address");
+    let addresses = tokio::time::timeout(
+        OWN_ADDRESS_ATTEMPT_TIMEOUT,
+        tokio::net::lookup_host((own.host.as_str(), own.port)),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("no answer to the lookup of {own}"))??;
+    for address in addresses {
+        let reached = tokio::time::timeout(
+            OWN_ADDRESS_ATTEMPT_TIMEOUT,
+            reach_resolved_address(address, tls),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(anyhow::anyhow!(
+                "no answer from {address} within {OWN_ADDRESS_ATTEMPT_TIMEOUT:?}"
+            ))
+        });
+        match reached {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+/// [`reach_own_address`] for one of the addresses that the advertised host resolves to.
+async fn reach_resolved_address(address: std::net::SocketAddr, tls: bool) -> anyhow::Result<()> {
     if tls {
-        tokio::net::TcpStream::connect((own.host.as_str(), own.port)).await?;
+        tokio::net::TcpStream::connect(address).await?;
         return Ok(());
     }
-    let channel = tonic::transport::Endpoint::from_shared(own.uri(false).to_string())?
+    // The channel is made for the resolved address, so that the attempt tests that address and not
+    // whichever one a second lookup would give first.
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))?
         .connect()
         .await?;
     let answer = tonic_health::pb::health_client::HealthClient::new(channel)
@@ -870,14 +902,7 @@ async fn confirm_own_address(
 ) -> anyhow::Result<()> {
     let mut last_warning: Option<tokio::time::Instant> = None;
     loop {
-        let attempt =
-            tokio::time::timeout(OWN_ADDRESS_ATTEMPT_TIMEOUT, reach_own_address(&own, tls))
-                .await
-                .unwrap_or_else(|_| {
-                    Err(anyhow::anyhow!(
-                        "no answer within {OWN_ADDRESS_ATTEMPT_TIMEOUT:?}"
-                    ))
-                });
+        let attempt = reach_own_address(&own, tls).await;
         match attempt {
             Ok(()) => break,
             Err(error) => {
