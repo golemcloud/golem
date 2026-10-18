@@ -416,7 +416,7 @@ async fn send(
                 .bytes()
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("{err}"))
+                .map_err(|err| error_chain(&err))
         }
         Ok(response) => {
             let status = response.status();
@@ -426,8 +426,20 @@ async fn send(
                 body.chars().take(300).collect::<String>()
             ))
         }
-        Err(err) => Err(format!("{err}")),
+        Err(err) => Err(error_chain(&err)),
     }
+}
+
+/// The error and all its sources, because reqwest shows only "error sending request" at the top.
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut message = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 /// The request number `n` of a client goes through the HTTP API for `http_api_percent`
@@ -884,6 +896,23 @@ mod tests {
         assert!(
             accepted.is_ok(),
             "the client did not connect to the pinned address"
+        );
+    }
+
+    #[test]
+    async fn a_failed_request_keeps_the_cause() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let err = build_client(true, &[])
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .unwrap_err();
+        let message = error_chain(&err);
+        assert!(
+            message.len() > err.to_string().len(),
+            "no cause in {message:?}"
         );
     }
 
