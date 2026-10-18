@@ -692,7 +692,7 @@ impl LeaderElection {
                 // The other replica keeps renewing its key, so a new campaign would meet it
                 // again: this ends the startup.
                 Err(CampaignExit::Interrupted(duplicate)) => {
-                    return Err(ShardManagerError::Internal(duplicate.to_string()));
+                    return Err(ShardManagerError::InvalidConfig(duplicate.to_string()));
                 }
                 Err(CampaignExit::Failed(err)) if err.is_retriable() => {
                     metrics::record_campaign_attempt_failure();

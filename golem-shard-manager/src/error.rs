@@ -119,6 +119,11 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 err.to_string(),
                 api::error_code::INTERNAL_FILESYSTEM_ERROR,
             ),
+            invalid @ ShardManagerError::InvalidConfig(_) => error(
+                shard_manager_error::Error::Unknown,
+                invalid.to_string(),
+                api::error_code::INTERNAL_UNKNOWN,
+            ),
             ShardManagerError::Internal(details) => error(
                 shard_manager_error::Error::Unknown,
                 details,

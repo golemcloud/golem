@@ -2316,10 +2316,11 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
     join_set.abort_all();
     let message = match started {
         Ok(_) => panic!("a replica that duplicates a live replica's address must not start"),
-        Err(err) => format!("{err:#}"),
+        Err(err) => err.root_cause().to_string(),
     };
     assert!(
-        message.contains("advertises the same gRPC address"),
+        message.starts_with("Invalid configuration: another shard manager replica (")
+            && message.contains("advertises the same gRPC address"),
         "{message}"
     );
     leader.abort();
