@@ -484,8 +484,11 @@ impl From<CardError> for ApiError {
             CardError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
-            CardError::RuntimeCardConflict(_) | CardError::RuntimeCardRevoked(_) => {
+            CardError::RuntimeCardConflict(_) => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            CardError::RuntimeCardRevoked(_) => {
+                Self::conflict(api::error_code::RUNTIME_CARD_REVOKED, error)
             }
             CardError::RuntimeCardCannotBeSystemCard => {
                 Self::bad_request(api::error_code::INVALID_RUNTIME_CARD, error)

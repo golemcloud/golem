@@ -75,6 +75,8 @@ fn unreadable_archive(
 pub enum OplogArchiveError {
     /// The storage did not answer, after its retries. A later call can pass.
     Unavailable(String),
+    /// Stored archive data does not decode.
+    Corruption(String),
     /// Any other failure. A later call gives the same answer.
     Failed(String),
 }
@@ -110,6 +112,7 @@ impl OplogArchiveError {
     pub fn map_details(self, describe: impl FnOnce(String) -> String) -> Self {
         match self {
             Self::Unavailable(details) => Self::Unavailable(describe(details)),
+            Self::Corruption(details) => Self::Corruption(describe(details)),
             Self::Failed(details) => Self::Failed(describe(details)),
         }
     }
@@ -122,7 +125,9 @@ impl OplogArchiveError {
 impl Display for OplogArchiveError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unavailable(details) | Self::Failed(details) => f.write_str(details),
+            Self::Unavailable(details) | Self::Corruption(details) | Self::Failed(details) => {
+                f.write_str(details)
+            }
         }
     }
 }
@@ -134,6 +139,8 @@ impl From<OplogReadError> for OplogArchiveError {
     fn from(error: OplogReadError) -> Self {
         if error.is_transient() {
             Self::Unavailable(error.to_string())
+        } else if matches!(error, OplogReadError::Corruption { .. }) {
+            Self::Corruption(error.to_string())
         } else {
             Self::Failed(error.to_string())
         }

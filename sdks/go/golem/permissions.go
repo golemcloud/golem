@@ -52,7 +52,8 @@ import (
 // Revoke and Install consume the card, as sending it does: afterwards the card
 // is moved, even when the call failed, and every further use panics with
 // [ErrPermissionCardMoved]. ID, Parents and ExpiresAt trap when the host no
-// longer knows the card.
+// longer knows the card, or when the card is revoked or expired; the other
+// operations on such a card return a [PermissionError].
 //
 // A [ScopeCard] from [DeriveScope] lends grants to awaited calls for the
 // current invocation only; see [MethodDef.WithScopeCard].

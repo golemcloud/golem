@@ -66,10 +66,10 @@ wallet; a card that you derived, or received as an agent or tool value, fails th
 `NotPermitted`.
 
 Expected failures raise `@permissions.PermissionError` (one case per WIT `permission-error` case,
-with `kind()` and `message()`). `CardRevoked` reports a card that the host knows to be revoked; a
-cached handle can still resolve after its card is revoked, so do not treat a successful call as
-proof that a card is live. Host traps stay traps: `id`, `parents` and `expires_at` trap on an
-unknown handle.
+with `kind()` and `message()`). `inspect`, `derive_child`, `derive_scope` and `install` on a card
+that is revoked or expired raise `CardRevoked` or `CardExpired`, so `inspect` detects revocation.
+Host traps stay traps: `id`, `parents` and `expires_at` trap on an unknown handle, and on a card
+that is revoked or expired.
 
 ```moonbit
 pub fn MyAgent::delegate(self : Self, target : @types.AgentId) -> Result[UInt, String] {
