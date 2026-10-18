@@ -1518,6 +1518,12 @@ impl std::error::Error for OplogPayloadDownloadError {
     }
 }
 
+impl From<OplogPayloadDownloadError> for String {
+    fn from(error: OplogPayloadDownloadError) -> Self {
+        error.to_string()
+    }
+}
+
 #[async_trait]
 pub trait OplogOps: Oplog {
     /// Uploads a big oplog payload and returns a reference to it
@@ -1891,7 +1897,7 @@ pub trait OplogServiceOps: OplogService {
         Ok(payload)
     }
 
-    /// Downloads a big oplog payload by its reference
+    /// Downloads a payload without losing the distinction between storage failure and corruption.
     async fn download_payload<
         T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
     >(
@@ -1899,29 +1905,46 @@ pub trait OplogServiceOps: OplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         payload: OplogPayload<T>,
-    ) -> Result<T, String> {
+    ) -> Result<T, OplogPayloadDownloadError> {
         match payload {
             OplogPayload::Inline(value) => Ok(*value),
             OplogPayload::SerializedInline {
-                cached: Some(v), ..
-            } => Ok((*v).clone()),
+                cached: Some(value),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(value),
+                ..
+            } => Ok((*value).clone()),
             OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
                 .await
-                .map_err(|error| error.to_string()),
-            OplogPayload::External {
-                cached: Some(v), ..
-            } => Ok((*v).clone()),
+                .map_err(OplogPayloadDownloadError::Corrupt),
             OplogPayload::External {
                 payload_id,
                 md5_hash,
                 ..
             } => {
                 let bytes = self
-                    .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
-                    .await?;
+                    .download_raw_payload_classified(
+                        owned_agent_id,
+                        agent_mode,
+                        payload_id,
+                        md5_hash,
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        RawOplogPayloadDownloadError::Backend(error) => {
+                            OplogPayloadDownloadError::Backend(error)
+                        }
+                        RawOplogPayloadDownloadError::Missing(payload_id) => {
+                            OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(
+                                "referenced oplog payload {payload_id} is missing"
+                            ))
+                        }
+                    })?;
                 deserialize_oplog_payload(bytes)
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(OplogPayloadDownloadError::Corrupt)
             }
         }
     }

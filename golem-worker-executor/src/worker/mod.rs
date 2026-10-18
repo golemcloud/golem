@@ -12487,6 +12487,7 @@ impl RunningWorker {
         }
         .await;
         if let Err(error) = install_wallet {
+            drop(filesystem_context);
             return Err(
                 cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
             );
@@ -12569,6 +12570,7 @@ impl RunningWorker {
         ) {
             Ok(instance_host) => instance_host,
             Err(error) => {
+                drop(context);
                 return Err(
                     cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
                 );

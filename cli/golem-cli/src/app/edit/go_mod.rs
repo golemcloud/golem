@@ -25,9 +25,12 @@
 //! module path and structure, never exact text.
 
 /// Reconcile the SDK dependency in `content`:
-///   - set the SDK module's `require` version to `version`;
+///   - set the SDK module's `require` version to `version` for proxy resolution;
 ///   - if `replace_path` is `Some`, ensure `replace <module> => <path>`;
 ///   - if `None`, remove any such replace directive.
+///
+/// Local replacements preserve the version selected by Go's module graph, so
+/// a dependency's minimum version does not cause repeated reconciliation.
 ///
 /// Returns the updated `go.mod` text. A trailing newline is preserved/ensured.
 pub fn reconcile_sdk_dependency(
@@ -38,7 +41,9 @@ pub fn reconcile_sdk_dependency(
 ) -> String {
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
-    set_require_version(&mut lines, module, version);
+    if replace_path.is_none() {
+        set_require_version(&mut lines, module, version);
+    }
     let replace_target = replace_path.map(replace_path_token);
     set_replace_directive(&mut lines, module, replace_target.as_deref());
 
@@ -353,11 +358,13 @@ mod tests {
     /// separate calls, which must compose.
     #[test]
     fn reconciles_the_sdk_and_core_together() {
-        let src =
-            format!("module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.0.0\n\t{CORE} v0.0.0\n)\n");
+        let src = format!(
+            "module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.0.0\n\t{CORE} v0.1.0-rc1\n)\n"
+        );
         let out = reconcile_sdk_dependency(&src, MOD, "v0.0.0", Some("/abs/sdks/go/golem"));
         let out = reconcile_sdk_dependency(&out, CORE, "v0.0.0", Some("/abs/sdks/go/core"));
 
+        assert!(out.contains(&format!("{CORE} v0.1.0-rc1")));
         assert!(out.contains(&format!("replace {MOD} => /abs/sdks/go/golem")));
         assert!(out.contains(&format!("replace {CORE} => /abs/sdks/go/core")));
 
@@ -531,8 +538,12 @@ replace(
             out.contains(&format!("replace {MOD} => /new/path")),
             "{out}"
         );
-        assert!(out.contains(&format!("require {MOD} v0.1.0")), "{out}");
+        assert!(out.contains(&format!("require \"{MOD}\" v0.0.0")), "{out}");
         let removed = reconcile_sdk_dependency(&src, MOD, "v0.1.0", None);
         assert!(!removed.contains("replace"), "{removed}");
+        assert!(
+            removed.contains(&format!("require {MOD} v0.1.0")),
+            "{removed}"
+        );
     }
 }

@@ -41,6 +41,15 @@ pub struct HttpServerConfig {
     /// Sizes the windows from the measured bandwidth-delay product. When enabled, the initial
     /// window sizes have no effect.
     pub http2_adaptive_window: bool,
+    /// Streams that the client may reset before the server accepts them, before the server
+    /// closes the connection with GOAWAY (rapid reset protection). The default is the one of
+    /// hyper. Behind a proxy such as Envoy, which protects against rapid resets itself, the
+    /// proxy resets the streams of all its clients on a few connections: when requests time
+    /// out under load, a low limit closes connections with many good requests on them.
+    pub http2_max_pending_accept_reset_streams: usize,
+    /// Streams that the server may reset because of errors, before it closes the connection
+    /// with GOAWAY. The default is the one of hyper.
+    pub http2_max_local_error_reset_streams: usize,
 }
 
 impl HttpServerConfig {
@@ -73,6 +82,8 @@ impl Default for HttpServerConfig {
             http2_initial_stream_window_size: 1024 * 1024,
             http2_initial_connection_window_size: 1024 * 1024,
             http2_adaptive_window: false,
+            http2_max_pending_accept_reset_streams: 20,
+            http2_max_local_error_reset_streams: 1024,
         }
     }
 }
@@ -80,11 +91,13 @@ impl Default for HttpServerConfig {
 impl SafeDisplay for HttpServerConfig {
     fn to_safe_string(&self) -> String {
         format!(
-            "HTTP/2 max header list size: {}, initial stream window size: {}, initial connection window size: {}, adaptive window: {}",
+            "HTTP/2 max header list size: {}, initial stream window size: {}, initial connection window size: {}, adaptive window: {}, max pending accept reset streams: {}, max local error reset streams: {}",
             self.http2_max_header_list_size,
             self.http2_initial_stream_window_size,
             self.http2_initial_connection_window_size,
             self.http2_adaptive_window,
+            self.http2_max_pending_accept_reset_streams,
+            self.http2_max_local_error_reset_streams,
         )
     }
 }
@@ -127,7 +140,8 @@ where
                     let mut builder = auto::Builder::new(TokioExecutor::new());
                     builder.http2()
                         .max_concurrent_streams(None)
-                        .max_pending_accept_reset_streams(Some(20))
+                        .max_pending_accept_reset_streams(config.http2_max_pending_accept_reset_streams)
+                        .max_local_error_reset_streams(config.http2_max_local_error_reset_streams)
                         .max_header_list_size(config.http2_max_header_list_size)
                         .initial_stream_window_size(config.http2_initial_stream_window_size)
                         .initial_connection_window_size(config.http2_initial_connection_window_size)

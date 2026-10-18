@@ -43,6 +43,7 @@ use crate::durable_host::concurrent::{
 use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryProperties;
+use golem_common::model::card::PermissionTarget;
 use golem_common::model::oplog::{DeniablePair, DurableFunctionType, HostPayloadPair};
 use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{HasData, Linker};
@@ -158,14 +159,15 @@ pub(crate) async fn run_deniable_access<T, D, Ctx, Pair, F>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
-    denial: Option<String>,
+    targets: Result<Vec<PermissionTarget>, String>,
     live: F,
 ) -> wasmtime::Result<Pair::Resp>
 where
     T: 'static,
-    D: HasData + ?Sized,
+    D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
     Pair: DeniablePair,
+    Pair::Req: Clone,
     F: AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
 {
     DurableCallSession::<Pair, Cancellable>::invoke_deniable_access(
@@ -173,7 +175,7 @@ where
         durable_worker_ctx::<Ctx, T>,
         request,
         function_type,
-        denial,
+        targets,
         live,
     )
     .await
@@ -197,34 +199,34 @@ pub(crate) async fn run_deniable_access_classified<T, D, Ctx, Pair, F, Fut>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
-    denial: Option<String>,
+    targets: Result<Vec<PermissionTarget>, String>,
     classify: impl Fn(&Pair::Resp) -> Option<ClassifiedHostError>,
     retry_properties: RetryProperties,
     live: F,
 ) -> wasmtime::Result<Pair::Resp>
 where
     T: 'static,
-    D: HasData + ?Sized,
+    D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
     Pair: DeniablePair,
+    Pair::Req: Clone,
     F: FnOnce() -> Fut,
     Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
 {
-    let denied = denial
-        .as_deref()
-        .map(|denial| Pair::denied(&request, denial));
-    let mut handle = DurableCallSession::<Pair, Cancellable>::start_access_with_options(
+    let (mut handle, decision) = DurableCallSession::<Pair, Cancellable>::start_authorized_access(
         store,
         durable_worker_ctx::<Ctx, T>,
         function_type,
-        AccessClaimOptions {
-            denial,
-            ..Default::default()
-        },
-        request,
+        AccessClaimOptions::default(),
+        request.clone(),
+        targets,
     )
     .await
     .map_err(wasmtime::Error::from)?;
+    let denied = decision
+        .as_ref()
+        .and_then(|decision| decision.as_ref().err())
+        .map(|denial| Pair::denied(&request, denial));
 
     if handle.is_live()
         && let Some(response) = denied

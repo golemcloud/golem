@@ -15,8 +15,14 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::authorization::targets::udp_target;
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable, ResolvedCall};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use golem_common::SafeDisplay;
+use golem_common::model::oplog::host_functions::SocketsUdpPermissionCheck;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestSocketsUdpPermissionCheck, HostResponsePermissionCheck,
+};
 use wasmtime_wasi::p2::SocketError;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
 use wasmtime_wasi::p2::bindings::sockets::udp::{
@@ -54,14 +60,8 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         ),
         SocketError,
     > {
-        if self.state.is_live()
-            && let Some(remote_address) = remote_address.as_ref()
-        {
-            let target = ip_socket_target(remote_address).ok_or(ErrorCode::AccessDenied)?;
-            match self.authorize_live_permission(&target).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(_)) | Err(_) => return Err(ErrorCode::AccessDenied.into()),
-            }
+        if let Some(remote_address) = remote_address.as_ref() {
+            authorize_addresses(self, std::slice::from_ref(remote_address)).await?;
         }
         self.observe_function_call("sockets::udp", "stream");
         let mut view = self.as_wasi_view();
@@ -177,18 +177,12 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutgoingDatagramStream>,
         datagrams: Vec<OutgoingDatagram>,
     ) -> Result<u64, SocketError> {
-        if self.state.is_live() {
-            let targets = datagrams
-                .iter()
-                .filter_map(|datagram| datagram.remote_address.as_ref())
-                .map(|address| ip_socket_target(address).ok_or(ErrorCode::AccessDenied))
-                .collect::<Result<Vec<_>, _>>()?;
-            if !targets.is_empty() {
-                match self.authorize_live_permissions(&targets).await {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(_)) | Err(_) => return Err(ErrorCode::AccessDenied.into()),
-                }
-            }
+        let addresses: Vec<_> = datagrams
+            .iter()
+            .filter_map(|datagram| datagram.remote_address)
+            .collect();
+        if !addresses.is_empty() {
+            authorize_addresses(self, &addresses).await?;
         }
         self.observe_function_call("sockets::udp", "send");
         let mut view = self.as_wasi_view();
@@ -210,6 +204,64 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+async fn authorize_addresses<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    addresses: &[IpSocketAddress],
+) -> Result<(), SocketError> {
+    let begun = DurableCallSession::<SocketsUdpPermissionCheck, NotCancellable>::begin(
+        ctx,
+        DurableFunctionType::ReadLocal,
+    )
+    .await
+    .map_err(SocketError::trap)?;
+    let request = HostRequestSocketsUdpPermissionCheck {
+        addresses: addresses
+            .iter()
+            .map(|address| std::net::SocketAddr::from(*address).to_string())
+            .collect(),
+    };
+    let response = 'response: {
+        let handle = match begun.resolve(ctx).await.map_err(SocketError::trap)? {
+            ResolvedCall::Live(begun) => {
+                let targets = addresses
+                    .iter()
+                    .map(|address| {
+                        ip_socket_target(address)
+                            .ok_or_else(|| "the address has no permission target".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                let denial = match targets {
+                    Ok(targets) => ctx
+                        .authorize_live_permissions(&targets)
+                        .await
+                        .map_err(SocketError::trap)?
+                        .err()
+                        .map(|error| error.to_safe_string()),
+                    Err(denial) => Some(denial),
+                };
+                if let Some(denial) = denial {
+                    break 'response begun
+                        .start_live_denied(ctx, request, denial)
+                        .await
+                        .map_err(|error| SocketError::trap(wasmtime::Error::from_anyhow(error)))?;
+                }
+                begun
+                    .start_live(ctx, request)
+                    .await
+                    .map_err(SocketError::trap)?
+            }
+            ResolvedCall::Replay(handle) => handle,
+        };
+        handle
+            .run(ctx, async |_| -> wasmtime::Result<_> {
+                Ok(HostResponsePermissionCheck { result: Ok(()) })
+            })
+            .await
+            .map_err(SocketError::trap)?
+    };
+    response.result.map_err(|_| ErrorCode::AccessDenied.into())
+}
 
 fn ip_socket_target(
     address: &IpSocketAddress,

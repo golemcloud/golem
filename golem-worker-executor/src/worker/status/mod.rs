@@ -1,4 +1,7 @@
-use crate::services::oplog::{CommitLevel, Oplog, OplogService, OplogServiceOps, UnreadableOplog};
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogPayloadDownloadError, OplogReadError, OplogReadSource, OplogService,
+    OplogServiceOps, UnreadableOplog,
+};
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::durable_stream::StreamSessionRecord;
@@ -484,6 +487,16 @@ where
     let mut regions = fold_regions_from(&baseline, pending_updates, &region_entries);
 
     if baseline_is_invalidated(&baseline, &regions.deleted, &regions.skipped) {
+        if baseline.oplog_idx == OplogIndex::NONE {
+            return Err(UnreadableOplog::new(
+                &owned_agent_id.agent_id,
+                OplogReadError::corruption(
+                    OplogReadSource::Other("status regions"),
+                    "oplog regions invalidate the empty status baseline",
+                ),
+            )
+            .into());
+        }
         return Ok(None);
     }
     baseline.deleted_regions = regions.deleted.clone();
@@ -553,7 +566,20 @@ where
                 .download_payload(owned_agent_id, agent_mode, record.clone())
                 .await
                 .map_err(|error| {
-                    format!("failed to load durable stream session payload: {error}")
+                    let source = OplogReadSource::Other("stream session payload");
+                    let error = match error {
+                        OplogPayloadDownloadError::Backend(error) => {
+                            OplogReadError::source_unavailable(
+                                source,
+                                format!("failed to load payload at oplog index {index}: {error:#}"),
+                            )
+                        }
+                        OplogPayloadDownloadError::Corrupt(error) => OplogReadError::corruption(
+                            source,
+                            format!("failed to load payload at oplog index {index}: {error:#}"),
+                        ),
+                    };
+                    UnreadableOplog::new(&owned_agent_id.agent_id, error)
                 })?;
             *record = OplogPayload::Inline(Box::new(decoded));
         }

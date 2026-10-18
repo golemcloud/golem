@@ -25,7 +25,9 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{
+    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, ShardAssignment, ShardId,
+};
 use golem_common::{agent_id, data_value};
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
@@ -39,10 +41,13 @@ use golem_worker_executor::services::HasEvents;
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor::services::oplog::CompressedOplogChunk;
+use golem_worker_executor::storage::scheduler::SchedulerStorage;
+use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
-    start_with_oplog_config, start_with_overrides, truncate_archived_oplog_chunk,
+    scheduler_sqlite_storage_config, start_with_oplog_config, start_with_overrides,
+    truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -85,8 +90,9 @@ fn assert_fails_with_the_decode_error<T: std::fmt::Debug>(
 ) {
     let error = result.expect_err("an agent whose oplog does not read must not run");
     let error = format!("{error:#}");
+    let agent = agent_id.to_string();
     assert!(
-        error.contains(&agent_id.to_string())
+        (error.contains(&agent) || error.contains(&agent.escape_debug().to_string()))
             && error.contains("archive layer 1")
             && error.contains("failed to decode compressed oplog chunk")
             && error.contains("Input ended unexpectedly"),
@@ -182,7 +188,7 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
 }
 
 /// The `Create` of the agent reads, and a later archived chunk does not: the agent is found, its
-/// start replays into the chunk and fails with the cause, and the agent is not run.
+/// cached status admits startup, whose replay scan fails with the cause, and the agent is not run.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -219,6 +225,31 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
         wait_until_archived(deps, &context, &unreadable_owned).await?;
         wait_until_archived(deps, &context, &healthy_owned).await?;
     }
+    // The primary can empty before the final archive action invalidates the cache. Count
+    // future-due and leased actions too, so none can erase the metadata warmed below.
+    let scheduler =
+        SqliteSchedulerStorage::configured(&scheduler_sqlite_storage_config(deps, &context))
+            .await
+            .map_err(anyhow::Error::msg)?;
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while scheduler
+        .count_due(chrono::DateTime::<chrono::Utc>::MAX_UTC, &assignment)
+        .await?
+        > 0
+    {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "archive actions did not finish"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    // Archival removes the status cache. Retire the shell and read metadata while the archive
+    // still reads, so the next startup reaches replay instead of failing a cold status fold.
+    assert!(executor.stop_worker_if_idle(&unreadable_owned).await?);
+    executor.retire_unloaded_worker(&unreadable_owned).await?;
+    executor.get_worker_metadata(&unreadable_id).await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
 
     let chunks = archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
@@ -239,10 +270,16 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
 
     let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
 
+    assert_eq!(
+        executor.get_worker_metadata(&unreadable_id).await?.status,
+        AgentStatus::Idle
+    );
     assert_fails_with_the_decode_error(
-        executor
-            .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
-            .await,
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            executor.invoke_and_await_agent(&component, &unreadable, "increment", data_value!()),
+        )
+        .await?,
         &unreadable_id,
     );
 
@@ -255,9 +292,11 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
     );
 
     drop(executor);
-    assert_eq!(
-        archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?,
-        corrupt
+    // Recovery may append diagnostics, but must not replace or delete the damaged history.
+    assert!(
+        archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL)
+            .await?
+            .starts_with(&corrupt)
     );
     Ok(())
 }

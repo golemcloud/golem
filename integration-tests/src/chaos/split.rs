@@ -1,0 +1,641 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Aiming a kill at one executor while still driving the agents it does not own.
+//!
+//! [`crate::chaos::pinned`] answers a different question. There, an operation
+//! that was not on the dead pod says nothing, so the driver keeps only the
+//! agents its chosen executor owns and discards the rest. Here every agent is
+//! driven and the ones elsewhere are the run's own control group: on a
+//! two-executor cluster roughly half the population is never touched, and
+//! reporting one percentile across both would let a recovery that took its full
+//! budget hide behind the half that was never disturbed.
+//!
+//! Both scenarios that work this way — S10's schedule targets and S11's promise
+//! waiters — need exactly the same three things, which is why they live here
+//! rather than being written twice: pick the executor owning the largest share,
+//! refuse to proceed if that share is too small to mean anything, and re-check
+//! the division immediately before the fault is injected.
+
+use crate::chaos::history::{OperationRecord, Outcome, Stream};
+use crate::chaos::pinned::{owners_by_pod_in, pod_ip_of, routing_agent_id_in};
+use crate::chaos::summary::LatencyStats;
+use crate::chaos::workload::WorkloadContext;
+use anyhow::Context;
+use chrono::{DateTime, Utc};
+use golem_common::model::component::ComponentDto;
+use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use tracing::info;
+
+/// The smallest share of agents one executor must own for the run to mean
+/// anything, as a divisor of the population.
+///
+/// A two-executor cluster splits a hashed population roughly evenly, so a
+/// quarter is a floor rather than an expectation. Below it the "affected" group
+/// is too small for its percentile to say anything, and a run that reported one
+/// anyway would be worse than one that refused.
+const MIN_SHARE_DIVISOR: usize = 4;
+
+/// What the split is about, for the messages a reader eventually sees.
+///
+/// Carried rather than hard-coded because the failure modes here are reported to
+/// an operator mid-maintenance-window, and "the most-loaded executor owns only 6
+/// of 100 agents" is a worse thing to read at 3am than the same sentence naming
+/// promise waiters.
+#[derive(Debug, Clone, Copy)]
+pub struct Subject<'a> {
+    /// Scenario code, used only to prefix log lines.
+    pub scenario: &'a str,
+    /// The component the agents live in. Ownership is per agent id and an agent
+    /// id contains its component, so this is not cosmetic.
+    pub component: &'a ComponentDto,
+    /// Agent type, e.g. `ScheduleCounter`.
+    pub agent_type: &'a str,
+    /// Plural noun for messages, e.g. `schedule targets`.
+    pub noun: &'a str,
+}
+
+/// The fault window, as the workflow reported it.
+#[derive(Debug, Clone, Copy)]
+pub struct FaultWindow {
+    pub injected_at: DateTime<Utc>,
+    /// Absent for a run that never saw the fault clear.
+    pub recovered_at: Option<DateTime<Utc>>,
+}
+
+/// Which side of the fault an event fell on.
+///
+/// Shared rather than written per scenario because the classification is the
+/// same question every time — an event before the kill, while the executor was
+/// gone, or after it came back — and because the three names end up in archived
+/// results that a reader compares across scenarios.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Window {
+    BeforeFault,
+    DuringFault,
+    AfterFault,
+    /// The run never learned when the fault was injected, so nothing can be
+    /// placed relative to it.
+    Unknown,
+}
+
+impl Window {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Window::BeforeFault => "before-fault",
+            Window::DuringFault => "during-fault",
+            Window::AfterFault => "after-fault",
+            Window::Unknown => "unknown",
+        }
+    }
+
+    /// Where `at` falls relative to the fault.
+    pub fn of(at: DateTime<Utc>, fault: Option<FaultWindow>) -> Self {
+        match fault {
+            None => Window::Unknown,
+            Some(window) if at < window.injected_at => Window::BeforeFault,
+            Some(FaultWindow {
+                recovered_at: Some(recovered),
+                ..
+            }) if at >= recovered => Window::AfterFault,
+            Some(_) => Window::DuringFault,
+        }
+    }
+}
+
+impl std::fmt::Display for Window {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// When a window began, for the windows that have a fixed start.
+///
+/// The fault's own boundaries come from the workflow's timestamps, which is
+/// what makes them comparable across runs. The baseline has no boundary of its
+/// own, so it starts at the first operation the run offered.
+pub fn window_start(
+    window: Window,
+    fault: Option<FaultWindow>,
+    first_submitted: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match (window, fault) {
+        (Window::BeforeFault, Some(_)) => first_submitted,
+        (Window::DuringFault, Some(w)) => Some(w.injected_at),
+        (Window::AfterFault, Some(w)) => w.recovered_at,
+        _ => None,
+    }
+}
+
+/// When a window closed.
+///
+/// The mirror of [`window_start`], and needed wherever a gap has to be measured
+/// against the window's own edges rather than against the first and last thing
+/// that happened inside it: a stream that went silent for the whole back half
+/// of a window has no later timestamp to compare against, so the edge is the
+/// only thing that can show it.
+pub fn window_end(
+    window: Window,
+    fault: Option<FaultWindow>,
+    last_completed: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match (window, fault) {
+        (Window::BeforeFault, Some(w)) => Some(w.injected_at),
+        (Window::DuringFault, Some(w)) => w.recovered_at.or(last_completed),
+        (Window::AfterFault, Some(_)) => last_completed,
+        _ => None,
+    }
+}
+
+/// The longest stretch of a window in which nothing was answered.
+///
+/// The window's own edges are the first and last comparison points, which is
+/// what separates "answered steadily but slowly" from "answered nothing for two
+/// minutes and then caught up in a burst". Those two produce the same count and
+/// the same rate; only this tells them apart.
+pub fn longest_silence_ms(
+    served_at: &[DateTime<Utc>],
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Option<u64> {
+    let (start, end) = (start?, end?);
+    let mut marks: Vec<DateTime<Utc>> = served_at
+        .iter()
+        .copied()
+        .filter(|at| *at >= start && *at <= end)
+        .collect();
+    marks.sort_unstable();
+    marks.insert(0, start);
+    marks.push(end);
+    Some(
+        marks
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).num_milliseconds().max(0) as u64)
+            .max()
+            .unwrap_or(0),
+    )
+}
+
+/// How long a window lasted, in seconds.
+///
+/// The fault's own windows come from the workflow's timestamps, which is what
+/// makes them comparable across runs. The two open-ended ones are bounded by
+/// the workload instead: the baseline starts at the first operation offered,
+/// and recovery ends at the last one that came back.
+pub fn window_secs(
+    window: Window,
+    fault: Option<FaultWindow>,
+    first_submitted: Option<DateTime<Utc>>,
+    last_completed: Option<DateTime<Utc>>,
+) -> f64 {
+    let seconds = |from: DateTime<Utc>, to: DateTime<Utc>| {
+        (to - from).num_milliseconds().max(0) as f64 / 1000.0
+    };
+    match (window, fault) {
+        (Window::BeforeFault, Some(w)) => first_submitted
+            .map(|first| seconds(first, w.injected_at))
+            .unwrap_or(0.0),
+        (Window::DuringFault, Some(w)) => match (w.recovered_at, last_completed) {
+            (Some(recovered), _) => seconds(w.injected_at, recovered),
+            // A run that never saw the heal: the fault ran to whatever the last
+            // operation saw, which is the most that can be claimed.
+            (None, Some(last)) => seconds(w.injected_at, last),
+            (None, None) => 0.0,
+        },
+        (
+            Window::AfterFault,
+            Some(FaultWindow {
+                recovered_at: Some(recovered),
+                ..
+            }),
+        ) => last_completed
+            .map(|last| seconds(recovered, last))
+            .unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+/// Two decimal places, for the rates and shares that end up in a result.
+pub fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+/// The executor the fault will be aimed at, and how the agents divide around it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodSplit {
+    /// The executor endpoint as the shard-manager names it, e.g.
+    /// `10.0.14.207:9000`.
+    pub pod_address: String,
+    /// Host part of the address, which is what a Kubernetes `status.podIP`
+    /// field selector matches.
+    pub pod_ip: String,
+    /// Agents this executor owns: the population that has to survive recovery.
+    pub on_pod: Vec<String>,
+    /// Agents owned by any other executor: the run's own control group.
+    pub elsewhere: Vec<String>,
+    /// How the agents spread across executors, so a run that refused to proceed
+    /// says whether the cluster was lopsided or the pool too small.
+    pub targets_per_pod: BTreeMap<String, usize>,
+    /// Shard count the routing table reported. Ownership is a hash modulo this,
+    /// so a selection cannot be re-derived later without it.
+    pub number_of_shards: usize,
+}
+
+impl PodSplit {
+    /// Which group an agent belongs to, or `None` for one the selection never
+    /// saw.
+    pub fn group_of(&self, agent: &str) -> Option<Group> {
+        if self.on_pod.iter().any(|a| a == agent) {
+            Some(Group::OnPod)
+        } else if self.elsewhere.iter().any(|a| a == agent) {
+            Some(Group::Elsewhere)
+        } else {
+            None
+        }
+    }
+}
+
+/// Which side of the kill an agent was on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Group {
+    /// Owned by the executor the fault was aimed at.
+    OnPod,
+    /// Owned by some other executor: the control group.
+    Elsewhere,
+}
+
+impl Group {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Group::OnPod => "on-pod",
+            Group::Elsewhere => "elsewhere",
+        }
+    }
+}
+
+/// Chooses the executor to aim at: the one owning the largest share of agents.
+///
+/// Fails rather than proceeding unaimed. Chaos Mesh's `mode: one` would pick a
+/// pod at random, and a run that killed an executor owning six agents out of a
+/// hundred would still produce a confident-looking report about recovery.
+pub async fn select(
+    subject: Subject<'_>,
+    deps: &BenchmarkTestDependencies,
+    agents: &[String],
+) -> anyhow::Result<PodSplit> {
+    let table = deps
+        .shard_manager()
+        .get_routing_table()
+        .await
+        .with_context(|| {
+            format!(
+                "reading the routing table to aim the {} fault",
+                subject.noun
+            )
+        })?;
+
+    let by_pod = owners_by_pod_in(subject.component, &table, subject.agent_type, agents);
+    let targets_per_pod: BTreeMap<String, usize> = by_pod
+        .iter()
+        .map(|(pod, xs)| (pod.clone(), xs.len()))
+        .collect();
+
+    let (pod_address, on_pod) = by_pod
+        .iter()
+        .max_by_key(|(_, agents)| agents.len())
+        .map(|(pod, agents)| (pod.clone(), agents.clone()))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "routing table assigned none of the {} {} to any executor",
+                agents.len(),
+                subject.noun
+            )
+        })?;
+
+    let floor = (agents.len() / MIN_SHARE_DIVISOR).max(1);
+    if on_pod.len() < floor {
+        anyhow::bail!(
+            "the most-loaded executor owns only {} of {} {}, below the {floor} needed for its \
+             share to be worth measuring: {targets_per_pod:?}",
+            on_pod.len(),
+            agents.len(),
+            subject.noun
+        );
+    }
+
+    let elsewhere: Vec<String> = agents
+        .iter()
+        .filter(|t| !on_pod.contains(t))
+        .cloned()
+        .collect();
+
+    info!(
+        "{}: aiming at executor {pod_address}, which owns {} of {} {} ({} elsewhere, across {} \
+         executors)",
+        subject.scenario,
+        on_pod.len(),
+        agents.len(),
+        subject.noun,
+        elsewhere.len(),
+        targets_per_pod.len()
+    );
+
+    Ok(PodSplit {
+        pod_ip: pod_ip_of(&pod_address),
+        pod_address,
+        on_pod,
+        elsewhere,
+        targets_per_pod,
+        number_of_shards: table.number_of_shards.value,
+    })
+}
+
+/// Re-checks, against a freshly read routing table, that the agents are still
+/// divided the way the selection says.
+///
+/// Called immediately before the readiness signal, for the same reason
+/// [`crate::chaos::pinned`] does it: a rebalance between selection and injection
+/// would leave the run reporting a control group that was actually the affected
+/// one.
+pub async fn verify_ownership(
+    subject: Subject<'_>,
+    deps: &BenchmarkTestDependencies,
+    split: &PodSplit,
+) -> anyhow::Result<()> {
+    let table = deps
+        .shard_manager()
+        .get_routing_table()
+        .await
+        .with_context(|| {
+            format!(
+                "re-reading the routing table to verify {} ownership",
+                subject.noun
+            )
+        })?;
+
+    let mut drifted = Vec::new();
+    for agent in &split.on_pod {
+        let owner = table
+            .lookup(&routing_agent_id_in(
+                subject.component,
+                subject.agent_type,
+                agent,
+            ))
+            .map(|pod| pod.to_string());
+        if owner.as_deref() != Some(split.pod_address.as_str()) {
+            drifted.push(format!(
+                "{agent} now owned by {}",
+                owner.unwrap_or_else(|| "nobody".to_string())
+            ));
+        }
+    }
+
+    if !drifted.is_empty() {
+        anyhow::bail!(
+            "{} of {} {} are no longer owned by {}: {}",
+            drifted.len(),
+            split.on_pod.len(),
+            subject.noun,
+            split.pod_address,
+            drifted.join(", ")
+        );
+    }
+
+    info!(
+        "{}: verified all {} {} are still owned by {}",
+        subject.scenario,
+        split.on_pod.len(),
+        subject.noun,
+        split.pod_address
+    );
+    Ok(())
+}
+
+/// The counters component's schedule targets, as S10 aims at them.
+/// One (stream, group, window) cell of a per-executor stream account.
+///
+/// Serialised into archived results as `skew.cells`, so the field names are
+/// load-bearing across runs that were written before this type had a second
+/// caller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamCell {
+    pub stream: Stream,
+    pub group: Group,
+    pub window: Window,
+    pub submitted: u64,
+    pub confirmed: u64,
+    pub rejected: u64,
+    pub indeterminate: u64,
+    /// Latency over confirmed operations only, filed by completion time.
+    pub latency: LatencyStats,
+}
+
+#[derive(Default)]
+struct Tally {
+    submitted: u64,
+    confirmed: u64,
+    rejected: u64,
+    indeterminate: u64,
+    latencies: Vec<u64>,
+}
+
+/// Tallies one stream by which executor owned the agent and which side of the
+/// fault the operation fell on.
+///
+/// The one table both fault-on-one-executor accounts are built from — S19's
+/// clock skew and S4's DNS failure. Neither scenario's headline number is a
+/// count: both are asking whether the group on the faulted pod moved away from
+/// the group that was never touched, and that comparison only exists if both
+/// halves are tallied the same way.
+///
+/// Two decisions are baked in here rather than left to callers, so the two
+/// scenarios cannot answer them differently:
+///
+/// An agent the selection never saw is dropped rather than guessed at.
+/// Attributing it would put the fault's own damage into the control group,
+/// which is the one error that makes the comparison read backwards.
+///
+/// Latency is filed by **completion**, not submission. An operation held across
+/// the recovery edge was paid for on the far side of it, and filing it by
+/// submission would credit the fault window with a cost the recovery bore.
+pub fn stream_cells(
+    records: &[OperationRecord],
+    stream: Stream,
+    split: &PodSplit,
+    fault: Option<FaultWindow>,
+) -> Vec<StreamCell> {
+    let mut tallies: BTreeMap<(Group, Window), Tally> = BTreeMap::new();
+
+    for record in records.iter().filter(|r| r.stream == stream) {
+        let Some(group) = split.group_of(&record.agent) else {
+            continue;
+        };
+
+        let offered = tallies
+            .entry((group, Window::of(record.submitted_at, fault)))
+            .or_default();
+        offered.submitted += 1;
+        match record.outcome {
+            Outcome::Confirmed => offered.confirmed += 1,
+            Outcome::Rejected => offered.rejected += 1,
+            Outcome::Indeterminate => offered.indeterminate += 1,
+        }
+
+        if record.outcome == Outcome::Confirmed
+            && let Some(completed_at) = record.completed_at
+        {
+            tallies
+                .entry((group, Window::of(completed_at, fault)))
+                .or_default()
+                .latencies
+                .push(record.duration_ms);
+        }
+    }
+
+    tallies
+        .into_iter()
+        .map(|((group, window), tally)| StreamCell {
+            stream,
+            group,
+            window,
+            submitted: tally.submitted,
+            confirmed: tally.confirmed,
+            rejected: tally.rejected,
+            indeterminate: tally.indeterminate,
+            latency: LatencyStats::from_durations(tally.latencies),
+        })
+        .collect()
+}
+
+/// Post-fault p50 as a percentage of the baseline p50, on the faulted executor.
+///
+/// `None` when either window produced no confirmed operation there, or when the
+/// baseline p50 was zero — a percentage of nothing is not a recovery reading,
+/// and reporting one would be worse than reporting none.
+pub fn recovery_percent(cells: &[StreamCell]) -> Option<f64> {
+    let at = |window: Window| {
+        cells
+            .iter()
+            .find(|c| c.group == Group::OnPod && c.window == window)
+            .map(|c| c.latency.p50_ms as f64)
+    };
+    let baseline = at(Window::BeforeFault)?;
+    let after = at(Window::AfterFault)?;
+    (baseline > 0.0).then(|| round2(100.0 * after / baseline))
+}
+
+pub fn schedule_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S10",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::SCHEDULE_COUNTER_AGENT,
+        noun: "schedule targets",
+    }
+}
+
+/// The counters component's durable agents, as S3 aims at them.
+///
+/// The same agent type the mixed workload's durable stream drives, because it
+/// is the same population: S3's emitters exist to pace it per agent, not to
+/// invent a new kind of agent.
+pub fn counter_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S3",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::COUNTER_AGENT,
+        noun: "counter agents",
+    }
+}
+
+/// The counters component's revert agents, as S7 aims at them.
+pub fn revert_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S7",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::COUNTER_AGENT,
+        noun: "revert agents",
+    }
+}
+
+/// The counters component's delete slots, as S6 aims at them.
+pub fn delete_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S6",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::COUNTER_AGENT,
+        noun: "delete agents",
+    }
+}
+
+/// The counters component's quota agents, as S19 aims at them.
+///
+/// The quota stream rather than the durable one because the lease is the only
+/// thing on this platform that one machine mints and another judges, and a
+/// clock skew can only be seen where two clocks are compared.
+pub fn quota_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S19",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::QUOTA_COUNTER_AGENT,
+        noun: "quota agents",
+    }
+}
+
+/// The promise component's waiters, as S11 aims at them.
+pub fn waiter_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S11",
+        component: &ctx.promise,
+        agent_type: crate::chaos::waiters::PROMISE_WAITER_AGENT,
+        noun: "promise waiters",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn split() -> PodSplit {
+        PodSplit {
+            pod_address: "10.0.1.1:9000".to_string(),
+            pod_ip: "10.0.1.1".to_string(),
+            on_pod: vec!["a".to_string(), "b".to_string()],
+            elsewhere: vec!["c".to_string()],
+            targets_per_pod: BTreeMap::new(),
+            number_of_shards: 1024,
+        }
+    }
+
+    #[test]
+    fn a_split_places_each_agent_in_exactly_one_group() {
+        let split = split();
+        assert_eq!(split.group_of("a"), Some(Group::OnPod));
+        assert_eq!(split.group_of("c"), Some(Group::Elsewhere));
+    }
+
+    /// An agent the selection never saw is not silently counted as a control:
+    /// the caller has to decide what an unknown agent means, because in every
+    /// scenario here it means the population drifted.
+    #[test]
+    fn an_agent_outside_the_selection_belongs_to_no_group() {
+        assert_eq!(split().group_of("z"), None);
+    }
+}

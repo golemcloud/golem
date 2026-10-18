@@ -367,6 +367,11 @@ ends in infrastructure recovery or in a stop with `OplogFailed` (`unreadable_opl
 pending invocation whose entry or payload does not hydrate takes the same path:
 `hydrate_pending_invocation` classifies the failure as `RecoveryRequired` or `OplogFailed`, and the
 loop does not retry it immediately.
+Status rebuilds also classify retained `StreamSession` payload reads through
+`OplogServiceOps::download_payload`: a backend failure gives `RecoveryRequired`, while
+a missing reference or undecodable payload gives `OplogFailed` for that agent, with the entry
+index and cause. Reverted payloads do not participate in the rebuild. Regions that invalidate
+even the empty status baseline are corrupt history; they do not mean the worker is absent.
 `AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
@@ -441,6 +446,8 @@ filesystem generation. Durable storage and cache authority remain fenced until v
 succeeds; old attempt handles retain their original error. Cleanup with no verifiable
 owning-component repair remains a failure: successful filesystem deletion cannot erase an
 unverified metering settlement, including `ObserverLost` during startup rollback.
+Before awaiting startup filesystem cleanup, drop any filesystem context, worker context or Store
+that owns open nodes. Cleanup drains those nodes; retaining one across the drain waits on itself.
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
@@ -802,6 +809,14 @@ recorded request and the denial, so live execution and recovery produce the same
 a denied `Start` without a terminal does not return `Incomplete`: the session appends the denied
 `End` and returns `Replayed`. A crash between the two entries therefore cannot run the denied
 operation. Call sites keep their replay branch free of authorization.
+
+Accessor permission checks belong to owned call initiation (`AccessPermissionCheck`), after the
+claim establishes that the call is new and before its immutable `Start`. Store liveness alone
+cannot classify a call: new work can reach the replay tail before live publication, and historical
+retained Starts can be claimed after publication. Claimed calls keep their recorded decision;
+only new calls authorize, including incomplete entities continuing beside sibling history. HTTP
+quota admission follows authorization in the request builder, still before `Start`, and preserves
+typed quota traps. Denied calls and historical claims do not consume HTTP quota.
 
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
 (`p3/http/send.rs`). Every method uses `Cancellable`: a guest drop records `Cancelled` and
@@ -1619,6 +1634,14 @@ undo the committed `Revert`. After the `Revert` entry commits, the revert delete
 snapshot names of the dropped region that no live record outside it uses
 (`reverted_snapshot_names`, `RevertHold::delete_snapshots`). A refused commit deletes nothing.
 
+Guest `revert-agent` resolves a count-based target only after its call resolves as new work,
+before authorization and `Start`. The permission resource is the resolved oplog index, and the
+request records the resolved cut and observed target tip. Incomplete repair reuses that request
+rather than resolving the count against newer target history. Resolution failures use the same
+immutable rejected-call path as permission refusals: `Start.denial` freezes the error and `End`
+returns it. Recovery of either a completed failure or a rejected `Start` without `End` never
+resolves the target again or dispatches the revert.
+
 Filesystem metadata has one deliberately deterministic exception to ordinary durable host-call
 recording. P2/P3 `stat` and `stat-at` of Golem's file at the exact path of a **read-only** component
 or pinned entity-activation initial file still execute the sandbox stat, but clear access and
@@ -1645,22 +1668,33 @@ guest paths, and its response is `Ok(())` or `Err(reason)`. A recorded denial re
 denial as their `not-permitted` result; their immutable initial-file fast path records a separate
 check. P3 `write-via-stream` and `append-via-stream` record the decision in their admission call
 (`admit_stream_write`). The live check (`live_permission_decision`,
-`p3_live_permission_decision`) runs only while the Store is live, before the call writes its
+`start_authorized_access`) runs after the call resolves as new, before the call writes its
 `Start`. A denied check records the denial in its `Start` (`start_live_denied`, or
 `AccessClaimOptions::denial` in `run_deniable_filesystem_access`), so recovery of an incomplete
 denied `Start` completes it with the same denied response and the protected effect does not run.
 An incomplete `Start` without a denial was allowed, so its repair completes it as allowed without a
 new check. A new check in the replay tail has no recorded `Start`, so the call switches to live and
-checks the policy; a P3 call that becomes live after its Store replayed at the call checks after
-its `Start`. P3 imports that await before their check reserve their invocation id first
+checks the policy before appending its `Start`. P3 imports that await before their check reserve their invocation id first
 (`reserve_invocation_id_before_await`). Test:
 `tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`.
+
+RDBMS connection query-stream and transaction query, execute and query-stream authorize through
+`start_with_options_and_authorize`, after replay and protocol readiness resolve but before `Start`.
+Their denial builders record the same query-execution failure for all database engines.
+`replay_or_persist_failure` restores a recorded denial before considering resource loss: an
+incomplete denied call remains denied; an admitted incomplete call still reports transaction or
+stream loss without repeating its database effect.
 
 P2 TCP `start-connect` records its decision in the same way, in a
 `sockets::tcp::permissions::check-connect` call (the request holds the remote address). A recorded
 denial returns `access-denied`, and its replay does not connect. A denial is recorded in the check
 `Start`, so the recovery of an incomplete denied check does not connect either. Test:
 `tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
+
+P2 UDP records explicit remote-address permission decisions in
+`sockets::udp::permissions::check`, for stream creation and addressed datagram batches. Its
+request holds the addresses; replay returns the recorded decision without consulting current
+permissions. Connected sends without an explicit address retain their stream's admission.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the

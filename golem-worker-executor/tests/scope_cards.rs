@@ -3351,6 +3351,170 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn p3_tcp_denial_survives_recovery_before_start_and_before_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("Networking")
+        .store()
+        .await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let connection_count = Arc::new(AtomicUsize::new(0));
+    let server_count = connection_count.clone();
+    let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            server_count.fetch_add(1, Ordering::SeqCst);
+            let _ = stream.write_all(b"unauthorized backend access").await;
+            let _ = stream.shutdown().await;
+        }
+    });
+
+    for retain_start in [false, true] {
+        let caller = agent_id!(
+            "Networking",
+            format!("denied-connect-prefix-{retain_start}")
+        );
+        configure_scope_card_root(&authority, &component, &caller)?;
+        let worker = executor.start_agent(&component.id, caller.clone()).await?;
+        // Establish completed history without adding a host call before connect in the guest.
+        let prior = executor
+            .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            prior
+                .as_ref()
+                .is_err_and(|error| error.contains("AccessDenied"))
+        );
+        let denied = executor
+            .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            denied
+                .as_ref()
+                .is_err_and(|error| error.contains("AccessDenied"))
+        );
+        let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let original_tip = oplog
+            .last()
+            .expect("the invocation must be recorded")
+            .oplog_index;
+        let start = oplog
+            .iter()
+            .rev()
+            .find(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "sockets::types::tcp-socket::connect"
+                )
+            })
+            .expect("the denied connect must have a Start");
+        let cut = if retain_start {
+            start.oplog_index
+        } else {
+            start.oplog_index.previous()
+        };
+        // Keep the invocation, but remove either the connect itself or its terminal.
+        // Revert unloads the Store and recovery consumes this exact prefix.
+        assert!(
+            oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::End(_) if entry.oplog_index < start.oplog_index
+            )),
+            "the connect must follow recorded host-call history"
+        );
+        executor
+            .revert(
+                &worker,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cut,
+                }),
+            )
+            .await?;
+        // A fresh invocation forces reconstruction of the unfinished invocation first.
+        let fresh = executor
+            .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            fresh
+                .as_ref()
+                .is_err_and(|error| error.contains("AccessDenied"))
+        );
+        assert_eq!(
+            connection_count.load(Ordering::SeqCst),
+            0,
+            "recovery at retain_start={retain_start} must not connect to the backend"
+        );
+        let recovered = executor.get_oplog(&worker, cut).await?;
+        let recovered_start = recovered
+            .iter()
+            .filter(|entry| {
+                if retain_start {
+                    entry.oplog_index == start.oplog_index
+                } else {
+                    entry.oplog_index > original_tip
+                }
+            })
+            .find(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "sockets::types::tcp-socket::connect"
+                )
+            })
+            .expect("recovery must retain or append the connect Start");
+        let fresh_invocation = recovered
+            .iter()
+            .find(|entry| {
+                entry.oplog_index > original_tip
+                    && matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_))
+            })
+            .expect("the fresh invocation must be recorded");
+        assert!(
+            recovered_start.oplog_index < fresh_invocation.oplog_index,
+            "the denied Start must belong to recovery, not the fresh invocation"
+        );
+        let PublicOplogEntry::Start(params) = &recovered_start.entry else {
+            unreachable!()
+        };
+        assert!(
+            params.denial.is_some(),
+            "the recovered Start must record denial"
+        );
+        let response = recovered
+            .iter()
+            .filter(|entry| entry.oplog_index > original_tip)
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) if end.start_index == recovered_start.oplog_index => {
+                    end.response.as_ref()
+                }
+                _ => None,
+            })
+            .expect("recovery must complete the denied connect");
+        assert_eq!(
+            HostResponseP3SocketsConnect::from_value(response.value())?.result,
+            Err(SerializableP3SocketErrorCode::AccessDenied),
+            "the unfinished invocation must recover with a guest-visible denial"
+        );
+    }
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3457,6 +3621,82 @@ async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_rep
             .await
             .is_err(),
         "replaying a denied connect must not reach the TCP backend"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn p2_udp_denials_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("Networking")
+        .store()
+        .await?;
+    let caller = agent_id!("Networking", "udp-permission-replay");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let port = receiver.local_addr()?.port();
+    for operation in ["udp-stream-send", "udp-unconnected-send"] {
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "probe_p2",
+                data_value!(operation, "", port, vec![42u8]),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| normalized_error_contains(error, "accessdenied"))
+        );
+    }
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let checks = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "sockets::udp::permissions::check" =>
+            {
+                Some(start)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(checks.len(), 2);
+    assert!(checks.iter().all(|start| start.denial.is_some()));
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    // A new invocation reconstructs both denied operations before doing any new work.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "probe_p2",
+            data_value!("resolve-addresses", "localhost", 0u16, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(result.is_err());
+    let mut datagram = [0; 64];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), receiver.recv(&mut datagram))
+            .await
+            .is_err(),
+        "neither live nor replayed denied UDP operations may send a datagram"
     );
     Ok(())
 }
@@ -5592,23 +5832,45 @@ async fn every_protected_rdbms_transaction_import_enforces_permissions(
         "every-protected-rdbms-transaction-import"
     );
     configure_scope_card_root(&authority, &component, &agent)?;
-    executor.start_agent(&component.id, agent.clone()).await?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
-    for (method, address) in [
+    for (method, address, functions) in [
         (
             "postgres_operation_result",
             permission_postgres.public_connection_string(),
+            [
+                HostFunctionName::RdbmsPostgresDbConnectionQueryStream,
+                HostFunctionName::RdbmsPostgresDbTransactionQuery,
+                HostFunctionName::RdbmsPostgresDbTransactionQueryStream,
+                HostFunctionName::RdbmsPostgresDbTransactionExecute,
+            ],
         ),
         (
             "mysql_operation_result",
             permission_mysql.public_connection_string(),
+            [
+                HostFunctionName::RdbmsMysqlDbConnectionQueryStream,
+                HostFunctionName::RdbmsMysqlDbTransactionQuery,
+                HostFunctionName::RdbmsMysqlDbTransactionQueryStream,
+                HostFunctionName::RdbmsMysqlDbTransactionExecute,
+            ],
         ),
         (
             "ignite_operation_result",
             permission_ignite.connection_url(),
+            [
+                HostFunctionName::RdbmsIgnite2DbConnectionQueryStream,
+                HostFunctionName::RdbmsIgnite2DbTransactionQuery,
+                HostFunctionName::RdbmsIgnite2DbTransactionQueryStream,
+                HostFunctionName::RdbmsIgnite2DbTransactionExecute,
+            ],
         ),
     ] {
-        for (operation, statement) in [
+        for ((operation, statement), function) in [
+            (
+                "connection-query-stream",
+                "SELECT * FROM blocked.denied_table",
+            ),
             ("transaction-query", "SELECT * FROM blocked.denied_table"),
             (
                 "transaction-query-stream",
@@ -5618,22 +5880,46 @@ async fn every_protected_rdbms_transaction_import_enforces_permissions(
                 "transaction-execute",
                 "INSERT INTO blocked.denied_table VALUES (1)",
             ),
-        ] {
-            let denied = executor
-                .invoke_and_await_agent(
-                    &component,
-                    &agent,
-                    method,
-                    data_value!(operation, address.clone(), statement),
-                )
-                .await?
-                .into_typed::<Result<String, String>>()?;
+        ]
+        .into_iter()
+        .zip(functions)
+        {
+            // Lose the denial's End and reconstruct from its immutable Start alone.
+            let (entered, release) = executor.gate_next_oplog_function_end(&worker, function, true);
+            let args = data_value!(operation, address.clone(), statement);
+            let invocation = executor.invoke_and_await_agent(&component, &agent, method, args);
+            let fail_end = async {
+                entered.await.expect("denied call must reach its End");
+                release.send(()).expect("denied End must still be waiting");
+            };
+            let (denied, ()) = tokio::join!(invocation, fail_end);
+            let denied = denied?.into_typed::<Result<String, String>>()?;
             assert!(
                 denied
                     .as_ref()
                     .is_err_and(|error| error.to_ascii_lowercase().contains("permission")),
                 "{method} {operation} must return a typed permission denial, got {denied:?}"
             );
+            let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            let denied_start = before.iter().rev().find(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start) if start.denial.is_some())
+            }).expect("the denial must be recorded in Start, not only End");
+            executor
+                .revert(
+                    &worker,
+                    RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                        last_oplog_index: denied_start.oplog_index.previous(),
+                    }),
+                )
+                .await?;
+            executor.resume(&worker, true).await?;
+            executor
+                .wait_for_status(&worker, AgentStatus::Idle, Duration::from_secs(30))
+                .await?;
+            let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert!(after.iter().any(|entry| entry.oplog_index > before.last().unwrap().oplog_index
+                && matches!(&entry.entry, PublicOplogEntry::Start(start) if start.denial.is_some())),
+                "the new replay-tail call must authorize before Start: {method} {operation}");
         }
         for operation in ["transaction-commit", "transaction-rollback"] {
             let allowed = executor
