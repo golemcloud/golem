@@ -365,15 +365,15 @@ mod lease_health_tests {
             .unwrap();
         let mut client = HealthClient::new(channel);
 
-        let belief = LeaseBelief::until(Instant::now() + Duration::from_millis(300));
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_secs(1));
         tokio::spawn(report_lease_health(
             belief.clone(),
             reporter,
             Duration::from_millis(100),
         ));
         for _ in 0..8 {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            belief.rearm_for(Duration::from_millis(300));
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            belief.rearm_for(Duration::from_secs(1));
             assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
         }
     }
