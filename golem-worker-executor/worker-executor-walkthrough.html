@@ -1021,7 +1021,7 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
   <li><code>prepare_instance</code> replays. The filesystem calls of the guest during replay change the tree as they did live.</li>
   <li><code>finish_replay</code> ends replay access, and <code>finish_reconstruction</code> checks the usage against the limits and makes the filesystem <code>Resident</code>.</li>
 </ol>
-<p>After the metering bind, a failure seals the filesystem for cleanup (<code>abort_reconstruction</code>). Then the start does one of these:</p>
+<p>After the metering bind, a failure releases the filesystem context, worker context or <code>Store</code> that owns open nodes before it awaits filesystem cleanup. Cleanup seals the filesystem (<code>abort_reconstruction</code>) and drains those nodes; retaining an open node across that wait would deadlock. Then the start does one of these:</p>
 <ul>
   <li>It fails.</li>
   <li>It starts again, after it skips a record or appends <code>FailedUpdate</code> (see below).</li>

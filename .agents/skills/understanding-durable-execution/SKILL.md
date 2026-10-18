@@ -436,6 +436,8 @@ filesystem generation. Durable storage and cache authority remain fenced until v
 succeeds; old attempt handles retain their original error. Cleanup with no verifiable
 owning-component repair remains a failure: successful filesystem deletion cannot erase an
 unverified metering settlement, including `ObserverLost` during startup rollback.
+Before awaiting startup filesystem cleanup, drop any filesystem context, worker context or Store
+that owns open nodes. Cleanup drains those nodes; retaining one across the drain waits on itself.
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
