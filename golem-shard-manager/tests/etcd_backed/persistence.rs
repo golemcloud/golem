@@ -1321,12 +1321,13 @@ fn replacement_shard_state(number_of_shards: usize) -> ShardLeaseState {
 /// A member whose name does not resolve, as when a Compose service or a pod is gone.
 const UNRESOLVABLE_MEMBER: &str = "http://golem-no-such-member.invalid:2379";
 
-/// A member that never answers the connection attempt.
+/// A member in a TEST-NET range that is not routed: the connect either times out or fails at once
+/// with an unreachable error, and both are failures to connect.
 const BLACK_HOLED_MEMBER: &str = "http://192.0.2.1:2379";
 
 /// How many requests to send through an endpoint list with a dead member. The balancer sends
 /// about a quarter of them to the dead member, so the chance that none of 80 does is
-/// 0.75^80, below 1e-10, and a run this long meets the dead member many times over.
+/// 0.75^80, about 1e-10, and a run this long meets the dead member many times over.
 const REQUESTS_THROUGH_DEAD_MEMBER: usize = 80;
 
 /// A client built the way `connect_for_requests` builds one, over `endpoints`: with a connect
@@ -1375,7 +1376,8 @@ async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<Dock
 
     // A member whose name no longer resolves, and one whose address swallows the connection
     // attempt until the connect timeout: nothing was sent in either case. The documentation
-    // range of RFC 5737 is never routed, so the second is a black hole on any network.
+    // range of RFC 5737 is not routed, so the connect either times out or fails at once with an
+    // unreachable error; both are failures to connect.
     for (what, endpoint) in [
         ("a name that does not resolve", UNRESOLVABLE_MEMBER),
         ("an address that never answers", BLACK_HOLED_MEMBER),

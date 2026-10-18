@@ -56,7 +56,8 @@ fn is_request_timeout(err: &ShardManagerError) -> bool {
 /// `etcd-client` hands each request to a random endpoint of its balancer, and an endpoint that
 /// cannot be connected to stays in the rotation, so with one member down a share of the requests
 /// fail this way at once. The failure arrives as `Unavailable` whose source is the transport error
-/// of the connection attempt, and tonic wraps every error of that attempt in [`tonic::ConnectError`].
+/// of the connection attempt, and tonic wraps every error of that attempt in
+/// [`tonic::ConnectError`].
 /// That marker is present when the connection was refused, when the name did not resolve and when
 /// the connection attempt ran into the connect timeout, and the request had not been written in
 /// any of them. It is absent when a request fails on an established connection (a request
