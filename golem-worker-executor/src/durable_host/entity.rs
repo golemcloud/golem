@@ -1064,6 +1064,11 @@ impl EntityInvocationDurability {
                         replay,
                         unconsumed_scope,
                         || abort.abort(),
+                        async {
+                            residual_replay_state
+                                .finish_entity_reconstruction_body(invocation.start_index())
+                                .await
+                        },
                         &mut historical_reconstruction,
                         cancellation.as_ref(),
                     )
@@ -1725,19 +1730,21 @@ where
         replay,
         structural_stall,
         abort,
+        async { Ok(()) },
         &mut historical_reconstruction,
         cancellation,
     )
     .await
 }
 
-async fn coordinate_entity_reconstruction_inner<R, H, B, F, S, A, G>(
+async fn coordinate_entity_reconstruction_inner<R, H, B, F, S, A, C, G>(
     invocation: &EntityInvocationId,
     execution_mode: InvocationExecutionMode,
     body: B,
     replay: F,
     structural_stall: S,
     abort: A,
+    settle_body: C,
     historical_reconstruction: &mut Option<G>,
     cancellation: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<EntityReconstructionOutcome<R, H>, WorkerExecutorError>
@@ -1747,8 +1754,18 @@ where
     F: Future<Output = Result<EntityReconstructionResolution<R, H>, WorkerExecutorError>>,
     S: Future<Output = Result<OplogIndex, WorkerExecutorError>>,
     A: FnOnce(),
+    C: Future<Output = Result<(), WorkerExecutorError>>,
     G: ReconstructionGuard,
 {
+    // Body membership protects its descendants from an ancestor's validation. Keep it
+    // until the joined body has accounted for any recorded cancellation, in either
+    // ordering of body completion and terminal resolution. Cleanup errors are separate
+    // from body errors: a recorded cancellation may ignore only the latter.
+    let body = async {
+        let result = body.await;
+        settle_body.await?;
+        Ok::<_, WorkerExecutorError>(result)
+    };
     tokio::pin!(body);
     tokio::pin!(replay);
     tokio::pin!(structural_stall);
@@ -1764,6 +1781,7 @@ where
     let (body_result, replay_result) = match first {
         First::Replay(replay_result) => (None, replay_result),
         First::Body(body_result) => {
+            let body_result = body_result?;
             if let Some(reconstruction) = historical_reconstruction.as_mut() {
                 reconstruction.body_settled();
             }
@@ -1822,7 +1840,7 @@ where
         Err(error) => {
             abort.take().unwrap()();
             if body_result.is_none() {
-                let _ = body.await;
+                let _ = body.await?;
                 if let Some(reconstruction) = historical_reconstruction.as_mut() {
                     reconstruction.body_settled();
                 }
@@ -1835,7 +1853,7 @@ where
         EntityReconstructionResolution::Cancelled(recorded) => {
             abort.take().unwrap()();
             if body_result.is_none() {
-                let _ = body.await;
+                let _ = body.await?;
                 if let Some(reconstruction) = historical_reconstruction.as_mut() {
                     reconstruction.body_settled();
                 }
@@ -1848,7 +1866,7 @@ where
                     response.map_err(|error| replay_body_failure(invocation, error))?
                 }
                 None => {
-                    let response = body.await;
+                    let response = body.await?;
                     if let Some(reconstruction) = historical_reconstruction.as_mut() {
                         reconstruction.body_settled();
                     }
@@ -1866,7 +1884,7 @@ where
         EntityReconstructionResolution::LiveAdmissionCancelled(handle) => {
             abort.take().unwrap()();
             if body_result.is_none() {
-                let _ = body.await;
+                let _ = body.await?;
                 if let Some(reconstruction) = historical_reconstruction.as_mut() {
                     reconstruction.body_settled();
                 }
@@ -1879,7 +1897,7 @@ where
             // detection can still identify its owned descendants during live repair.
             if cancellation.is_some_and(|token| token.is_cancelled()) {
                 if body_result.is_none() {
-                    let _ = body.await;
+                    let _ = body.await?;
                     if let Some(reconstruction) = historical_reconstruction.as_mut() {
                         reconstruction.body_settled();
                     }
@@ -1888,7 +1906,7 @@ where
             }
             let response = match body_result {
                 Some(response) => response?,
-                None => match body.await {
+                None => match body.await? {
                     Ok(response) => {
                         if let Some(reconstruction) = historical_reconstruction.as_mut() {
                             reconstruction.body_settled();
@@ -2399,6 +2417,75 @@ mod tests {
         fn body_settled(&mut self) {
             self.0.store(true, Ordering::Release);
         }
+    }
+
+    #[test]
+    async fn cancelled_body_cleanup_precedes_settlement_in_both_completion_orders() {
+        for body_finishes_first in [false, true] {
+            let body_joined = Arc::new(AtomicBool::new(false));
+            let body_settled = Arc::new(AtomicBool::new(false));
+            let cleanup_finished = Arc::new(AtomicBool::new(false));
+            let (cancel_body, cancelled) = oneshot::channel();
+            let (body_finished, body_done) = oneshot::channel();
+            let mut guard = Some(BodySettlementProbe(body_settled.clone()));
+            let result = coordinate_entity_reconstruction_inner(
+                &invocation(),
+                InvocationExecutionMode::ReplayingCompleted,
+                async {
+                    if !body_finishes_first {
+                        let _ = cancelled.await;
+                    }
+                    body_joined.store(true, Ordering::Release);
+                    Ok::<_, WorkerExecutorError>(7)
+                },
+                async {
+                    if body_finishes_first {
+                        let _ = body_done.await;
+                        tokio::task::yield_now().await;
+                    }
+                    Ok(EntityReconstructionResolution::<u64, ()>::Cancelled(9))
+                },
+                no_structural_stall(),
+                move || {
+                    let _ = cancel_body.send(());
+                },
+                async {
+                    assert!(body_joined.load(Ordering::Acquire));
+                    assert!(!body_settled.load(Ordering::Acquire));
+                    tokio::task::yield_now().await;
+                    assert!(!body_settled.load(Ordering::Acquire));
+                    cleanup_finished.store(true, Ordering::Release);
+                    let _ = body_finished.send(());
+                    Ok(())
+                },
+                &mut guard,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, EntityReconstructionOutcome::Cancelled(9)));
+            assert!(cleanup_finished.load(Ordering::Acquire));
+            assert!(body_settled.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    async fn recorded_cancellation_does_not_mask_body_cleanup_failure() {
+        let mut guard = None::<()>;
+        let error = coordinate_entity_reconstruction_inner(
+            &invocation(),
+            InvocationExecutionMode::ReplayingCompleted,
+            async { Err::<u64, _>(WorkerExecutorError::runtime("cancelled body")) },
+            async { Ok(EntityReconstructionResolution::<u64, ()>::Cancelled(9)) },
+            no_structural_stall(),
+            || {},
+            async { Err(WorkerExecutorError::runtime("invalid cancelled subtree")) },
+            &mut guard,
+            None,
+        )
+        .await
+        .expect_err("recorded cancellation must not hide invalid descendant ownership");
+        assert!(error.to_string().contains("invalid cancelled subtree"));
     }
 
     #[test]

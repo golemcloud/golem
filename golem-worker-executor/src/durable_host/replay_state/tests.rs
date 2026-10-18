@@ -6699,6 +6699,362 @@ async fn unclaimed_retained_descendant_reports_only_settled_subtrees() {
     assert!(!rs.has_unclaimed_retained_starts());
 }
 
+fn entity_reconstruction_start(parent: u64) -> OplogEntry {
+    let mut entry = owned_start_now(parent);
+    if let OplogEntry::Start {
+        function_name,
+        durable_function_type,
+        ..
+    } = &mut entry
+    {
+        *function_name = HostFunctionName::GolemEntityInvoke;
+        *durable_function_type = DurableFunctionType::WriteLocal;
+    }
+    entry
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_entity_body_accounts_for_descendants_through_claimed_calls() {
+    for retain_before_cleanup in [false, true] {
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_now(),                      // 2: parent
+            entity_reconstruction_start(2),   // 3: cancelled entity
+            owned_start_now(3),               // 4: already claimed call
+            owned_start_now(4),               // 5: unfinished descendant
+            owned_start_now(2),               // 6: unrelated sibling
+            cancelled_for(3),                 // 7
+            end_for(4, 44),                   // 8
+            observational_start_now(5, None), // 9: late descendant
+            end_for(9, 49),                   // 10
+            end_for(6, 46),                   // 11
+            end_for(2, 42),                   // 12
+        ])
+        .await;
+        let parent = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let mut entity = claim_rejected_tool_reconstruction(&rs, OplogIndex::from_u64(2)).await;
+        let mut reconstruction = entity.take_historical_reconstruction().unwrap();
+        let call = rs
+            .claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(3),
+            )
+            .await
+            .unwrap();
+        assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+        let mut parent = Some(parent);
+        if retain_before_cleanup {
+            rs.await_resolution(parent.take().unwrap()).await.unwrap();
+        }
+        assert!(matches!(
+            rs.await_resolution(entity).await.unwrap(),
+            Resolution::Cancelled { .. }
+        ));
+        assert_eq!(
+            rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+                .await
+                .unwrap(),
+            Some(OplogIndex::from_u64(5)),
+        );
+        rs.finish_entity_reconstruction_body(OplogIndex::from_u64(3))
+            .await
+            .unwrap();
+        reconstruction.body_settled();
+        drop(reconstruction);
+        rs.await_resolution(call).await.unwrap();
+        if let Some(parent) = parent {
+            rs.await_resolution(parent).await.unwrap();
+        }
+        assert_eq!(
+            rs.unclaimed_retained_descendant(OplogIndex::from_u64(3), HashSet::new())
+                .await
+                .unwrap(),
+            None,
+        );
+        assert_eq!(
+            rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+                .await
+                .unwrap(),
+            Some(OplogIndex::from_u64(6)),
+            "the cancelled child must not consume its sibling's history",
+        );
+        let sibling = rs
+            .claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(2),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(6));
+        rs.await_resolution(sibling).await.unwrap();
+        assert!(!rs.has_unclaimed_retained_starts());
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_entity_body_preserves_independently_claimed_entities() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        entity_reconstruction_start(1), // 2
+        entity_reconstruction_start(2), // 3: independently reconstructed child
+        owned_start_now(3),             // 4: child's unclaimed call
+        owned_start_now(2),             // 5: cancelled parent's call
+        cancelled_for(2),               // 6
+        end_for(3, 43),                 // 7
+        end_for(4, 44),                 // 8
+        end_for(5, 45),                 // 9
+    ])
+    .await;
+    let mut parent = claim_rejected_tool_reconstruction(&rs, OplogIndex::from_u64(1)).await;
+    let mut parent_reconstruction = parent.take_historical_reconstruction().unwrap();
+    let mut child = claim_rejected_tool_reconstruction(&rs, OplogIndex::from_u64(2)).await;
+    let mut child_reconstruction = child.take_historical_reconstruction().unwrap();
+    rs.await_resolution(parent).await.unwrap();
+    rs.finish_entity_reconstruction_body(OplogIndex::from_u64(2))
+        .await
+        .unwrap();
+    parent_reconstruction.body_settled();
+    drop(parent_reconstruction);
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(4)),
+        "the claimed child's calls must remain subject to its own validation",
+    );
+    let call = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+    rs.await_resolution(child).await.unwrap();
+    rs.await_resolution(call).await.unwrap();
+    child_reconstruction.body_settled();
+    drop(child_reconstruction);
+    rs.switch_cursor_to_live().await.unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+async fn cancelled_entity_with_accepted_output() -> (
+    ReplayState,
+    crate::durable_host::concurrent::HistoricalReconstruction,
+) {
+    let fixture = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+    let mut write = fixture[1].clone();
+    let OplogEntry::Start {
+        parent_start_index, ..
+    } = &mut write
+    else {
+        unreachable!()
+    };
+    *parent_start_index = Some(OplogIndex::from_u64(2));
+    let mut accepted = fixture[2].clone();
+    let OplogEntry::End { start_index, .. } = &mut accepted else {
+        unreachable!()
+    };
+    *start_index = OplogIndex::from_u64(3);
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        entity_reconstruction_start(1),
+        write,
+        accepted,
+        cancelled_for(2),
+    ])
+    .await;
+    let mut entity = claim_rejected_tool_reconstruction(&rs, OplogIndex::from_u64(1)).await;
+    let reconstruction = entity.take_historical_reconstruction().unwrap();
+    rs.await_resolution(entity).await.unwrap();
+    (rs, reconstruction)
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_entity_body_waits_for_accepted_output_reconstruction() {
+    let (rs, mut reconstruction) = cancelled_entity_with_accepted_output().await;
+    let mut cleanup = Box::pin(rs.finish_entity_reconstruction_body(OplogIndex::from_u64(2)));
+    assert_pending(
+        &mut cleanup,
+        "accepted output reconstruction before cancellation cleanup",
+    )
+    .await;
+    let write = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::GolemToolOutputWrite,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        write.start_idx(),
+        OplogIndex::from_u64(3),
+        "the output reconstruction must still be able to claim its recorded write"
+    );
+    rs.await_resolution(write).await.unwrap();
+    assert_pending(
+        &mut cleanup,
+        "output restoration, not its terminal alone, releases cleanup",
+    )
+    .await;
+    rs.complete_tool_attachment_reconstruction(OplogIndex::from_u64(3))
+        .unwrap();
+    cleanup.await.unwrap();
+    reconstruction.body_settled();
+    drop(reconstruction);
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_entity_body_cleanup_wait_is_cancellation_safe() {
+    let (rs, reconstruction) = cancelled_entity_with_accepted_output().await;
+    let cursor = Arc::downgrade(&rs.cursor);
+    let mut cleanup = Box::pin(rs.finish_entity_reconstruction_body(OplogIndex::from_u64(2)));
+    assert_pending(&mut cleanup, "accepted output restoration").await;
+    drop(cleanup);
+    drop(reconstruction);
+    drop(rs);
+    assert!(
+        cursor.upgrade().is_none(),
+        "dropping a blocked body cleanup must not leave a detached attachment waiter alive"
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_entity_body_preserves_active_incomplete_child() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        entity_reconstruction_start(1), // 2
+        entity_reconstruction_start(2), // 3: incomplete, but its body is still active
+        owned_start_now(3),             // 4
+        owned_start_now(2),             // 5
+        cancelled_for(2),               // 6
+        end_for(4, 44),                 // 7
+        end_for(5, 45),                 // 8
+    ])
+    .await;
+    let mut parent = claim_rejected_tool_reconstruction(&rs, OplogIndex::from_u64(1)).await;
+    let mut parent_reconstruction = parent.take_historical_reconstruction().unwrap();
+    let mut child = claim_rejected_tool_reconstruction(&rs, OplogIndex::from_u64(2)).await;
+    let mut child_reconstruction = child.take_historical_reconstruction().unwrap();
+    rs.await_resolution(parent).await.unwrap();
+    assert!(matches!(
+        rs.await_resolution_outcome(child).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    let claims = &rs.cursor.reconstruction_claims;
+    assert!(!claims.active_fences().contains(&OplogIndex::from_u64(3)));
+    assert!(claims.active_bodies().contains(&OplogIndex::from_u64(3)));
+    rs.finish_entity_reconstruction_body(OplogIndex::from_u64(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(4)),
+        "releasing an incomplete child's fence does not release its body ownership"
+    );
+    let call = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+    rs.await_resolution(call).await.unwrap();
+    child_reconstruction.body_settled();
+    parent_reconstruction.body_settled();
+    drop(child_reconstruction);
+    drop(parent_reconstruction);
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn entity_body_cleanup_requires_recorded_cancellation() {
+    for terminal in [Some(end_for(2, 42)), None] {
+        let has_terminal = terminal.is_some();
+        let mut entries = vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            entity_reconstruction_start(1),
+            owned_start_now(2),
+        ];
+        entries.extend(terminal);
+        let rs = replay_state_over(entries).await;
+        let entity = claim_rejected_tool_reconstruction(&rs, OplogIndex::from_u64(1)).await;
+        if has_terminal {
+            rs.await_resolution(entity).await.unwrap();
+            rs.finish_entity_reconstruction_body(OplogIndex::from_u64(2))
+                .await
+                .unwrap();
+            assert_eq!(
+                rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+                    .await
+                    .unwrap(),
+                Some(OplogIndex::from_u64(3)),
+                "completed bodies must claim every descendant"
+            );
+        } else {
+            assert!(
+                rs.finish_entity_reconstruction_body(OplogIndex::from_u64(2))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        owned_start_now(2),
+        cancelled_for(2),
+    ])
+    .await;
+    let call = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(call).await.unwrap();
+    assert!(
+        rs.finish_entity_reconstruction_body(OplogIndex::from_u64(2))
+            .await
+            .is_err(),
+        "an ordinary cancelled call cannot adopt an entity subtree"
+    );
+}
+
 #[test]
 async fn closed_retained_starts_are_released_at_live_invocation_end() {
     // [RecoverySucceeded, Start(A=2), Start(B=3), End(B=3→4), End(A=2→5)] — A's await commits past B's Start

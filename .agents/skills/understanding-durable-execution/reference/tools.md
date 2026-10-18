@@ -429,6 +429,14 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
   resolution here could depend on later caller work that admission itself must allow to proceed.
 - `Live` — ordinary recording.
 
+Recorded cancellation can stop a reconstructed body before it claims all of its descendants.
+After joining that body, `ReplayState::finish_entity_reconstruction_body` accounts for its
+remaining recorded calls before releasing body membership. The cursor treats those records as
+replay-inert history owned by the cancelled entity, including descendants behind already claimed
+calls. Independently claimed child entities keep their own reconstruction and validation. An
+unrelated sibling stays available to its caller. A completed `End` grants no such ownership:
+returning without claiming a recorded descendant remains structural divergence.
+
 ### Fences and admission
 
 Completed reconstructions are fenced: `HistoricalReconstruction` / `ReconstructionClaimState`
