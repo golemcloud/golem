@@ -26,7 +26,6 @@ use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leade
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -76,9 +75,10 @@ enum GateState<S> {
 /// Shared by the gRPC server, which asks it about each call, and `run()`, which moves it on.
 pub(crate) struct LeaderGate<S> {
     state: Arc<RwLock<GateState<S>>>,
-    /// Whether this replica still has to reach its own advertised address before it is ready.
-    /// An atomic of its own, so that `/readyz` stays a cheap read.
-    own_address_pending: Arc<AtomicBool>,
+    /// Whether this replica still has to reach its own advertised address before it is ready or
+    /// may campaign. A channel of its own, so that `/readyz` stays a cheap read and the campaign
+    /// can wait for the change.
+    own_address_pending: Arc<tokio::sync::watch::Sender<bool>>,
 }
 
 impl<S> Clone for LeaderGate<S> {
@@ -99,19 +99,27 @@ impl<S: Clone> LeaderGate<S> {
     pub fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(GateState::Starting)),
-            own_address_pending: Arc::new(AtomicBool::new(false)),
+            own_address_pending: Arc::new(tokio::sync::watch::channel(false).0),
         }
     }
 
     /// From now on the replica is not ready until [`Self::own_address_reached`] is called. Only
     /// distributed mode, whose replicas advertise an address to each other, asks for this.
     pub fn require_own_address_check(&self) {
-        self.own_address_pending.store(true, Ordering::Release);
+        self.own_address_pending.send_replace(true);
     }
 
     /// The replica's advertised address reaches the replica itself.
     pub fn own_address_reached(&self) {
-        self.own_address_pending.store(false, Ordering::Release);
+        self.own_address_pending.send_replace(false);
+    }
+
+    /// Completes once the replica's advertised address has reached the replica itself, at once if
+    /// no check was asked for.
+    pub async fn wait_for_own_address(&self) {
+        let mut pending = self.own_address_pending.subscribe();
+        // The sender lives as long as the gate does, which this borrows.
+        let _ = pending.wait_for(|pending| !*pending).await;
     }
 
     pub fn stand_by(
@@ -156,7 +164,7 @@ impl<S: Clone> LeaderGate<S> {
     /// advertised address does not reach it, because the clients that are sent there would find
     /// nothing.
     pub fn is_ready(&self) -> bool {
-        if self.own_address_pending.load(Ordering::Acquire) {
+        if *self.own_address_pending.borrow() {
             return false;
         }
         match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
@@ -444,6 +452,28 @@ mod tests {
         );
         leader.own_address_reached();
         assert!(leader.is_ready());
+    }
+
+    #[test]
+    async fn waiting_for_the_own_address_ends_when_it_is_reached() {
+        let unchecked: LeaderGate<Served> = LeaderGate::new();
+        tokio::time::timeout(Duration::from_secs(1), unchecked.wait_for_own_address())
+            .await
+            .expect("no check was asked for, so there is nothing to wait for");
+
+        let gate: LeaderGate<Served> = LeaderGate::new();
+        gate.require_own_address_check();
+        let waiting = tokio::spawn({
+            let gate = gate.clone();
+            async move { gate.wait_for_own_address().await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!waiting.is_finished(), "the address has not been reached");
+        gate.own_address_reached();
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("reaching the address ends the wait")
+            .unwrap();
     }
 
     #[test]

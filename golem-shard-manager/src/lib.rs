@@ -508,6 +508,90 @@ mod startup_supervision_tests {
 }
 
 #[cfg(test)]
+mod own_address_tests {
+    use super::{own_address_probe_name, reach_own_address};
+    use golem_service_base::clients::shard_manager_leader::LeaderAddress;
+    use test_r::test;
+    use tokio_util::sync::CancellationToken;
+
+    /// A gRPC server that serves the health service, with `probe` SERVING as well. Returns the
+    /// address it listens on.
+    async fn health_server(probe: &str, stop: &CancellationToken) -> LeaderAddress {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_service_status(probe, tonic_health::ServingStatus::Serving)
+            .await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            let _ = tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming_shutdown(
+                    super::accept_until(listener, stop.clone()),
+                    async move { stop.cancelled().await },
+                )
+                .await;
+        });
+        LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port,
+        }
+    }
+
+    #[test]
+    async fn a_replica_reaches_its_own_address() {
+        let stop = CancellationToken::new();
+        let probe = own_address_probe_name();
+        let address = health_server(&probe, &stop).await;
+        reach_own_address(&address, false, &probe)
+            .await
+            .expect("the process that serves the probe name is reached");
+        stop.cancel();
+    }
+
+    #[test]
+    async fn another_shard_manager_at_the_address_is_not_this_replica() {
+        let stop = CancellationToken::new();
+        let other = health_server(&own_address_probe_name(), &stop).await;
+        let own_probe = own_address_probe_name();
+        let error = reach_own_address(&other, false, &own_probe)
+            .await
+            .expect_err("a shard manager that serves another name is not this process");
+        let _ = error;
+        stop.cancel();
+    }
+
+    #[test]
+    async fn a_closed_port_is_not_reached() {
+        let closed = {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            LeaderAddress {
+                host: "127.0.0.1".to_string(),
+                port: listener.local_addr().unwrap().port(),
+            }
+        };
+        assert!(
+            reach_own_address(&closed, false, &own_address_probe_name())
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    async fn under_server_tls_a_tcp_connect_is_all_that_is_asked() {
+        let stop = CancellationToken::new();
+        let other = health_server(&own_address_probe_name(), &stop).await;
+        reach_own_address(&other, true, &own_address_probe_name())
+            .await
+            .expect("the check stops at the TCP connect");
+        stop.cancel();
+    }
+}
+
+#[cfg(test)]
 mod advertised_host_tests {
     use super::{advertised_address, validate_advertised_host};
     use crate::config::{EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig};
@@ -929,6 +1013,21 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
+    // A replica leads only if its advertised address reaches this very process: once it leads,
+    // every standby names that address to the clients. Until the check has passed, the replica
+    // watches the election and sends callers to the leader like any standby, but it is not
+    // queued, and `/readyz` says it is not ready.
+    unless_a_task_fails(join_set, async {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => {
+                Err(anyhow::Error::new(ShardManagerError::ShutdownRequested))
+            }
+            () = gate.wait_for_own_address() => Ok(()),
+        }
+    })
+    .await?;
+
     let elected = campaign_watching_startup(&election, join_set).await?;
 
     metrics::record_elected(
@@ -1025,13 +1124,25 @@ const OWN_ADDRESS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// The least time between two warnings that the advertised address does not reach the replica.
 const OWN_ADDRESS_WARNING_INTERVAL: Duration = Duration::from_secs(30);
 
+/// The name of the health entry that only this process serves, as SERVING. The overall health
+/// entry (the empty name) is SERVING on every shard manager, so asking for it proves that some
+/// shard manager answers at an address, not that this one does. A name with a random part is
+/// served by no other process, whichever replica or earlier run is at the address.
+fn own_address_probe_name() -> String {
+    format!(
+        "golem.shardmanager.v1.Process/{}",
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
 /// One attempt to reach the replica's own advertised address from the inside, the way a client
 /// that was sent there would.
 ///
-/// Without server TLS the attempt asks the gRPC health service, which confirms that a gRPC server
+/// Without server TLS the attempt asks the gRPC health service for `probe`, the entry that only
+/// this process serves, which confirms that this process, and not just some shard manager,
 /// answers at the address. With server TLS it stops at the TCP connect: a TLS client would need
 /// the CA certificate that clients are given, which this process does not hold.
-async fn reach_own_address(own: &LeaderAddress, tls: bool) -> anyhow::Result<()> {
+async fn reach_own_address(own: &LeaderAddress, tls: bool, probe: &str) -> anyhow::Result<()> {
     // A name may resolve to several addresses, some of which this replica cannot reach; each one
     // gets its own short attempt, and one that works is enough.
     let mut last_error = anyhow::anyhow!("{own} resolves to no address");
@@ -1044,7 +1155,7 @@ async fn reach_own_address(own: &LeaderAddress, tls: bool) -> anyhow::Result<()>
     for address in addresses {
         let reached = tokio::time::timeout(
             OWN_ADDRESS_ATTEMPT_TIMEOUT,
-            reach_resolved_address(address, tls),
+            reach_resolved_address(address, tls, probe),
         )
         .await
         .unwrap_or_else(|_| {
@@ -1061,7 +1172,13 @@ async fn reach_own_address(own: &LeaderAddress, tls: bool) -> anyhow::Result<()>
 }
 
 /// [`reach_own_address`] for one of the addresses that the advertised host resolves to.
-async fn reach_resolved_address(address: std::net::SocketAddr, tls: bool) -> anyhow::Result<()> {
+async fn reach_resolved_address(
+    address: std::net::SocketAddr,
+    tls: bool,
+    probe: &str,
+) -> anyhow::Result<()> {
+    // Under server TLS the attempt stops at the TCP connect, so a Service name or another shard
+    // manager's address still passes there: the health call needs the clients' CA certificate.
     if tls {
         tokio::net::TcpStream::connect(address).await?;
         return Ok(());
@@ -1073,9 +1190,18 @@ async fn reach_resolved_address(address: std::net::SocketAddr, tls: bool) -> any
         .await?;
     let answer = tonic_health::pb::health_client::HealthClient::new(channel)
         .check(tonic_health::pb::HealthCheckRequest {
-            service: String::new(),
+            service: probe.to_string(),
         })
-        .await?
+        .await
+        .map_err(|status| {
+            if status.code() == tonic::Code::NotFound {
+                anyhow::anyhow!(
+                    "a gRPC server answers at the address, but it is not this process: it does                      not know this process's health entry"
+                )
+            } else {
+                anyhow::Error::new(status)
+            }
+        })?
         .into_inner();
     anyhow::ensure!(
         answer.status == tonic_health::pb::health_check_response::ServingStatus::Serving as i32,
@@ -1093,11 +1219,12 @@ async fn reach_resolved_address(address: std::net::SocketAddr, tls: bool) -> any
 async fn confirm_own_address(
     own: LeaderAddress,
     tls: bool,
+    probe: String,
     gate: LeaderGate<ShardManagerGrpcService>,
 ) -> anyhow::Result<()> {
     let mut last_warning: Option<tokio::time::Instant> = None;
     loop {
-        let attempt = reach_own_address(&own, tls).await;
+        let attempt = reach_own_address(&own, tls, &probe).await;
         match attempt {
             Ok(()) => break,
             Err(error) => {
@@ -1410,6 +1537,10 @@ pub async fn run(
             PersistenceConfig::Etcd(etcd) => {
                 let own = advertised_address(&shard_manager_config, grpc_port)?;
                 gate.require_own_address_check();
+                let probe = own_address_probe_name();
+                health_reporter
+                    .set_service_status(&probe, tonic_health::ServingStatus::Serving)
+                    .await;
                 join_set.spawn(
                     confirm_own_address(
                         own.clone(),
@@ -1417,6 +1548,7 @@ pub async fn run(
                             shard_manager_config.grpc.tls,
                             GrpcServerTlsConfig::Enabled(_)
                         ),
+                        probe,
                         gate.clone(),
                     )
                     .in_current_span(),

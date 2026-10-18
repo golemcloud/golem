@@ -103,6 +103,11 @@ impl BreakableProxy {
         format!("http://{}", self.address)
     }
 
+    /// The port the proxy listens on.
+    pub fn port(&self) -> u16 {
+        self.address.port()
+    }
+
     /// Closes every connection currently proxied, as an etcd member going away does.
     ///
     /// New connections are still accepted: the lease is untouched on the server, so a client that

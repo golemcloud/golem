@@ -247,6 +247,21 @@ async fn queue_order(etcd: &DockerEtcd) -> Vec<u16> {
     campaigners.into_iter().map(|(_, port)| port).collect()
 }
 
+/// Fails if the election gains a campaigner at any moment within `window`. Looked at all along,
+/// not at the end: a replica that campaigned and left again must be caught as well.
+async fn assert_no_campaigner_within(
+    etcd: &DockerEtcd,
+    before: &BTreeSet<Vec<u8>>,
+    window: Duration,
+    complaint: &str,
+) {
+    let deadline = Instant::now() + window;
+    while Instant::now() < deadline {
+        assert_eq!(&campaigner_keys(etcd).await, before, "{complaint}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// The gRPC address of the campaigner that joined after `before` was taken.
 async fn await_new_campaigner(etcd: &DockerEtcd, before: &BTreeSet<Vec<u8>>) -> LeaderAddress {
     timeout(STARTUP_TIMEOUT, async {
@@ -1647,12 +1662,20 @@ fn free_port() -> u16 {
 /// GET `/readyz` on a replica's HTTP port; `true` for 200. Raw HTTP/1.1: the crate has no HTTP
 /// client among its dependencies.
 async fn readyz(http_port: u16) -> bool {
+    http_ok(http_port, "/readyz").await
+}
+
+/// GET `path` on a replica's HTTP port; `true` for 200.
+async fn http_ok(http_port: u16, path: &str) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", http_port)).await else {
         return false;
     };
     stream
-        .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
         .await
         .expect("the request is written");
     let mut response = String::new();
@@ -2175,8 +2198,9 @@ async fn replicas_that_reach_their_advertised_address_become_ready(etcd: &Arc<Do
 #[test]
 #[tracing::instrument(skip_all)]
 // A wrong advertised address passes every other check: etcd answers, the port is bound. Clients
-// that are sent there would find nothing, so the replica must not count as ready for a rollout.
-async fn a_standby_whose_advertised_address_does_not_reach_it_stays_unready(
+// that are sent there would find nothing, so the replica must not count as ready for a rollout,
+// and it must not join the election either: once it led, every standby would name that address.
+async fn a_replica_whose_advertised_address_does_not_reach_it_stays_unready_and_never_campaigns(
     etcd: &Arc<DockerEtcd>,
 ) {
     wipe_state(etcd).await;
@@ -2194,10 +2218,10 @@ async fn a_standby_whose_advertised_address_does_not_reach_it_stays_unready(
     standby_config.grpc.advertised_port = Some(free_port());
     let before = campaigner_keys(etcd).await;
     let (standby, _) = spawn_replica(standby_config.clone(), CancellationToken::new());
-    await_new_campaigner(etcd, &before).await;
 
     // Several attempts of the replica's own check fit in this window.
-    let became_ready = timeout(Duration::from_secs(4), async {
+    let window = Duration::from_secs(4);
+    let became_ready = timeout(window, async {
         while !readyz(standby_config.http_port).await {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -2209,12 +2233,99 @@ async fn a_standby_whose_advertised_address_does_not_reach_it_stays_unready(
     );
     assert!(!readyz(standby_config.http_port).await);
     assert!(
+        http_ok(standby_config.http_port, "/healthcheck").await,
+        "the replica itself is healthy"
+    );
+    assert_no_campaigner_within(
+        etcd,
+        &before,
+        Duration::from_secs(2),
+        "a replica that cannot reach its advertised address must not join the election",
+    )
+    .await;
+    assert!(
         readyz(leader_config.http_port).await,
         "the replica with a working address is ready"
     );
 
     leader.abort();
     standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A replica that waits for its advertised address to reach it is stopped like one that waits in
+// the campaign: the startup ends with the stop that was asked for, and nothing is left queued.
+async fn a_shutdown_while_waiting_for_the_own_address_ends_the_startup(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let mut config = distributed_config(etcd);
+    config.grpc.advertised_port = Some(free_port());
+    let shutdown = CancellationToken::new();
+    let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    let stopper = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        stopper.cancel();
+    });
+    let started = timeout(
+        REFUSAL_TIMEOUT,
+        golem_shard_manager::run(
+            &config,
+            Deployment::Standalone { shutdown },
+            prometheus::Registry::new(),
+            &mut join_set,
+        ),
+    )
+    .await
+    .expect("a stop must end a startup that waits for the own address");
+    join_set.abort_all();
+    let err = started.err().expect("the startup was stopped");
+    assert!(
+        matches!(
+            err.downcast_ref::<ShardManagerError>(),
+            Some(ShardManagerError::ShutdownRequested)
+        ),
+        "{err:#}"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// An address that some other shard manager answers at is not this replica's: the check must tell
+// the two processes apart, or the replica would lead under an address that reaches the other one.
+async fn a_replica_that_advertises_another_shard_managers_address_never_campaigns(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let mut leader_config = distributed_config(etcd);
+    leader_config.http_port = free_port();
+    let (leader, leader_ports) = spawn_replica(leader_config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut impostor_config = distributed_config(etcd);
+    impostor_config.http_port = free_port();
+    impostor_config.grpc.advertised_port = Some(leader_details.grpc_port);
+    let before = campaigner_keys(etcd).await;
+    let (impostor, _) = spawn_replica(impostor_config.clone(), CancellationToken::new());
+
+    assert_no_campaigner_within(
+        etcd,
+        &before,
+        Duration::from_secs(4),
+        "a replica whose advertised address reaches another shard manager must not campaign",
+    )
+    .await;
+    assert!(
+        !readyz(impostor_config.http_port).await,
+        "a shard manager at the advertised address is not this replica"
+    );
+
+    leader.abort();
+    impostor.abort();
 }
 
 #[test]
@@ -2474,25 +2585,56 @@ async fn a_leader_that_loses_its_lease_during_its_startup_stops_at_once(etcd: &A
 #[test]
 #[tracing::instrument(skip_all)]
 // Two replicas that advertise one address would each name the other as the leader, and clients
-// would never find the real one: the second must refuse to go on, and say why.
-async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
-    etcd: &Arc<DockerEtcd>,
-) {
+// would never find the real one: the second must refuse to go on, and say why. The holder of the
+// address is a key whose lease is renewed all the time; the new replica reaches itself at that
+// address, which is the case the duplicate rule exists for.
+async fn a_replica_that_advertises_a_live_replicas_address_is_refused(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
-    let config = distributed_config(etcd);
-    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
-    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+    await_election_idle(etcd).await;
+    let mut config = distributed_config(etcd);
+    let port = free_port();
+    config.grpc.port = port;
+
+    let mut client = etcd_client::Client::connect([etcd.client_url()], None)
+        .await
+        .unwrap();
+    let lease = client
+        .lease_grant(LEASE_TTL.as_secs() as i64, None)
         .await
         .unwrap()
+        .id();
+    let holder = ElectionValue {
+        identity: "live-holder".to_string(),
+        grpc_address: LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port,
+        },
+        ready: true,
+        version: String::new(),
+    };
+    client
+        .put(
+            format!("{LEADER_ELECTION_NAME}/{lease:x}"),
+            holder.encode(),
+            Some(etcd_client::PutOptions::new().with_lease(lease)),
+        )
+        .await
         .unwrap();
+    let (mut keeper, mut answers) = client.lease_keep_alive(lease).await.unwrap();
+    let renewing = tokio::spawn(async move {
+        loop {
+            if keeper.keep_alive().await.is_err() || answers.message().await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
 
-    let mut duplicate = config.clone();
-    duplicate.grpc.advertised_port = Some(leader_details.grpc_port);
     let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
     let started = timeout(
-        LEASE_TTL * 4,
+        LEASE_TTL * 6,
         golem_shard_manager::run(
-            &duplicate,
+            &config,
             Deployment::Standalone {
                 shutdown: CancellationToken::new(),
             },
@@ -2503,6 +2645,7 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
     .await
     .expect("the duplicate replica must stop within a few lease TTLs");
     join_set.abort_all();
+    renewing.abort();
     let message = match started {
         Ok(_) => panic!("a replica that duplicates a live replica's address must not start"),
         Err(err) => err.root_cause().to_string(),
@@ -2512,7 +2655,6 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
             && message.contains("advertises the same gRPC address"),
         "{message}"
     );
-    leader.abort();
 }
 
 #[test]
@@ -2554,11 +2696,10 @@ async fn wait_out_an_earlier_process_key(
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
     let mut config = distributed_config(etcd);
-    let reserved_port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
-    config.grpc.advertised_port = Some(reserved_port);
+    // The replica serves on the port that the earlier process had, as a restarted one does: its
+    // advertised address must reach it, or it would not campaign at all.
+    let reserved_port = free_port();
+    config.grpc.port = reserved_port;
 
     let mut client = etcd_client::Client::connect([etcd.client_url()], None)
         .await
@@ -2925,17 +3066,23 @@ async fn a_client_that_cannot_reach_the_named_leader_recovers_when_the_leadershi
 ) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
+    // The leader advertises the address of a proxy in front of its gRPC port. The leader reaches
+    // itself through it, as every replica must to lead; once it leads, the proxy is cut, so that a
+    // connection to the address the standby names gets no answer at all, like one to the IP of a
+    // pod that clients cannot reach. A refused port would fail at once and not exercise the
+    // client's connect timeout.
+    let leader_port = free_port();
+    let partition = BreakableProxy::start(&format!("http://127.0.0.1:{leader_port}")).await;
     let mut leader_config = distributed_config(etcd);
-    // A documentation address (RFC 5737) that no network routes: a connection to it gets no answer
-    // at all, like one to the IP of a pod that clients cannot reach. A refused port would fail at
-    // once and not exercise the client's connect timeout.
-    leader_config.grpc.advertised_host = Some("192.0.2.1".to_string());
+    leader_config.grpc.port = leader_port;
+    leader_config.grpc.advertised_port = Some(partition.port());
     let leader_token = CancellationToken::new();
     let (leader_task, leader_started) = spawn_serving_replica(leader_config, leader_token.clone());
     timeout(STARTUP_TIMEOUT, leader_started)
         .await
         .unwrap()
         .unwrap();
+    partition.black_hole();
     let before = campaigner_keys(etcd).await;
     let (standby_task, standby_started) =
         spawn_serving_replica(distributed_config(etcd), CancellationToken::new());
