@@ -9711,7 +9711,7 @@ async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() 
             assert_eq!(projections.len(), count * 2);
             let mut payloads = HashSet::new();
             let mut entries = HashSet::new();
-            for (i, pair) in projections.chunks_exact(2).enumerate() {
+            for (i, pair) in projections.as_chunks::<2>().0.iter().enumerate() {
                 assert_eq!(pair[0].wallet.cards.len(), i + 2);
                 assert_eq!(pair[0].wallet.generation, (i + 1) as u64);
                 assert!(
