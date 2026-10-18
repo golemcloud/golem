@@ -17,7 +17,9 @@
 //! that connection until a call to it fails.
 
 use crate::clients::shard_manager::GrpcShardManagerConfig;
-use crate::clients::shard_manager_leader::{LeaderAddress, is_not_leader, leader_of};
+use crate::clients::shard_manager_leader::{
+    LeaderAddress, is_not_leader, leader_of, refused_before_running,
+};
 use crate::grpc::client::{
     EnabledGrpcClientTlsConfig, GrpcClient, GrpcClientConfig, GrpcClientTlsConfig,
     MultiTargetGrpcClient, peer_answered_unavailable, requires_reconnect,
@@ -456,7 +458,10 @@ impl LeaderRouter {
                         return Routed::Done(Err(status));
                     }
                     self.forget_leader(&leader, &status);
-                    if !attempts.replayable() {
+                    // A refusal before the call ran leaves nothing to repeat, so even a call
+                    // that must not be repeated goes on to the configured address, whose
+                    // replicas know the leader that follows.
+                    if !attempts.replayable() && !refused_before_running(&status) {
                         return Routed::Done(Err(status));
                     }
                     failed_here = Some(leader);

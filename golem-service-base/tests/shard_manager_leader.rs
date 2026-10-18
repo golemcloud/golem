@@ -33,7 +33,9 @@ use golem_schema::proto::golem::common::Empty;
 use golem_service_base::clients::shard_manager::{
     GrpcShardManager, GrpcShardManagerConfig, ShardManager,
 };
-use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leader_status};
+use golem_service_base::clients::shard_manager_leader::{
+    LeaderAddress, not_leader_status, refusal_status,
+};
 use golem_service_base::grpc::client::{
     EnabledGrpcClientTlsConfig, GrpcClientConfig, GrpcClientTlsConfig,
 };
@@ -142,6 +144,8 @@ enum Mode {
     Leader,
     /// Names this leader, or none.
     Standby(Option<LeaderAddress>),
+    /// Refuses every call before running it, naming no leader, as a leader that is stopping does.
+    Refuses,
     /// Answers every call with this code and no detail, as a process that is not a working
     /// shard manager does.
     Fails(tonic::Code),
@@ -197,6 +201,10 @@ impl Service<http::Request<Body>> for FakeReplica {
                         None => Status::unavailable("no shard manager leader is ready yet; retry"),
                     };
                     Ok(status.into_http())
+                }
+                Mode::Refuses => {
+                    refusals.fetch_add(1, Ordering::SeqCst);
+                    Ok(refusal_status("this shard manager is stopping").into_http())
                 }
                 Mode::Fails(code) => {
                     refusals.fetch_add(1, Ordering::SeqCst);
@@ -1256,4 +1264,49 @@ async fn a_kept_leader_connection_that_goes_silent_fails_the_call_within_the_kee
     old.server.abort();
     new.stop().await;
     standby.stop().await;
+}
+
+#[test]
+// A leader that is stopping refuses the call before running it, and says so. Even a call that must
+// not be repeated has not run, so it goes on to the configured address, whose replicas name the
+// new leader, and runs there exactly once.
+async fn a_one_try_call_refused_by_a_stopping_known_leader_runs_once_on_the_new_leader() {
+    let old = run_replica(Mode::Leader).await;
+    let new = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(old.address()))).await;
+    let client = client_for(&standby);
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the old leader, which is now known");
+    old.set(Mode::Refuses);
+    standby.set(Mode::Standby(Some(new.address())));
+
+    client
+        .deregister(Uuid::new_v4(), BTreeMap::new())
+        .await
+        .expect("the refusal did not run the call, so the new leader runs it");
+
+    assert_eq!(old.refusals(), 1, "the stopping leader was asked once");
+    assert_eq!(old.calls(), 1, "and ran only the discovery call");
+    assert_eq!(new.calls(), 1, "the call ran exactly once");
+    old.stop().await;
+    new.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// A refusal from the configured address itself is an answer from a replica that works, as before:
+// a call that may be repeated keeps asking, and a one-try call returns it.
+async fn a_refusal_from_the_configured_address_is_returned_to_a_one_try_call() {
+    let replica = run_replica(Mode::Refuses).await;
+    let client = client_for(&replica);
+
+    client
+        .deregister(Uuid::new_v4(), BTreeMap::new())
+        .await
+        .expect_err("the only replica refuses");
+
+    assert_eq!(replica.refusals(), 1, "the one try asked once");
+    replica.stop().await;
 }

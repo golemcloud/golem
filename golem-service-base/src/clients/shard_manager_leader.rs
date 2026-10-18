@@ -68,6 +68,13 @@ impl fmt::Display for LeaderAddress {
 
 const NOT_LEADER_TYPE_URL: &str = "type.googleapis.com/golem.shardmanager.v1.NotLeader";
 
+/// The detail of a refusal that happened before the call ran and names no leader. A type of its
+/// own, rather than a `NotLeader` with no host: a reader that looks only for the type of a
+/// redirect cannot take it for one, and a client that does not know it sees a plain `UNAVAILABLE`,
+/// as it would from any replica that cannot serve.
+const REFUSED_BEFORE_RUNNING_TYPE_URL: &str =
+    "type.googleapis.com/golem.shardmanager.v1.RefusedBeforeRunning";
+
 /// `google.rpc.Status`, the standard layout of `grpc-status-details-bin`. Using it rather than
 /// the bare message lets grpcurl, through the server's reflection service, show the detail.
 #[derive(Clone, PartialEq, prost::Message)]
@@ -92,14 +99,46 @@ pub fn not_leader_status(leader: &LeaderAddress) -> Status {
     )
 }
 
+/// The answer of a replica that refuses a call before running it and cannot name a leader: it is
+/// starting or stopping, its belief that it leads has lapsed, or no leader is ready. `UNAVAILABLE`
+/// like [`not_leader_status`]. A client that knows this detail sees that the call did not run, so
+/// it may go to another replica even when it must not repeat the call.
+pub fn refusal_status(message: impl Into<String>) -> Status {
+    status_with_detail(
+        prost_types::Any {
+            type_url: REFUSED_BEFORE_RUNNING_TYPE_URL.to_string(),
+            value: Vec::new(),
+        },
+        message.into(),
+    )
+}
+
+/// Whether the status is a [`refusal_status`]: the call was refused before it ran.
+pub fn refused_before_running(status: &Status) -> bool {
+    status.code() == Code::Unavailable
+        && RpcStatus::decode(status.details()).is_ok_and(|details| {
+            details
+                .details
+                .iter()
+                .any(|any| any.type_url == REFUSED_BEFORE_RUNNING_TYPE_URL)
+        })
+}
+
 fn status_with(detail: NotLeader, message: String) -> Status {
+    status_with_detail(
+        prost_types::Any {
+            type_url: NOT_LEADER_TYPE_URL.to_string(),
+            value: detail.encode_to_vec(),
+        },
+        message,
+    )
+}
+
+fn status_with_detail(detail: prost_types::Any, message: String) -> Status {
     let details = RpcStatus {
         code: Code::Unavailable as i32,
         message: message.clone(),
-        details: vec![prost_types::Any {
-            type_url: NOT_LEADER_TYPE_URL.to_string(),
-            value: detail.encode_to_vec(),
-        }],
+        details: vec![detail],
     };
     Status::with_details(Code::Unavailable, message, details.encode_to_vec().into())
 }
@@ -209,6 +248,33 @@ mod tests {
         assert_eq!(leader_of(&status("10.0.3.7", 0)), None);
         assert_eq!(leader_of(&status(" ", 9002)), None);
         assert_eq!(leader_of(&status("h", 70_000)), None);
+    }
+
+    #[test]
+    fn a_refusal_is_marked_and_names_no_leader() {
+        let status = refusal_status("this shard manager is stopping");
+        assert_eq!(status.code(), Code::Unavailable);
+        assert_eq!(status.message(), "this shard manager is stopping");
+        assert!(refused_before_running(&status));
+        assert_eq!(leader_of(&status), None);
+        assert!(!is_not_leader(&status));
+    }
+
+    #[test]
+    fn other_answers_are_not_marked_as_refused_before_running() {
+        assert!(!refused_before_running(&Status::unavailable("x")));
+        assert!(!refused_before_running(&not_leader_status(&leader())));
+        let on_another_code = Status::with_details(
+            Code::Internal,
+            "x",
+            Bytes::from(refusal_status("x").details().to_vec()),
+        );
+        assert!(!refused_before_running(&on_another_code));
+        assert!(!refused_before_running(&Status::with_details(
+            Code::Unavailable,
+            "x",
+            Bytes::from_static(b"\xff\xff\xff")
+        )));
     }
 
     #[test]
