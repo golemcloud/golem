@@ -4455,6 +4455,7 @@ dependencies = [
  "prometheus",
  "prost",
  "prost-types",
+ "rand 0.9.5",
  "reqwest 0.13.4",
  "rustc-hash",
  "scc",

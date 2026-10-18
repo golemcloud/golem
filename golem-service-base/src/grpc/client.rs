@@ -23,8 +23,9 @@ use scc::hash_map::Entry;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
@@ -107,9 +108,8 @@ type ClientFactory<T> = Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send 
 /// it — for the life of the process. Reaching a dropped target again costs one
 /// reconnect, which is why this is generous rather than tight.
 ///
-/// A client with one fixed target uses `Duration::MAX` instead: it holds one
-/// connection to a service that is meant to be there, and holding on to it is
-/// the point.
+/// A client with one fixed target uses `Duration::MAX` instead. Its pool slots
+/// rotate by connection age rather than by idle time.
 const IDLE_CONNECTION_TTL: Duration = Duration::from_secs(600);
 
 /// How often connections to targets nobody is calling are dropped.
@@ -277,12 +277,22 @@ pub struct GrpcClientConnection<T: Clone> {
     id: u64,
     retirement: Retirement,
     last_used: LastUsed,
+    established: Instant,
+    max_age: Duration,
+}
+
+impl<T: Clone> GrpcClientConnection<T> {
+    fn reusable(&self) -> bool {
+        !self.retirement.is_retired()
+            && (self.max_age.is_zero() || self.established.elapsed() < self.max_age)
+    }
 }
 
 fn connect_shared<T>(
     endpoint: Endpoint,
     config: &GrpcClientConfig,
     build_client: ClientFactory<T>,
+    max_connection_age: Duration,
 ) -> SharedConnect<T>
 where
     T: Clone + Send + Sync + 'static,
@@ -307,6 +317,10 @@ where
                 id,
                 retirement: Retirement::new(),
                 last_used: LastUsed::now(),
+                established: Instant::now(),
+                // Rotate on use, independently per slot and caller process.
+                // Never extend the configured maximum age.
+                max_age: max_connection_age.mul_f64(rand::random_range(0.8..=1.0)),
             }),
             Ok(Err(err)) => Err(Status::unavailable(format!("tcp connect error: {err}"))),
             Err(_) => Err(Status::unavailable(format!(
@@ -337,6 +351,7 @@ struct Connections<T: Clone> {
     last_pruned: Arc<AtomicU64>,
     idle_ttl: Duration,
     prune_interval: Duration,
+    max_connection_age: Duration,
     /// Test-only seam: awaited between a connection being established and the
     /// retirement check below it, so a test can retire one in that window
     /// rather than race to. Same pattern as `Cache::evict_interleave` in
@@ -358,6 +373,7 @@ where
             last_pruned: Arc::new(AtomicU64::new(elapsed_millis())),
             idle_ttl,
             prune_interval,
+            max_connection_age: Duration::ZERO,
             #[cfg(test)]
             interleave: Arc::new(std::sync::Mutex::new(None)),
         }
@@ -394,18 +410,17 @@ where
             #[cfg(test)]
             self.interleave().await;
 
-            if !connected.retirement.is_retired() {
+            if connected.reusable() {
                 return Ok(connected);
             }
 
             // A caller that joined an attempt already under way can be handed a
-            // connection an earlier one has since used and given up on. Retiring
-            // it also forgot it, so going back gets a fresh connection rather
-            // than the same verdict.
+            // connection that has since expired or been retired. Recheck at
+            // handoff, so a waiter delayed past its lifetime gets a replacement.
             attempts_left = attempts_left.saturating_sub(1);
             if attempts_left == 0 {
                 return Err(Status::unavailable(
-                    "connection retired before it could be used",
+                    "connection expired or retired before it could be used",
                 ));
             }
         }
@@ -433,7 +448,7 @@ where
         {
             match existing.peek() {
                 // Already connected.
-                Some(Ok(connected)) if !connected.retirement.is_retired() => {
+                Some(Ok(connected)) if connected.reusable() => {
                     connected.last_used.touch();
                     return Ok(connected.clone());
                 }
@@ -458,7 +473,7 @@ where
         let attempt = match self.by_target.entry_async(target.clone()).await {
             Entry::Occupied(mut entry) => match entry.get().peek() {
                 // Already connected. This is the reuse path.
-                Some(Ok(connected)) if !connected.retirement.is_retired() => {
+                Some(Ok(connected)) if connected.reusable() => {
                     connected.last_used.touch();
                     return Ok(connected.clone());
                 }
@@ -468,14 +483,24 @@ where
                 // up on, so the caller gets its own rather than inheriting
                 // either verdict.
                 Some(_) => {
-                    let attempt = connect_shared(endpoint, config, build_client.clone());
+                    let attempt = connect_shared(
+                        endpoint,
+                        config,
+                        build_client.clone(),
+                        self.max_connection_age,
+                    );
                     *entry.get_mut() = attempt.clone();
                     self.drive(target.clone(), attempt.clone());
                     attempt
                 }
             },
             Entry::Vacant(entry) => {
-                let attempt = connect_shared(endpoint, config, build_client.clone());
+                let attempt = connect_shared(
+                    endpoint,
+                    config,
+                    build_client.clone(),
+                    self.max_connection_age,
+                );
                 entry.insert_entry(attempt.clone());
                 self.drive(target.clone(), attempt.clone());
                 attempt
@@ -569,16 +594,15 @@ where
     }
 }
 
-/// A client for one fixed target.
+/// A connection pool for one fixed service address.
 ///
-/// A [`MultiTargetGrpcClient`] that never names more than one target. The two
-/// were written out separately once, and drifted apart as such pairs do: the
-/// single-target call loop ended up with no test reaching it at all, and the
-/// stall this file exists to fix lived in that half.
+/// Each slot uses the same connection establishment and failure handling as
+/// [`MultiTargetGrpcClient`]. Clones share the pool and round-robin position.
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
     endpoint: Uri,
-    inner: MultiTargetGrpcClient<T>,
+    pool: Arc<[MultiTargetGrpcClient<T>]>,
+    next: Arc<AtomicUsize>,
 }
 
 impl<T> GrpcClient<T>
@@ -591,17 +615,30 @@ where
         endpoint: Uri,
         config: GrpcClientConfig,
     ) -> Self {
+        let client_factory = Arc::new(client_factory);
+        let pool = (0..config.connection_pool_size.get())
+            .map(|_| {
+                let factory = client_factory.clone();
+                let mut client = MultiTargetGrpcClient::with_sweep(
+                    target_name.as_ref(),
+                    move |channel, size| factory(channel, size),
+                    config.clone(),
+                    Duration::MAX,
+                    PRUNE_INTERVAL,
+                );
+                client.connections.max_connection_age = config.max_connection_age;
+                client
+            })
+            .collect();
         Self {
             endpoint,
-            // Never dropped for being idle. See [`IDLE_CONNECTION_TTL`].
-            inner: MultiTargetGrpcClient::with_sweep(
-                target_name,
-                client_factory,
-                config,
-                Duration::MAX,
-                PRUNE_INTERVAL,
-            ),
+            pool,
+            next: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    fn select(&self) -> &MultiTargetGrpcClient<T> {
+        &self.pool[self.next.fetch_add(1, Ordering::Relaxed) % self.pool.len()]
     }
 
     pub async fn call<F, R>(&self, description: impl AsRef<str>, f: F) -> Result<R, Status>
@@ -609,7 +646,9 @@ where
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
-        self.inner.call(description, self.endpoint.clone(), f).await
+        self.select()
+            .call(description, self.endpoint.clone(), f)
+            .await
     }
 
     /// Performs one attempt at the call itself, even for `Unavailable`, for
@@ -623,7 +662,7 @@ where
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
-        self.inner
+        self.select()
             .call_without_retry(description, self.endpoint.clone(), f)
             .await
     }
@@ -794,6 +833,17 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrpcClientConfig {
+    /// Reusable connections to a fixed service address, selected round-robin
+    /// per call. Expired connections can remain alive while existing calls or
+    /// streams use them. Multi-target clients keep one connection per explicit
+    /// target and ignore this setting.
+    pub connection_pool_size: NonZeroUsize,
+    /// Maximum age before a fixed-target pool slot reconnects on its next use.
+    /// Zero disables rotation. Each connection uses 80–100% of this age to
+    /// stagger replacements. Existing calls and streams are not interrupted.
+    /// Multi-target clients ignore this setting.
+    #[serde(with = "humantime_serde")]
+    pub max_connection_age: Duration,
     /// Bounds connection establishment to one target.
     ///
     /// Callers waiting for the same target share a single attempt, so an
@@ -842,6 +892,8 @@ impl GrpcClientConfig {
 impl Default for GrpcClientConfig {
     fn default() -> Self {
         Self {
+            connection_pool_size: NonZeroUsize::new(4).unwrap(),
+            max_connection_age: Duration::from_secs(60),
             connect_timeout: Duration::from_secs(10),
             request_timeout: None,
             // `connect_timeout` only bounds the TCP connect, and `request_timeout`
@@ -865,6 +917,16 @@ impl Default for GrpcClientConfig {
 impl SafeDisplay for GrpcClientConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "connection_pool_size: {}",
+            self.connection_pool_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_connection_age: {:?}",
+            self.max_connection_age
+        );
         let _ = writeln!(&mut result, "connect_timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "request_timeout: {:?}", self.request_timeout);
         let _ = writeln!(
@@ -1222,7 +1284,331 @@ fn reset_one_stream(e: &Status) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+    use futures::StreamExt;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, ConnectWorkerRequest,
+    };
+    use http_body_util::BodyExt;
     use test_r::test;
+
+    type ProbeClient = WorkerExecutorClient<OtelGrpcService<Channel>>;
+
+    #[test]
+    fn pool_configuration_accepts_single_connection_and_rejects_zero_connections() {
+        let defaults = GrpcClientConfig::default();
+        assert_eq!(defaults.connection_pool_size.get(), 4);
+        assert_eq!(defaults.max_connection_age, Duration::from_secs(60));
+        let mut config = serde_json::to_value(defaults).unwrap();
+        config["connection_pool_size"] = 1.into();
+        config["max_connection_age"] = "0s".into();
+        let single: GrpcClientConfig = serde_json::from_value(config.clone()).unwrap();
+        assert_eq!(single.connection_pool_size.get(), 1);
+        assert_eq!(single.max_connection_age, Duration::ZERO);
+        config["connection_pool_size"] = 0.into();
+        assert!(serde_json::from_value::<GrpcClientConfig>(config).is_err());
+    }
+
+    struct PoolPeer {
+        target: Uri,
+        task: tokio::task::JoinHandle<()>,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        closed: Arc<tokio::sync::Notify>,
+    }
+
+    impl Drop for PoolPeer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    // A real HTTP/2 peer identifies the TCP connection in each gRPC response.
+    // The hold header lets a call remain in flight while its slot rotates.
+    async fn pool_peer() -> PoolPeer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let closed = Arc::new(tokio::sync::Notify::new());
+        let closed_peer = closed.clone();
+        let (started_peer, release_peer) = (started.clone(), release.clone());
+        let peer = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (socket, remote) = accepted.unwrap();
+                        let (started, release) = (started_peer.clone(), release_peer.clone());
+                        let closed = closed_peer.clone();
+                        connections.spawn(async move {
+                            let service = hyper::service::service_fn(move |request: http::Request<hyper::body::Incoming>| {
+                                let (started, release) = (started.clone(), release.clone());
+                                async move {
+                                    let streaming = request.uri().path().ends_with("/ConnectWorker");
+                                    if request.headers().contains_key("hold") {
+                                        started.notify_one();
+                                        release.notified().await;
+                                    }
+                                    let body = if streaming {
+                                        let frames = futures::stream::once(async move {
+                                            release.notified().await;
+                                            Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(bytes::Bytes::from_static(&[0, 0, 0, 0, 0])))
+                                        }).chain(futures::stream::once(async {
+                                            let mut trailers = http::HeaderMap::new();
+                                            trailers.insert("grpc-status", "0".parse().unwrap());
+                                            Ok(hyper::body::Frame::trailers(trailers))
+                                        }));
+                                        http_body_util::StreamBody::new(frames).boxed_unsync()
+                                    } else {
+                                        http_body_util::Full::new(bytes::Bytes::from_static(&[0, 0, 0, 0, 0])).boxed_unsync()
+                                    };
+                                    let mut response = http::Response::builder()
+                                        .header("content-type", "application/grpc")
+                                        .header("connection-id", remote.port().to_string());
+                                    if !streaming {
+                                        response = response.header("grpc-status", "0");
+                                    }
+                                    Ok::<_, std::convert::Infallible>(response
+                                        .body(body)
+                                        .unwrap())
+                                }
+                            });
+                            let _ = hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+                                .serve_connection(hyper_util::rt::TokioIo::new(socket), service).await;
+                            closed.notify_one();
+                        });
+                    }
+                    _ = connections.join_next(), if !connections.is_empty() => {}
+                }
+            }
+        });
+        PoolPeer {
+            target,
+            task: peer,
+            started,
+            release,
+            closed,
+        }
+    }
+
+    async fn probe(client: &mut ProbeClient, hold: bool) -> Result<String, Status> {
+        let mut request = tonic::Request::new(AssignShardsRequest::default());
+        if hold {
+            request
+                .metadata_mut()
+                .insert("hold", "true".parse().unwrap());
+        }
+        let response = client.assign_shards(request).await?;
+        Ok(response
+            .metadata()
+            .get("connection-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned())
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn fixed_target_pool_shares_round_robin_connections_across_clones() {
+        let peer = pool_peer().await;
+        let client = GrpcClient::new(
+            "test",
+            |channel, _| ProbeClient::new(channel),
+            peer.target.clone(),
+            GrpcClientConfig {
+                connection_pool_size: NonZeroUsize::new(3).unwrap(),
+                max_connection_age: Duration::ZERO,
+                ..one_attempt()
+            },
+        );
+        let clone = client.clone();
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(
+                client
+                    .call("probe", |c| Box::pin(probe(c, false)))
+                    .await
+                    .unwrap(),
+            );
+            ids.push(
+                clone
+                    .call_without_retry("probe", |c| Box::pin(probe(c, false)))
+                    .await
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            3
+        );
+        assert_eq!(&ids[..3], &ids[3..]);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn fixed_target_rotation_preserves_in_flight_calls_and_shares_replacement() {
+        let peer = pool_peer().await;
+        let client = GrpcClient::new(
+            "test",
+            |channel, _| ProbeClient::new(channel),
+            peer.target.clone(),
+            GrpcClientConfig {
+                connection_pool_size: NonZeroUsize::MIN,
+                max_connection_age: Duration::from_millis(200),
+                ..one_attempt()
+            },
+        );
+        let first = client
+            .call("probe", |c| Box::pin(probe(c, false)))
+            .await
+            .unwrap();
+        let held_client = client.clone();
+        let held = tokio::spawn(async move {
+            held_client
+                .call_without_retry("held", |c| Box::pin(probe(c, true)))
+                .await
+        });
+        peer.started.notified().await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let calls = (0..8).map(|_| client.call("probe", |c| Box::pin(probe(c, false))));
+        let replacements = futures::future::try_join_all(calls).await.unwrap();
+        assert!(replacements.iter().all(|id| id == &replacements[0]));
+        assert_ne!(replacements[0], first);
+        peer.release.notify_one();
+        assert_eq!(held.await.unwrap().unwrap(), first);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn fixed_target_rotation_preserves_returned_stream_and_releases_old_connection() {
+        let peer = pool_peer().await;
+        let client = GrpcClient::new(
+            "test",
+            |channel, _| ProbeClient::new(channel),
+            peer.target.clone(),
+            GrpcClientConfig {
+                connection_pool_size: NonZeroUsize::MIN,
+                max_connection_age: Duration::from_millis(200),
+                ..one_attempt()
+            },
+        );
+        let response = client
+            .call_without_retry("stream", |c| {
+                Box::pin(c.connect_worker(ConnectWorkerRequest::default()))
+            })
+            .await
+            .unwrap();
+        let first = response
+            .metadata()
+            .get("connection-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let mut stream = response.into_inner();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let replacement = client
+            .call("probe", |c| Box::pin(probe(c, false)))
+            .await
+            .unwrap();
+        assert_ne!(replacement, first);
+        peer.release.notify_one();
+        assert_eq!(stream.message().await.unwrap(), Some(Default::default()));
+        assert_eq!(stream.message().await.unwrap(), None);
+        let trailers = stream.trailers().await.unwrap().unwrap();
+        assert_eq!(trailers.get("grpc-status").unwrap(), "0");
+        drop(stream);
+        peer.closed.notified().await;
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn fixed_target_waiter_rechecks_age_at_handoff() {
+        let peer = pool_peer().await;
+        let client = GrpcClient::new(
+            "test",
+            |channel, _| ProbeClient::new(channel),
+            peer.target.clone(),
+            GrpcClientConfig {
+                connection_pool_size: NonZeroUsize::MIN,
+                max_connection_age: Duration::from_millis(200),
+                ..one_attempt()
+            },
+        );
+        let first = client
+            .call("probe", |c| Box::pin(probe(c, false)))
+            .await
+            .unwrap();
+        let handoffs = Arc::new(AtomicUsize::new(0));
+        client.pool[0].connections.set_interleave(Arc::new(move || {
+            let first_handoff = handoffs.fetch_add(1, Ordering::Relaxed) == 0;
+            async move {
+                if first_handoff {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+            .boxed()
+        }));
+        let replacement = client
+            .call("probe", |c| Box::pin(probe(c, false)))
+            .await
+            .unwrap();
+        assert_ne!(replacement, first);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn single_connection_without_rotation_and_explicit_targets_keep_reusing_connections() {
+        let peer = pool_peer().await;
+        let single = GrpcClient::new(
+            "test",
+            |channel, _| ProbeClient::new(channel),
+            peer.target.clone(),
+            GrpcClientConfig {
+                connection_pool_size: NonZeroUsize::MIN,
+                max_connection_age: Duration::ZERO,
+                ..one_attempt()
+            },
+        );
+        let routed = MultiTargetGrpcClient::new(
+            "test",
+            |channel, _| ProbeClient::new(channel),
+            GrpcClientConfig {
+                connection_pool_size: NonZeroUsize::new(3).unwrap(),
+                max_connection_age: Duration::from_millis(1),
+                ..one_attempt()
+            },
+        );
+        let first = single
+            .call("probe", |c| Box::pin(probe(c, false)))
+            .await
+            .unwrap();
+        let routed_first = routed
+            .call("probe", peer.target.clone(), |c| Box::pin(probe(c, false)))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        for _ in 0..6 {
+            assert_eq!(
+                single
+                    .call("probe", |c| Box::pin(probe(c, false)))
+                    .await
+                    .unwrap(),
+                first
+            );
+            assert_eq!(
+                routed
+                    .call("probe", peer.target.clone(), |c| Box::pin(probe(c, false)))
+                    .await
+                    .unwrap(),
+                routed_first
+            );
+        }
+    }
 
     /// A peer that completes the TCP handshake and then holds the socket open.
     ///
@@ -1262,6 +1648,7 @@ mod test {
                 ..GrpcClientConfig::default()
             },
             Arc::new(|_, _| ()),
+            Duration::ZERO,
         )
     }
 
@@ -1601,14 +1988,8 @@ mod test {
         );
     }
 
-    /// The single-target client is the multi-target one with its target filled
-    /// in, so what needs checking is that the target reaches it and that its one
-    /// connection is exempt from the sweep.
-    ///
-    /// One test rather than a copy of each above, because there is now one
-    /// implementation rather than two. The two drifted apart while they were
-    /// separate: the single-target call loop ended up with no test reaching it
-    /// at all, and the stall this file exists to fix lived in that half.
+    /// Fixed-target pool slots share the multi-target call path, but remain
+    /// exempt from idle sweeping.
     #[test]
     async fn the_single_target_client_calls_the_target_it_was_given() {
         // Refuses at once, so the failure is the connect to this target and
@@ -1628,7 +2009,7 @@ mod test {
             failed.message()
         );
         assert_eq!(
-            client.inner.connections.idle_ttl,
+            client.pool[0].connections.idle_ttl,
             Duration::MAX,
             "a client with one fixed target would drop its connection for \
              going idle"
@@ -2082,6 +2463,8 @@ mod test {
                 id: 0,
                 retirement: Retirement::new(),
                 last_used: LastUsed::now(),
+                established: Instant::now(),
+                max_age: Duration::ZERO,
             };
             connection.retirement.retire(true);
 
