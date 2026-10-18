@@ -84,8 +84,12 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view "$GITHUB_REF_NAME" --repo golemcloud/golem; then
+            prerelease=false
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+              prerelease=true
+            fi
             gh release create "$GITHUB_REF_NAME" --repo golemcloud/golem \
-              --verify-tag --draft --title "$GITHUB_REF_NAME" --generate-notes
+              --verify-tag --draft --prerelease="$prerelease" --title "$GITHUB_REF_NAME" --generate-notes
           fi
       - name: Publish built-ins and attach the verified manifest
         shell: bash
