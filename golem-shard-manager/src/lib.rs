@@ -839,7 +839,10 @@ pub async fn run(
     debug!("Initializing shard manager");
 
     for warning in validate_timing_config(shard_manager_config)? {
-        warn!("{warning}");
+        warn!(
+            warning,
+            "The shard manager timing configuration is inconsistent"
+        );
     }
     if let Some(host) = validate_advertised_host(shard_manager_config)? {
         warn!(
@@ -1103,7 +1106,7 @@ pub async fn run(
         return Err(err);
     }
 
-    info!("Started shard manager on ports: grpc: {grpc_port}");
+    info!(grpc_port, "Started shard manager");
 
     Ok(RunDetails {
         http_port,

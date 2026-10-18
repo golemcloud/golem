@@ -36,7 +36,7 @@ pub struct Campaigner {
     /// The lease the key is attached to: how a replica finds its own key.
     pub lease: i64,
     pub create_revision: i64,
-    /// `None` when the value cannot be read, as a value written before the JSON form.
+    /// `None` when the value cannot be read, as a value that is not a JSON `ElectionValue`.
     pub value: Option<ElectionValue>,
 }
 
@@ -337,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn a_value_written_before_the_json_form_reads_as_none() {
+    fn a_value_that_is_not_json_reads_as_none() {
         // A value from a replica that wrote only its identity.
         let view =
             CampaignView::from_entries([(b"e/1".to_vec(), 1, 10, b"sm-old/pid-1/17".to_vec())]);

@@ -2026,11 +2026,9 @@ async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtc
 
 #[test]
 #[tracing::instrument(skip_all)]
-// A value written before the JSON form (a plain identity) must not break a standby: the leader is
+// A value that is not a JSON `ElectionValue` (a plain identity) must not break a standby: the leader is
 // seen, its value is not, so nobody is named and the client retries.
-async fn a_leader_value_written_before_the_json_form_is_seen_but_names_no_address(
-    etcd: &Arc<DockerEtcd>,
-) {
+async fn a_leader_value_that_is_not_json_is_seen_but_names_no_address(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
     let mut client = inspection_client(etcd).await;
     let lease = client.lease_grant(10, None).await.unwrap().id();
