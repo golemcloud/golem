@@ -4798,6 +4798,7 @@ dependencies = [
  "indexmap 2.14.0",
  "jsonschema",
  "libsqlite3-sys",
+ "mimalloc",
  "mime",
  "mime_guess",
  "openidconnect",
