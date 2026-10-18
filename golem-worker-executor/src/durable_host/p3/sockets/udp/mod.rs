@@ -15,8 +15,7 @@
 use crate::durable_host::authorization::targets::udp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
-    ResolvedCall, authorize_live_permissions_at_serialized_access,
-    reserve_invocation_id_before_await,
+    ResolvedCall, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::p3::{
@@ -292,53 +291,34 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
     ) -> SocketResult<()> {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
             .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
-        let live = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .state
-                .is_live()
-        });
-        let denial = if live {
-            match remote_address.as_ref() {
-                Some(remote_address) => match socket_target(remote_address) {
-                    Some(target) => match authorize_live_permissions_at_serialized_access(
-                        store,
-                        durable_worker_ctx::<Ctx, U>,
-                        &[target],
-                    )
-                    .await
-                    {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(error)) => Some(error.to_string()),
-                        Err(error) => Some(error.to_string()),
-                    },
-                    None => Some(UNSUPPORTED_SOCKET_TARGET.to_string()),
-                },
-                None => None,
-            }
-        } else {
-            None
+        let targets = match remote_address.as_ref() {
+            Some(remote_address) => socket_target(remote_address)
+                .map(|target| vec![target])
+                .ok_or_else(|| UNSUPPORTED_SOCKET_TARGET.to_string()),
+            None => Ok(Vec::new()),
         };
         let request = HostRequestP3SocketsUdpSend {
             data: data.clone(),
             remote_address: remote_address.map(Into::into),
         };
-        let denied = denial
-            .as_deref()
-            .map(|denial| P3SocketsTypesUdpSocketSend::denied(&request, denial));
-        let mut call =
-            DurableCallSession::<P3SocketsTypesUdpSocketSend, Cancellable>::start_access_with_options(
+        let (mut call, decision) =
+            DurableCallSession::<P3SocketsTypesUdpSocketSend, Cancellable>::start_authorized_access(
                 store,
                 durable_worker_ctx::<Ctx, U>,
                 DurableFunctionType::WriteRemote,
                 AccessClaimOptions {
                     incomplete_repair_authorized_by_scope: true,
-                    denial,
                     ..Default::default()
                 },
-                request,
+                request.clone(),
+                targets,
             )
             .await
             .map_err(SocketError::trap)?;
+        let denied = decision
+            .as_ref()
+            .and_then(|decision| decision.as_ref().err())
+            .map(|denial| P3SocketsTypesUdpSocketSend::denied(&request, denial));
         let result = if !call.is_live() {
             match call
                 .replay_access(store, durable_worker_ctx::<Ctx, U>)

@@ -859,6 +859,27 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         Ok(response.await.ok())
     }
 
+    /// Observes an attached status, repairing a detached projection before replying. A failed
+    /// repair returns its cause; a stopped actor returns `None` so the caller can resolve retirement.
+    pub async fn observe_repaired_status(
+        &self,
+    ) -> Result<Option<Arc<AgentStatusRecord>>, WorkerExecutorError> {
+        let (done, response) = oneshot::channel();
+        if self
+            .commit
+            .status_jobs
+            .send(StatusJob::RepairedStatus { done })
+            .is_err()
+        {
+            return Ok(None);
+        }
+        response
+            .await
+            .ok()
+            .transpose()
+            .map_err(WorkerExecutorError::from)
+    }
+
     pub async fn try_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
         self.observe_status()
             .await?
@@ -1094,6 +1115,8 @@ pub(super) fn reconstructed_status(
 ) -> Result<AgentStatusRecord, OplogRefusal> {
     match status {
         Ok(Some(status)) => Ok(status),
+        // An established actor rebuilds a nonempty fixed horizon. Missing entries and regions
+        // that invalidate the empty baseline are unreadable oplogs, not an absent worker.
         Ok(None) => panic!("worker oplog disappeared during status reconstruction"),
         Err(StatusError::Unreadable(unreadable)) => Err(OplogRefusal::Unreadable(unreadable)),
         Err(error) => panic!("oplog status reconstruction: {error}"),

@@ -162,6 +162,17 @@ not add a feature-specific recovery path or immediate restart.
   consumer record with `reobserves` referencing the original record. Append and replay validate
   identical logical content. A re-observation reserves its new guest boundary but advances no
   consumer progress and introduces no nested readers; their identities retain the original index.
+- The stdin of a tool call that a client started is read by the component body itself
+  (`DurableToolStdinProducer`): each chunk and the terminal its guest takes is a guest observation
+  whose parent is the entity `Start`, or the custom or batched scope that is open at the read. Do
+  not put a host task or a buffer between that durable input and the guest: what a host takes ahead
+  of the body has no place among the body's recorded calls, and a replay then hands it over too
+  early or, after a restart, in another order. In completed replay a read past the recorded journal
+  stays pending. A reader that is dropped cancels nothing; the end of the session cancels the unread
+  input. The records keep the session's attribution, so `has_visible_scope_descendant` consults the
+  cursor's `stream_observations` to see that such a body has started; do not send it through the
+  empty-scope shortcut. Only a native body (`EntityActivationSource::Host`) gets an attachment that
+  a host task fills.
 
 ## Entity bodies and tool invocations
 

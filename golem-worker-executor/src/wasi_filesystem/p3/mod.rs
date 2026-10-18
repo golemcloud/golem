@@ -30,7 +30,6 @@ use crate::durable_host::p3::{
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{
     CallReplayOutcome, DurabilityHost, DurableCallSession, LiveAuthorizationPermit, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
 };
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AttributeChanges, Attributes as AgentAttributes,
@@ -48,8 +47,7 @@ use crate::wasi_filesystem::{
 };
 use crate::workerctx::WorkerCtx;
 use bytes::{Bytes, BytesMut};
-use golem_common::SafeDisplay;
-use golem_common::model::card::FilesystemVerb;
+use golem_common::model::card::{FilesystemVerb, PermissionTarget};
 use golem_common::model::entity::FilesystemCapability;
 use golem_common::model::oplog::host_functions::{
     FilesystemPermissionCheck, P3FilesystemTypesDescriptorAppendViaStream,
@@ -62,7 +60,7 @@ use golem_common::model::oplog::{
     HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
     HostResponsePermissionCheck,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureReader, Linker, Resource, Source,
     StreamConsumer, StreamProducer, StreamReader, StreamResult,
@@ -193,29 +191,15 @@ async fn authorize_paths<Ctx: WorkerCtx, U: Send + 'static>(
     }
 }
 
-/// The live decision of a filesystem permission check. `Err` holds the reason of a denial. `None`
-/// when the Store replays: a replayed call uses the decision that its `Start` records.
-async fn p3_live_permission_decision<Ctx: WorkerCtx, U: 'static>(
+/// Constructs the targets of a filesystem permission check without making a live decision.
+fn p3_permission_targets<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
-) -> Result<Option<Result<LiveAuthorizationPermit, String>>, WorkerExecutorError> {
-    let targets = accessor.with(|mut access| {
+) -> Result<Vec<PermissionTarget>, String> {
+    Ok(accessor.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.is_live()
-            .then(|| filesystem_permission_targets(ctx, requests))
-    });
-    let Some(targets) = targets else {
-        return Ok(None);
-    };
-    Ok(Some(
-        authorize_live_permissions_at_serialized_access(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            &targets,
-        )
-        .await?
-        .map_err(|error| error.to_safe_string()),
-    ))
+        filesystem_permission_targets(ctx, requests)
+    }))
 }
 
 /// Runs a `ReadLocal` durable call that the filesystem permissions of `requests` can deny, and
@@ -232,29 +216,27 @@ where
     Pair: DeniablePair,
     Pair::Req: Clone,
 {
-    run_deniable_filesystem_access::<Ctx, U, Pair, Cancellable, _, _>(
+    run_deniable_filesystem_access::<Ctx, U, Pair, Cancellable>(
         accessor,
         request,
-        || p3_live_permission_decision(accessor, requests),
+        p3_permission_targets(accessor, requests),
         live,
     )
     .await
 }
 
-/// Runs a `ReadLocal` durable call that `decide` can deny, and returns its response with the
-/// permit of an allowed live decision. `decide` gives the live decision, or `None` when the Store
-/// replays.
+/// Runs a `ReadLocal` durable call checked against `targets`, and returns its response with the
+/// permit of an allowed new decision.
 ///
 /// A live call decides before it writes its `Start`. A denied call records the denial in the
 /// `Start` and completes with [`DeniablePair::denied`] without running `live`, so the recovery of
 /// an incomplete denied `Start` gives the same response. A replayed call uses the recorded
 /// decision: an incomplete `Start` without a denial was allowed, so its repair runs `live` without
-/// a new decision. A call that becomes live although the Store replayed when it was made decides
-/// after its `Start`, and completes a denial with the same denied response.
-async fn run_deniable_filesystem_access<Ctx, U, Pair, P, D, DF>(
+/// a new decision. A new call decides after its claim resolves and before it writes its `Start`.
+async fn run_deniable_filesystem_access<Ctx, U, Pair, P>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     request: Pair::Req,
-    decide: D,
+    targets: Result<Vec<PermissionTarget>, String>,
     live: impl AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
 ) -> wasmtime::Result<(Pair::Resp, Option<LiveAuthorizationPermit>)>
 where
@@ -263,41 +245,22 @@ where
     Pair: DeniablePair,
     Pair::Req: Clone,
     P: DropPolicy,
-    D: Fn() -> DF,
-    DF: Future<
-        Output = Result<Option<Result<LiveAuthorizationPermit, String>>, WorkerExecutorError>,
-    >,
 {
-    let decision = decide().await?;
-    let decided = decision.is_some();
-    let (mut permit, denial) = match decision {
-        Some(Ok(permit)) => (Some(permit), None),
-        Some(Err(denial)) => (None, Some(denial)),
-        None => (None, None),
-    };
-    let mut denied = denial
-        .as_deref()
-        .map(|denial| Pair::denied(&request, denial));
-    let undecided_request = (!decided).then(|| request.clone());
-    let call = DurableCallSession::<Pair, P>::start_access_with_options(
+    let (call, decision) = DurableCallSession::<Pair, P>::start_authorized_access(
         accessor,
         durable_worker_ctx::<Ctx, U>,
         DurableFunctionType::ReadLocal,
-        AccessClaimOptions {
-            denial,
-            ..Default::default()
-        },
-        request,
+        AccessClaimOptions::default(),
+        request.clone(),
+        targets,
     )
     .await?;
+    let (mut permit, denied) = match decision {
+        Some(Ok(permit)) => (Some(permit), None),
+        Some(Err(denial)) => (None, Some(Pair::denied(&request, &denial))),
+        None => (None, None),
+    };
     let response = if call.is_live() {
-        if let Some(request) = undecided_request {
-            match decide().await? {
-                Some(Ok(decision)) => permit = Some(decision),
-                Some(Err(denial)) => denied = Some(Pair::denied(&request, &denial)),
-                None => {}
-            }
-        }
         match denied {
             Some(denied) => call
                 .complete_access(accessor, durable_worker_ctx::<Ctx, U>, denied)
@@ -1395,10 +1358,10 @@ where
         .map_err(wasmtime::Error::from)?;
     let fd_rep = fd.rep();
     let (response, authorization_permit) =
-        run_deniable_filesystem_access::<Ctx, U, Pair, NotCancellable, _, _>(
+        run_deniable_filesystem_access::<Ctx, U, Pair, NotCancellable>(
             accessor,
             HostRequestNoInput {},
-            || check_stream_write::<Ctx, U>(accessor, fd_rep),
+            check_stream_write::<Ctx, U>(accessor, fd_rep),
             async || -> wasmtime::Result<_> {
                 Ok(HostResponseP3FileSystemWriteAdmission { result: Ok(()) })
             },
@@ -1408,21 +1371,15 @@ where
     Ok(deserialize_write_admission(response.result)?.map(|()| authorization_permit))
 }
 
-/// The live decision of the write permission of a stream write. `Err` holds the reason of a
-/// denial; a descriptor without a guest path denies the write. `None` when the Store replays.
-async fn check_stream_write<Ctx: WorkerCtx, U: 'static>(
+/// Constructs the targets of a stream write; a descriptor without a guest path denies the write.
+fn check_stream_write<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     fd_rep: u32,
-) -> Result<Option<Result<LiveAuthorizationPermit, String>>, WorkerExecutorError> {
-    let live =
-        accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).is_live());
-    if !live {
-        return Ok(None);
-    }
+) -> Result<Vec<PermissionTarget>, String> {
     match descriptor_guest_path_from_accessor::<Ctx, U>(accessor, &Resource::new_borrow(fd_rep), "")
     {
-        Ok(path) => p3_live_permission_decision(accessor, &[(FilesystemVerb::Write, path)]).await,
-        Err(_) => Ok(Some(Err("the descriptor has no guest path".to_string()))),
+        Ok(path) => p3_permission_targets(accessor, &[(FilesystemVerb::Write, path)]),
+        Err(_) => Err("the descriptor has no guest path".to_string()),
     }
 }
 

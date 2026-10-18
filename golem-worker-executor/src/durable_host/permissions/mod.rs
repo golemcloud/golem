@@ -46,6 +46,7 @@ use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{DateTime, TimeDelta, Utc};
+use desert_rust::{BinaryCodec, BinaryDeserializer, BinarySerializer};
 use golem_common::base_model::oplog::QueuedCardEventTransfer;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentId;
@@ -59,20 +60,25 @@ use golem_common::model::card::{
     PolymorphicPermissionPattern, RenderedPermissionFields, ScopeCard, StoredCard,
     WalletDerivationParent, agent_delegation_surface_from_wallet, card_matches_agent_recipient,
     instantiate_polymorphic_card_for_agent, monomorphize_card_for_agent, parse_permission_fields,
-    permission_class_metadata,
+    parse_polymorphic_permission_fields, permission_card_envelope, permission_class_metadata,
 };
 use golem_common::model::oplog::host_functions::{
-    GolemPermissionsCardLiveness, GolemPermissionsDerivePersist,
-    GolemPermissionsInstallChildPersist, GolemPermissionsInstallTransfer,
-    GolemPermissionsRevokePersist, GolemPermissionsSelfVersion, GolemPermissionsSelfWallet,
+    GolemPermissionsCardLiveness, GolemPermissionsDeriveDecision,
+    GolemPermissionsDeriveFromWalletDecision, GolemPermissionsDerivePersist,
+    GolemPermissionsDeriveScopeDecision, GolemPermissionsInspectDecision,
+    GolemPermissionsInstallChildPersist, GolemPermissionsInstallDecision,
+    GolemPermissionsInstallTransfer, GolemPermissionsRevokePersist, GolemPermissionsSelfVersion,
+    GolemPermissionsSelfWallet,
 };
 use golem_common::model::oplog::payload::types::{
     PermissionCardDeriveError, PermissionCardRevokeError, SerializablePermissionCardLiveness,
+    SerializablePermissionError,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput,
-    HostRequestPermissionCardDerive, HostRequestPermissionCardLiveness,
-    HostRequestPermissionCardRevoke, HostRequestPermissionCardTransfer,
+    HostRequestPermissionCardDecision, HostRequestPermissionCardDerive,
+    HostRequestPermissionCardLiveness, HostRequestPermissionCardRevoke,
+    HostRequestPermissionCardTransfer, HostResponsePermissionCardDecision,
     HostResponsePermissionCardDerived, HostResponsePermissionCardLiveness,
     HostResponsePermissionCardTransferComplete, HostResponsePermissionCardsRevoked,
     HostResponsePermissionWallet, HostResponsePermissionWalletVersion, OplogEntry, OplogIndex,
@@ -593,6 +599,130 @@ async fn resolve_permission_card_handle_or_trap<Ctx: WorkerCtx>(
         .map_err(permission_error_to_anyhow)
 }
 
+fn permission_error_to_serializable(
+    error: permissions_types::PermissionError,
+) -> SerializablePermissionError {
+    use permissions_types::PermissionError as E;
+    match error {
+        E::NotPermitted(message) => SerializablePermissionError::NotPermitted(message),
+        E::LowerBoundTooBroad(message) => SerializablePermissionError::LowerBoundTooBroad(message),
+        E::UpperBoundTooBroad(message) => SerializablePermissionError::UpperBoundTooBroad(message),
+        E::WalletMultiSourceRequired(message) => {
+            SerializablePermissionError::WalletMultiSourceRequired(message)
+        }
+        E::CardRevoked(message) => SerializablePermissionError::CardRevoked(message),
+        E::CardExpired(message) => SerializablePermissionError::CardExpired(message),
+        E::InstallRecipientMismatch(message) => {
+            SerializablePermissionError::InstallRecipientMismatch(message)
+        }
+        E::UnknownResourceClass(message) => {
+            SerializablePermissionError::UnknownResourceClass(message)
+        }
+        E::InvalidPattern(message) => SerializablePermissionError::InvalidPattern(message),
+        E::InvalidVerb(message) => SerializablePermissionError::InvalidVerb(message),
+        E::InvalidOwner(message) => SerializablePermissionError::InvalidOwner(message),
+        E::InvalidRecipient(message) => SerializablePermissionError::InvalidRecipient(message),
+    }
+}
+
+fn permission_error_from_serializable(
+    error: SerializablePermissionError,
+) -> permissions_types::PermissionError {
+    use permissions_types::PermissionError as E;
+    match error {
+        SerializablePermissionError::NotPermitted(message) => E::NotPermitted(message),
+        SerializablePermissionError::LowerBoundTooBroad(message) => E::LowerBoundTooBroad(message),
+        SerializablePermissionError::UpperBoundTooBroad(message) => E::UpperBoundTooBroad(message),
+        SerializablePermissionError::WalletMultiSourceRequired(message) => {
+            E::WalletMultiSourceRequired(message)
+        }
+        SerializablePermissionError::CardRevoked(message) => E::CardRevoked(message),
+        SerializablePermissionError::CardExpired(message) => E::CardExpired(message),
+        SerializablePermissionError::InstallRecipientMismatch(message) => {
+            E::InstallRecipientMismatch(message)
+        }
+        SerializablePermissionError::UnknownResourceClass(message) => {
+            E::UnknownResourceClass(message)
+        }
+        SerializablePermissionError::InvalidPattern(message) => E::InvalidPattern(message),
+        SerializablePermissionError::InvalidVerb(message) => E::InvalidVerb(message),
+        SerializablePermissionError::InvalidOwner(message) => E::InvalidOwner(message),
+        SerializablePermissionError::InvalidRecipient(message) => E::InvalidRecipient(message),
+    }
+}
+
+/// The id of the card behind a handle, or `None` for an invalid handle.
+fn handle_card_id<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: &Resource<PermissionCardHandleRep>,
+) -> Option<Uuid> {
+    match permission_card_scope_card(ctx, handle).ok()? {
+        Some((card, _)) => Some(card.scope_card_id.0),
+        None => permission_card_snapshot(ctx, handle)
+            .ok()
+            .map(|snapshot| snapshot.card_id),
+    }
+}
+
+/// Makes the authorization decision of a card operation in a `ReadLocal` durable call that
+/// records it, allowed or denied, together with the data the operation continues with.
+///
+/// Card events are hints. Replay publishes every card event up to the next recorded entry when it
+/// commits a recorded entry, and the next authority boundary applies them, so a decision that
+/// records nothing can observe on replay a card event that live execution applied only to a later
+/// operation. Replay returns the recorded decision instead of deciding again; the repair of an
+/// incomplete decision decides at its own `Start`.
+async fn record_card_decision<Ctx, Pair, T, Decide>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    card_ids: Vec<Uuid>,
+    decide: Decide,
+) -> anyhow::Result<Result<T, permissions_types::PermissionError>>
+where
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair<
+            Req = HostRequestPermissionCardDecision,
+            Resp = HostResponsePermissionCardDecision,
+        >,
+    T: BinarySerializer + BinaryDeserializer,
+    Decide: AsyncFnOnce(
+        &mut DurableWorkerCtx<Ctx>,
+    ) -> anyhow::Result<Result<T, permissions_types::PermissionError>>,
+{
+    let response = DurableCallSession::<Pair, NotCancellable>::invoke(
+        ctx,
+        HostRequestPermissionCardDecision { card_ids },
+        DurableFunctionType::ReadLocal,
+        async move |ctx| {
+            let result = match decide(ctx).await? {
+                Ok(decided) => Ok(serialize(&decided).map_err(|error| {
+                    anyhow!("failed to serialize a permission-card decision: {error}")
+                })?),
+                Err(error) => Err(permission_error_to_serializable(error)),
+            };
+            Ok::<_, anyhow::Error>(HostResponsePermissionCardDecision { result })
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(decided) => Ok(Ok(deserialize(&decided).map_err(|error| {
+            anyhow!("failed to deserialize a recorded permission-card decision: {error}")
+        })?)),
+        Err(error) => Ok(Err(permission_error_from_serializable(error))),
+    }
+}
+
+/// The holder identity that template cards resolve against for the caller. It depends on the
+/// caller's component, which card events do not change.
+fn caller_monomorphization_context<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> AgentPermissionMonomorphizationContext {
+    super::owner_monomorphization_context(
+        ctx.authority_component_metadata(),
+        &ctx.owned_agent_id,
+        &ctx.state.owner_context,
+    )
+}
+
 fn parse_pattern_grant(
     g: &permissions_types::PatternGrant,
 ) -> Result<PermissionPattern, permissions_types::PermissionError> {
@@ -612,25 +742,27 @@ async fn normalize_tool_grants<Ctx: WorkerCtx>(
         if grant.class != "tool" {
             continue;
         }
-        let mut pattern = match parse_permission_fields(
+        let mut pattern = match parse_polymorphic_permission_fields(
             &grant.class,
             &grant.owner,
             &grant.recipient,
             &grant.verb,
             "*",
         ) {
-            Ok(PermissionPattern::Tool(pattern)) => pattern,
+            Ok(PolymorphicPermissionPattern::Tool(pattern)) => pattern,
             Ok(_) => unreachable!("tool class was checked"),
             Err(error) => return Ok(Err(permission_error_from_parse(error))),
         };
         let tool_name = match &pattern.owner {
-            ToolOwnerPattern::Tool {
-                account,
-                application,
-                environment,
-                component,
-                tool,
-            } if account == &ctx.owner_component_metadata().account_email
+            golem_common::model::card::owner::PolymorphicToolOwnerPattern::Concrete(
+                ToolOwnerPattern::Tool {
+                    account,
+                    application,
+                    environment,
+                    component,
+                    tool,
+                },
+            ) if account == &ctx.owner_component_metadata().account_email
                 && application == &ctx.owner_component_metadata().application_name
                 && environment == &ctx.owner_component_metadata().environment_name
                 && component == &ctx.owner_component_metadata().component_name =>
@@ -662,7 +794,7 @@ async fn normalize_tool_grants<Ctx: WorkerCtx>(
                 )));
             }
         };
-        *grant = match concrete_pattern_grant(&PermissionPattern::Tool(pattern)) {
+        *grant = match polymorphic_pattern_grant(&PolymorphicPermissionPattern::Tool(pattern)) {
             Ok(grant) => grant,
             Err(error) => return Ok(Err(error)),
         };
@@ -860,11 +992,75 @@ fn derive_expires_at(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct DerivedGrantSets {
-    lower_positive: Vec<PermissionPattern>,
-    lower_negative: Vec<PermissionPattern>,
-    upper_positive: Vec<PermissionPattern>,
-    upper_negative: Vec<PermissionPattern>,
+struct DerivedGrantSets<P = PolymorphicPermissionPattern> {
+    lower_positive: Vec<P>,
+    lower_negative: Vec<P>,
+    upper_positive: Vec<P>,
+    upper_negative: Vec<P>,
+}
+
+impl DerivedGrantSets {
+    fn envelope(
+        &self,
+    ) -> Result<golem_common::model::card::TemplateCardEnvelope, permissions_types::PermissionError>
+    {
+        permission_card_envelope(
+            &self.lower_positive,
+            &self.lower_negative,
+            &self.upper_positive,
+            &self.upper_negative,
+        )
+        .map_err(permissions_types::PermissionError::InvalidPattern)
+    }
+
+    fn as_concrete(&self) -> Option<DerivedGrantSets<PermissionPattern>> {
+        let convert = |grants: &[PolymorphicPermissionPattern]| {
+            grants
+                .iter()
+                .map(PolymorphicPermissionPattern::as_concrete)
+                .collect::<Option<Vec<_>>>()
+        };
+        Some(DerivedGrantSets {
+            lower_positive: convert(&self.lower_positive)?,
+            lower_negative: convert(&self.lower_negative)?,
+            upper_positive: convert(&self.upper_positive)?,
+            upper_negative: convert(&self.upper_negative)?,
+        })
+    }
+
+    fn into_card(
+        self,
+        card_id: CardId,
+        parent_id: CardId,
+        created_at: DateTime<Utc>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> StoredCard {
+        match self.as_concrete() {
+            Some(grants) => StoredCard::Concrete(Card {
+                card_id,
+                parent_ids: vec![parent_id],
+                lower_positive: grants.lower_positive,
+                lower_negative: grants.lower_negative,
+                upper_positive: grants.upper_positive,
+                upper_negative: grants.upper_negative,
+                created_at,
+                expires_at,
+                system_card: false,
+                managed_by: None,
+            }),
+            None => StoredCard::Polymorphic(PolymorphicCard {
+                card_id,
+                parent_ids: vec![parent_id],
+                lower_positive: self.lower_positive,
+                lower_negative: self.lower_negative,
+                upper_positive: self.upper_positive,
+                upper_negative: self.upper_negative,
+                created_at,
+                expires_at,
+                system_card: false,
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -904,6 +1100,7 @@ impl ScopeDerivationParent {
     }
 }
 
+#[cfg(test)]
 fn parse_grants(
     grants: &[permissions_types::PatternGrant],
 ) -> Result<Vec<PermissionPattern>, permissions_types::PermissionError> {
@@ -917,28 +1114,30 @@ fn derive_grant_sets(
     upper_positive_to_retain: &[permissions_types::PatternGrant],
     upper_negative_to_add: &[permissions_types::PatternGrant],
 ) -> Result<DerivedGrantSets, permissions_types::PermissionError> {
-    let lower_positive = parse_grants(lower_positive_to_retain)?;
-    let mut lower_negative = parent.lower_negative.clone();
-    lower_negative.extend(parse_grants(lower_negative_to_add)?);
-    let upper_positive = parse_grants(upper_positive_to_retain)?;
-    let mut upper_negative = parent.upper_negative.clone();
-    upper_negative.extend(parse_grants(upper_negative_to_add)?);
+    let mut grants = parse_derived_grant_sets(
+        lower_positive_to_retain,
+        lower_negative_to_add,
+        upper_positive_to_retain,
+        upper_negative_to_add,
+    )?;
+    grants
+        .lower_negative
+        .splice(0..0, parent.lower_negative.iter().cloned().map(Into::into));
+    grants
+        .upper_negative
+        .splice(0..0, parent.upper_negative.iter().cloned().map(Into::into));
+    let envelope = grants.envelope()?;
 
     DelegationSurface::from_cards(std::slice::from_ref(parent))
         .validate_attenuation(
-            &lower_positive,
-            &lower_negative,
-            &upper_positive,
-            &upper_negative,
+            &envelope.lower_positive,
+            &envelope.lower_negative,
+            &envelope.upper_positive,
+            &envelope.upper_negative,
         )
         .map_err(permission_error_from_algebra)?;
 
-    Ok(DerivedGrantSets {
-        lower_positive,
-        lower_negative,
-        upper_positive,
-        upper_negative,
-    })
+    Ok(grants)
 }
 
 fn parse_derived_grant_sets(
@@ -947,11 +1146,26 @@ fn parse_derived_grant_sets(
     upper_positive: &[permissions_types::PatternGrant],
     upper_negative: &[permissions_types::PatternGrant],
 ) -> Result<DerivedGrantSets, permissions_types::PermissionError> {
+    let parse = |grants: &[permissions_types::PatternGrant]| {
+        grants
+            .iter()
+            .map(|g| {
+                parse_polymorphic_permission_fields(
+                    &g.class,
+                    &g.owner,
+                    &g.recipient,
+                    &g.verb,
+                    &g.resource_id,
+                )
+                .map_err(permission_error_from_parse)
+            })
+            .collect::<Result<Vec<_>, _>>()
+    };
     Ok(DerivedGrantSets {
-        lower_positive: parse_grants(lower_positive)?,
-        lower_negative: parse_grants(lower_negative)?,
-        upper_positive: parse_grants(upper_positive)?,
-        upper_negative: parse_grants(upper_negative)?,
+        lower_positive: parse(lower_positive)?,
+        lower_negative: parse(lower_negative)?,
+        upper_positive: parse(upper_positive)?,
+        upper_negative: parse(upper_negative)?,
     })
 }
 
@@ -966,6 +1180,9 @@ fn build_scope_card(
         ));
     }
 
+    let grants = grants.as_concrete().ok_or_else(|| permissions_types::PermissionError::InvalidPattern(
+        "derive-scope does not support slot-bearing requested grants; scope cards must be concrete".to_string()
+    ))?;
     DelegationSurface {
         cards: parents
             .iter()
@@ -1035,36 +1252,88 @@ fn wallet_parent_for_agent(
     Ok(monomorphize_card_for_agent(wallet_card, context))
 }
 
-async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
+/// A parent of a scope derivation as the derivation's authorization decision saw it.
+#[derive(BinaryCodec)]
+enum DecidedScopeParent {
+    /// A scope card that is valid in the invocation.
+    Scope(ScopeCard),
+    /// A persistent card, with the caller's wallet copy of it when the wallet holds it. Its
+    /// liveness is resolved after the decision, in its own recorded call.
+    Persistent(Option<StoredCard>),
+    /// A parent that the derivation cannot use.
+    Refused(SerializablePermissionError),
+}
+
+fn decide_scope_derivation_parent<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     wallet: &[StoredCard],
+    handle: &Resource<PermissionCardHandleRep>,
+    invocation_key: &IdempotencyKey,
+) -> DecidedScopeParent {
+    match permission_card_scope_card(ctx, handle) {
+        Err(error) => DecidedScopeParent::Refused(permission_error_to_serializable(
+            worker_error_to_permission_error(error),
+        )),
+        Ok(Some((card, owner_invocation_key))) => {
+            if owner_invocation_key.as_ref() == Some(invocation_key) {
+                DecidedScopeParent::Scope(card)
+            } else {
+                DecidedScopeParent::Refused(SerializablePermissionError::NotPermitted(
+                    "scope-card parent is not valid in this invocation".to_string(),
+                ))
+            }
+        }
+        Ok(None) => {
+            let card_id = permission_card_snapshot(ctx, handle)
+                .ok()
+                .map(|snapshot| CardId(snapshot.card_id));
+            DecidedScopeParent::Persistent(card_id.and_then(|card_id| {
+                wallet
+                    .iter()
+                    .find(|card| card.card_id() == card_id)
+                    .cloned()
+            }))
+        }
+    }
+}
+
+/// Resolves the parents of a scope derivation in argument order from its recorded decision. A
+/// persistent parent resolves its liveness in its own recorded call and must match the wallet
+/// copy that the decision saw.
+async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
     context: &AgentPermissionMonomorphizationContext,
     handles: &[Resource<PermissionCardHandleRep>],
-    invocation_key: &IdempotencyKey,
+    decided: Vec<DecidedScopeParent>,
 ) -> anyhow::Result<Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError>> {
+    if decided.len() != handles.len() {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            format!("a derive-scope decision for {} parents", handles.len()),
+            format!("a derive-scope decision for {} parents", decided.len()),
+        )
+        .into());
+    }
     let mut parents = Vec::with_capacity(handles.len());
-    for handle in handles {
-        let scope_card = match permission_card_scope_card(ctx, handle) {
-            Ok(scope_card) => scope_card,
-            Err(error) => return Ok(Err(worker_error_to_permission_error(error))),
-        };
-        if let Some((card, owner_invocation_key)) = scope_card {
-            if owner_invocation_key.as_ref() != Some(invocation_key) {
-                return Ok(Err(permissions_types::PermissionError::NotPermitted(
-                    "scope-card parent is not valid in this invocation".to_string(),
-                )));
+    for (handle, decided) in handles.iter().zip(decided) {
+        match decided {
+            DecidedScopeParent::Scope(card) => parents.push(ScopeDerivationParent::scope(&card)),
+            DecidedScopeParent::Refused(error) => {
+                return Ok(Err(permission_error_from_serializable(error)));
             }
-            parents.push(ScopeDerivationParent::scope(&card));
-            continue;
-        }
-
-        let resolved = match resolve_permission_card(ctx, handle).await? {
-            Ok(resolved) => resolved,
-            Err(error) => return Ok(Err(error)),
-        };
-        match persistent_scope_parent_from_wallet(wallet, &resolved, context) {
-            Ok(parent) => parents.push(parent),
-            Err(error) => return Ok(Err(error)),
+            DecidedScopeParent::Persistent(wallet_card) => {
+                let resolved = match resolve_permission_card(ctx, handle).await? {
+                    Ok(resolved) => resolved,
+                    Err(error) => return Ok(Err(error)),
+                };
+                match persistent_scope_parent_from_wallet(
+                    wallet_card.as_slice(),
+                    &resolved,
+                    context,
+                ) {
+                    Ok(parent) => parents.push(parent),
+                    Err(error) => return Ok(Err(error)),
+                }
+            }
         }
     }
 
@@ -1077,12 +1346,13 @@ fn select_wallet_derivation_parent(
     grants: &DerivedGrantSets,
 ) -> Result<Card, permissions_types::PermissionError> {
     let surface = agent_delegation_surface_from_wallet(context, wallet);
+    let envelope = grants.envelope()?;
     let parent_id = match surface
         .select_wallet_derivation_parent(
-            &grants.lower_positive,
-            &grants.lower_negative,
-            &grants.upper_positive,
-            &grants.upper_negative,
+            &envelope.lower_positive,
+            &envelope.lower_negative,
+            &envelope.upper_positive,
+            &envelope.upper_negative,
         )
         .map_err(permission_error_from_algebra)?
     {
@@ -1521,24 +1791,11 @@ async fn persist_derived_card<Ctx: WorkerCtx>(
     created_at: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,
     source: PersistentDerivationSource,
-) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>> {
+) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>> {
     let created = match persist_runtime_card::<Ctx, GolemPermissionsDerivePersist, _, _, _>(
         ctx,
         |ctx, invocation_key, oplog_index| ctx.derive_card_id(invocation_key, oplog_index),
-        |card_id| {
-            StoredCard::Concrete(Card {
-                card_id,
-                parent_ids: vec![parent_id],
-                lower_positive: grants.lower_positive,
-                lower_negative: grants.lower_negative,
-                upper_positive: grants.upper_positive,
-                upper_negative: grants.upper_negative,
-                created_at,
-                expires_at,
-                system_card: false,
-                managed_by: None,
-            })
-        },
+        |card_id| grants.into_card(card_id, parent_id, created_at, expires_at),
         parent_expires_at,
         move |ctx| {
             ensure_persistent_derivation_repair_authority(
@@ -1558,9 +1815,15 @@ async fn persist_derived_card<Ctx: WorkerCtx>(
         Err(refusal) => return Ok(Err(refusal)),
     };
 
-    Ok(Ok(ctx.table().push(PermissionCardHandleRep::new(
+    let template = matches!(&created, StoredCard::Polymorphic(_));
+    let handle = ctx.table().push(PermissionCardHandleRep::new(
         PermissionCardEntry::from_card(created),
-    ))?))
+    ))?;
+    Ok(Ok(if template {
+        permissions_types::PersistentCard::Template(handle)
+    } else {
+        permissions_types::PersistentCard::Concrete(handle)
+    }))
 }
 
 #[allow(
@@ -1607,7 +1870,7 @@ async fn derive_and_persist_card<Ctx: WorkerCtx>(
     grants: DerivedGrantSets,
     lifespan: Option<&permissions_types::Duration>,
     source: PersistentDerivationSource,
-) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>> {
+) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>> {
     let now = durable_now(ctx).await?;
     let expires_at = match derive_expires_at(now, lifespan, parent.expires_at) {
         Ok(expires_at) => expires_at,
@@ -1718,10 +1981,10 @@ fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> 
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, BinaryCodec)]
 struct InstallAgentTarget {
     agent_id: AgentId,
-    context: AgentPermissionMonomorphizationContext,
+    holder: AgentPermissionMonomorphizationContext,
 }
 
 const UNSUPPORTED_INSTALL_TARGET_ERROR: &str = "install-card currently supports only agent targets";
@@ -1783,7 +2046,7 @@ async fn resolve_install_target_context<Ctx: WorkerCtx>(
 
     Ok(InstallAgentTarget {
         agent_id: target.clone(),
-        context: AgentPermissionMonomorphizationContext {
+        holder: AgentPermissionMonomorphizationContext {
             account: component.account_email,
             application: component.application_name,
             environment: component.environment_name,
@@ -1792,6 +2055,42 @@ async fn resolve_install_target_context<Ctx: WorkerCtx>(
             owner: RecipientOwnerContext::AgentType(agent_type),
         },
     })
+}
+
+/// Decides whether the caller may install `source_card` on the `target` agent, and resolves the
+/// target's holder identity that a template card is instantiated for.
+async fn decide_install<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    source_card: &StoredCard,
+    target: AgentId,
+) -> anyhow::Result<Result<InstallAgentTarget, permissions_types::PermissionError>> {
+    let target = match resolve_install_target_context(ctx, target).await {
+        Ok(target) => target,
+        Err(error) => return Ok(Err(error)),
+    };
+    let target_recipient = agent_recipient_pattern(&target.holder);
+    if let Err(error) = ctx
+        .with_agent_authority_at_boundary(|ctx| {
+            ensure_install_permission_in_surface(
+                &ctx.state.agent_effective_surface,
+                &ctx.state.created_by_email,
+                source_card.card_id(),
+                &target_recipient,
+            )
+        })
+        .await
+        .map_err(worker_error_to_permission_error)?
+    {
+        return Ok(Err(error));
+    }
+    if !card_matches_agent_recipient(source_card, &target.holder) {
+        return Ok(Err(
+            permissions_types::PermissionError::InstallRecipientMismatch(
+                "the target agent does not match any recipient pattern of the card".to_string(),
+            ),
+        ));
+    }
+    Ok(Ok(target))
 }
 
 #[derive(Clone, Debug)]
@@ -2931,13 +3230,21 @@ impl<Ctx: WorkerCtx> permissions_inspect::Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<permissions_types::CardView, permissions_types::PermissionError>>
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::inspect", "inspect-card");
-        if let Err(error) = self
-            .with_agent_authority_at_boundary(|ctx| {
-                ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
-            })
-            .await
-            .map_err(worker_error_to_permission_error)
-            .and_then(|authorized| authorized)
+        let card_ids = handle_card_id(self, &c).into_iter().collect();
+        if let Err(error) = record_card_decision::<_, GolemPermissionsInspectDecision, (), _>(
+            self,
+            card_ids,
+            async |ctx| {
+                Ok(ctx
+                    .with_agent_authority_at_boundary(|ctx| {
+                        ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
+                    })
+                    .await
+                    .map_err(worker_error_to_permission_error)
+                    .and_then(|authorized| authorized))
+            },
+        )
+        .await?
         {
             return Ok(Err(error));
         }
@@ -2956,7 +3263,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         mut upper_positive_to_retain: Vec<permissions_types::PatternGrant>,
         mut upper_negative_to_add: Vec<permissions_types::PatternGrant>,
         lifespan: Option<permissions_types::Duration>,
-    ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
+    ) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>>
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
@@ -2974,22 +3281,41 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
             return Ok(Err(error));
         }
         async {
-            let authorized = self
-                .with_agent_authority_at_boundary(|ctx| {
-                    ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
-                    let wallet = ctx.agent_wallet_cards_snapshot();
-                    let context = super::owner_monomorphization_context(
-                        ctx.authority_component_metadata(),
-                        &ctx.owned_agent_id,
-                        &ctx.state.owner_context,
-                    );
-                    Ok::<_, permissions_types::PermissionError>((wallet, context))
-                })
-                .await?;
-            let (wallet, context) = match authorized {
-                Ok(authorized) => authorized,
+            // A template parent must be in the caller's wallet, so the decision records the
+            // wallet's copy of the parent card.
+            let parent_card_id = handle_card_id(self, &parent);
+            let wallet_parent = match record_card_decision::<
+                _,
+                GolemPermissionsDeriveDecision,
+                Option<StoredCard>,
+                _,
+            >(
+                self,
+                parent_card_id.into_iter().collect(),
+                async |ctx| {
+                    Ok(ctx
+                        .with_agent_authority_at_boundary(|ctx| {
+                            ensure_card_permission(
+                                ctx,
+                                CardVerb::Derive,
+                                CardResourcePattern::Any,
+                            )?;
+                            Ok(parent_card_id.and_then(|card_id| {
+                                ctx.agent_wallet_cards_snapshot()
+                                    .into_iter()
+                                    .find(|card| card.card_id().0 == card_id)
+                            }))
+                        })
+                        .await?)
+                },
+            )
+            .await?
+            {
+                Ok(wallet_parent) => wallet_parent,
                 Err(error) => return Ok(Err(error)),
             };
+            let wallet = Vec::from_iter(wallet_parent);
+            let context = caller_monomorphization_context(self);
             let parent = match resolve_permission_card_handle(self, &parent)
                 .await?
                 .and_then(|parent| parent.into_persistent("derive"))
@@ -3028,7 +3354,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         mut upper_positive: Vec<permissions_types::PatternGrant>,
         mut upper_negative: Vec<permissions_types::PatternGrant>,
         lifespan: Option<permissions_types::Duration>,
-    ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
+    ) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>>
     {
         DurabilityHost::observe_function_call(
             self,
@@ -3059,23 +3385,25 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                 Ok(grants) => grants,
                 Err(error) => return Ok(Err(error)),
             };
-            let authorized = self
-                .with_agent_authority_at_boundary(|ctx| {
-                    ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
-                    let wallet = ctx.agent_wallet_cards_snapshot();
-                    let context = super::owner_monomorphization_context(
-                        ctx.authority_component_metadata(),
-                        &ctx.owned_agent_id,
-                        &ctx.state.owner_context,
-                    );
-                    Ok::<_, permissions_types::PermissionError>((wallet, context))
-                })
-                .await?;
-            let (wallet, context) = match authorized {
-                Ok(authorized) => authorized,
-                Err(error) => return Ok(Err(error)),
-            };
-            let parent = match select_wallet_derivation_parent(&wallet, &context, &grants) {
+            let parent = match record_card_decision::<
+                _,
+                GolemPermissionsDeriveFromWalletDecision,
+                Card,
+                _,
+            >(self, Vec::new(), async |ctx| {
+                Ok(ctx
+                    .with_agent_authority_at_boundary(|ctx| {
+                        ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
+                        select_wallet_derivation_parent(
+                            &ctx.agent_wallet_cards_snapshot(),
+                            &caller_monomorphization_context(ctx),
+                            &grants,
+                        )
+                    })
+                    .await?)
+            })
+            .await?
+            {
                 Ok(parent) => parent,
                 Err(error) => return Ok(Err(error)),
             };
@@ -3115,39 +3443,50 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         {
             return Ok(Err(error));
         }
-        let authorized = self
-            .with_agent_authority_at_boundary(|ctx| {
-                ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
-                let wallet = ctx.agent_wallet_cards_snapshot();
-                let context = super::owner_monomorphization_context(
-                    ctx.authority_component_metadata(),
-                    &ctx.owned_agent_id,
-                    &ctx.state.owner_context,
-                );
-                let invocation_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
-                    permissions_types::PermissionError::NotPermitted(
-                        "derive-scope requires an active invocation".to_string(),
-                    )
-                })?;
-                Ok::<_, permissions_types::PermissionError>((wallet, context, invocation_key))
-            })
-            .await?;
-        let (wallet, context, invocation_key) = match authorized {
-            Ok(authorized) => authorized,
-            Err(error) => return Ok(Err(error)),
-        };
-        let parents = match resolve_scope_derivation_parents(
-            self,
-            &wallet,
-            &context,
-            &parents,
-            &invocation_key,
-        )
+        let card_ids = parents
+            .iter()
+            .filter_map(|parent| handle_card_id(self, parent))
+            .collect();
+        let decided = match record_card_decision::<
+            _,
+            GolemPermissionsDeriveScopeDecision,
+            Vec<DecidedScopeParent>,
+            _,
+        >(self, card_ids, async |ctx| {
+            Ok(ctx
+                .with_agent_authority_at_boundary(|ctx| {
+                    ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
+                    let invocation_key =
+                        ctx.state.get_current_idempotency_key().ok_or_else(|| {
+                            permissions_types::PermissionError::NotPermitted(
+                                "derive-scope requires an active invocation".to_string(),
+                            )
+                        })?;
+                    let wallet = ctx.agent_wallet_cards_snapshot();
+                    Ok(parents
+                        .iter()
+                        .map(|parent| {
+                            decide_scope_derivation_parent(ctx, &wallet, parent, &invocation_key)
+                        })
+                        .collect())
+                })
+                .await?)
+        })
         .await?
         {
-            Ok(parents) => parents,
+            Ok(decided) => decided,
             Err(error) => return Ok(Err(error)),
         };
+        let invocation_key = self
+            .state
+            .get_current_idempotency_key()
+            .ok_or_else(|| anyhow!("derive-scope requires an active invocation"))?;
+        let context = caller_monomorphization_context(self);
+        let parents =
+            match resolve_scope_derivation_parents(self, &context, &parents, decided).await? {
+                Ok(parents) => parents,
+                Err(error) => return Ok(Err(error)),
+            };
         let result = (|| {
             let grants = parse_derived_grant_sets(
                 &lower_positive,
@@ -3329,33 +3668,16 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 Ok(card) => card,
                 Err(error) => return Ok(Err(error)),
             };
-            let target = match resolve_install_target_context(self, target).await {
+            let target = match record_card_decision::<_, GolemPermissionsInstallDecision, _, _>(
+                self,
+                vec![source_card.card_id().0],
+                async |ctx| decide_install(ctx, &source_card, target).await,
+            )
+            .await?
+            {
                 Ok(target) => target,
                 Err(error) => return Ok(Err(error)),
             };
-            let target_recipient = agent_recipient_pattern(&target.context);
-            if let Err(error) = self
-                .with_agent_authority_at_boundary(|ctx| {
-                    ensure_install_permission_in_surface(
-                        &ctx.state.agent_effective_surface,
-                        &ctx.state.created_by_email,
-                        source_card.card_id(),
-                        &target_recipient,
-                    )
-                })
-                .await
-                .map_err(worker_error_to_permission_error)?
-            {
-                return Ok(Err(error));
-            }
-            if !card_matches_agent_recipient(&source_card, &target.context) {
-                return Ok(Err(
-                    permissions_types::PermissionError::InstallRecipientMismatch(
-                        "the target agent does not match any recipient pattern of the card"
-                            .to_string(),
-                    ),
-                ));
-            }
 
             let invocation_key = self
                 .state
@@ -3376,7 +3698,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                     (
                         StoredCard::Concrete(instantiate_polymorphic_card_for_agent(
                             source,
-                            &target.context,
+                            &target.holder,
                             self.derive_installed_child_card_id(&invocation_key, operation_index),
                             created_at,
                         )),
@@ -4450,9 +4772,9 @@ mod tests {
         assert!(
             matches!(
                 derive_grant_sets(&parent, &[requested_with_slot], &[], &ceiling, &[]),
-                Err(permissions_types::PermissionError::InvalidPattern(_))
+                Err(permissions_types::PermissionError::LowerBoundTooBroad(_))
             ),
-            "requested grants must be concrete: a slot variable is not resolved for the caller"
+            "a caller-scoped parent cannot delegate the slot to every holder of its agent type"
         );
 
         let sibling = permissions_types::PatternGrant {
@@ -4616,6 +4938,8 @@ mod tests {
             std::slice::from_ref(&retained),
             std::slice::from_ref(&upper_negative_to_add),
         )
+        .unwrap()
+        .as_concrete()
         .unwrap();
 
         assert_eq!(grants.lower_positive, parent.lower_positive);

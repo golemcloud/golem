@@ -53,6 +53,7 @@ const permissionHost = {
   lastDeriveParent: -1,
   lastScopeParentCount: -1,
   lastLifespan: null,
+  persistentTemplate: false,
   lentScope: false,
 }
 
@@ -69,6 +70,7 @@ function resetPermissionHost() {
   permissionHost.lastDeriveParent = -1
   permissionHost.lastScopeParentCount = -1
   permissionHost.lastLifespan = null
+  permissionHost.persistentTemplate = false
   permissionHost.lentScope = false
 }
 
@@ -154,6 +156,13 @@ function permissionHostOkCard(retPtr, handle) {
   memory.setInt32(retPtr + 4, handle, true)
 }
 
+function permissionHostOkPersistentCard(retPtr, handle) {
+  const memory = new DataView(instance.exports.memory.buffer)
+  memory.setUint8(retPtr, 0)
+  memory.setUint8(retPtr + 4, permissionHost.persistentTemplate ? 1 : 0)
+  memory.setInt32(retPtr + 8, handle, true)
+}
+
 function permissionHostErr(retPtr, kind, message) {
   const memory = new DataView(instance.exports.memory.buffer)
   memory.setUint8(retPtr, 1)
@@ -217,7 +226,7 @@ const permissionHostImports = {
       permissionHost.lastLifespan = hasLifespan
         ? permissionHostReadString(lifespanPtr, lifespanLen)
         : null
-      permissionHostOkCard(retPtr, permissionHostNewCard(
+      permissionHostOkPersistentCard(retPtr, permissionHostNewCard(
           [parent],
           hasLifespan !== 0 ? PERMISSION_HOST_DERIVED_EXPIRY : undefined,
         ))
@@ -230,7 +239,7 @@ const permissionHostImports = {
         permissionHostErr(retPtr, "not-permitted", "card:derive is not permitted")
         return
       }
-      permissionHostOkCard(retPtr, permissionHostNewCard(
+      permissionHostOkPersistentCard(retPtr, permissionHostNewCard(
           [11],
           hasLifespan !== 0 ? PERMISSION_HOST_DERIVED_EXPIRY : undefined,
         ))
@@ -454,6 +463,9 @@ const importObject = {
     },
     "reset-permission-host"() {
       resetPermissionHost()
+    },
+    "set-persistent-template"(enabled) {
+      permissionHost.persistentTemplate = enabled !== 0
     },
     "lend-permission-scope-card"() {
       // The lent scope card 13 has the root 12, which expires.

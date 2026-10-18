@@ -1,0 +1,79 @@
+name: 'Check Published SDKs'
+description: 'Build, deploy, and invoke the six streaming templates with pinned registry SDKs'
+inputs:
+  wasm-rquickjs-version:
+    description: 'wasm-rquickjs version used to build JavaScript components'
+    default: '0.4.13'
+  moonbit-version:
+    description: 'MoonBit compiler and core version'
+    default: '0.10.11+6ff76a5f9'
+runs:
+  using: 'composite'
+  steps:
+    - uses: ./.github/actions/setup-rust
+      with:
+        use-cache: 'false'
+        rust-targets: 'wasm32-wasip1 wasm32-wasip2'
+        install-cargo-make: 'false'
+        install-cargo-binstall: 'true'
+    - name: Setup Redis
+      uses: shogo82148/actions-setup-redis@v1.49.0
+      with:
+        redis-version: latest
+        auto-start: false
+    - name: Install WASM tools
+      shell: bash
+      run: |
+        cargo binstall --force --locked wasm-tools@1.248.0
+        cargo binstall --force --locked wit-bindgen-cli@0.40.0
+    - uses: ./.github/actions/setup-js-wasm-tools
+      with:
+        wasm-rquickjs-version: ${{ inputs.wasm-rquickjs-version }}
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
+    - uses: sbt/setup-sbt@v1
+    - uses: hustcer/setup-moonbit@v1
+      with:
+        version: ${{ inputs.moonbit-version }}
+        core-version: ${{ inputs.moonbit-version }}
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: sdks/go/golem/go.mod
+        cache: 'false'
+    - name: Check published SDK streaming templates
+      shell: bash
+      env:
+        # Empty environment values replace both file overrides and the test layer,
+        # including the Go workspace default, before normalization to None.
+        GOLEM_PATH: ''
+        GOLEM_RUST_PATH: ''
+        GOLEM_RUST_VERSION: ''
+        GOLEM_TS_PACKAGES_PATH: ''
+        GOLEM_TS_VERSION: ''
+        GOLEM_EFFECT_GOLEM_PATH: ''
+        GOLEM_EFFECT_GOLEM_VERSION: ''
+        GOLEM_SCALA_SDK_VERSION: ''
+        GOLEM_MOONBIT_SDK_PATH: ''
+        GOLEM_MOONBIT_SDK_VERSION: ''
+        GOLEM_GO_PATH: ''
+        GOLEM_GO_VERSION: ''
+        GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
+        GOLEM_CLI_TEST_SERVER_LOG_DIR: ${{ github.workspace }}/tmp/golem-cli-test-server-logs
+        QUIET: 'true'
+        WASI_SDK_PATH: /opt/wasi-sdk
+        # Do not resolve Scala SDKs from a previous publishLocal installation.
+        SBT_OPTS: -Dsbt.ivy.home=${{ runner.temp }}/published-sdks-ivy-${{ github.run_id }}-${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        mkdir -p tmp
+        cargo-test-r run --package golem-cli --test integration -- \
+          app::external_durable_streams::rust_streaming_template_durable_streams_walkthrough \
+          app::external_durable_streams::typescript_streaming_template_durable_streams_walkthrough \
+          app::external_durable_streams::effect_streaming_template_durable_streams_walkthrough \
+          app::external_durable_streams::scala_streaming_template_durable_streams_walkthrough \
+          app::external_durable_streams::moonbit_streaming_template_durable_streams_walkthrough \
+          app::external_durable_streams::go_streaming_template_durable_streams_walkthrough \
+          --exact --nocapture --test-threads=1 --report-time \
+          2>&1 | tee tmp/check-published-sdks.log

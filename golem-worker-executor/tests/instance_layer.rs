@@ -288,6 +288,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
     // Deliberately distinct dispatch metadata models a retained entity pin. These synthetic
     // scopes test namespace selection only; genuine reconstruction is covered separately.
     let wallet_cards = active.primary().get_wallet_cards().await?;
+    let mut live_decisions = Vec::new();
     for historical in [false, true] {
         let parent_start = active.execution().oplog().current_oplog_index().await;
         let parent_id = OwnerInvocationId::Agent(parent_start);
@@ -322,13 +323,24 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         .with_authority_wallet(wallet_cards.clone());
         stage_entity_boundary(&active, &scope).await?;
         let claim = if historical {
-            // The body reads its wallet once, and each of its two scope derivations checks the
-            // liveness of every wallet parent, so its history records each of those answers.
+            // The body reads its wallet once. Each of its two scope derivations records its
+            // authorization decision and then checks the liveness of every wallet parent, and
+            // the refused wallet derivation records its decision. The decisions are copied from
+            // the live body, which decided on the same wallet cards.
             record_entity_self_wallet(&active, parent_start.next(), &wallet_cards).await?;
-            let checked_parents = wallet_cards.iter().chain(&wallet_cards);
-            for (ordinal, card) in (1u64..).zip(checked_parents) {
-                record_live_card_liveness(&active, parent_start.next(), ordinal, card).await?;
+            let mut decisions = live_decisions.iter();
+            let mut ordinal = 1u64;
+            for _ in 0..2 {
+                let decision = decisions.next().expect("a live scope-derivation decision");
+                record_entity_call(&active, parent_start.next(), ordinal, decision).await?;
+                ordinal += 1;
+                for card in &wallet_cards {
+                    record_live_card_liveness(&active, parent_start.next(), ordinal, card).await?;
+                    ordinal += 1;
+                }
             }
+            let decision = decisions.next().expect("a live wallet-derivation decision");
+            record_entity_call(&active, parent_start.next(), ordinal, decision).await?;
             finish_entity_boundary(&active, parent_start.next()).await?;
             active
                 .execution()
@@ -404,7 +416,8 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                         matches!(wrong, Err(types::PermissionError::LowerBoundTooBroad(_))),
                         "other namespace scope must be refused: historical={historical}, {wrong:?}"
                     );
-                    // A wrong namespace must be refused before persistent creation, including replay.
+                    // A wrong namespace must be refused before persistent creation. Replay returns
+                    // the recorded refusal.
                     let wrong = derive::Host::derive_from_wallet(
                         ctx,
                         vec![unexpected],
@@ -446,9 +459,112 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .await?;
         } else {
             finish_entity_boundary(&active, parent_start.next()).await?;
+            live_decisions = recorded_entity_calls(
+                &active,
+                parent_start.next(),
+                &[
+                    HostFunctionName::GolemPermissionsDeriveScopeDecision,
+                    HostFunctionName::GolemPermissionsDeriveFromWalletDecision,
+                ],
+            )
+            .await;
         }
         drop(parent);
     }
+    Ok(())
+}
+
+/// A completed durable call of an entity body: its function, function type, request and
+/// response.
+type RecordedEntityCall = (
+    HostFunctionName,
+    DurableFunctionType,
+    Option<OplogPayload<HostRequest>>,
+    Option<OplogPayload<HostResponse>>,
+    Option<String>,
+);
+
+/// The completed calls of `functions` that the entity body started at `entity_start` recorded,
+/// in oplog order.
+async fn recorded_entity_calls(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start: OplogIndex,
+    functions: &[HostFunctionName],
+) -> Vec<RecordedEntityCall> {
+    let oplog = active.execution().oplog();
+    let tip = oplog.current_oplog_index().await;
+    let entries = oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap();
+    entries
+        .iter()
+        .filter_map(|(index, entry)| match entry {
+            OplogEntry::Start {
+                parent_start_index: Some(parent),
+                function_name,
+                durable_function_type,
+                request,
+                denial,
+                ..
+            } if *parent == entity_start && functions.contains(function_name) => {
+                let response =
+                    entries
+                        .range(index.next()..)
+                        .find_map(|(_, entry)| match entry {
+                            OplogEntry::End {
+                                start_index,
+                                response,
+                                ..
+                            } if start_index == index => Some(response.clone()),
+                            _ => None,
+                        })?;
+                Some((
+                    function_name.clone(),
+                    durable_function_type.clone(),
+                    request.clone(),
+                    response,
+                    denial.clone(),
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Records `call` again as the `ordinal`-th durable call of the entity body started at
+/// `entity_start`.
+async fn record_entity_call(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start: OplogIndex,
+    ordinal: u64,
+    call: &RecordedEntityCall,
+) -> Result<(), WorkerExecutorError> {
+    let (function_name, durable_function_type, request, response, denial) = call.clone();
+    let oplog = active.execution().oplog();
+    let start_index = oplog
+        .add(OplogEntry::Start {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: Some(entity_start),
+            function_name,
+            invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
+            observational_owner: None,
+            request,
+            durable_function_type,
+            span_started: None,
+            denial,
+        })
+        .await?;
+    oplog
+        .add(OplogEntry::End {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            start_index,
+            response,
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
     Ok(())
 }
 

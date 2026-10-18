@@ -72,6 +72,7 @@ mod resource_producers;
 pub mod retry_lifecycle;
 pub mod retry_policies;
 pub mod revert;
+pub mod revert_replay_tail;
 pub mod rpc;
 pub mod scalability;
 pub mod scheduler_storage;

@@ -65,6 +65,8 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 ## Value Syntax
 
+Pass one native argument per user-supplied `input` field in declaration order, not one JSON object wrapping the input map. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. No-input methods take no arguments, not `'{}'`. `--format json` controls output only. Load [`golem-invoke-agent-ts`](/v1.6/how-to-guides/ts/golem-invoke-agent-ts) for the string fallback and HTTP body rules; awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
 The agent ID parameters and method arguments use **TypeScript syntax**:
 
 - Field names use `camelCase`
@@ -72,6 +74,8 @@ The agent ID parameters and method arguments use **TypeScript syntax**:
 - Records: `{ fieldOne: 1, fieldTwo: "hello" }`
 - Variants: `{ tag: "variant-name", value: 42 }`
 - Tuples: `[1, "hello"]`
+
+This example assumes `input: { request: z.object({ to: z.string(), subject: z.string(), body: z.string() }) }`. The unquoted fields belong to the single `request` value, not to the input map:
 
 ```shell
 golem agent invoke --trigger 'MyAgent("user-123")' sendEmail '{ to: "alice@example.com", subject: "Hello", body: "World" }'

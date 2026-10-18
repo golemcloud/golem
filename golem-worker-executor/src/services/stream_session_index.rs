@@ -898,7 +898,10 @@ impl StreamSessionIndexService {
                         }
                         if let OplogEntry::StreamSession { record, .. } = entry
                             && matches!(
-                                oplog.download_payload(id, mode, record.clone()).await?,
+                                oplog
+                                    .download_payload(id, mode, record.clone())
+                                    .await
+                                    .map_err(String::from)?,
                                 StreamSessionRecord::ForkCut(_)
                             )
                         {
@@ -958,7 +961,10 @@ impl StreamSessionIndexService {
             while let Some((_, OplogEntry::StreamRegistered { record, .. })) =
                 entries.last_key_value()
             {
-                let record = oplog.download_payload(id, mode, record.clone()).await?;
+                let record = oplog
+                    .download_payload(id, mode, record.clone())
+                    .await
+                    .map_err(String::from)?;
                 if !matches!(
                     record.coordinate,
                     golem_common::model::durable_stream::StreamRegistrationRecordCoordinate::Nested { .. }
@@ -1070,7 +1076,7 @@ impl StreamSessionIndexService {
                             &decoded
                         }
                         OplogPayload::External { cached: None, .. } => {
-                            decoded = oplog.download_payload(id, mode, record.clone()).await?;
+                            decoded = oplog.download_payload(id, mode, record.clone()).await.map_err(String::from)?;
                             &decoded
                         }
                     };

@@ -438,7 +438,7 @@ fn derive_child_raw(
   parent : @types.PermissionCard,
   bounds : Bounds,
   lifespan : Lifespan?,
-) -> PermissionCard raise PermissionError {
+) -> PersistentCard raise PermissionError {
   let raw = lift_result(
     @rawDerive.derive_(
       parent,
@@ -449,7 +449,7 @@ fn derive_child_raw(
       lifespan_to_raw(lifespan),
     ),
   )
-  PermissionCard::from_raw(raw)
+  PersistentCard::from_raw(raw)
 }
 
 ///|
@@ -513,11 +513,13 @@ fn view_from_raw(view : @raw.CardView) -> CardView {
 /// negative lists name the denials to add. A child of a card with an expiry
 /// needs a `lifespan` that ends no later than the parent. Requires
 /// `card:derive` authority.
+/// Slots name the eventual holder. The host checks attenuation for every
+/// holder and supplies the concrete or template result tag.
 pub fn PermissionCard::derive_child(
   self : PermissionCard,
   bounds : Bounds,
   lifespan? : Lifespan,
-) -> PermissionCard raise PermissionError {
+) -> PersistentCard raise PermissionError {
   derive_child_raw(self.borrow_raw(), bounds, lifespan)
 }
 
@@ -567,8 +569,8 @@ pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
 /// It has the operations of `PermissionCard`, with the same borrowing and
 /// consuming rules, and the same non-forgeability: there is no public
 /// constructor, no JSON codec, and decoding never yields a second card for a
-/// handle that a card already holds. `derive_child` returns a concrete
-/// `PermissionCard`. As an agent or tool parameter or return value its schema
+/// handle that a card already holds. `derive_child` returns a host-tagged
+/// `PersistentCard`. As an agent or tool parameter or return value its schema
 /// is `permission-card { polymorphic: true }`; a `PermissionCard` declares
 /// `polymorphic: false`. A received card decodes into the type that the
 /// parameter or return value declares, and the host refuses an agent call
@@ -624,21 +626,22 @@ pub fn PolymorphicPermissionCard::inspect(
 }
 
 ///|
-/// Derives a narrower concrete child card from this card. This card is kept.
+/// Derives a narrower persistent child card from this card. This card is kept.
 ///
 /// The host accepts a template parent only when this card is in the caller's
 /// wallet, so a template card received as an agent or tool value fails with
 /// `PermissionError::NotPermitted`. The host resolves the slot variables of
 /// this card for the caller, and
-/// checks `bounds` against the result. The requested grants must be concrete:
-/// a slot variable in `bounds` raises `PermissionError::InvalidPattern`. The
+/// checks `bounds` against the result. Slots in the requested grants name the
+/// eventual holder, not caller metadata. The host checks attenuation for every
+/// holder and reports whether the result is concrete or a template. The
 /// rules for `bounds` and `lifespan` are those of
 /// `PermissionCard::derive_child`. Requires `card:derive` authority.
 pub fn PolymorphicPermissionCard::derive_child(
   self : PolymorphicPermissionCard,
   bounds : Bounds,
   lifespan? : Lifespan,
-) -> PermissionCard raise PermissionError {
+) -> PersistentCard raise PermissionError {
   derive_child_raw(self.borrow_raw(), bounds, lifespan)
 }
 
@@ -765,11 +768,12 @@ pub fn wallet_version() -> WalletVersionToken {
 ///
 /// The four lists of `bounds` are the complete requested lattice. Fails with
 /// `PermissionError::NotPermitted` when the wallet does not grant the requested
-/// authority.
+/// authority. Slots name the eventual holder, not caller metadata. The host
+/// checks attenuation for every holder and supplies the result tag.
 pub fn derive_from_wallet(
   bounds : Bounds,
   lifespan? : Lifespan,
-) -> PermissionCard raise PermissionError {
+) -> PersistentCard raise PermissionError {
   let raw = lift_result(
     @rawDerive.derive_from_wallet(
       grants_to_raw(bounds.lower_positive),
@@ -779,7 +783,7 @@ pub fn derive_from_wallet(
       lifespan_to_raw(lifespan),
     ),
   )
-  PermissionCard::from_raw(raw)
+  PersistentCard::from_raw(raw)
 }
 
 ///|
@@ -880,7 +884,8 @@ pub fn ScopeCard::drop(self : ScopeCard) -> Unit {
 /// host resolves for the caller, and `scope_parents` are scope cards of the
 /// current invocation; `ScopeCard::parents` of the result names the root cards
 /// of all of them. The four lists of `bounds` are the complete requested
-/// lattice, and its grants must be concrete. The host accepts a persistent
+/// lattice, and its grants must be concrete. Slots fail with
+/// `PermissionError::InvalidPattern`. The host accepts a persistent
 /// parent, concrete or template, only when it is in the caller's wallet, and
 /// fails with `PermissionError::NotPermitted` otherwise, for example for a
 /// card that this agent derived or received as a value.

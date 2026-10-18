@@ -433,9 +433,67 @@ fn upload(&mut self, file: UnstructuredBinary<String>) -> u64;
 </Tabs.Tab>
 <Tabs.Tab>
 Use `golem.schema.UnstructuredBinary[M]` for raw binary bodies. Use `String` as the type argument for unrestricted MIME types, or a string-literal union such as `"image/png" | "image/jpeg"` to restrict them. `golem.schema.UnstructuredText[L]` provides the corresponding raw-text mapping. See the [Scala HTTP parameter guide](/next/how-to-guides/scala/golem-http-params-scala) for examples.
+
+```scala
+import golem.BaseAgent
+import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint}
+import golem.schema.{UnstructuredBinary, UnstructuredText}
+import scala.concurrent.Future
+
+@agentDefinition(mount = "/files")
+trait Files extends BaseAgent {
+  class Id()
+
+  @endpoint(method = "POST", path = "/echo")
+  def echo(file: UnstructuredBinary[String]): Future[UnstructuredBinary[String]]
+
+  @endpoint(method = "GET", path = "/hello")
+  def hello(): Future[UnstructuredText[String]]
+}
+
+@agentImplementation()
+final class FilesImpl() extends Files {
+  override def echo(file: UnstructuredBinary[String]): Future[UnstructuredBinary[String]] =
+    Future.successful(file)
+
+  override def hello(): Future[UnstructuredText[String]] =
+    Future.successful(UnstructuredText.fromInline("Hello", "en"))
+}
+```
+
+`POST /files/echo` accepts the raw request body and returns it with its MIME type.
+`GET /files/hello` returns raw text, not a JSON object.
 </Tabs.Tab>
 <Tabs.Tab>
 Use `@schema.UnstructuredBinary[M]` for raw binary bodies and `@schema.UnstructuredText[L]` for raw text, from `golemcloud/golem_sdk/schema`. The type arguments implement `AllowedMimeTypes` or `AllowedLanguages`; use `AnyMimeType` or `AnyLanguage` for unrestricted values. A bare `Bytes` parameter also accepts a raw binary body when it is the only body parameter. Use `UnstructuredBinary[M]` for MIME restrictions and inline-or-URL values. See the [MoonBit HTTP parameter guide](/next/how-to-guides/moonbit/golem-http-params-moonbit) for examples.
+
+Import `golemcloud/golem_sdk/schema` as `@schema` in `moon.pkg`.
+
+```moonbit
+#derive.agent
+#derive.mount("/files")
+pub(all) struct Files {}
+
+fn Files::new() -> Files {
+  Files::{}
+}
+
+#derive.endpoint(post = "/echo")
+pub fn Files::echo(
+  self : Self,
+  file : @schema.UnstructuredBinary[@schema.AnyMimeType],
+) -> @schema.UnstructuredBinary[@schema.AnyMimeType] {
+  file
+}
+
+#derive.endpoint(get = "/hello")
+pub fn Files::hello(self : Self) -> @schema.UnstructuredText[@schema.AnyLanguage] {
+  @schema.UnstructuredText::inline("Hello", language="en")
+}
+```
+
+`POST /files/echo` accepts and returns the raw binary body. `GET /files/hello`
+returns raw text. Returning a URL value instead redirects the HTTP caller.
 </Tabs.Tab>
 <Tabs.Tab>
 ```go

@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::dns_target;
-use crate::durable_host::concurrent::{
-    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
-};
+use crate::durable_host::concurrent::reserve_invocation_id_before_await;
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, run_deniable_access_classified, wasi_sockets_view,
@@ -38,29 +36,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
-        let live = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .state
-                .is_live()
-        });
-        let denial = if live {
-            match dns_target(&name) {
-                Ok(target) => match authorize_live_permissions_at_serialized_access(
-                    store,
-                    durable_worker_ctx::<Ctx, U>,
-                    &[target],
-                )
-                .await
-                {
-                    Ok(Ok(_)) => None,
-                    Ok(Err(error)) => Some(error.to_string()),
-                    Err(error) => Some(error.to_string()),
-                },
-                Err(error) => Some(error.to_string()),
-            }
-        } else {
-            None
-        };
+        let targets = dns_target(&name)
+            .map(|target| vec![target])
+            .map_err(|error| error.to_string());
 
         // Worker-level retry classification, mirroring the P2 `resolve_addresses` path: a
         // transient resolver failure raises a retry trap (the worker goes to `Retrying` per its
@@ -79,7 +57,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
             store,
             HostRequestP3SocketsResolveName { name: name.clone() },
             DurableFunctionType::ReadRemote,
-            denial,
+            targets,
             |response| {
                 response
                     .result

@@ -12,10 +12,14 @@ type = "LocalFileSystem"
 
 [component_compilation_service.compile_worker]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
+queue_capacity = 100
+upload_queue_capacity = 100
 
 [component_compilation_service.compile_worker.retries_on_unavailable]
 max_attempts = 3
@@ -70,9 +74,12 @@ type = "Enabled"
 
 [registry_service.component_compilation.config]
 connect_timeout = "10s"
+connection_pool_size = 4
+enqueue_timeout = "1s"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 
 [registry_service.component_compilation.config.retries_on_unavailable]
@@ -121,6 +128,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [registry_service.initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
@@ -235,6 +244,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [shard_manager]
 bind_address = "127.0.0.1"
@@ -274,9 +285,11 @@ min_executors = 2
 
 [shard_manager.registry_service]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 52428800
 
 [shard_manager.registry_service.invalidation_event_subscriber]
@@ -303,10 +316,12 @@ cache_ttl = "5m"
 [shard_manager.worker_executors]
 assign_shards_timeout = "5s"
 connect_timeout = "10s"
+connection_pool_size = 4
 health_check_timeout = "2s"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 revoke_shards_timeout = "5s"
 
@@ -556,9 +571,11 @@ page_size = 128
 
 [worker_executor.public_worker_api]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 
 [worker_executor.public_worker_api.retries_on_unavailable]
@@ -594,9 +611,11 @@ max_entry_age = "2h"
 
 [worker_executor.registry_service]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 52428800
 
 [worker_executor.registry_service.invalidation_event_subscriber]
@@ -657,9 +676,11 @@ multiplier = 3.0
 
 [worker_executor.shard_manager]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 
 [worker_executor.shard_manager.retries]
@@ -765,6 +786,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [worker_service.http_session]
 cleanup_timeout = "2s"
@@ -800,9 +823,11 @@ sse_keep_alive_interval = "15s"
 
 [worker_service.registry_service]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 52428800
 
 [worker_service.registry_service.invalidation_event_subscriber]
@@ -832,9 +857,11 @@ invalidation_min_delay = "500ms"
 
 [worker_service.shard_manager]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 
 [worker_service.shard_manager.retries]
@@ -861,10 +888,12 @@ hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 
 [worker_service.worker_executor]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
 max_concurrent_oplog_entry_reads = 4
+max_connection_age = "1m"
 max_message_size = 33554432
 
 [worker_service.worker_executor.retries]
@@ -917,10 +946,14 @@ type = "Disabled"
 #
 # [component_compilation_service.compile_worker]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
+# queue_capacity = 100
+# upload_queue_capacity = 100
 #
 # [component_compilation_service.compile_worker.retries_on_unavailable]
 # max_attempts = 3
@@ -992,9 +1025,12 @@ type = "Disabled"
 #
 # [registry_service.component_compilation.config]
 # connect_timeout = "10s"
+# connection_pool_size = 4
+# enqueue_timeout = "1s"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 #
 # [registry_service.component_compilation.config.retries_on_unavailable]
@@ -1048,6 +1084,8 @@ type = "Disabled"
 # http2_initial_connection_window_size = 1048576
 # http2_initial_stream_window_size = 1048576
 # http2_max_header_list_size = 65536
+# http2_max_local_error_reset_streams = 1024
+# http2_max_pending_accept_reset_streams = 20
 #
 # [registry_service.initial_accounts.builtin_plugin_owner]
 # email = "builtin-plugin-owner@golem.cloud"
@@ -1162,6 +1200,8 @@ type = "Disabled"
 # http2_initial_connection_window_size = 1048576
 # http2_initial_stream_window_size = 1048576
 # http2_max_header_list_size = 65536
+# http2_max_local_error_reset_streams = 1024
+# http2_max_pending_accept_reset_streams = 20
 #
 # [shard_manager]
 # bind_address = "127.0.0.1"
@@ -1206,9 +1246,11 @@ type = "Disabled"
 #
 # [shard_manager.registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 #
 # [shard_manager.registry_service.invalidation_event_subscriber]
@@ -1235,10 +1277,12 @@ type = "Disabled"
 # [shard_manager.worker_executors]
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # health_check_timeout = "2s"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # revoke_shards_timeout = "5s"
 #
@@ -1518,9 +1562,11 @@ type = "Disabled"
 #
 # [worker_executor.public_worker_api]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 #
 # [worker_executor.public_worker_api.retries_on_unavailable]
@@ -1556,9 +1602,11 @@ type = "Disabled"
 #
 # [worker_executor.registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 #
 # [worker_executor.registry_service.invalidation_event_subscriber]
@@ -1624,9 +1672,11 @@ type = "Disabled"
 #
 # [worker_executor.shard_manager]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 #
 # [worker_executor.shard_manager.retries]
@@ -1754,6 +1804,8 @@ type = "Disabled"
 # http2_initial_connection_window_size = 1048576
 # http2_initial_stream_window_size = 1048576
 # http2_max_header_list_size = 65536
+# http2_max_local_error_reset_streams = 1024
+# http2_max_pending_accept_reset_streams = 20
 #
 # [worker_service.http_session]
 # cleanup_timeout = "2s"
@@ -1789,9 +1841,11 @@ type = "Disabled"
 #
 # [worker_service.registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 #
 # [worker_service.registry_service.invalidation_event_subscriber]
@@ -1821,9 +1875,11 @@ type = "Disabled"
 #
 # [worker_service.shard_manager]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 #
 # [worker_service.shard_manager.retries]
@@ -1850,10 +1906,12 @@ type = "Disabled"
 #
 # [worker_service.worker_executor]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
 # max_concurrent_oplog_entry_reads = 4
+# max_connection_age = "1m"
 # max_message_size = 33554432
 #
 # [worker_service.worker_executor.retries]

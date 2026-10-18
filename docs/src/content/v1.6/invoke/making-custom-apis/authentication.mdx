@@ -14,7 +14,7 @@ Golem supports the following OIDC provider types: **google**, **facebook**, **mi
 For Google, here is the direct link to register your app with [Google Identity Provider](https://console.cloud.google.com/apis/credentials).
 Make sure your app with a redirect URL and get the client-id and client secret.
 
-When using a locally executed Golem instance during development, the redirect URI can be `http://localhost:9006/auth/callback`. Otherwise it should be be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API in Golem.
+The redirect URI must have the same origin as the HTTP API deployment that uses the security scheme. When using a locally executed Golem instance during development, the default deployment domain is `<app>.localhost:9006`, so the redirect URI can be `http://<app>.localhost:9006/auth/callback`. HTTP redirect URIs are accepted only for `localhost`, `*.localhost` and loopback IP addresses. Otherwise it should be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API in Golem.
 
 The `/auth/callback` part is just an example and it can be anything, as far as it doesn't collide with any other existing routes.
 
@@ -233,7 +233,7 @@ golem api security-scheme create my-security \
   --frontend-origin "https://frontend.example.com"
 ```
 
-The upstream `--redirect-url` belongs to the identity provider. Each `--frontend-redirect-uri` is an exact URI where Golem may return the frontend after login. Each `--frontend-origin` is allowed to call the generated token endpoint through CORS. Production URIs must use HTTPS; loopback HTTP URIs are accepted for local development.
+The upstream `--redirect-url` belongs to the identity provider. Each `--frontend-redirect-uri` is an exact URI where Golem may return the frontend after login. Each `--frontend-origin` is allowed to call the generated token endpoint through CORS. Production URIs must use HTTPS; loopback HTTP URIs (`localhost`, `*.localhost`, `127.0.0.1` and `[::1]`) are accepted for local development.
 
 The security scheme's frontend origins apply only to its generated authorization and token endpoints. Configure [CORS on the protected application routes](/v1.6/invoke/making-custom-apis#cors) separately so the browser can send its bearer-authenticated requests:
 

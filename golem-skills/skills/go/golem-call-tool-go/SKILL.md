@@ -167,6 +167,12 @@ if !found {
 	return fmt.Errorf("the greeter tool is not available to this agent")
 }
 client := greeter.Bind()
+if cmd, known := greeter.Command([]string{"greet"}); known && cmd.Callable() {
+	fmt.Println(golem.Must(cmd.Input().ToJSONSchema(true)))
+	if output, hasOutput := cmd.Output().Get(); hasOutput {
+		fmt.Println(golem.Must(output.ToJSONSchema(true)))
+	}
+}
 out, err := client.Call([]string{"greet"}, map[string]any{
 	"name": "ada", "loud": false, "times": 2, "title": nil,
 })
@@ -178,7 +184,7 @@ if errors.As(err, &ce) && ce.Kind == tool.CallDeclaredError {
 
 - Supply the fields of the command's input record by their wire names: inherited globals, positionals, the tail (a list), options and flags. An omitted scalar option, positional with a declared default, or flag takes its declared default (a count flag takes 0), and `cmd.Input().ToJSONSchema` does not require it. Supply the tail and repeatable options explicitly.
 - `client.Start(path, args, stdin)` runs a command that reads standard input or has outputs, and returns the running invocation with every output the command declares; `client.Call` discards them.
-- `cmd.Input()` is the input record of a callable command (`cmd.Callable()`) and `cmd.Output()` the result type, `golem.None` when there is none, as `schema.Ref`s that pack, unpack and render JSON Schema; `tool.Command(path)`, `tool.Commands()` and `cmd.Errors()` describe the rest. Arguments that do not match fail with `*schema.ValidationError` before anything is sent. A snapshot never refreshes itself.
+- `cmd.Input()` returns a `schema.Ref` for the input record of a callable command (`cmd.Callable()`). `cmd.Output()` returns a `golem.Option[schema.Ref]`, with `golem.None[schema.Ref]()` when there is no result. Use `Get()` and check its boolean before accessing the result schema. A `schema.Ref` packs and unpacks canonical JSON and renders JSON Schema; `tool.Command(path)`, `tool.Commands()` and `cmd.Errors()` describe the rest. Arguments that do not match fail with `*schema.ValidationError` before anything is sent. A snapshot never refreshes itself.
 - `reflection.BindTool(name)` (no error; nothing is checked until a call) gives a dynamic client that forwards already packed `golem.TypedValue`s unchecked, with the same `Call` and `Start`; its `Start` takes `tool.Streams{Stdout: true, Stderr: true}` to request outputs, which must match what the command declares.
 
 ### Related Skills

@@ -1118,11 +1118,15 @@ Environment and application deletion invalidate component metadata, environment 
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
 of admitting requests against a retiring cached owner.
 
-External metadata observation uses a fallible FIFO status read. If the actor has stopped, the
-lookup takes the cold oplog lifecycle guard, verifies retirement, joins writer completion, and
-reconstructs from persisted metadata and the oplog. A failed deletion can therefore leave a
-cached but stopped worker observable until removal is retried. Missing storage means absence;
-failed reconstruction means an error, never a stale cached status or permission to restart work.
+External metadata observation uses a fallible FIFO status read that repairs a detached projection
+before returning it. Unreadable history returns its cause rather than a stale status; once history
+reads again, the next observation reconstructs the status without starting the worker. Cleanup
+keeps its non-repairing FIFO read so an unreadable oplog cannot prevent runtime teardown. If the
+actor has stopped, the lookup takes the cold oplog lifecycle guard, verifies retirement, joins
+writer completion, and reconstructs from persisted metadata and the oplog. A failed deletion can
+therefore leave a cached but stopped worker observable until removal is retried. Missing storage
+means absence; failed reconstruction means an error, never a stale cached status or permission to
+restart work.
 
 Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
 The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
@@ -1194,6 +1198,11 @@ ends in infrastructure recovery or in a stop with `OplogFailed` (`unreadable_opl
 pending invocation whose entry or payload does not hydrate takes the same path:
 `hydrate_pending_invocation` classifies the failure as `RecoveryRequired` or `OplogFailed`, and the
 loop does not retry it immediately.
+Status rebuilds also classify retained `StreamSession` payload reads through
+`OplogServiceOps::download_payload`: a backend failure gives `RecoveryRequired`, while
+a missing reference or undecodable payload gives `OplogFailed` for that agent, with the entry
+index and cause. Reverted payloads do not participate in the rebuild. Regions that invalidate
+even the empty status baseline are corrupt history; they do not mean the worker is absent.
 `AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
@@ -1271,6 +1280,8 @@ filesystem generation. Durable storage and cache authority remain fenced until v
 succeeds; old attempt handles retain their original error. Cleanup with no verifiable
 owning-component repair remains a failure: successful filesystem deletion cannot erase an
 unverified metering settlement, including `ObserverLost` during startup rollback.
+Before awaiting startup filesystem cleanup, drop any filesystem context, worker context or Store
+that owns open nodes. Cleanup drains those nodes; retaining one across the drain waits on itself.
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
@@ -1632,6 +1643,14 @@ recorded request and the denial, so live execution and recovery produce the same
 a denied `Start` without a terminal does not return `Incomplete`: the session appends the denied
 `End` and returns `Replayed`. A crash between the two entries therefore cannot run the denied
 operation. Call sites keep their replay branch free of authorization.
+
+Accessor permission checks belong to owned call initiation (`AccessPermissionCheck`), after the
+claim establishes that the call is new and before its immutable `Start`. Store liveness alone
+cannot classify a call: new work can reach the replay tail before live publication, and historical
+retained Starts can be claimed after publication. Claimed calls keep their recorded decision;
+only new calls authorize, including incomplete entities continuing beside sibling history. HTTP
+quota admission follows authorization in the request builder, still before `Start`, and preserves
+typed quota traps. Denied calls and historical claims do not consume HTTP quota.
 
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
 (`p3/http/send.rs`). Every method uses `Cancellable`: a guest drop records `Cancelled` and
@@ -2449,6 +2468,14 @@ undo the committed `Revert`. After the `Revert` entry commits, the revert delete
 snapshot names of the dropped region that no live record outside it uses
 (`reverted_snapshot_names`, `RevertHold::delete_snapshots`). A refused commit deletes nothing.
 
+Guest `revert-agent` resolves a count-based target only after its call resolves as new work,
+before authorization and `Start`. The permission resource is the resolved oplog index, and the
+request records the resolved cut and observed target tip. Incomplete repair reuses that request
+rather than resolving the count against newer target history. Resolution failures use the same
+immutable rejected-call path as permission refusals: `Start.denial` freezes the error and `End`
+returns it. Recovery of either a completed failure or a rejected `Start` without `End` never
+resolves the target again or dispatches the revert.
+
 Filesystem metadata has one deliberately deterministic exception to ordinary durable host-call
 recording. P2/P3 `stat` and `stat-at` of Golem's file at the exact path of a **read-only** component
 or pinned entity-activation initial file still execute the sandbox stat, but clear access and
@@ -2475,22 +2502,33 @@ guest paths, and its response is `Ok(())` or `Err(reason)`. A recorded denial re
 denial as their `not-permitted` result; their immutable initial-file fast path records a separate
 check. P3 `write-via-stream` and `append-via-stream` record the decision in their admission call
 (`admit_stream_write`). The live check (`live_permission_decision`,
-`p3_live_permission_decision`) runs only while the Store is live, before the call writes its
+`start_authorized_access`) runs after the call resolves as new, before the call writes its
 `Start`. A denied check records the denial in its `Start` (`start_live_denied`, or
 `AccessClaimOptions::denial` in `run_deniable_filesystem_access`), so recovery of an incomplete
 denied `Start` completes it with the same denied response and the protected effect does not run.
 An incomplete `Start` without a denial was allowed, so its repair completes it as allowed without a
 new check. A new check in the replay tail has no recorded `Start`, so the call switches to live and
-checks the policy; a P3 call that becomes live after its Store replayed at the call checks after
-its `Start`. P3 imports that await before their check reserve their invocation id first
+checks the policy before appending its `Start`. P3 imports that await before their check reserve their invocation id first
 (`reserve_invocation_id_before_await`). Test:
 `tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`.
+
+RDBMS connection query-stream and transaction query, execute and query-stream authorize through
+`start_with_options_and_authorize`, after replay and protocol readiness resolve but before `Start`.
+Their denial builders record the same query-execution failure for all database engines.
+`replay_or_persist_failure` restores a recorded denial before considering resource loss: an
+incomplete denied call remains denied; an admitted incomplete call still reports transaction or
+stream loss without repeating its database effect.
 
 P2 TCP `start-connect` records its decision in the same way, in a
 `sockets::tcp::permissions::check-connect` call (the request holds the remote address). A recorded
 denial returns `access-denied`, and its replay does not connect. A denial is recorded in the check
 `Start`, so the recovery of an incomplete denied check does not connect either. Test:
 `tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
+
+P2 UDP records explicit remote-address permission decisions in
+`sockets::udp::permissions::check`, for stream creation and addressed datagram batches. Its
+request holds the addresses; replay returns the recorded decision without consulting current
+permissions. Connected sends without an explicit address retain their stream's admission.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
@@ -2753,11 +2791,10 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
   and pins until their own live transition, never borrowing the latest live snapshot. Guest
   `self-wallet` and `self-version` reads are `ReadLocal` calls whose `End` records the exact
   observed view, so replay returns each read's own observation whatever card events it applies
-  around it; an incomplete read completes live at its own `Start`. Authorization decisions such
-  as `inspect-card` and derivation are not recorded and still evaluate the replayed wallet; a card
-  event between two of them can diverge the same way. The root `Start` records the pinned
-  chain plan; descendants record root plus position, and every occurrence retains the original
-  calling principal and typed static installation parameters. Component and host leaves use the
+  around it; an incomplete read completes live at its own `Start`. Card authorization decisions
+  are recorded in the same way (see "Card authorization decisions"). The root `Start` records the
+  pinned chain plan; descendants record root plus position, and every occurrence retains the
+  original calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.
 - Middleware can start its next layer repeatedly and concurrently. Each result has independent
   `get`/`cancel`; dropping the observer does not cancel execution. Handler return revokes new
@@ -2820,6 +2857,17 @@ satisfies one does not imply the others.
 
 ## Permission-card handles
 
+Persistent `derive` and `derive-from-wallet` return the host-tagged `persistent-card` sum:
+`concrete` or `template`. Child slots name the eventual installed holder, not the caller.
+A template parent must be in the caller's wallet and is resolved for that caller. Every possible
+child instantiation must attenuate against that resolved parent. The stored card keeps its original
+slots; the universal envelope is proof only. Explicit derivation inherits the exact parent
+negatives and adds requested denials; wallet derivation takes complete bounds. Slot-bearing denials
+cannot supply universal proof evidence; concrete inherited denials remain. `derive-scope` stays
+concrete and rejects requested slots with `InvalidPattern` and an explicit message. A slot-bearing
+tool owner does not resolve aliases against caller metadata; metadata-dependent short flags are
+rejected instead.
+
 A persistent permission-card handle (from `self-wallet`, `derive`, `derive-from-wallet`, or a
 received value) caches no liveness. Every guest operation that resolves one — the `id`, `parents`
 and `expires-at` accessors, `inspect-card`, `derive`, `derive-scope` and `install-card` — first
@@ -2827,9 +2875,10 @@ runs a `ReadRemote` durable call, `golem::permissions::types::card-liveness`
 (`durable_host/permissions/mod.rs::resolve_permission_card`). Live, it asks the card service and
 records `Live(card)`, `Revoked` or `Expired`; replay returns the recorded answer and never asks
 the card service again. A failed lookup, or an answer that omits the card, traps and leaves the
-`Start` incomplete, so recovery asks again; no error is recorded. The answer never depends on wallet membership, which is an unrecorded observation
-(see the historical-ordering limit in the walkthrough). A revoked or expired card gives
-`card-revoked` or `card-expired`; the accessors trap. `revoke-card` resolves its handle inside
+`Start` incomplete, so recovery asks again; no error is recorded. The answer never depends on
+wallet membership; the operation's recorded authorization decision holds the wallet data that the
+operation uses. A revoked or expired card gives `card-revoked` or `card-expired`; the accessors
+trap. `revoke-card` resolves its handle inside
 its own recorded call. Runtime-card creation (`persist_runtime_card`) records a typed refusal in
 its `End` when the card service refuses a child because a parent is no longer live. The card
 service reports an expired card as revoked, so the parent's expiry decides between
@@ -2845,6 +2894,27 @@ externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap,
 cached_handle_reports_card_expired_after_its_lifespan,
 derive_from_a_card_that_expires_before_its_creation_records_card_expired,
 a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
+
+### Card authorization decisions
+
+Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
+event up to the next recorded entry, and the next authority boundary applies them. A decision that
+records nothing therefore sees on replay the card events that live execution applied only to a
+later call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card`
+each make their authorization decision in a `ReadLocal` call
+(`permissions/mod.rs::record_card_decision`): `golem::permissions::inspect::inspect-card-decision`,
+`golem::permissions::derive::{derive-decision, derive-from-wallet-decision,
+derive-scope-decision}` and `golem::permissions::wallet::install-card-decision`. The request holds
+the card ids of the handles. The `End` (`PermissionCardDecision`) records the outcome, allowed or
+the typed permission error, and on success the serialized data the operation continues with: the
+wallet copy of the `derive` parent, the selected `derive-from-wallet` parent, each `derive-scope`
+parent (a valid scope card, the wallet copy of a persistent parent, or the refusal of an unusable
+parent), and the `install-card` target with its holder identity. Replay returns the recorded
+decision; the rest of the operation is deterministic from it and from the recorded `card-liveness`
+answers. Each decision keeps its place relative to the handle's liveness call: `inspect-card`,
+`derive` and `derive-scope` decide first, `install-card` resolves its handle first. A repaired
+incomplete decision decides at its own `Start`. Tests:
+`tests/scope_cards.rs::card_decisions_survive_reconstruction` and its cases.
 
 ## Wrong model → right model
 | Wrong | Right | Fails under wrong model |

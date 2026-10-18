@@ -66,7 +66,10 @@ impl LineageSource<'_> {
                 service,
                 owner,
                 mode,
-            } => service.download_payload(owner, *mode, payload).await,
+            } => service
+                .download_payload(owner, *mode, payload)
+                .await
+                .map_err(String::from),
         }
     }
 
@@ -80,7 +83,10 @@ impl LineageSource<'_> {
                 service,
                 owner,
                 mode,
-            } => service.download_payload(owner, *mode, payload).await,
+            } => service
+                .download_payload(owner, *mode, payload)
+                .await
+                .map_err(String::from),
         }
     }
 }

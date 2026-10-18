@@ -41,10 +41,12 @@ min_executors = 2
 
 [registry_service]
 connect_timeout = "10s"
+connection_pool_size = 4
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 52428800
 port = 8080
 
@@ -123,10 +125,12 @@ without_time = false
 [worker_executors]
 assign_shards_timeout = "5s"
 connect_timeout = "10s"
+connection_pool_size = 4
 health_check_timeout = "2s"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 revoke_shards_timeout = "5s"
 
@@ -193,10 +197,12 @@ type = "Disabled"
 #
 # [registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 # port = 8080
 #
@@ -275,10 +281,12 @@ type = "Disabled"
 # [worker_executors]
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # health_check_timeout = "2s"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # revoke_shards_timeout = "5s"
 #
@@ -349,10 +357,12 @@ type = "Disabled"
 #
 # [registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 # port = 8080
 #
@@ -431,10 +441,12 @@ type = "Disabled"
 # [worker_executors]
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # health_check_timeout = "2s"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # revoke_shards_timeout = "5s"
 #

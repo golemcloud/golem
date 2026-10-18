@@ -23,8 +23,9 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::card::{
-    Card, CardId, CardManagedByRuntimeDerived, PolymorphicCard, PolymorphicPermissionPattern,
-    StoredCard, parse_permission_fields, parse_polymorphic_permission,
+    Card, CardId, CardManagedBy, CardManagedByRuntimeDerived, PolymorphicCard,
+    PolymorphicPermissionPattern, StoredCard, parse_permission_fields,
+    parse_polymorphic_permission,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -474,8 +475,8 @@ impl CardService for ScopeCardService {
 
     async fn create_runtime_card(
         &self,
-        card: StoredCard,
-        _provenance: CardManagedByRuntimeDerived,
+        mut card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
     ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         self.authority
             .create_card_count
@@ -496,6 +497,9 @@ impl CardService for ScopeCardService {
             return Err(WorkerExecutorError::runtime(format!(
                 "Failed creating runtime permission card: parent card {parent_id} not found"
             )));
+        }
+        if let StoredCard::Concrete(card) = &mut card {
+            card.managed_by = Some(CardManagedBy::RuntimeDerived(provenance));
         }
         self.authority.add_card(card.clone());
         if take_one(&self.authority.failing_creations) {
@@ -1264,6 +1268,381 @@ async fn an_incomplete_wallet_read_observes_the_live_wallet_when_repaired(
         3,
         2,
         PausedRead::Fails,
+    )
+    .await
+}
+
+/// A card operation whose authorization decision `card_decisions_survive_reconstruction` makes
+/// twice, and the card event that changes the decision between the two calls.
+#[derive(Clone, Copy, Debug)]
+enum CardDecision {
+    /// `derive-scope` from a scope card; the root card is revoked.
+    DeriveScope,
+    /// `inspect-card` without `card:inspect`; a card that grants it is installed.
+    InspectCard,
+    /// `derive` without `card:derive`; a card that grants it is installed.
+    Derive,
+    /// `derive-from-wallet` of `card:inspect` and `card:derive` with only `card:derive`; a card
+    /// that grants `card:inspect` is installed, so no single wallet card covers the request.
+    DeriveFromWallet,
+    /// `install-card` without `card:install` of a card whose recipient excludes the target; a
+    /// card that grants `card:install` is installed, so the second install reaches the recipient
+    /// check instead of the transfer. Each call inspects its card first, so the second call
+    /// applies the card event before its install records anything.
+    InstallCard,
+}
+
+impl CardDecision {
+    fn operation(self) -> &'static str {
+        match self {
+            CardDecision::DeriveScope => "derive-scope",
+            CardDecision::InspectCard => "inspect-card",
+            CardDecision::Derive => "derive",
+            CardDecision::DeriveFromWallet => "derive-from-wallet",
+            CardDecision::InstallCard => "install-card",
+        }
+    }
+
+    fn host_function(self) -> HostFunctionName {
+        match self {
+            CardDecision::DeriveScope => HostFunctionName::GolemPermissionsDeriveScopeDecision,
+            CardDecision::InspectCard => HostFunctionName::GolemPermissionsInspectDecision,
+            CardDecision::Derive => HostFunctionName::GolemPermissionsDeriveDecision,
+            CardDecision::DeriveFromWallet => {
+                HostFunctionName::GolemPermissionsDeriveFromWalletDecision
+            }
+            CardDecision::InstallCard => HostFunctionName::GolemPermissionsInstallDecision,
+        }
+    }
+
+    /// The `card` verbs that the caller's initial card grants.
+    fn initial_card_verbs(self) -> &'static [&'static str] {
+        match self {
+            CardDecision::DeriveScope | CardDecision::InstallCard => &["derive", "inspect"],
+            CardDecision::InspectCard | CardDecision::Derive => &[],
+            CardDecision::DeriveFromWallet => &["derive"],
+        }
+    }
+
+    /// The `card` verb that the card installed between the two calls grants, or `None` when the
+    /// initial card is revoked instead.
+    fn installed_card_verb(self) -> Option<&'static str> {
+        match self {
+            CardDecision::DeriveScope => None,
+            CardDecision::InspectCard | CardDecision::DeriveFromWallet => Some("inspect"),
+            CardDecision::Derive => Some("derive"),
+            CardDecision::InstallCard => Some("install"),
+        }
+    }
+
+    /// The outcomes of the two calls in the live run.
+    fn live_outcomes(self) -> [&'static str; 2] {
+        match self {
+            CardDecision::DeriveScope => ["ok", "not-permitted"],
+            CardDecision::InspectCard | CardDecision::Derive => ["not-permitted", "ok"],
+            CardDecision::DeriveFromWallet => {
+                ["lower-bound-too-broad", "wallet-multi-source-required"]
+            }
+            CardDecision::InstallCard => ["not-permitted", "install-recipient-mismatch"],
+        }
+    }
+}
+
+/// The message that the host-api-tests agent logs between the two calls of
+/// `remember_card_decisions_around_gap`.
+const CARD_DECISION_GAP_MARKER: &str = "card-decision-gap";
+
+fn is_card_decision_gap_marker(entry: &OplogEntry) -> bool {
+    matches!(entry, OplogEntry::Log { message, .. } if message == CARD_DECISION_GAP_MARKER)
+}
+
+/// A concrete card derived from `parent` that grants `card:<verb>`.
+fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: vec![parent],
+        lower_positive: vec![
+            parse_permission_fields("card", "*", "*", verb, "*").expect("valid card grant"),
+        ],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+/// Makes `decision`'s operation twice in one invocation and changes the caller's wallet between
+/// the two calls, where no recorded entry separates them: the agent logs a marker, which is a
+/// hint, and the test queues the card event while a gate holds the guest in the marker's append.
+/// The live run applies the event at the second call only, so the two calls return different
+/// outcomes. Then a new executor reconstructs the agent, which must keep both outcomes: replay
+/// commits the entry before the first call and publishes every card event up to the next
+/// recorded entry, so a first decision that records nothing would observe the event.
+async fn card_decisions_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+    decision: CardDecision,
+) -> anyhow::Result<()> {
+    use golem_common::model::OwnedAgentId;
+
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive.retain(|pattern| !matches!(pattern, PolymorphicPermissionPattern::Card(_)));
+            positive.extend(decision.initial_card_verbs().iter().map(|verb| {
+                parse_polymorphic_permission(&format!("card(*) @ * : {verb} : *")).unwrap()
+            }));
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", agent_name);
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let target = agent_id!("ScopeCardAgent", format!("{agent_name}-target"));
+
+    let owner = executor
+        .active_agent(&OwnedAgentId::new(context.default_environment_id, &worker))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the agent is not active"))?;
+    let key = IdempotencyKey::fresh();
+    let mut gap = executor
+        .gate_after_next_append(&worker, is_card_decision_gap_marker)
+        .await;
+    let live_call = executor.invoke_and_await_agent_with_key(
+        &component,
+        &caller,
+        &key,
+        "remember_card_decisions_around_gap",
+        data_value!(
+            decision.operation().to_string(),
+            component.id,
+            target.to_string()
+        ),
+    );
+    let change_wallet_in_gap = async {
+        tokio::time::timeout(Duration::from_secs(60), gap.entered()).await?;
+        match decision.installed_card_verb() {
+            None => {
+                owner
+                    .primary()
+                    .queue_card_revocations(&[root_card_id])
+                    .await?;
+            }
+            Some(verb) => {
+                let card = concrete_card_granting(root_card_id, verb);
+                authority.add_card(card.clone());
+                executor.queue_card_install(&worker, card).await?;
+            }
+        }
+        drop(gap);
+        Ok::<_, anyhow::Error>(())
+    };
+    let (live, ()) = tokio::try_join!(live_call, change_wallet_in_gap)?;
+    let live = live.into_typed::<Vec<String>>()?;
+    assert_eq!(
+        live,
+        decision.live_outcomes(),
+        "the card event must change only the second decision"
+    );
+
+    let entries = read_whole_oplog(&owner).await;
+    drop(owner);
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    let reconstructed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "remembered_card_decisions",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(
+        reconstructed, live,
+        "reconstruction must keep the outcome of each decision"
+    );
+
+    let recorded = RecordedCardDecisions::find(&entries, &key, decision)
+        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
+    let marker = recorded
+        .marker
+        .ok_or_else(|| anyhow::anyhow!("the gap marker was not logged"))?;
+    let first = recorded
+        .decisions
+        .iter()
+        .copied()
+        .rfind(|start| *start < marker)
+        .ok_or_else(|| anyhow::anyhow!("the first decision is not recorded"))?;
+    let second = recorded
+        .decisions
+        .iter()
+        .copied()
+        .find(|start| *start > marker)
+        .ok_or_else(|| anyhow::anyhow!("the second decision is not recorded"))?;
+    assert!(
+        entries
+            .range(first.next()..marker)
+            .any(|(_, entry)| matches!(
+                entry,
+                OplogEntry::End { start_index, .. } if *start_index == first
+            )),
+        "the first decision must be completed before the gap"
+    );
+    assert!(
+        entries
+            .range(marker..second)
+            .any(|(_, entry)| matches!(entry, OplogEntry::CardEventQueued { .. })),
+        "the card event must be queued between the gap marker and the second decision"
+    );
+    Ok(())
+}
+
+/// The oplog positions of `remember_card_decisions_around_gap` in the invocation that `key`
+/// started: the `Start` of each authorization decision of the operation, in order, and the
+/// logged gap marker.
+struct RecordedCardDecisions {
+    decisions: Vec<OplogIndex>,
+    marker: Option<OplogIndex>,
+}
+
+impl RecordedCardDecisions {
+    fn find(
+        entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        key: &IdempotencyKey,
+        decision: CardDecision,
+    ) -> Option<Self> {
+        let started = entries.iter().find_map(|(index, entry)| {
+            matches!(entry,
+                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key
+            )
+            .then_some(*index)
+        })?;
+        let invocation = entries
+            .range(started.next()..)
+            .take_while(|(_, entry)| !matches!(entry, OplogEntry::AgentInvocationFinished { .. }));
+        let mut recorded = Self {
+            decisions: Vec::new(),
+            marker: None,
+        };
+        for (index, entry) in invocation {
+            match entry {
+                OplogEntry::Start { function_name, .. }
+                    if *function_name == decision.host_function() =>
+                {
+                    recorded.decisions.push(*index)
+                }
+                OplogEntry::Log { message, .. } if message == CARD_DECISION_GAP_MARKER => {
+                    recorded.marker = Some(*index)
+                }
+                _ => {}
+            }
+        }
+        Some(recorded)
+    }
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_scope_derivation_keeps_its_outcome_after_a_later_revocation_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "derive-scope-decisions",
+        CardDecision::DeriveScope,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn an_inspect_denial_keeps_its_outcome_after_a_later_grant_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "inspect-decisions",
+        CardDecision::InspectCard,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_derive_denial_keeps_its_outcome_after_a_later_grant_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "derive-decisions",
+        CardDecision::Derive,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_wallet_derivation_keeps_its_error_kind_after_a_later_install_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "derive-from-wallet-decisions",
+        CardDecision::DeriveFromWallet,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn an_install_denial_keeps_its_outcome_after_a_later_grant_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "install-decisions",
+        CardDecision::InstallCard,
     )
     .await
 }
@@ -2972,6 +3351,170 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn p3_tcp_denial_survives_recovery_before_start_and_before_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("Networking")
+        .store()
+        .await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let connection_count = Arc::new(AtomicUsize::new(0));
+    let server_count = connection_count.clone();
+    let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            server_count.fetch_add(1, Ordering::SeqCst);
+            let _ = stream.write_all(b"unauthorized backend access").await;
+            let _ = stream.shutdown().await;
+        }
+    });
+
+    for retain_start in [false, true] {
+        let caller = agent_id!(
+            "Networking",
+            format!("denied-connect-prefix-{retain_start}")
+        );
+        configure_scope_card_root(&authority, &component, &caller)?;
+        let worker = executor.start_agent(&component.id, caller.clone()).await?;
+        // Establish completed history without adding a host call before connect in the guest.
+        let prior = executor
+            .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            prior
+                .as_ref()
+                .is_err_and(|error| error.contains("AccessDenied"))
+        );
+        let denied = executor
+            .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            denied
+                .as_ref()
+                .is_err_and(|error| error.contains("AccessDenied"))
+        );
+        let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let original_tip = oplog
+            .last()
+            .expect("the invocation must be recorded")
+            .oplog_index;
+        let start = oplog
+            .iter()
+            .rev()
+            .find(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "sockets::types::tcp-socket::connect"
+                )
+            })
+            .expect("the denied connect must have a Start");
+        let cut = if retain_start {
+            start.oplog_index
+        } else {
+            start.oplog_index.previous()
+        };
+        // Keep the invocation, but remove either the connect itself or its terminal.
+        // Revert unloads the Store and recovery consumes this exact prefix.
+        assert!(
+            oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::End(_) if entry.oplog_index < start.oplog_index
+            )),
+            "the connect must follow recorded host-call history"
+        );
+        executor
+            .revert(
+                &worker,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cut,
+                }),
+            )
+            .await?;
+        // A fresh invocation forces reconstruction of the unfinished invocation first.
+        let fresh = executor
+            .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            fresh
+                .as_ref()
+                .is_err_and(|error| error.contains("AccessDenied"))
+        );
+        assert_eq!(
+            connection_count.load(Ordering::SeqCst),
+            0,
+            "recovery at retain_start={retain_start} must not connect to the backend"
+        );
+        let recovered = executor.get_oplog(&worker, cut).await?;
+        let recovered_start = recovered
+            .iter()
+            .filter(|entry| {
+                if retain_start {
+                    entry.oplog_index == start.oplog_index
+                } else {
+                    entry.oplog_index > original_tip
+                }
+            })
+            .find(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "sockets::types::tcp-socket::connect"
+                )
+            })
+            .expect("recovery must retain or append the connect Start");
+        let fresh_invocation = recovered
+            .iter()
+            .find(|entry| {
+                entry.oplog_index > original_tip
+                    && matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_))
+            })
+            .expect("the fresh invocation must be recorded");
+        assert!(
+            recovered_start.oplog_index < fresh_invocation.oplog_index,
+            "the denied Start must belong to recovery, not the fresh invocation"
+        );
+        let PublicOplogEntry::Start(params) = &recovered_start.entry else {
+            unreachable!()
+        };
+        assert!(
+            params.denial.is_some(),
+            "the recovered Start must record denial"
+        );
+        let response = recovered
+            .iter()
+            .filter(|entry| entry.oplog_index > original_tip)
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) if end.start_index == recovered_start.oplog_index => {
+                    end.response.as_ref()
+                }
+                _ => None,
+            })
+            .expect("recovery must complete the denied connect");
+        assert_eq!(
+            HostResponseP3SocketsConnect::from_value(response.value())?.result,
+            Err(SerializableP3SocketErrorCode::AccessDenied),
+            "the unfinished invocation must recover with a guest-visible denial"
+        );
+    }
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3078,6 +3621,82 @@ async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_rep
             .await
             .is_err(),
         "replaying a denied connect must not reach the TCP backend"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn p2_udp_denials_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("Networking")
+        .store()
+        .await?;
+    let caller = agent_id!("Networking", "udp-permission-replay");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let port = receiver.local_addr()?.port();
+    for operation in ["udp-stream-send", "udp-unconnected-send"] {
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "probe_p2",
+                data_value!(operation, "", port, vec![42u8]),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| normalized_error_contains(error, "accessdenied"))
+        );
+    }
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let checks = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "sockets::udp::permissions::check" =>
+            {
+                Some(start)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(checks.len(), 2);
+    assert!(checks.iter().all(|start| start.denial.is_some()));
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    // A new invocation reconstructs both denied operations before doing any new work.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "probe_p2",
+            data_value!("resolve-addresses", "localhost", 0u16, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(result.is_err());
+    let mut datagram = [0; 64];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), receiver.recv(&mut datagram))
+            .await
+            .is_err(),
+        "neither live nor replayed denied UDP operations may send a datagram"
     );
     Ok(())
 }
@@ -5213,23 +5832,45 @@ async fn every_protected_rdbms_transaction_import_enforces_permissions(
         "every-protected-rdbms-transaction-import"
     );
     configure_scope_card_root(&authority, &component, &agent)?;
-    executor.start_agent(&component.id, agent.clone()).await?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
-    for (method, address) in [
+    for (method, address, functions) in [
         (
             "postgres_operation_result",
             permission_postgres.public_connection_string(),
+            [
+                HostFunctionName::RdbmsPostgresDbConnectionQueryStream,
+                HostFunctionName::RdbmsPostgresDbTransactionQuery,
+                HostFunctionName::RdbmsPostgresDbTransactionQueryStream,
+                HostFunctionName::RdbmsPostgresDbTransactionExecute,
+            ],
         ),
         (
             "mysql_operation_result",
             permission_mysql.public_connection_string(),
+            [
+                HostFunctionName::RdbmsMysqlDbConnectionQueryStream,
+                HostFunctionName::RdbmsMysqlDbTransactionQuery,
+                HostFunctionName::RdbmsMysqlDbTransactionQueryStream,
+                HostFunctionName::RdbmsMysqlDbTransactionExecute,
+            ],
         ),
         (
             "ignite_operation_result",
             permission_ignite.connection_url(),
+            [
+                HostFunctionName::RdbmsIgnite2DbConnectionQueryStream,
+                HostFunctionName::RdbmsIgnite2DbTransactionQuery,
+                HostFunctionName::RdbmsIgnite2DbTransactionQueryStream,
+                HostFunctionName::RdbmsIgnite2DbTransactionExecute,
+            ],
         ),
     ] {
-        for (operation, statement) in [
+        for ((operation, statement), function) in [
+            (
+                "connection-query-stream",
+                "SELECT * FROM blocked.denied_table",
+            ),
             ("transaction-query", "SELECT * FROM blocked.denied_table"),
             (
                 "transaction-query-stream",
@@ -5239,22 +5880,46 @@ async fn every_protected_rdbms_transaction_import_enforces_permissions(
                 "transaction-execute",
                 "INSERT INTO blocked.denied_table VALUES (1)",
             ),
-        ] {
-            let denied = executor
-                .invoke_and_await_agent(
-                    &component,
-                    &agent,
-                    method,
-                    data_value!(operation, address.clone(), statement),
-                )
-                .await?
-                .into_typed::<Result<String, String>>()?;
+        ]
+        .into_iter()
+        .zip(functions)
+        {
+            // Lose the denial's End and reconstruct from its immutable Start alone.
+            let (entered, release) = executor.gate_next_oplog_function_end(&worker, function, true);
+            let args = data_value!(operation, address.clone(), statement);
+            let invocation = executor.invoke_and_await_agent(&component, &agent, method, args);
+            let fail_end = async {
+                entered.await.expect("denied call must reach its End");
+                release.send(()).expect("denied End must still be waiting");
+            };
+            let (denied, ()) = tokio::join!(invocation, fail_end);
+            let denied = denied?.into_typed::<Result<String, String>>()?;
             assert!(
                 denied
                     .as_ref()
                     .is_err_and(|error| error.to_ascii_lowercase().contains("permission")),
                 "{method} {operation} must return a typed permission denial, got {denied:?}"
             );
+            let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            let denied_start = before.iter().rev().find(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start) if start.denial.is_some())
+            }).expect("the denial must be recorded in Start, not only End");
+            executor
+                .revert(
+                    &worker,
+                    RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                        last_oplog_index: denied_start.oplog_index.previous(),
+                    }),
+                )
+                .await?;
+            executor.resume(&worker, true).await?;
+            executor
+                .wait_for_status(&worker, AgentStatus::Idle, Duration::from_secs(30))
+                .await?;
+            let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert!(after.iter().any(|entry| entry.oplog_index > before.last().unwrap().oplog_index
+                && matches!(&entry.entry, PublicOplogEntry::Start(start) if start.denial.is_some())),
+                "the new replay-tail call must authorize before Start: {method} {operation}");
         }
         for operation in ["transaction-commit", "transaction-rollback"] {
             let allowed = executor
@@ -7176,5 +7841,152 @@ async fn cached_handle_reports_card_expired_after_its_lifespan(
         use_kept_child(&executor, &component, &holder).await?,
         vec!["card-expired", "card-expired"]
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+async fn derived_templates_bind_to_the_install_target_and_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor =
+        moonbit::start_local_card_transfer_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.extend(scope_card_initial_permissions());
+            grants.push(parse_polymorphic_permission("card(*) @ * : install : *").unwrap());
+            grants
+                .push(parse_polymorphic_permission("env(*/*/*/*/*) @ * : read : GOL905").unwrap());
+            grants.push(env_permission("GOL905_SCOPED"));
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "template-deriver");
+    let target = agent_id!("ScopeCardAgent", "template-recipient");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    let mut results = Vec::new();
+    for source in ["concrete", "template", "wallet"] {
+        let key = IdempotencyKey::fresh();
+        let result = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &caller,
+                &key,
+                "derive_and_install_template",
+                data_value!(component.id, target.to_string(), source.to_string()),
+            )
+            .await?
+            .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;
+        for (name, passed) in &result.2 {
+            assert!(passed, "{source}: {name}");
+        }
+        results.push((source.to_string(), key, result));
+    }
+    let installed = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "installed_template_grants",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<(SchemaCardId, Vec<SchemaCardId>, String)>>()?;
+    assert_eq!(installed.len(), 3);
+    for (_, _, (_, template_id, _)) in &results {
+        let (_, parents, owner) = installed
+            .iter()
+            .find(|(_, parents, _)| parents == &vec![template_id.clone()])
+            .expect("installation creates a concrete child of the derived template");
+        assert_eq!(parents, &vec![template_id.clone()]);
+        assert!(
+            owner.ends_with(&target.to_string()),
+            "slot did not bind to B: {owner}"
+        );
+        assert!(
+            !owner.ends_with(&caller.to_string()),
+            "slot bound to caller A"
+        );
+    }
+    let creates = authority.create_card_count.load(Ordering::SeqCst);
+    let audit = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let derived = audit
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardDerived(card) => Some((card.card_id, card.parent_ids.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (_, _, (parent, child, _)) in &results {
+        assert!(derived.iter().any(|(id, parents)| id.0 == child.uuid
+            && parents.iter().map(|id| id.0).collect::<Vec<_>>() == vec![parent.uuid]));
+    }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor =
+        moonbit::start_local_card_transfer_executor(deps, &context, authority.clone()).await?;
+    for (source, key, expected) in results {
+        let actual = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &caller,
+                &key,
+                "derive_and_install_template",
+                data_value!(component.id, target.to_string(), source),
+            )
+            .await?
+            .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;
+        assert_eq!(actual, expected);
+    }
+    let restored = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "installed_template_grants",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<(SchemaCardId, Vec<SchemaCardId>, String)>>()?;
+    assert_eq!(restored, installed);
+    // A fresh call forces reconstruction of the caller, rather than only reading cached results.
+    executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?;
+    assert_eq!(authority.create_card_count.load(Ordering::SeqCst), creates);
+    let replayed = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let replayed_derived = replayed
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardDerived(card) => Some((card.card_id, card.parent_ids.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed_derived, derived);
+    let target_audit = executor
+        .get_oplog(&target_worker, OplogIndex::INITIAL)
+        .await?;
+    for (id, _, _) in installed {
+        assert_eq!(
+            target_audit
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::CardTransferred(card) if card.installed_card_id.0 == id.uuid
+                ))
+                .count(),
+            1
+        );
+    }
     Ok(())
 }

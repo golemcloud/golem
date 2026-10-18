@@ -255,10 +255,12 @@ page_size = 128
 
 [public_worker_api]
 connect_timeout = "10s"
+connection_pool_size = 4
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 port = 9007
 
@@ -295,10 +297,12 @@ max_entry_age = "2h"
 
 [registry_service]
 connect_timeout = "10s"
+connection_pool_size = 4
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 52428800
 port = 8080
 request_timeout = "30s"
@@ -362,10 +366,12 @@ multiplier = 3.0
 
 [shard_manager]
 connect_timeout = "10s"
+connection_pool_size = 4
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 port = 9002
 
@@ -706,10 +712,12 @@ without_time = false
 #
 # [public_worker_api]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # port = 9007
 #
@@ -746,10 +754,12 @@ without_time = false
 #
 # [registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
@@ -813,10 +823,12 @@ without_time = false
 #
 # [shard_manager]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # port = 9002
 #
@@ -1156,10 +1168,12 @@ without_time = false
 #
 # [public_worker_api]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # port = 9007
 #
@@ -1196,10 +1210,12 @@ without_time = false
 #
 # [registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
@@ -1263,10 +1279,12 @@ without_time = false
 #
 # [shard_manager]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # port = 9002
 #
@@ -1576,10 +1594,12 @@ without_time = false
 #
 # [public_worker_api]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # port = 9007
 #
@@ -1616,10 +1636,12 @@ without_time = false
 #
 # [registry_service]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
@@ -1683,10 +1705,12 @@ without_time = false
 #
 # [shard_manager]
 # connect_timeout = "10s"
+# connection_pool_size = 4
 # host = "localhost"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
 # port = 9002
 #

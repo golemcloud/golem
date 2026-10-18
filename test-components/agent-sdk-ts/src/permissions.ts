@@ -392,6 +392,7 @@ export const PermissionCallerImpl = PermissionCaller.implement({
 
     async cardRoundTrip({ calleeName }) {
       const card = permissions.deriveFromWallet({ lowerPositive: [inspectGrant] }).unwrap();
+      if (!(card instanceof permissions.PermissionCard)) throw new Error('expected concrete card');
       const id = card.id();
       const returned = await PermissionCallee.client.get({ name: calleeName }).echoCard({ card });
       const template = templateCard();
