@@ -134,6 +134,14 @@ impl<S: Clone> LeaderGate<S> {
         self.set(GateState::Stopped);
     }
 
+    /// Whether [`Self::stop`] has been called.
+    pub fn is_stopped(&self) -> bool {
+        matches!(
+            &*self.state.read().unwrap_or_else(PoisonError::into_inner),
+            GateState::Stopped
+        )
+    }
+
     pub fn serve(&self, service: S, lease: Option<LeaseBelief>) {
         self.set(GateState::Serving { service, lease });
     }

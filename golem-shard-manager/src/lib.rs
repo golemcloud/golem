@@ -285,7 +285,11 @@ mod lease_timing_tests {
 
 #[cfg(test)]
 mod lease_health_tests {
-    use super::{ShardManagerServiceImpl, ShardManagerServiceServer, report_lease_health};
+    use super::{
+        ShardManagerGrpcService, ShardManagerServiceImpl, ShardManagerServiceServer,
+        report_lease_health,
+    };
+    use crate::leader_gate::LeaderGate;
     use crate::sharding::leader_election::LeaseBelief;
     use std::time::Duration;
     use test_r::test;
@@ -331,6 +335,7 @@ mod lease_health_tests {
         tokio::spawn(report_lease_health(
             belief.clone(),
             reporter,
+            LeaderGate::new(),
             Duration::from_millis(100),
         ));
 
@@ -368,6 +373,7 @@ mod lease_health_tests {
         tokio::spawn(report_lease_health(
             belief.clone(),
             reporter,
+            LeaderGate::new(),
             Duration::from_millis(100),
         ));
         for _ in 0..8 {
@@ -375,6 +381,47 @@ mod lease_health_tests {
             belief.rearm_for(Duration::from_secs(1));
             assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
         }
+    }
+
+    #[test]
+    async fn a_stopped_gate_stays_not_serving_when_the_belief_comes_back() {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = HealthClient::new(channel);
+
+        let gate: LeaderGate<ShardManagerGrpcService> = LeaderGate::new();
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_millis(300));
+        tokio::spawn(report_lease_health(
+            belief.clone(),
+            reporter.clone(),
+            gate.clone(),
+            Duration::from_millis(50),
+        ));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        // The replica stops: the entry says so, and the belief then comes back, as a late
+        // acknowledgement can bring it.
+        gate.stop();
+        reporter
+            .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        belief.rearm_for(Duration::from_secs(30));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(status(&mut client).await, ServingStatus::NotServing as i32);
     }
 }
 
@@ -1422,6 +1469,7 @@ pub async fn run(
                 report_lease_health(
                     belief,
                     health_reporter.clone(),
+                    gate.clone(),
                     LeaseKeepAlive::renewal_interval(etcd.leader_lease_ttl),
                 )
                 .in_current_span(),
@@ -1475,15 +1523,19 @@ pub async fn run(
 /// process. While the belief holds, it sleeps until the deadline, but never longer than `poll`,
 /// because every renewal moves the deadline and a suspended machine wakes past it; while it has
 /// lapsed it looks again every `poll`. It never returns, so that the task set does not take it for
-/// a stopped task. The entry is SERVING when it starts.
+/// a stopped task. The entry is SERVING when it starts, and NOT_SERVING for good once the gate
+/// has stopped.
 async fn report_lease_health(
     belief: LeaseBelief,
     health_reporter: tonic_health::server::HealthReporter,
+    gate: LeaderGate<ShardManagerGrpcService>,
     poll: Duration,
 ) -> anyhow::Result<()> {
     let mut serving = true;
     loop {
-        let held = !belief.remaining().is_zero();
+        // A stopped replica serves nothing, whatever its belief says: a belief that comes back
+        // after the stop began must not turn the entry to SERVING again.
+        let held = !belief.remaining().is_zero() && !gate.is_stopped();
         if held != serving {
             serving = held;
             if held {
