@@ -751,6 +751,9 @@ impl Default for ComponentCompilationConfig {
 pub struct ComponentCompilationEnabledConfig {
     pub host: String,
     pub port: u16,
+    /// Total budget for cache-warming admission, including connection and retries.
+    #[serde(with = "humantime_serde")]
+    pub enqueue_timeout: Duration,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
 }
@@ -760,6 +763,7 @@ impl SafeDisplay for ComponentCompilationEnabledConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "enqueue timeout: {:?}", self.enqueue_timeout);
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -770,6 +774,7 @@ impl Default for ComponentCompilationEnabledConfig {
         Self {
             host: "localhost".to_string(),
             port: 9091,
+            enqueue_timeout: Duration::from_secs(1),
             client_config: GrpcClientConfig::default(),
         }
     }

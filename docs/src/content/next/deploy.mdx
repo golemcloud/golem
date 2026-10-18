@@ -145,7 +145,28 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-sh
 
 ### Component Compilation Service
 
-[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is a sidecar service responsible for compiling components. The service uses Blob storage as data storage.
+[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) warms the compiled-component cache in Blob storage. It is an optional optimisation: if precompilation is skipped or fails, the executor compiles and caches the component on first use. Pending requests are held in memory and are lost on restart. The service compiles one component at a time because Wasmtime already parallelises compilation internally.
+
+The service rejects an enqueue immediately when its request queue is full. The registry still completes the component upload. The registry's `component_compilation.config.enqueue_timeout` bounds the entire enqueue attempt, including connection establishment and retries; its default is `1s`. A timeout skips cache warming, not the component upload. A timed-out request might already have reached the compilation service and can still be compiled. Saturation is not retried inside the upload request.
+
+| Compilation service setting | Default | Meaning |
+| --- | --- | --- |
+| `compile_worker.queue_capacity` | `100` | Maximum pending compilation requests, excluding the component being processed |
+| `compile_worker.upload_queue_capacity` | `100` | Maximum compiled components waiting for upload, excluding the component being uploaded |
+
+Both capacities must be positive. Their environment variables are `GOLEM__COMPILE_WORKER__QUEUE_CAPACITY` and `GOLEM__COMPILE_WORKER__UPLOAD_QUEUE_CAPACITY`. The registry timeout is `GOLEM__COMPONENT_COMPILATION__CONFIG__ENQUEUE_TIMEOUT`.
+
+#### Choose queue capacities
+
+The defaults are starting values, not measured recommendations for golem-dev or golem-prod. Measure each environment with its actual CPU and memory limits and Blob storage backend before selecting values:
+
+1. Use representative small and large components and realistic deployment bursts. For cold-compilation measurements, confirm compiled-blob cache misses and disable or start with a cold Wasmtime filesystem cache (`engine.enable_fs_cache`). Fresh component revisions alone do not bypass the filesystem cache. Measure warm-cache workloads separately.
+2. Observe `component_compilation_time_seconds` and the pending-request queue. Measure sustained successful compilations and artifact uploads per second over wall-clock time. Download time and upload backpressure affect throughput but are outside the histogram. Choose how much cache-warming delay is useful: validate the time from admission until the artifact is available against the expected first invocation. Use measured throughput and that delay to choose the request capacity. A larger queue does not increase compilation throughput.
+3. Exercise slow Blob storage uploads. Observe `component_compilation_upload_queue_length` and process/pod peak memory with the proposed capacity. The upload queue retains compiled components, which can be much larger than request metadata. In addition to the queue, allow for one component being uploaded, one being processed or waiting for upload-queue space, compilation working memory, download buffers, artifact serialization buffers, Blob storage upload buffers, and runtime overhead. Leave headroom below the pod memory limit.
+4. Run a burst that exceeds the request capacity. Confirm that `component_compilation_enqueue_total{outcome="rejected"}` increases in the registry and that uploads remain responsive. Exercise an unavailable or unresponsive compilation service and confirm the configured enqueue budget bounds the extra upload delay.
+5. Record the component mix, resource limits, compilation durations, sustained throughput, time until artifacts are available, queue peaks, peak memory, enqueue outcomes, and upload latency with the chosen golem-dev and golem-prod settings in the deployment configuration review.
+
+Use process or container memory measurements, such as the platform's working-set/RSS metrics. Do not interpret RSS differences between compilations as precise per-component allocation measurements: allocators, shared compiler threads, and retained artifacts affect them. The compilation-duration histogram measures successful Wasmtime component-build calls. It excludes request-queue wait, component download, compiled-blob cache hits, and artifact upload, but includes Wasmtime filesystem-cache loads when that cache is enabled. The queue gauges exclude in-flight work; a flat queue does not prove progress. Check compilation logs and duration samples as well.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-compilation-service)
 

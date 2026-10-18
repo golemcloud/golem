@@ -120,6 +120,12 @@ impl CompileGrpcService {
 impl From<crate::model::CompilationError> for ComponentCompilationError {
     fn from(value: crate::model::CompilationError) -> Self {
         let error = match value {
+            crate::model::CompilationError::QueueFull => {
+                component_compilation_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::INTERNAL_COMPILATION_QUEUE_FULL.to_string(),
+                })
+            }
             crate::model::CompilationError::ComponentNotFound(_) => {
                 component_compilation_error::Error::NotFound(ErrorBody {
                     error: value.to_string(),
@@ -139,6 +145,7 @@ impl From<crate::model::CompilationError> for ComponentCompilationError {
                 })
             }
             crate::model::CompilationError::ComponentUploadFailed(_)
+            | crate::model::CompilationError::QueueClosed
             | crate::model::CompilationError::Unexpected(_) => {
                 component_compilation_error::Error::InternalError(ErrorBody {
                     error: value.to_string(),
@@ -195,6 +202,11 @@ impl ApiErrorDetails for ComponentCompilationTraceErrorKind<'_> {
             Some(error) => match error {
                 component_compilation_error::Error::BadRequest(_) => "BadRequest",
                 component_compilation_error::Error::NotFound(_) => "NotFound",
+                component_compilation_error::Error::InternalError(body)
+                    if body.code == api::error_code::INTERNAL_COMPILATION_QUEUE_FULL =>
+                {
+                    "QueueFull"
+                }
                 component_compilation_error::Error::InternalError(_) => "InternalError",
             },
         }
@@ -206,7 +218,9 @@ impl ApiErrorDetails for ComponentCompilationTraceErrorKind<'_> {
             Some(error) => match error {
                 component_compilation_error::Error::BadRequest(_) => true,
                 component_compilation_error::Error::NotFound(_) => true,
-                component_compilation_error::Error::InternalError(_) => false,
+                component_compilation_error::Error::InternalError(body) => {
+                    body.code == api::error_code::INTERNAL_COMPILATION_QUEUE_FULL
+                }
             },
         }
     }
