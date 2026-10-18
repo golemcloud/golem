@@ -117,7 +117,9 @@ use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
 };
-use golem_worker_executor::services::card::{CardService, CardState, NoopCardService};
+use golem_worker_executor::services::card::{
+    CardService, CardState, NoopCardService, RuntimeCardCreation,
+};
 use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
@@ -1780,6 +1782,23 @@ impl TestWorkerExecutor {
             })
             .await;
         handle.gate.after_append.store(after_end, Ordering::SeqCst);
+        handle.gate.commit_prefix.store(true, Ordering::SeqCst);
+        handle
+    }
+
+    /// Pauses after the next entry that `matches` is appended for `agent_id`, committing the
+    /// retained prefix first. The host call that appends the entry waits until the handle is
+    /// dropped, so a test can change agent state at that exact point of the guest's execution.
+    pub async fn gate_after_next_append(
+        &self,
+        agent_id: &AgentId,
+        matches: fn(&OplogEntry) -> bool,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(agent_id.clone(), matches)
+            .await;
+        handle.gate.after_append.store(true, Ordering::SeqCst);
         handle.gate.commit_prefix.store(true, Ordering::SeqCst);
         handle
     }
@@ -9117,17 +9136,17 @@ impl CardService for TestCardService {
         &self,
         card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         let mut cards = TEST_RUNTIME_CARDS.write().unwrap();
         match cards.get(&card.card_id()) {
             Some(existing) if existing != &card => Err(WorkerExecutorError::runtime(format!(
                 "conflicting test runtime permission card {}",
                 card.card_id()
             ))),
-            Some(existing) => Ok(existing.clone()),
+            Some(existing) => Ok(RuntimeCardCreation::Created(Box::new(existing.clone()))),
             None => {
                 cards.insert(card.card_id(), card.clone());
-                Ok(card)
+                Ok(RuntimeCardCreation::Created(Box::new(card)))
             }
         }
     }

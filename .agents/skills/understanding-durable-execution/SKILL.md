@@ -255,6 +255,12 @@ finalization, joins Store destruction and retained callbacks, then joins those c
 layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
 state for its replacement without adding a second recovery path.
 
+On executor shutdown, the active-agent cache task removes its cached workers regardless of TTL.
+Each worker owns the service graph that owns the cache, so leaving the entries cached would
+retain the graph and its storage pools after task cancellation. This drops cache references only;
+it does not record an interruption or delete persisted agents. In-process replacement still waits
+for the previous executor's invocation loops and oplog generations to drain.
+
 Explicit interruption retires the cached owner and fences its replacement startup. Automatic
 shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or
 updates; an executor restart or shard move is not a request to resume them. If the worker
@@ -281,11 +287,15 @@ Environment and application deletion invalidate component metadata, environment 
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
 of admitting requests against a retiring cached owner.
 
-External metadata observation uses a fallible FIFO status read. If the actor has stopped, the
-lookup takes the cold oplog lifecycle guard, verifies retirement, joins writer completion, and
-reconstructs from persisted metadata and the oplog. A failed deletion can therefore leave a
-cached but stopped worker observable until removal is retried. Missing storage means absence;
-failed reconstruction means an error, never a stale cached status or permission to restart work.
+External metadata observation uses a fallible FIFO status read that repairs a detached projection
+before returning it. Unreadable history returns its cause rather than a stale status; once history
+reads again, the next observation reconstructs the status without starting the worker. Cleanup
+keeps its non-repairing FIFO read so an unreadable oplog cannot prevent runtime teardown. If the
+actor has stopped, the lookup takes the cold oplog lifecycle guard, verifies retirement, joins
+writer completion, and reconstructs from persisted metadata and the oplog. A failed deletion can
+therefore leave a cached but stopped worker observable until removal is retried. Missing storage
+means absence; failed reconstruction means an error, never a stale cached status or permission to
+restart work.
 
 Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
 The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
@@ -1920,11 +1930,10 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   and pins until their own live transition, never borrowing the latest live snapshot. Guest
   `self-wallet` and `self-version` reads are `ReadLocal` calls whose `End` records the exact
   observed view, so replay returns each read's own observation whatever card events it applies
-  around it; an incomplete read completes live at its own `Start`. Authorization decisions such
-  as `inspect-card` and derivation are not recorded and still evaluate the replayed wallet; a card
-  event between two of them can diverge the same way. The root `Start` records the pinned
-  chain plan; descendants record root plus position, and every occurrence retains the original
-  calling principal and typed static installation parameters. Component and host leaves use the
+  around it; an incomplete read completes live at its own `Start`. Card authorization decisions
+  are recorded in the same way (see "Card authorization decisions"). The root `Start` records the
+  pinned chain plan; descendants record root plus position, and every occurrence retains the
+  original calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.
 - Middleware can start its next layer repeatedly and concurrently. Each result has independent
   `get`/`cancel`; dropping the observer does not cancel execution. Handler return revokes new
@@ -1985,6 +1994,67 @@ exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
 
+## Permission-card handles
+
+Persistent `derive` and `derive-from-wallet` return the host-tagged `persistent-card` sum:
+`concrete` or `template`. Child slots name the eventual installed holder, not the caller.
+A template parent must be in the caller's wallet and is resolved for that caller. Every possible
+child instantiation must attenuate against that resolved parent. The stored card keeps its original
+slots; the universal envelope is proof only. Explicit derivation inherits the exact parent
+negatives and adds requested denials; wallet derivation takes complete bounds. Slot-bearing denials
+cannot supply universal proof evidence; concrete inherited denials remain. `derive-scope` stays
+concrete and rejects requested slots with `InvalidPattern` and an explicit message. A slot-bearing
+tool owner does not resolve aliases against caller metadata; metadata-dependent short flags are
+rejected instead.
+
+A persistent permission-card handle (from `self-wallet`, `derive`, `derive-from-wallet`, or a
+received value) caches no liveness. Every guest operation that resolves one — the `id`, `parents`
+and `expires-at` accessors, `inspect-card`, `derive`, `derive-scope` and `install-card` — first
+runs a `ReadRemote` durable call, `golem::permissions::types::card-liveness`
+(`durable_host/permissions/mod.rs::resolve_permission_card`). Live, it asks the card service and
+records `Live(card)`, `Revoked` or `Expired`; replay returns the recorded answer and never asks
+the card service again. A failed lookup, or an answer that omits the card, traps and leaves the
+`Start` incomplete, so recovery asks again; no error is recorded. The answer never depends on
+wallet membership; the operation's recorded authorization decision holds the wallet data that the
+operation uses. A revoked or expired card gives `card-revoked` or `card-expired`; the accessors
+trap. `revoke-card` resolves its handle inside
+its own recorded call. Runtime-card creation (`persist_runtime_card`) records a typed refusal in
+its `End` when the card service refuses a child because a parent is no longer live. The card
+service reports an expired card as revoked, so the parent's expiry decides between
+`card-expired` and `card-revoked`. Creation repairs an interrupted call only while its repair
+authorization still holds. Otherwise it revokes the card the interrupted attempt may have
+created and records the refusal; the guest has not observed an incomplete call, so either
+outcome is a valid first observation. The registry never creates a revoked runtime card id
+again (`RuntimeCardCreation::Revoked`), so a later repair of a refused repair that failed before
+its `End` records `card-revoked` instead of retrying. `install-card` of a template card records
+the same typed refusals in its `install-card-transfer` `End`. Tests: `tests/scope_cards.rs::{cached_child_handle_reports_its_self_revoked_card_before_and_after_replay,
+received_card_replays_its_recorded_liveness_after_an_external_revocation,
+externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap,
+cached_handle_reports_card_expired_after_its_lifespan,
+derive_from_a_card_that_expires_before_its_creation_records_card_expired,
+a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
+
+### Card authorization decisions
+
+Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
+event up to the next recorded entry, and the next authority boundary applies them. A decision that
+records nothing therefore sees on replay the card events that live execution applied only to a
+later call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card`
+each make their authorization decision in a `ReadLocal` call
+(`permissions/mod.rs::record_card_decision`): `golem::permissions::inspect::inspect-card-decision`,
+`golem::permissions::derive::{derive-decision, derive-from-wallet-decision,
+derive-scope-decision}` and `golem::permissions::wallet::install-card-decision`. The request holds
+the card ids of the handles. The `End` (`PermissionCardDecision`) records the outcome, allowed or
+the typed permission error, and on success the serialized data the operation continues with: the
+wallet copy of the `derive` parent, the selected `derive-from-wallet` parent, each `derive-scope`
+parent (a valid scope card, the wallet copy of a persistent parent, or the refusal of an unusable
+parent), and the `install-card` target with its holder identity. Replay returns the recorded
+decision; the rest of the operation is deterministic from it and from the recorded `card-liveness`
+answers. Each decision keeps its place relative to the handle's liveness call: `inspect-card`,
+`derive` and `derive-scope` decide first, `install-card` resolves its handle first. A repaired
+incomplete decision decides at its own `Start`. Tests:
+`tests/scope_cards.rs::card_decisions_survive_reconstruction` and its cases.
+
 ## Wrong model → right model
 | Wrong | Right | Fails under wrong model |
 |---|---|---|
@@ -1993,6 +2063,7 @@ satisfies one does not imply the others.
 | "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
 | "Losing a shard reconstructs the agent, like a restart." | It is retired instead: that generation is stopped without writing its status, dropped and never restarted. Only the executor now holding the shard reconstructs it — the new owner, or this one if the shard came back at a higher epoch. | `worker/mod.rs::a_failure_that_is_a_lost_shard_is_given_up_on_every_path`, `services/oplog/tests.rs::a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable`, the fence tests in `tests/indexed_storage.rs` |
+| "A card handle can answer from its cached card, or from wallet membership." | A held handle outlives revocation and expiry, and wallet membership at an arbitrary point is not a recorded input. Each use records the card service's answer as `card-liveness`. | `received_card_replays_its_recorded_liveness_after_an_external_revocation` |
 | "A retried RPC attempt executed the target again." | Same key ⇒ same target invocation; count target mutations, not attempts. | Provider-side counter tests in `tests/rpc.rs` |
 | "Repair should generate a fresh RPC key." | Repair retains the call's own `Start` and derived key. A new saga attempt appends new calls. | RPC crash-recovery tests |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |

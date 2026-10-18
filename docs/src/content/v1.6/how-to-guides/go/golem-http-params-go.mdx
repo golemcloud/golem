@@ -94,7 +94,7 @@ Binding a non-scalar field (struct, slice, map) from path/query/header is a defi
 
 ## Request body mapping
 
-For body-carrying verbs (`POST`, `PUT`, `DELETE`, `PATCH`, …), any input field **not** bound to a path/query/header binding is populated from the JSON request body:
+On body-carrying verbs (`POST`, `PUT`, `DELETE`, `PATCH`, …), user-supplied input fields **not** bound to a path/query/header binding are body fields. Ordinary structured fields are populated from the JSON request body:
 
 ```go
 type UpdateIn struct {
@@ -107,7 +107,11 @@ type UpdateIn struct {
 var Update = Agent.Method[UpdateIn, Item]("update", golem.HTTP(golem.POST("/items/{sku}")))
 ```
 
-Each unbound field becomes a top-level key in the JSON body object (keyed by schema name, as elsewhere in the SDK).
+Each ordinary structured body field becomes a top-level key in the JSON body object (keyed by schema name, as elsewhere in the SDK).
+
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body field names only** as keys, even for one field. A `DecideIn struct{ Decision string }` expects `{"decision": "approved"}`, not a bare string. A single struct field named `Payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header fields. Unstructured text and binary fields instead consume the raw body; see below.
+
+CLI positional invocation is different: pass one argument per user-supplied input field in declaration order, including fields bound to path/query/header values over HTTP. Skip `golem.Principal` fields without a principal value or placeholder. Use a Go literal for each value, not one JSON object wrapping the full input. A single struct field is one composite literal without the HTTP `payload` wrapper. Load [`golem-invoke-agent-go`](/v1.6/how-to-guides/go/golem-invoke-agent-go) for CLI examples and caller-only input rules.
 
 `GET` and `HEAD` are **bodyless**: they carry no request body, so they must bind **every** input field from path/query/header. An unbound field on a bodyless verb is a definition error.
 

@@ -1,257 +1,163 @@
 import { glob } from "glob"
 import path from "path"
 import { promises as fs } from "fs"
-import markdownLinkExtractor from "markdown-link-extractor"
+import { unified } from "unified"
+import remarkParse from "remark-parse"
+import remarkMdx from "remark-mdx"
+import Slugger from "github-slugger"
+import { toString } from "mdast-util-to-string"
+import { visit } from "unist-util-visit"
 
-type BaseResult = { link: string }
-
-type LinkCheckResult =
-  | (BaseResult &
-      (
-        | {
-            status: "ignored"
-          }
-        | {
-            status: "alive"
-            filePath?: string
-          }
-      ))
-  | CheckLinkError
-
-type CheckLinkError = BaseResult &
-  (
-    | {
-        status: "dead"
-      }
-    | {
-        status: "error"
-        error: Error
-      }
-  )
-
-type CheckFileResult =
-  | {
-      type: "success"
-    }
-  | {
-      type: "dead-links"
-      file: string
-      deadLinks: CheckLinkError[]
-    }
-  | {
-      type: "fatal"
-      file: string
-      error: Error
-    }
-
-// Helper to get base URL for file system paths
-const makeBaseUrl = (file: string) =>
-  process.platform === "win32" ? path.resolve(file).replace(/\\/g, "/") : path.resolve(file)
-
-const codeBlockRegex = /^```[\S\s]+?^```$/gm
-const headingRegex = /^#+ (.+)$/gm
-
-// Extract all links from markdown content
-const extractLinks = (content: string): string[] => {
-  const links = markdownLinkExtractor(content)
-  return Array.from<string>(new Set(links)).filter(
-    link => link.length > 0 && !link.startsWith("mailto:")
-  )
+const args = process.argv.slice(2)
+const hosts = new Set<string>()
+const files: string[] = []
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--external-host") {
+    if (!args[i + 1]) throw new Error("--external-host requires a host")
+    hosts.add(args[++i])
+  } else if (args[i].startsWith("--")) throw new Error(`Unknown option: ${args[i]}`)
+  else files.push(args[i])
 }
-
-// Extract all headings and convert to valid anchor links
-const extractHeadings = (content: string): string[] => {
-  // First remove code blocks
-  const contentWithoutCode = content.replace(codeBlockRegex, "")
-
-  const headings: string[] = []
-  let match
-
-  while ((match = headingRegex.exec(contentWithoutCode)) !== null) {
-    const heading = match[1]
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, "")
-      .replace(/\s+/g, "-")
-    headings.push(heading)
-  }
-
-  // Handle duplicate headings by adding numbers
-  const uniqueHeadings = new Map<string, number>()
-  return headings.map(heading => {
-    const count = uniqueHeadings.get(heading) || 0
-    uniqueHeadings.set(heading, count + 1)
-    return count === 0 ? heading : `${heading}-${count}`
-  })
-}
-
-namespace MarkdownPath {
-  const cache = new Map<string, string | null>()
-  export const resolve = async (markdownPath: string): Promise<string | null> => {
-    if (cache.has(markdownPath)) {
-      return cache.get(markdownPath)!
-    }
-
-    try {
-      // handle all page layout variants
-      const variants = [
-        markdownPath,
-        `${markdownPath}.mdx`,
-        `${markdownPath}.md`,
-        path.join(markdownPath, "index.mdx"),
-        path.join(markdownPath, "index.md"),
-      ]
-      const filePath = await Promise.any(
-        variants.map(variant => fs.access(variant).then(() => variant))
-      )
-      cache.set(markdownPath, filePath)
-      return filePath
-    } catch {
-      return null
-    }
-  }
-}
-
-const checkLink = async (params: {
-  link: string
-  baseUrl: string
-  headings: string[]
-  ignorePatterns?: RegExp[]
-}): Promise<LinkCheckResult> => {
-  let { link, baseUrl, headings, ignorePatterns = [] } = params
-  // Check if link should be ignored
-  if (ignorePatterns.some(pattern => pattern.test(link))) {
-    return { link, status: "ignored" }
-  }
-
-  try {
-    // Handle same page anchor links
-    if (link.startsWith("#")) {
-      const anchorId = link.slice(1)
-      return {
-        link,
-        status: headings.includes(anchorId) ? "alive" : "dead",
-      }
-    }
-
-    // For other page anchors links only check the base link
-    const anchorIdx = link.indexOf("#")
-    if (anchorIdx !== -1) {
-      link = link.substring(0, anchorIdx)
-    }
-
-    // Handle absolute links. Two cases:
-    //   1. Links that point at a public asset (e.g. /images/foo.png) — those
-    //      live under public/ and are not part of the MDX tree. We check the
-    //      file exists on disk.
-    //   2. Documentation links — those must be version-prefixed (e.g.
-    //      /v1.5/quickstart) and resolve to src/content/<version>/...mdx.
-    if (link.startsWith("/")) {
-      const publicPath = path.join(process.cwd(), "public", link)
-      try {
-        await fs.access(publicPath)
-        return { link, status: "alive", filePath: publicPath }
-      } catch {
-        // fall through to doc resolution
-      }
-      const docPath = path.join(process.cwd(), "src/content", link)
-      const filePath = await MarkdownPath.resolve(docPath)
-      return filePath !== null ? { link, status: "alive", filePath } : { link, status: "dead" }
-    }
-
-    // Handle relative links
-    if (!link.startsWith("http")) {
-      const absolutePath = path.resolve(path.dirname(baseUrl), link)
-      const filePath = await MarkdownPath.resolve(absolutePath)
-      return filePath !== null ? { link, status: "alive", filePath } : { link, status: "dead" }
-    }
-
-    // Handle external links
-    const response = await fetch(link, { method: "HEAD" })
-    return {
-      link,
-      status: response.ok ? "alive" : "dead",
-    }
-  } catch (error) {
-    return {
-      link,
-      status: "error",
-      error: error as Error,
-    }
-  }
-}
-
-const checkFile = async (fileStr: string): Promise<CheckFileResult> => {
-  try {
-    const content = await fs.readFile(fileStr, "utf8")
-    const links = extractLinks(content)
-    const headings = extractHeadings(content)
-    const baseUrl = makeBaseUrl(fileStr)
-
-    const results = await Promise.all(
-      links.map(link =>
-        checkLink({
-          link,
-          baseUrl,
-          headings,
-          ignorePatterns: [/^https?:\/\//, /^.*\/images\/.*/], // Ignore external links for now
+const root = path.resolve("src/content")
+const publicRoot = path.resolve("public")
+type Page = { links: string[]; anchors: Set<string> }
+const pages = new Map<string, Promise<Page>>()
+function page(file: string): Promise<Page> {
+  if (!pages.has(file))
+    pages.set(
+      file,
+      fs.readFile(file, "utf8").then(source => {
+        const tree = unified().use(remarkParse).use(remarkMdx).parse(source)
+        const links: string[] = []
+        const anchors = new Set<string>()
+        const slugger = new Slugger()
+        const definitions = new Map<string, string>()
+        visit(tree, "definition", node => {
+          definitions.set(node.identifier, node.url)
         })
-      )
-    )
-
-    const deadLinks: CheckLinkError[] = results.filter(
-      (result): result is CheckLinkError => result.status === "dead" || result.status === "error"
-    )
-
-    if (deadLinks.length > 0) {
-      return { type: "dead-links", file: fileStr, deadLinks }
-    }
-    return { type: "success" }
-  } catch (err) {
-    return { type: "fatal", file: fileStr, error: err as Error }
-  }
-}
-
-const execute = async (files: string[]) => {
-  const markdownFiles = files.filter(file => file.endsWith(".mdx") || file.endsWith(".md"))
-  console.log(`Checking links in ${markdownFiles.length} files`)
-
-  const errors = (await Promise.all(markdownFiles.map(checkFile))).filter(
-    result => result.type !== "success"
-  )
-
-  if (errors.length > 0) {
-    console.error(`\nFound ${errors.length} files with broken links:`)
-    errors.forEach(error => {
-      switch (error.type) {
-        case "dead-links":
-          console.error(`- ${error.file}:`)
-          error.deadLinks.forEach(link => {
-            if (link.status === "error") {
-              console.error(`  - ${link.link} (${link.status} - ${link.error.message})`)
-            } else {
-              console.error(`  - ${link.link} (${link.status})`)
+        visit(tree, (node, index, parent) => {
+          if (node.type === "heading" && node.depth !== 1) anchors.add(slugger.slug(toString(node)))
+          // Nextra allocates hidden headings for language tabs in document order.
+          if (node.type === "mdxJsxFlowElement" && (node as any).name === "Tabs.Tab") {
+            const items = (parent as any)?.attributes?.find((a: any) => a.name === "items")?.value
+              ?.data?.estree?.body?.[0]?.expression?.elements
+            const label = items?.[index!]?.value
+            if (typeof label === "string") anchors.add(slugger.slug(label))
+          }
+          if (node.type === "link" || node.type === "image") links.push(node.url)
+          if (node.type === "linkReference" || node.type === "imageReference") {
+            const url = definitions.get(node.identifier)
+            if (url) links.push(url)
+          }
+          if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
+            // Field renders its literal meta.path as an anchor (app-manifest-schema.tsx).
+            if ((node as any).name === "Field") {
+              const props =
+                (node as any).attributes?.find((a: any) => a.name === "meta")?.value?.data?.estree
+                  ?.body?.[0]?.expression?.properties ?? []
+              const fieldPath = props.find((p: any) => p.key?.name === "path")?.value?.value
+              if (typeof fieldPath === "string")
+                anchors.add(`fields_${fieldPath.replaceAll(/[<>\[\].*-]/g, "_")}`)
             }
+            for (const attr of (node as any).attributes ?? []) {
+              if (typeof attr.value !== "string") continue
+              if (attr.name === "id") anchors.add(attr.value)
+              if (["href", "src", "lightSrc", "darkSrc"].includes(attr.name)) links.push(attr.value)
+            }
+          }
+        })
+        return { links: [...new Set(links)], anchors }
+      })
+    )
+  return pages.get(file)!
+}
+async function isFile(file: string) {
+  return fs.stat(file).then(
+    s => s.isFile(),
+    () => false
+  )
+}
+async function resolvePage(base: string) {
+  for (const candidate of [
+    base,
+    `${base}.mdx`,
+    `${base}.md`,
+    path.join(base, "index.mdx"),
+    path.join(base, "index.md"),
+  ]) {
+    if (await isFile(candidate)) return candidate
+  }
+}
+const external = new Map<string, Promise<void>>()
+async function check(link: string, source: string) {
+  if (/^(https?:)?\/\//.test(link)) {
+    const url = new URL(link, "https://learn.golem.cloud")
+    if (!hosts.has(url.host)) return
+    if (!external.has(url.href) && external.size >= 50)
+      throw new Error("External URL budget exceeded (50)")
+    if (!external.has(url.href))
+      external.set(
+        url.href,
+        (async () => {
+          const response = await fetch(url, {
+            method: "HEAD",
+            redirect: "manual",
+            signal: AbortSignal.timeout(5000),
           })
-          break
-        case "fatal":
-          console.error(`- ${error.file}: ${error.error.message}`)
-          break
-      }
-    })
-    process.exit(1)
+          if (!response.ok && !(response.status >= 300 && response.status < 400))
+            throw new Error(`HTTP ${response.status}`)
+        })()
+      )
+    return external.get(url.href)
+  }
+  if (/^(mailto:|tel:|data:)/.test(link)) return
+  if (/^[a-z][a-z0-9+.-]*:/i.test(link)) throw new Error("Unsupported URL scheme")
+  const [beforeHash, fragment] = link.split("#", 2)
+  const pathname = decodeURIComponent(beforeHash.split("?", 1)[0])
+  let target: string | undefined
+  if (!pathname) target = source
+  else if (pathname.startsWith("/")) {
+    const asset = path.resolve(publicRoot, `.${pathname}`)
+    if (asset.startsWith(publicRoot + path.sep) && (await isFile(asset))) return
+    target = await resolvePage(path.resolve(root, `.${pathname}`))
+  } else target = await resolvePage(path.resolve(path.dirname(source), pathname))
+  if (!target) throw new Error("Missing file")
+  if (
+    fragment &&
+    /\.mdx?$/.test(target) &&
+    !(await page(target)).anchors.has(decodeURIComponent(fragment))
+  ) {
+    throw new Error(`Missing anchor #${fragment}`)
   }
 }
 
-const main = async () => {
-  const args = process.argv.slice(2)
-  const files =
-    args.length > 0 ? args : await glob("src/content/**/*.{mdx,md}", { ignore: "node_modules/**" })
-  await execute(files)
+async function main() {
+  const selected = files.length ? files : await glob("src/content/**/*.{mdx,md}")
+  console.log(
+    `Checking links in ${selected.length} files (external hosts: ${[...hosts].join(", ") || "none; offline"})`
+  )
+  let failures = 0
+  // Sequential requests bound external concurrency to one; every request has a timeout.
+  for (const file of selected) {
+    const source = path.resolve(file)
+    try {
+      for (const link of (await page(source)).links) {
+        try {
+          await check(link, source)
+        } catch (error) {
+          failures++
+          console.error(`${file}: ${link}: ${(error as Error).message}`)
+        }
+      }
+    } catch (error) {
+      failures++
+      console.error(`${file}: ${(error as Error).message}`)
+    }
+  }
+  console.log(`Link errors: ${failures}`)
+  process.exitCode = failures ? 1 : 0
 }
-
-main()
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error("Failed to check links:", err)
-    process.exit(1)
-  })
+main().catch(error => {
+  console.error(error)
+  process.exitCode = 1
+})

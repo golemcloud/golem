@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{RustBridgeGenerator, RustInput, RustOutput, RustTypeName};
+use super::{RustBridgeGenerator, RustInput, RustOutput, RustRemappedType, RustTypeName};
 use anyhow::{anyhow, bail};
 use golem_common::schema::agent::{InputSchema, OutputSchema};
 use golem_common::schema::schema_type::SchemaType;
@@ -315,11 +315,20 @@ impl RustBridgeGenerator {
         depth: usize,
     ) -> anyhow::Result<TokenStream> {
         let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            let RustTypeName::Derived(name) = name else {
-                bail!("Remapped type names are not supported yet");
-            };
-            let function = Ident::new(&format!("encode_{name}"), Span::call_site());
-            quote! { #function(#val, __writer) }
+            match name {
+                RustTypeName::Remapped(RustRemappedType::Uuid) => quote! {{
+                    let (__high, __low) = (#val).as_u64_pair();
+                    let __fields = vec![
+                        __writer.push(__wire::SchemaValueNode::U64Value(__high)),
+                        __writer.push(__wire::SchemaValueNode::U64Value(__low)),
+                    ];
+                    Ok(__writer.push(__wire::SchemaValueNode::RecordValue(__fields)))
+                }},
+                RustTypeName::Derived(name) => {
+                    let function = Ident::new(&format!("encode_{name}"), Span::call_site());
+                    quote! { #function(#val, __writer) }
+                }
+            }
         } else {
             let inner =
                 self.guest_wire_encode_structural(quote! { __source }, typ, box_recursive, depth)?;
@@ -336,14 +345,30 @@ impl RustBridgeGenerator {
         depth: usize,
     ) -> anyhow::Result<TokenStream> {
         let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            let RustTypeName::Derived(name) = name else {
-                bail!("Remapped type names are not supported yet");
-            };
-            let function = Ident::new(&format!("decode_{name}"), Span::call_site());
-            if box_recursive && self.type_naming.is_recursive_ref(typ) {
-                quote! { #function(#index, __reader).map(Box::new) }
-            } else {
-                quote! { #function(#index, __reader) }
+            match name {
+                RustTypeName::Remapped(RustRemappedType::Uuid) => quote! {
+                    match __reader.take(#index).map_err(|e| e.to_string())? {
+                        __wire::SchemaValueNode::RecordValue(__fields) if __fields.len() == 2 => {
+                            let mut __halves = [0u64; 2];
+                            for (__half, __field) in __halves.iter_mut().zip(__fields) {
+                                *__half = match __reader.take(__field).map_err(|e| e.to_string())? {
+                                    __wire::SchemaValueNode::U64Value(__value) => __value,
+                                    __other => return Err(format!("Expected u64 uuid half, got {:?}", __other)),
+                                };
+                            }
+                            Ok(golem_rust::Uuid::from_u64_pair(__halves[0], __halves[1]))
+                        }
+                        __other => Err(format!("Expected uuid record value, got {:?}", __other)),
+                    }
+                },
+                RustTypeName::Derived(name) => {
+                    let function = Ident::new(&format!("decode_{name}"), Span::call_site());
+                    if box_recursive && self.type_naming.is_recursive_ref(typ) {
+                        quote! { #function(#index, __reader).map(Box::new) }
+                    } else {
+                        quote! { #function(#index, __reader) }
+                    }
+                }
             }
         } else {
             self.guest_wire_decode_structural(index, typ, box_recursive, depth)?

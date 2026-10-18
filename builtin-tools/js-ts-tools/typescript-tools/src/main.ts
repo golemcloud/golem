@@ -1,10 +1,11 @@
+import { join } from 'node:path';
 import { ok, processExitStatusSchema, toolDefinition } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod/v4';
 import { runCli, validatedCwd } from '../../shared/cli-runtime.js';
 import { evaluateCommonJs, installPrivateReadOnlyFiles } from '../../shared/private-vfs.js';
 import { tscBundleSource, typescriptPrivateFiles } from '../../generated/typescript-assets.js';
 
-const DEFAULT_CWD = '/workspace';
+const DEFAULT_CWD = '/';
 const TYPESCRIPT_VERSION = '5.9.2';
 const TYPESCRIPT_ROOT = '/toolchain/typescript/node_modules/typescript';
 const TSC_BUNDLED = '/toolchain/private/tsc.cjs';
@@ -17,7 +18,8 @@ const tscTool = toolDefinition('tsc', { requiresFilesystem: true })
     body
       .option('cwd', z.string(), {
         default: DEFAULT_CWD,
-        doc: 'Project directory used to resolve files and configuration.',
+        env: 'PWD',
+        doc: 'Project directory used to resolve files and configuration. A shell supplies its current directory.',
       })
       .tail('args', z.string(), {
         separator: '--',
@@ -37,7 +39,7 @@ const tscTool = toolDefinition('tsc', { requiresFilesystem: true })
 tscTool.implement({
   tsc: async (input, context) => {
     const cwd = validatedCwd(input.cwd);
-    const home = `${cwd}/.golem-home`;
+    const home = join(cwd, '.golem-home');
     return ok({
       exit_code: await runCli(
         {
@@ -45,7 +47,7 @@ tscTool.implement({
           cwd,
           environment: {
             HOME: home,
-            PATH: `${cwd}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
+            PATH: `${join(cwd, 'node_modules/.bin')}:/usr/local/bin:/usr/bin:/bin`,
           },
           directories: [home],
           stopOnExit: true,

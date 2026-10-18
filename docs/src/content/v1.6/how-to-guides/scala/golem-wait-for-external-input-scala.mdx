@@ -11,7 +11,6 @@ All functions are on the `golem.HostApi` object:
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `createPromise` | `(): PromiseId` | Creates a new promise and returns its ID |
-| `awaitPromiseBlocking` | `(id: PromiseId): Array[Byte]` | Blocks until the promise is completed (sync) |
 | `awaitPromise` | `(id: PromiseId): Future[Array[Byte]]` | Awaits promise completion (async Future) |
 | `completePromise` | `(id: PromiseId, data: Array[Byte]): Boolean` | Completes a promise with raw bytes |
 
@@ -21,8 +20,7 @@ For structured data, use the JSON variants which require an implicit `zio.blocks
 
 | Method | Signature |
 |--------|-----------|
-| `awaitPromiseBlockingJson[A]` | `(id: PromiseId)(implicit Schema[A]): A` |
-| `awaitPromiseJson[A]` | `(id: PromiseId)(implicit Schema[A]): Future[A]` |
+| `awaitPromiseJson[A]` | `(id: PromiseId, rejectExtraFields: Boolean = false)(implicit Schema[A]): Future[A]` |
 | `completePromiseJson[A]` | `(id: PromiseId, value: A)(implicit Schema[A]): Boolean` |
 
 ## Imports
@@ -30,18 +28,21 @@ For structured data, use the JSON variants which require an implicit `zio.blocks
 ```scala
 import golem.HostApi
 import golem.HostApi.PromiseId
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import zio.blocks.schema.Schema
 ```
 
 ## Usage Pattern
 
-### 1. Create a Promise and Wait (Blocking)
+### 1. Create a Promise and Await Its Future
 
 ```scala
 val promiseId = HostApi.createPromise()
 // Pass promiseId to an external system...
 
 // Agent is durably suspended here until the promise is completed
-val data: Array[Byte] = HostApi.awaitPromiseBlocking(promiseId)
+val data: Future[Array[Byte]] = HostApi.awaitPromise(promiseId)
 ```
 
 ### 2. Create a Promise and Wait with JSON Decoding
@@ -50,7 +51,7 @@ val data: Array[Byte] = HostApi.awaitPromiseBlocking(promiseId)
 case class Decision(status: String) derives Schema
 
 val promiseId = HostApi.createPromise()
-val decision: Decision = HostApi.awaitPromiseBlockingJson[Decision](promiseId)
+val decision: Future[Decision] = HostApi.awaitPromiseJson[Decision](promiseId)
 ```
 
 ### 3. Complete a Promise from Another Agent
@@ -76,39 +77,36 @@ Content-Type: application/json
 
 ```scala
 import golem.*
+import golem.runtime.annotations.{agentDefinition, agentImplementation}
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import zio.blocks.schema.Schema
 
 case class Decision(status: String) derives Schema
 
 @agentDefinition
 trait WorkflowAgent extends BaseAgent {
-  class Id(name: String)
+  class Id(val name: String)
 
-  def startApproval(): String
+  def startApproval(): Future[String]
 }
 
 @agentImplementation()
-class WorkflowAgentImpl extends WorkflowAgent {
-  private var name: String = ""
-
-  override def init(id: Id): Unit = {
-    name = id.name
-  }
-
-  override def startApproval(): String = {
+class WorkflowAgentImpl(private val name: String) extends WorkflowAgent {
+  override def startApproval(): Future[String] = {
     // 1. Create a promise
     val promiseId = HostApi.createPromise()
 
-    // 2. Pass promiseId.oplogIdx to an external system
-    // The agent is now durably suspended.
+    // Publish the identity before waiting (replace with your notification integration).
+    println(s"Approval for $name: ${promiseId.agentId}, ${promiseId.oplogIdx}")
 
     // 3. Wait for external completion
-    val decision = HostApi.awaitPromiseBlockingJson[Decision](promiseId)
-
-    if (decision.status == "approved")
-      s"Workflow $name approved ✅"
-    else
-      s"Workflow $name rejected ❌"
+    HostApi.awaitPromiseJson[Decision](promiseId).map { decision =>
+      if (decision.status == "approved")
+        s"Workflow $name approved ✅"
+      else
+        s"Workflow $name rejected ❌"
+    }
   }
 }
 ```

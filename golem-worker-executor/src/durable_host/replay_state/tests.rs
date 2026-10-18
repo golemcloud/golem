@@ -3875,15 +3875,28 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
 }
 
 fn consumer_observation(reader_slot: u32, guest: bool, terminal: bool) -> OplogEntry {
+    consumer_observation_with_parent(reader_slot, guest, terminal, None)
+}
+
+/// A guest consumer observation whose read was performed by the scope rooted at `parent`,
+/// such as a tool body reading its durable stdin.
+fn guest_consumer_observation_of(reader_slot: u32, parent: u64) -> OplogEntry {
+    consumer_observation_with_parent(reader_slot, true, false, Some(OplogIndex::from_u64(parent)))
+}
+
+fn consumer_observation_with_parent(
+    reader_slot: u32,
+    guest: bool,
+    terminal: bool,
+    parent_start_index: Option<OplogIndex>,
+) -> OplogEntry {
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
         StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
         StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
     };
     let observation = if guest {
-        StreamConsumerObservation::Guest {
-            parent_start_index: None,
-        }
+        StreamConsumerObservation::Guest { parent_start_index }
     } else {
         StreamConsumerObservation::Host
     };
@@ -8043,6 +8056,38 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
             .await
             .unwrap(),
         "a nested Start proves the historical entity body began execution"
+    );
+
+    let owned_session_read = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        guest_consumer_observation_of(0, 2),
+    ])
+    .await;
+    assert!(
+        owned_session_read
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
+        "a guest session-input read attributed to the body proves it began execution"
+    );
+
+    let unowned_session_read = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        consumer_observation(0, true, false),
+    ])
+    .await;
+    assert!(
+        !unowned_session_read
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
+        "a guest session-input read of the invocation itself is not entity-body work"
     );
 }
 

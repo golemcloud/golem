@@ -346,10 +346,26 @@ Unstructured text is an arbitrary string, optionally annotated with a language c
 
     <Tabs.Tab>
     Use `golem.schema.UnstructuredText[L]` for inline text with an optional language code or a URL reference. Use `String` as the type argument for unrestricted language codes, or a string-literal union such as `"en" | "de"` to restrict them. Construct values with `UnstructuredText.fromInline(...)` or `UnstructuredText.fromUrl(...)`. See the [Scala HTTP parameter guide](/next/how-to-guides/scala/golem-http-params-scala) for raw-body mapping.
+
+    ```scala
+    import golem.schema.UnstructuredText
+
+    val greeting: UnstructuredText["en" | "de"] =
+      UnstructuredText.fromInline("Hello", "en")
+    val document: UnstructuredText[String] =
+      UnstructuredText.fromUrl("https://example.com/document.txt")
+    ```
     </Tabs.Tab>
 
     <Tabs.Tab>
     Use `@schema.UnstructuredText[L]` from `golemcloud/golem_sdk/schema` for inline text with an optional language code or a URL reference. The type argument implements `AllowedLanguages`; use `AnyLanguage` for unrestricted language codes. Construct values with `UnstructuredText::inline(...)` or `UnstructuredText::url(...)`. See the [MoonBit HTTP parameter guide](/next/how-to-guides/moonbit/golem-http-params-moonbit) for raw-body mapping.
+
+    ```moonbit
+    let greeting : @schema.UnstructuredText[@schema.AnyLanguage] =
+      @schema.UnstructuredText::inline("Hello", language="en")
+    let document : @schema.UnstructuredText[@schema.AnyLanguage] =
+      @schema.UnstructuredText::url("https://example.com/document.txt")
+    ```
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -497,9 +513,25 @@ Unstructured binary data is similar to unstructured text, but it is annotated (a
     </Tabs.Tab>
     <Tabs.Tab>
     Use `golem.schema.UnstructuredBinary[M]` for inline bytes with an optional MIME type or a URL reference. Use `String` as the type argument for unrestricted MIME types, or a string-literal union such as `"image/png" | "image/jpeg"` to restrict them. Construct values with `UnstructuredBinary.fromInline(...)` or `UnstructuredBinary.fromUrl(...)`. See the [Scala HTTP parameter guide](/next/how-to-guides/scala/golem-http-params-scala) for raw-body mapping.
+
+    ```scala
+    import golem.schema.UnstructuredBinary
+
+    val data: UnstructuredBinary["application/octet-stream"] =
+      UnstructuredBinary.fromInline(Array[Byte](1, 2, 3), "application/octet-stream")
+    val image: UnstructuredBinary[String] =
+      UnstructuredBinary.fromUrl("https://example.com/image.png")
+    ```
     </Tabs.Tab>
     <Tabs.Tab>
     Use `@schema.UnstructuredBinary[M]` from `golemcloud/golem_sdk/schema` for inline bytes with an optional MIME type or a URL reference. The type argument implements `AllowedMimeTypes`; use `AnyMimeType` for unrestricted MIME types. Construct values with `UnstructuredBinary::inline(...)` or `UnstructuredBinary::url(...)`. A bare `Bytes` parameter also accepts a raw binary HTTP body when it is the only body parameter. See the [MoonBit HTTP parameter guide](/next/how-to-guides/moonbit/golem-http-params-moonbit) for raw-body mapping.
+
+    ```moonbit
+    let data : @schema.UnstructuredBinary[@schema.AnyMimeType] =
+      @schema.UnstructuredBinary::inline(b"\x01\x02\x03", mime_type="application/octet-stream")
+    let image : @schema.UnstructuredBinary[@schema.AnyMimeType] =
+      @schema.UnstructuredBinary::url("https://example.com/image.png")
+    ```
     </Tabs.Tab>
     <Tabs.Tab>
     ```go

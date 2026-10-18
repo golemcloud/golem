@@ -109,7 +109,14 @@ pub fn MoonBitPermissionAgent::derive_chain(
     )
     // A derived card is not in the wallet, so it cannot be a scope parent.
     let derived_parent = try {
-      @permissions.derive_scope([child], inspect_bounds(grant)).drop()
+      match child {
+        Concrete(card) =>
+          @permissions.derive_scope([card], inspect_bounds(grant)).drop()
+        Template(card) =>
+          @permissions.derive_scope([], inspect_bounds(grant), template_parents=[
+            card,
+          ]).drop()
+      }
       "accepted"
     } catch {
       error => error.kind()
@@ -251,7 +258,7 @@ fn template_oplog_grant(
 ///|
 /// A concrete grant to read the oplog of the agent with the owner path
 /// `owner` (`account/application/environment/component/agent`). A requested
-/// grant must be concrete: the host rejects a slot variable such as `?agent`.
+/// scope grant must be concrete: the host rejects a slot such as `?agent`.
 fn oplog_read_grant(
   root : @permissions.PolymorphicPermissionCard,
   owner : String,

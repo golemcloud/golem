@@ -36,9 +36,10 @@ use crate::model::oplog::payload::external_durable_stream::{
     DurableStreamTransport, DurableStreamWriterOptions,
 };
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
-    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
-    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
+    FileSystemError, ObjectMetadata, PermissionCardDeriveError, PermissionCardRevokeError,
+    SecretRevealAudit, SecretRevealError, SerializableDateTime, SerializableFileTimes,
+    SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
+    SerializableP3UdpDatagram, SerializablePermissionCardLiveness, SerializablePermissionError,
     SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
     SerializableWebsocketMessage, SerializableWebsocketReconstructionPolicy,
 };
@@ -268,6 +269,14 @@ oplog_payload! {
         },
         PermissionCardRevoke {
             card_id: Uuid,
+        },
+        PermissionCardLiveness {
+            card_id: Uuid,
+        },
+        /// The ids of the cards behind the handles that a card operation decides on, in argument
+        /// order.
+        PermissionCardDecision {
+            card_ids: Vec<Uuid>,
         },
         PermissionCardTransfer {
             transfer_id: Uuid,
@@ -635,12 +644,22 @@ oplog_payload! {
             credit_after_at_ms: i64,
         },
         PermissionCardDerived {
-            card: Vec<u8>,
+            result: Result<Vec<u8>, PermissionCardDeriveError>,
+        },
+        PermissionCardLiveness {
+            liveness: SerializablePermissionCardLiveness,
+        },
+        /// The authorization decision of a card operation. `Ok` holds the serialized data that
+        /// the operation continues with, as the decision saw it.
+        PermissionCardDecision {
+            result: Result<Vec<u8>, SerializablePermissionError>,
         },
         PermissionCardsRevoked {
             result: Result<Vec<Uuid>, PermissionCardRevokeError>,
         },
-        PermissionCardTransferComplete {},
+        PermissionCardTransferComplete {
+            result: Result<(), PermissionCardDeriveError>,
+        },
         GolemRetryPolicies {
             policies: Vec<NamedRetryPolicy>
         },
@@ -1015,8 +1034,14 @@ pub mod host_functions {
         (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
         (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
+        (GolemPermissionsCardLiveness => "golem::permissions::types", "card-liveness", PermissionCardLiveness, PermissionCardLiveness),
         (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
+        (GolemPermissionsInspectDecision => "golem::permissions::inspect", "inspect-card-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveDecision => "golem::permissions::derive", "derive-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveFromWalletDecision => "golem::permissions::derive", "derive-from-wallet-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveScopeDecision => "golem::permissions::derive", "derive-scope-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsInstallDecision => "golem::permissions::wallet", "install-card-decision", PermissionCardDecision, PermissionCardDecision),
         (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),
         (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool),
         (RdbmsMysqlDbConnectionBeginTransaction => "rdbms::mysql::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount, denied = denied::rdbms::row_count),

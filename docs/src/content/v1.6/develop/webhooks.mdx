@@ -154,7 +154,7 @@ When a webhook is created, Golem generates a URL with the following format:
 <scheme>://<domain>/<prefix>/<suffix>/<id>
 ```
 
-- **`<domain>`** — the domain of the HTTP API deployment
+- **`<domain>`** — the domain of the HTTP API deployment. An agent type can be listed in only one HTTP API deployment per environment, so its webhook URLs always use one domain
 - **`<prefix>`** — defaults to `/webhooks`, customizable via the `webhookUrl` field in the `httpApi` deployment configuration in `golem.yaml`
 - **`<suffix>`** — defaults to the agent type name in kebab-case (e.g., `my-webhook-agent`), customizable via `webhookSuffix` in agent annotations
 - **`<id>`** — a unique identifier for this particular webhook instance

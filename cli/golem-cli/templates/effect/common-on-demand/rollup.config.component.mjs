@@ -68,6 +68,24 @@ if (actualEffectVersion !== expectedEffectVersion) {
       `Pin "effect" to "${expectedEffectVersion}" in package.json.`,
   );
 }
+// Annotation and circular dependency warnings that only involve dependency
+// modules are not actionable in the application, so they are dropped. The same
+// warnings about application sources are still reported.
+const dependencyOnlyLogCodes = new Set(["INVALID_ANNOTATION", "CIRCULAR_DEPENDENCY"]);
+
+const isDependencyModule = (id) =>
+  id.replaceAll("\\", "/").includes("/node_modules/");
+
+const onLog = (level, log, handler) => {
+  if (level === "warn" && dependencyOnlyLogCodes.has(log.code)) {
+    const ids = log.ids ?? (log.id ? [log.id] : []);
+    if (ids.length > 0 && ids.every(isDependencyModule)) {
+      return;
+    }
+  }
+  handler(level, log);
+};
+
 const configuration = () => ({
   input: "./src/main.ts",
   output: {
@@ -77,6 +95,7 @@ const configuration = () => ({
     sourcemap: false,
   },
   external: externalPackages,
+  onLog,
   plugins: [
     nodeResolve({
       extensions: [".mjs", ".js", ".node", ".ts"],

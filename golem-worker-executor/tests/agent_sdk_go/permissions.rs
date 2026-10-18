@@ -50,7 +50,9 @@ use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{CardRevokeResult, CardService, CardState};
+use golem_worker_executor::services::card::{
+    CardRevokeResult, CardService, CardState, RuntimeCardCreation,
+};
 use golem_worker_executor::services::rpc::DurableStreamRemoteError;
 use golem_worker_executor::services::worker_proxy::{
     InvocationRequestStream, InvocationResponseStream, WorkerProxy, WorkerProxyError,
@@ -141,9 +143,9 @@ impl CardService for RegistryCardService {
         &self,
         card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         self.0.add(card.clone());
-        Ok(card)
+        Ok(RuntimeCardCreation::Created(Box::new(card)))
     }
 
     async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {

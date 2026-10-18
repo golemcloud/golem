@@ -6,6 +6,9 @@ Any Golem application can be automatically exposed through **MCP** (Model Contex
 
 <Callout type="info">
 The MCP server uses port **9007** by default, separate from the HTTP API gateway on port 9006.
+The HTTP API gateway port also serves MCP deployments, chosen by the request's host, so a
+deployment can expose both on one port. A domain holds either an HTTP API deployment or an
+MCP deployment, not both.
 </Callout>
 
 ## Enabling MCP
@@ -236,9 +239,13 @@ Golem provides special data types that map naturally to MCP content types:
 
 These types allow agents to exchange rich content with MCP clients beyond simple JSON values.
 
-<Callout type="warning">
-MoonBit currently supports schema-native multimodal values through `@multimodal.Multimodal[T]` and `#derive.multimodal`, but does not yet provide user-facing `UnstructuredText`, `UnstructuredBinary`, or multipart wrappers. Use supported structured schemas or multimodal values instead; the removed `#derive.text_languages` and `#derive.mime_types` annotations are not available.
-</Callout>
+MoonBit exposes `@schema.UnstructuredText[L]` and `@schema.UnstructuredBinary[M]`
+from `golemcloud/golem_sdk/schema`, including inline and URL constructors.
+See [unstructured text and binary values](/v1.6/type-mapping#unstructured-text)
+for construction examples. For mixed content, MoonBit uses
+`@multimodal.Multimodal[T]` and `#derive.multimodal`; it does not expose a
+separate public `Multipart` wrapper. The removed `#derive.text_languages` and
+`#derive.mime_types` annotations are not available.
 
 ## Testing with MCP Inspector
 
@@ -262,7 +269,8 @@ Declare imports in order for each environment:
 mcp:
   imports:
     local:
-      - url: https://tools.example.com/mcp
+      - name: catalog
+        url: https://tools.example.com/mcp
         prefix: catalog
         include: ["search*"]
 ```
@@ -272,10 +280,17 @@ with `-`, so `search_items` becomes `catalog-search-items`. Use either `include`
 `exclude`, not both. Application tools and the selected environment's ambient native
 tools take precedence over imports; among imports, earlier entries win. Imports do
 not need top-level `tools` declarations.
+The name of a [default tool](/v1.6/app-manifest#default-tools), such as `bash`, is
+reserved: when the deployment has a tool with that name, a deployment is refused if an
+import lists a tool with the same name at deploy time. If the tools of the imports cannot
+be read at deploy time, the deployment is refused when an import can supply that name;
+an import with a `prefix`, or with a filter that leaves the name out, cannot.
 The optional `version` selects the MCP protocol revision, not a tool release.
 The supported import protocol is currently `2026-07-28` Streamable HTTP.
 
 ### Generate typed clients
+
+Follow [Generate typed clients for existing tools](/v1.6/how-to-guides/common/golem-generating-tool-clients#generate-an-mcp-imported-tool-client) for a complete TypeScript example, including generated imports, a typed call, and output collection. It also links the Rust, Effect, Scala, and MoonBit consumer workflows. Client generation selects a schema; a deployed binding and the calling agent's permissions authorize invocation.
 
 Add the projected name to a component's tool dependencies, using the component's
 normal language template:
@@ -286,10 +301,18 @@ components:
     # Keep the component's existing dir, templates and build settings.
     dependencies:
       tools: [catalog-search-items]
+    tools:
+      catalog-search-items: {}
 ```
 
-`golem build` resolves the current manifest's imports before generating the
-consumer's tool clients. It does not use an older deployment's declarations.
+The dependency automatically selects client generation in the consumer's language;
+no `bridge.<language>.internal.tools` entry is needed. The separate `tools` binding
+exposes the import for invocation. A dependency does not add a binding, and a
+binding alone does not generate a client. Configure the calling agent's runtime
+permissions separately.
+
+`golem build` resolves the current manifest's imports before automatically generating
+the dependency clients. It does not use an older deployment's declarations.
 Rust, TypeScript, Effect, Scala and MoonBit use their existing tool-client APIs.
 Unavailable metadata fails client generation rather than silently generating
 stale types. A changed projection causes regeneration on the next build.
@@ -322,14 +345,29 @@ OAuth-protected imports need consent before generating typed clients. The enviro
 and security scheme must already exist, but the import need not be deployed:
 
 ```shell
-golem api mcp-import authorize 0 --manifest
+golem api mcp-import authorize catalog --manifest
 # Open the authorization URL, then copy the full callback URL.
-golem api mcp-import complete 0 --manifest '<callback-url>'
-golem api mcp-import status 0 --manifest
+golem api mcp-import complete catalog --manifest '<callback-url>'
+golem api mcp-import status catalog --manifest
 ```
 
-The index is zero-based in the selected environment's import list. Keep the import
-declaration and its rendered environment variables unchanged between authorization
+The optional `name` is CLI metadata and must match `[a-z][a-z0-9_-]*`, unique within
+the environment. Without a name, use the exact resolved full URL as the selector.
+If several imports share a URL, add distinct names and select one. Names do not
+change tool precedence, reach the server, or isolate OAuth grants.
+URL selection ignores declarations whose URLs cannot be rendered when exactly
+one successfully rendered URL matches. If none matches, the CLI reports which
+declarations could not be rendered.
+
+Command output uses the selected declaration's name, even when selected by URL.
+For unnamed imports, structured output contains `"import": null` and human output
+uses "Unnamed MCP import". The CLI does not echo the import URL because it can
+contain credentials. For unnamed OAuth imports, replace `'<import-url>'` in the
+printed completion command with the original exact URL. Keep the printed
+`--revision` or `--manifest` option.
+
+These commands do not add imports: declaring an OAuth-protected upstream does not
+authorize it. Keep the import configuration and its rendered environment variables unchanged between authorization
 and completion: consent is bound to that exact target. The CLI does not start a
 callback listener. These operations require permission to update the security
 scheme. Golem stores the grant under the environment owner's account; the provider
@@ -337,15 +375,24 @@ identity is the one used during consent.
 
 For a deployed import, omit `--manifest` and use the revision printed by
 `authorize` when completing consent. `--manifest` and `--revision` are mutually
-exclusive. To revoke a grant, use `golem api mcp-import disconnect 0 --manifest`,
+exclusive. To revoke a grant, use `golem api mcp-import disconnect catalog --manifest`,
 or select a deployed revision instead. Redeploying alone does not grant consent.
 
 ### Inspect and refresh deployed definitions
 
 ```shell
-golem api mcp-import tools 0 --revision 42
-golem api mcp-import refresh 0 --revision 42
+golem api mcp-import tools catalog --revision 42
+golem api mcp-import refresh catalog --revision 42
+# A name is not required for an import with a unique URL:
+golem api mcp-import tools 'https://tools.example.com/mcp' --revision 42
 ```
+
+Deployed commands require a local manifest and permission to view the deployment
+summary. The CLI matches the selected import's complete configuration against the
+selected revision, so local reordering does not change the target. A missing match
+requires the declaration and environment values for that revision, or deployment
+of the changed configuration. Identical deployed configurations cannot be selected
+unambiguously even with distinct CLI names; use distinct configurations.
 
 Omitting `--revision` selects the environment's current deployment. Inspection
 shows that import's projected definitions before native and earlier-import

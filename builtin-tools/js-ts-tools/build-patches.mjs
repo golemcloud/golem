@@ -32,6 +32,45 @@ export const npmBuildPatches = new Map(
         ['() => require(cliEntry)', '() => cliEntry'],
       ],
     },
+    {
+      id: 'npm-init-default-input-runtime-path',
+      package: 'npm',
+      packageVersion: '10.9.9',
+      relativePath: 'node_modules/init-package-json/lib/init-package-json.js',
+      sourceSha256: '9b45c6a7e9c0975ff64e0d65e42435a6705fc77c4f9790b2045c892b81365097',
+      replacements: [
+        [
+          "const def = require.resolve('./default-input.js')",
+          "const def = path.join(__dirname, 'default-input.js')",
+        ],
+      ],
+    },
+    {
+      id: 'npm-init-default-input-bundled-dependencies',
+      package: 'npm',
+      packageVersion: '10.9.9',
+      relativePath: 'node_modules/promzard/lib/index.js',
+      sourceSha256: '4d15120547acffc5d1d453e1630167677b9c2d732de4bacc33d902b5242710a0',
+      replacements: [
+        [
+          'const files = {}',
+          [
+            'const files = {}',
+            "const defaultInput = require('path').join(__dirname, '../../init-package-json/lib/default-input.js')",
+            'const defaultInputDependencies = {',
+            "  'npm-package-arg': () => require('npm-package-arg'),",
+            "  semver: () => require('semver'),",
+            "  'validate-npm-package-license': () => require('validate-npm-package-license'),",
+            "  'validate-npm-package-name': () => require('validate-npm-package-name'),",
+            '}',
+          ].join('\n'),
+        ],
+        [
+          'this.#ctx.require = (p) => mod.require(p)',
+          'this.#ctx.require = (p) => this.#file === defaultInput && Object.hasOwn(defaultInputDependencies, p) ? defaultInputDependencies[p]() : mod.require(p)',
+        ],
+      ],
+    },
   ].map((patch) => [patch.relativePath, patch]),
 );
 

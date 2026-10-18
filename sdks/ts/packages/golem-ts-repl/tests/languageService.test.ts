@@ -116,6 +116,26 @@ describe('LanguageService remote method diagnostic hints', () => {
     expectRemoteMethodHint(result!, '(authorization: string): Promise<string>;');
   });
 
+  it('marks omittable trailing arguments as optional in remote method hints', () => {
+    const history = remoteMethodHistory.replace(
+      'declare const MyAgent: { get: RemoteMethod<[string], string> };',
+      'declare const MyAgent: { get: RemoteMethod<[authorization: string, scope?: string], string> };',
+    );
+    const config = {
+      ...remoteMethodConfig,
+      agents: {
+        MyAgent: {
+          ...remoteMethodConfig.agents!.MyAgent,
+          methodParameterNames: { get: ['authorization', 'scope'] },
+        },
+      },
+    };
+    const result = typeCheckSnippet(history, 'MyAgent.get()', config);
+
+    expect(result?.formattedErrors).toContain('TS2554');
+    expectRemoteMethodHint(result!, '(authorization: string, scope?: string): Promise<string>;');
+  });
+
   it('enriches wrong argument diagnostics for remote method invocation', () => {
     const result = typeCheckSnippet(remoteMethodHistory, 'MyAgent.get(123)', remoteMethodConfig);
 

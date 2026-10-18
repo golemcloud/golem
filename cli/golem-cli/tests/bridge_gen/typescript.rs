@@ -34,7 +34,7 @@ use golem_common::schema::schema_type::{
     QuantitySpec, ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
 };
 use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
-use golem_common::schema::tool::StreamSpec;
+use golem_common::schema::tool::{StreamSpec, Tool};
 use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
@@ -219,6 +219,183 @@ async function exercise() {
   client.produce.schedule({ seconds: 0n, nanoseconds: 0 });
   // @ts-expect-error recursive stream methods cannot be scheduled
   client.recursive.scheduleCancelable({ seconds: 0n, nanoseconds: 0 }, { tag: 'branch', val: [] });
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn guest_trailing_optional_parameters_and_sdk_results_compile() {
+    let result = |ok: SchemaType, err: SchemaType| {
+        SchemaType::result(ResultSpec {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(err)),
+        })
+    };
+    let agent_type = agent(
+        "OptionalAgent",
+        "typescript",
+        vec![
+            field("name", SchemaType::string()),
+            field("nickname", SchemaType::option(SchemaType::string())),
+            field("tag", SchemaType::option(SchemaType::u32())),
+        ],
+        vec![
+            method(
+                "lookup",
+                vec![
+                    field("first", SchemaType::option(SchemaType::string())),
+                    field("count", SchemaType::u32()),
+                    field("last", SchemaType::option(SchemaType::string())),
+                ],
+                Some(result(SchemaType::u64(), SchemaType::string())),
+            ),
+            method(
+                "accept",
+                vec![field(
+                    "outcome",
+                    result(SchemaType::string(), SchemaType::u32()),
+                )],
+                Some(SchemaType::option(SchemaType::string())),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("optional-agent-guest-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("optional-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("nickname?: string"), "{source}");
+    assert!(
+        source.contains("[first: string | undefined, count: number, last?: string]"),
+        "{source}"
+    );
+    assert!(source.contains("base.Result<bigint, string>"), "{source}");
+    assert!(source.contains("base.Result.ok("), "{source}");
+    assert!(!source.contains("'ok' in v"), "{source}");
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { bridge as base } from '@golemcloud/golem-ts-sdk';
+import { OptionalAgent } from './optional-agent-guest-client';
+async function exercise() {
+  const client = OptionalAgent.get('name');
+  OptionalAgent.get('name', 'nick');
+  OptionalAgent.get('name', undefined, 3);
+  const found: base.Result<bigint, string> = await client.lookup(undefined, 1);
+  if (found.tag === 'ok') { const value: bigint = found.val; void value; }
+  const isOk: boolean = found.isOk();
+  void isOk;
+  await client.lookup('first', 1, 'last');
+  client.lookup.trigger(undefined, 1);
+  client.lookup.schedule({ seconds: 0n, nanoseconds: 0 }, undefined, 1);
+  // @ts-expect-error an optional parameter before a required one cannot be omitted
+  await client.lookup(1);
+  const accepted: string | undefined = await client.accept(base.Result.ok('yes'));
+  await client.accept(base.Result.err(1));
+  void accepted;
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn guest_named_nested_and_unit_results_compile() {
+    let agent_type = agent(
+        "OutcomeAgent",
+        "typescript",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "named",
+                vec![field("outcome", ref_to("outcome"))],
+                Some(ref_to("outcome")),
+            ),
+            method(
+                "nested",
+                vec![],
+                Some(SchemaType::option(ref_to("wrapped"))),
+            ),
+            method(
+                "unit-ok",
+                vec![field("note", ref_to("maybe-note"))],
+                Some(SchemaType::result(ResultSpec {
+                    ok: None,
+                    err: Some(Box::new(SchemaType::string())),
+                })),
+            ),
+        ],
+        vec![
+            def(
+                "outcome",
+                SchemaType::result(ResultSpec {
+                    ok: Some(Box::new(SchemaType::u32())),
+                    err: Some(Box::new(SchemaType::string())),
+                }),
+            ),
+            def(
+                "wrapped",
+                SchemaType::variant(vec![
+                    variant_case("done", Some(ref_to("outcome"))),
+                    variant_case("pending", None),
+                ]),
+            ),
+            def("maybe-note", SchemaType::option(SchemaType::string())),
+        ],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("outcome-agent-guest-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("outcome-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("base.Result<number, string>"), "{source}");
+    assert!(source.contains("base.Result<void, string>"), "{source}");
+    assert!(source.contains("note?: MaybeNote"), "{source}");
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { bridge as base } from '@golemcloud/golem-ts-sdk';
+import { OutcomeAgent } from './outcome-agent-guest-client';
+async function exercise() {
+  const client = OutcomeAgent.get('name');
+  const named: base.Result<number, string> = await client.named(base.Result.ok(1));
+  const nested = await client.nested();
+  if (nested !== undefined && nested.tag === 'done') {
+    const inner: base.Result<number, string> = nested.val;
+    void inner;
+  }
+  const unit: base.Result<void, string> = await client.unitOk();
+  await client.unitOk('note');
+  void named; void unit;
 }
 void exercise;
 "#,
@@ -876,6 +1053,10 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(!source.contains("map((entry: any) => [ {"));
     assert!(source.contains("{ tag: 'option', value:"));
     assert!(source.contains("{ tag: 'result', result:"));
+    assert!(source.contains("result: base.Result<bigint, string>"));
+    assert!(source.contains("base.Result.ok("));
+    assert!(source.contains("v.tag === 'ok'"));
+    assert!(!source.contains("'ok' in v"));
     assert!(source.contains("{ tag: 'union', unionTag:"));
     assert!(source.contains("n.unionTag"));
     assert!(source.contains("{ tag: 'path', value:"));
@@ -1926,4 +2107,67 @@ fn http_router_bridge_rejection_uses_kind_not_name() {
                 .contains("HTTP routers do not have ordinary agent clients")
         );
     }
+}
+
+pub(super) fn grep_tool_with_result_and_trailing_option(stdin_required: Option<bool>) -> Tool {
+    let mut tool = grep_tool();
+    let body = tool.commands.nodes[0].body.as_mut().unwrap();
+    body.flags.clear();
+    body.result.as_mut().unwrap().type_ = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::list(SchemaType::string()))),
+        err: Some(Box::new(SchemaType::u32())),
+    });
+    body.stdin = stdin_required.map(|required| StreamSpec {
+        doc: Default::default(),
+        mime: vec![],
+        required,
+    });
+    tool
+}
+
+#[test]
+fn guest_tool_trailing_optional_fields_and_sdk_results_compile() {
+    let package_name = tool_bridge_client_directory_name("grep");
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path()).unwrap().join(&package_name);
+    TypeScriptToolBridgeGenerator::new(
+        grep_tool_with_result_and_trailing_option(None),
+        &package_dir,
+        true,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source_path = package_dir.join(format!("{package_name}.ts"));
+    let source = std::fs::read_to_string(&source_path).unwrap();
+    assert!(source.contains("max_count?: number)"), "{source}");
+    assert!(
+        source.contains("Promise<base.Result<string[], number>>"),
+        "{source}"
+    );
+    assert!(source.contains("base.Result.ok("), "{source}");
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\n\ndeclare const consumer: GrepClient;\nasync function exercise() {{\n  const found: base.Result<string[], number> = await consumer.grep(undefined, false, 'needle', []);\n  if (found.tag === 'ok') {{ const matches: string[] = found.val; void matches; }}\n}}\nvoid exercise;\n"
+        ),
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path()).unwrap().join(&package_name);
+    TypeScriptToolBridgeGenerator::new(
+        grep_tool_with_result_and_trailing_option(Some(true)),
+        &package_dir,
+        true,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
+    assert!(
+        source.contains("max_count: number | undefined, stdin: ToolInputStream)"),
+        "{source}"
+    );
 }

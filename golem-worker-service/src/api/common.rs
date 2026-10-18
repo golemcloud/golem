@@ -397,6 +397,9 @@ impl From<RegistryServiceError> for ApiEndpointError {
             RegistryServiceError::AlreadyExists(_) => {
                 Self::conflict(api::error_code::RESOURCE_ALREADY_EXISTS, value)
             }
+            RegistryServiceError::RuntimeCardRevoked(_) => {
+                Self::conflict(api::error_code::RUNTIME_CARD_REVOKED, value)
+            }
             RegistryServiceError::InternalServerError(_) => {
                 Self::internal(api::error_code::INTERNAL_DEPENDENCY_FAILURE, value)
             }

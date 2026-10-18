@@ -824,6 +824,27 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         Ok(response.await.ok())
     }
 
+    /// Observes an attached status, repairing a detached projection before replying. A failed
+    /// repair returns its cause; a stopped actor returns `None` so the caller can resolve retirement.
+    pub async fn observe_repaired_status(
+        &self,
+    ) -> Result<Option<Arc<AgentStatusRecord>>, WorkerExecutorError> {
+        let (done, response) = oneshot::channel();
+        if self
+            .commit
+            .status_jobs
+            .send(StatusJob::RepairedStatus { done })
+            .is_err()
+        {
+            return Ok(None);
+        }
+        response
+            .await
+            .ok()
+            .transpose()
+            .map_err(WorkerExecutorError::from)
+    }
+
     pub async fn try_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
         self.observe_status()
             .await?

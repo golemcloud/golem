@@ -4039,6 +4039,9 @@ impl ReplayState {
     /// rooted at `start_index`. An incomplete filesystem-capable tool with no such work can release
     /// its historical body-reconstruction fence while it continues staging fresh input; a tool
     /// whose prior body started must retain the fence and reconstruct those descendants first.
+    ///
+    /// A guest read of a durable session input is recorded in the session's attribution, not the
+    /// body's, and names the body only in its observation. Such a read is work of the body too.
     pub(crate) async fn has_visible_scope_descendant(
         &self,
         start_index: OplogIndex,
@@ -4051,6 +4054,20 @@ impl ReplayState {
             let state = self.cursor.state.lock().await;
             state.skipped_regions.clone()
         };
+        if self
+            .cursor
+            .stream_observations
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(index, parent)| {
+                *parent == Some(start_index)
+                    && *index <= replay_target
+                    && !skipped_regions.is_in_deleted_region(*index)
+            })
+        {
+            return Ok(true);
+        }
         let mut projection = OplogScopeProjection::new(start_index);
         let mut next = start_index.next();
         while next <= replay_target {

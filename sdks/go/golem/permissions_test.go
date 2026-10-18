@@ -48,6 +48,7 @@ type fakeCards struct {
 	target   perm.Holder
 	err      witTypes.Option[perm.PermissionError]
 	next     *types.PermissionCard
+	template bool
 	wallet   []perm.WalletCard
 }
 
@@ -70,6 +71,16 @@ func newFakeCards(t *testing.T) *fakeCards {
 		}
 		return witTypes.Ok[*types.PermissionCard, perm.PermissionError](f.next)
 	}
+	persistentResult := func() witTypes.Result[perm.PersistentCard, perm.PermissionError] {
+		if f.err.IsSome() {
+			return witTypes.Err[perm.PersistentCard](f.err.Some())
+		}
+		c := perm.MakePersistentCardConcrete(f.next)
+		if f.template {
+			c = perm.MakePersistentCardTemplate(f.next)
+		}
+		return witTypes.Ok[perm.PersistentCard, perm.PermissionError](c)
+	}
 	permissionsHostOps = permissionsHost{
 		id:      func(c *types.PermissionCard) types.CardId { return f.ids[c] },
 		parents: func(c *types.PermissionCard) []types.CardId { return f.parents[c] },
@@ -85,16 +96,16 @@ func newFakeCards(t *testing.T) *fakeCards {
 				UpperNegative: []perm.PatternGrant{{Class: "blob", Verb: "write", ResourceId: "b"}},
 			})
 		},
-		derive: func(parent *types.PermissionCard, lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[*types.PermissionCard, perm.PermissionError] {
+		derive: func(parent *types.PermissionCard, lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[perm.PersistentCard, perm.PermissionError] {
 			f.scope = []*types.PermissionCard{parent}
 			f.derived = [][]perm.PatternGrant{lp, ln, up, un}
 			f.lifespan = lifespan
-			return cardResult()
+			return persistentResult()
 		},
-		deriveFromWallet: func(lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[*types.PermissionCard, perm.PermissionError] {
+		deriveFromWallet: func(lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[perm.PersistentCard, perm.PermissionError] {
 			f.derived = [][]perm.PatternGrant{lp, ln, up, un}
 			f.lifespan = lifespan
-			return cardResult()
+			return persistentResult()
 		},
 		deriveScope: func(parents []*types.PermissionCard, lp, ln, up, un []perm.PatternGrant) witTypes.Result[*types.PermissionCard, perm.PermissionError] {
 			f.scope = parents
@@ -172,7 +183,7 @@ func TestPermissionErrorKindsAreTheWitCases(t *testing.T) {
 	if !reflect.DeepEqual(cases, permissionErrorKindNames[:]) {
 		t.Fatalf("the WIT declares %v, the SDK pins %v", cases, permissionErrorKindNames)
 	}
-	if got := permissionTagCount(t); got != permissionErrorKindCount {
+	if got := permissionTagCount(t, "PermissionError"); got != permissionErrorKindCount {
 		t.Fatalf("the bindings declare %d permission-error tags, the SDK pins %d", got, permissionErrorKindCount)
 	}
 
@@ -208,7 +219,7 @@ func TestPermissionErrorKindsAreTheWitCases(t *testing.T) {
 	}
 }
 
-func permissionTagCount(t *testing.T) int {
+func permissionTagCount(t *testing.T, prefix string) int {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), "internal/wit/golem_permissions_types/wit_bindings.go", nil, 0)
 	if err != nil {
@@ -218,7 +229,7 @@ func permissionTagCount(t *testing.T) int {
 	ast.Inspect(file, func(node ast.Node) bool {
 		if vs, ok := node.(*ast.ValueSpec); ok {
 			for _, name := range vs.Names {
-				if strings.HasPrefix(name.Name, "PermissionError") {
+				if strings.HasPrefix(name.Name, prefix) {
 					n++
 				}
 			}
@@ -226,6 +237,54 @@ func permissionTagCount(t *testing.T) int {
 		return true
 	})
 	return n
+}
+
+func TestPersistentDerivationUsesHostTag(t *testing.T) {
+	const persistentCardTagCount = 2
+	if got := permissionTagCount(t, "PersistentCard"); got != persistentCardTagCount {
+		t.Fatalf("the bindings declare %d persistent-card cases, the SDK handles %d", got, persistentCardTagCount)
+	}
+	for _, template := range []bool{false, true} {
+		for _, wallet := range []bool{false, true} {
+			f := newFakeCards(t)
+			f.template = template
+			f.next = &types.PermissionCard{}
+			parent := f.card(1, 2)
+			// Deliberately use identical concrete requests for both host tags.
+			b := Bounds{LowerPositive: []PatternGrant{{Class: "kv", Owner: "*", Recipient: "*", Verb: "read", ResourceID: "*"}}}
+			var c PersistentCard
+			var err error
+			if wallet {
+				c, err = DeriveFromWallet(b, None[Lifespan]())
+			} else {
+				c, err = parent.Derive(b, None[Lifespan]())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			concrete, isConcrete := c.Concrete()
+			poly, isTemplate := c.Template()
+			if isConcrete == template || isTemplate != template {
+				t.Fatalf("host template=%v became concrete=%v template=%v", template, isConcrete, isTemplate)
+			}
+			if template {
+				if c.Kind() != WalletCardTemplate || poly.cardState() != c.cardState() {
+					t.Fatal("template lost its tag or shared handle")
+				}
+				poly.Release()
+			} else {
+				if c.Kind() != WalletCardConcrete || concrete.cardState() != c.cardState() {
+					t.Fatal("concrete lost its tag or shared handle")
+				}
+				concrete.Release()
+			}
+			c.Release()
+			if !reflect.DeepEqual(f.released, []*types.PermissionCard{f.next}) {
+				t.Fatal("views did not release exactly one shared handle")
+			}
+			mustPanicMoved(t, "persistent ID", func() { c.ID() })
+		}
+	}
 }
 
 func TestDerivePassesTheBoundsInWitOrder(t *testing.T) {
@@ -615,28 +674,31 @@ func TestDecodingACardTakesItOutOfTheValue(t *testing.T) {
 // a type nobody validated fails.
 func TestCardManagementValuesHaveNoSchema(t *testing.T) {
 	type holds struct {
-		Scope    ScopeCard
-		ID       CardID
-		Holder   Holder
-		Lifespan Lifespan
-		Wallet   WalletCard
+		Scope      ScopeCard
+		ID         CardID
+		Holder     Holder
+		Lifespan   Lifespan
+		Wallet     WalletCard
+		Persistent PersistentCard
 	}
 	g := engine.GraphBuilder{E: defs.Engine}
 	g.Node(defs.Compile(reflect.TypeFor[holds]()))
 	for typ, name := range map[reflect.Type]string{
 		reflect.TypeFor[ScopeCard](): "golem.ScopeCard", reflect.TypeFor[CardID](): "golem.CardID",
 		reflect.TypeFor[Holder](): "golem.Holder", reflect.TypeFor[Lifespan](): "golem.Lifespan",
-		reflect.TypeFor[WalletCard](): "golem.WalletCard",
+		reflect.TypeFor[WalletCard]():     "golem.WalletCard",
+		reflect.TypeFor[PersistentCard](): "golem.PersistentCard",
 	} {
 		if why := g.Invalids[typ]; !strings.HasPrefix(why, name+" cannot be sent") {
 			t.Errorf("a field of type %s compiled: %q", name, why)
 		}
 	}
 	for name, v := range map[string]any{
-		"CardID":     struct{ ID CardID }{},
-		"Holder":     struct{ H Holder }{AgentHolder(AgentID{AgentID: "a"})},
-		"Lifespan":   struct{ L Lifespan }{LifespanOf(time.Hour)},
-		"WalletCard": struct{ W WalletCard }{WalletCard{kind: WalletCardConcrete, wst: &permissionCardState{h: &types.PermissionCard{}}}},
+		"CardID":         struct{ ID CardID }{},
+		"Holder":         struct{ H Holder }{AgentHolder(AgentID{AgentID: "a"})},
+		"Lifespan":       struct{ L Lifespan }{LifespanOf(time.Hour)},
+		"WalletCard":     struct{ W WalletCard }{WalletCard{kind: WalletCardConcrete, wst: &permissionCardState{h: &types.PermissionCard{}}}},
+		"PersistentCard": struct{ C PersistentCard }{},
 	} {
 		func() {
 			defer func() {

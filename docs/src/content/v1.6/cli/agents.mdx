@@ -153,6 +153,26 @@ golem agent oplog --from 100 'CounterAgent("my-counter")'
 
 Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the agent.
 
+### Viewing the oplog in a browser
+
+The oplog can be explored in an **interactive HTML viewer** instead of the terminal. The viewer groups the entries by invocation, merges each durable host call's **start** and **end** entries into one foldable row with its duration, nests the entries executed by tool entities under the tool invocation, and marks the regions skipped by a **jump** or a **revert**. It can filter by entry category, log level or index range, search the content of the entries, decode typed payloads, binary and snapshot data, and it shows per-invocation and per-type statistics.
+
+The `--serve` parameter starts a local server that hosts the viewer and opens it in the default browser:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --serve
+```
+
+The served viewer loads the oplog **page by page** through the API, so it works for oplogs of any size. It can run a **Lucene query** on the server (the same syntax as `--query`, see below), load the context around a query hit, jump to any oplog index, and **follow** a running agent by polling for new entries. `--from` and `--query` select the initial position and query of the viewer. Use `--port` to choose the port and `--no-open` to skip opening the browser. The server runs until it is interrupted.
+
+The `--html` parameter writes a **self-contained HTML file** instead, with every selected entry embedded in the page:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --html oplog.html --open
+```
+
+The generated file has no external dependencies, so it can be opened directly from disk or shared. `--open` opens it in the default browser. Because the page embeds all entries, it is meant for oplogs of moderate size; use `--from` or `--query` to narrow the selection, or `--serve` for large oplogs. The static viewer can also load a dump produced by `--format json` through its _Load JSON_ button.
+
 ### Searching for oplog entries
 
 The same command can also be used to **search** for oplog entries, using the `--query` parameter. This parameter requires a query using **lucene query syntax**. The following syntax elements are supported:
@@ -179,12 +199,9 @@ The terms and fields are interpreted in the following way:
 | `Suspend`                                                    | `suspend`                                                                                                                                                     |
 | `Error`                                                      | `error`, match on error message                                                                                                                               |
 | `RecoverySucceeded`                                          | `recovery-succeeded`                                                                                                                                          |
-| `NoOp`                                                       | `noop`                                                                                                                                                        |
 | `Jump`                                                       | `jump`                                                                                                                                                        |
 | `Interrupted`                                                | `interrupted`                                                                                                                                                 |
 | `Exited`                                                     | `exited`                                                                                                                                                      |
-| `BeginAtomicRegion`                                          | `begin-atomic-region`                                                                                                                                         |
-| `EndAtomicRegion`                                            | `end-atomic-region`                                                                                                                                           |
 | `PendingUpdate`                                              | `pending-update`, `update`, match on target revision                                                                                                          |
 | `SuccessfulUpdate`                                           | `successful-update`, `update`, match on target revision                                                                                                       |
 | `FailedUpdate`                                               | `failed-update`, `update`, match on target revision, match on error details                                                                                   |
@@ -208,7 +225,7 @@ The terms and fields are interpreted in the following way:
 | Card entries                                                 | `card-installed`, `card-install-failed`, `card-derived`, `card-revoked`, `card-revoked-cascade`, `card-expired`, `card-event-queued`, `card-transfer-started`, `card-transferred`, `card-transfer-confirmed`; match on card ID or transfer ID |
 | Stream entries                                               | `host-stream-frame`, `stream-registered`, `stream-items`, `stream-end`, `stream-cancel`, `stream-session`                                                     |
 
-Search terms are case-insensitive substring matches, so for example `start` also matches `agent-invocation-started` and `start-span` entries; combine terms with `AND` / `NOT` to narrow the results. Most entry kinds can also be matched by their name without dashes (for example `beginatomicregion`), except `CancelPendingInvocation`.
+Search terms are case-insensitive substring matches, so for example `start` also matches `agent-invocation-started` entries; combine terms with `AND` / `NOT` to narrow the results. Most entry kinds can also be matched by their name without dashes (for example `pendingupdate`), except `CancelPendingInvocation`.
 
 The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured values. For `Start`, `End` and `Cancelled` entries the field path starts with `request`, `response` or `partial` and continues with record field names, for example `request.product-id:123`. For span attributes, the field path is the attribute key, for example `http.method:GET`.
 
@@ -249,11 +266,17 @@ golem agent cancel-invocation 'CounterAgent("my-counter")' my-key
 
 ## Shell access: `golem ssh`
 
-When the built-in bash tool is bound to an agent, `golem ssh` opens a command prompt on that agent. Each command you type is one call of the tool's `run` operation, the same call `golem tool invoke --agent <AGENT> bash -- run` makes:
+`golem ssh` opens a command prompt on an agent through the built-in bash tool. Each command you type is one call of the tool's `run` operation, the same call `golem tool invoke --agent <AGENT> bash -- run` makes:
 
 ```shell copy
 golem ssh 'MyAgent("m1")'
 ```
+
+`golem deploy` automatically binds the bash tool to every agent type of the application, with access to the agent's files, as a [default tool](/v1.6/app-manifest#default-tools). An agent that existed before that deployment gets the tool on its next call, or when it is updated if the deployment also changed its component.
+
+<Callout type="warning">
+With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it. Those commands can read and change the agent's files, and they can read all environment variables of the agent, also a secret that is kept in one. Set `defaults: []` under the `tools` of an environment in the application manifest to turn them off; `golem ssh` then says that `bash` is not bound to the agent. To keep the shell but withhold the files, bind `bash` with `filesystemAccess: denied`, on the environment for every agent type or under one agent type.
+</Callout>
 
 The prompt's first line is a row of blocks in purple and grey, a cell apart: `ssh` with a dot for what the agent is doing, the agent's type and name (its constructor arguments), the directory the last command ended in and, inside a git repository when the git tool is bound to the agent, the branch. The directory and the branch are the agent's to name, so a character in them that would act on your terminal is spelled out: an escape character shows as `^[`. The dot is green when the agent is idle, yellow when something is running or waiting on it, so your command will queue, and red when the agent has failed or exited; a hollow dot means the status could not be read. The dot is read when the prompt is drawn and does not change while you type. A terminal with only 16 colours shows the slabs in its own magenta and grey. The row sits on a dark band, from edge to edge, which sets the session's prompts apart from the shell you started it in; set `GOLEM_SSH_BACKGROUND=0` to drop the band. The band has the same colour on every terminal: `golem ssh` does not ask your terminal for its colours and does not change them. At the right edge the prompt shows the last exit status, when it was not zero, the number of commands waiting on the agent, when there are any, and how long the last command took. In a window too narrow for both, the row keeps the line and the colour of `❯` alone shows a failure. You type on the line below, after `❯`. Each command in the scrollback keeps these blocks, so you can see the directory it ran in. When colours are off, for example with `NO_COLOR` set, the prompt is one line of plain text. Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line being typed.
 

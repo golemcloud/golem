@@ -129,7 +129,11 @@ func init() {
 		only := golem.Bounds{LowerPositive: []golem.PatternGrant{grant}}
 
 		// 1. Derive a card from the wallet, and 2. inspect it.
-		fromWallet := golem.MustDeriveFromWallet(only, golem.None[golem.Lifespan]())
+		derived := golem.MustDeriveFromWallet(only, golem.None[golem.Lifespan]())
+		fromWallet, concrete := derived.Concrete()
+		if !concrete {
+			panic("host returned a template for concrete bounds")
+		}
 		note("from-wallet-parents", len(fromWallet.Parents()))
 		view := fromWallet.MustInspect()
 		note("from-wallet-grants", fmt.Sprintf("%d/%d/%d/%d", len(view.LowerPositive), len(view.LowerNegative), len(view.UpperPositive), len(view.UpperNegative)))
