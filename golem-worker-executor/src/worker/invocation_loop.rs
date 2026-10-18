@@ -2087,77 +2087,61 @@ where
         debug!(?reason, "Unloading resident agent");
         drop(runtime);
 
-        let deadline_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
-        tokio::pin!(deadline_sleep);
-        let close_error = {
-            let preparation = async {
-                drain_sealed_filesystem(&filesystem).await;
-                drained.complete();
-                let (window, close_error) = match window {
-                    Some(window) => {
-                        let (window, error) = window.prepare_disposal().await;
-                        (Some(window), error)
-                    }
-                    None => (None, None),
-                };
-                let settlement = match window {
-                    Some(window) => crate::services::resource_usage_metering::close_window(
-                        window,
-                        resource_usage_close_deadline(),
-                    )
-                    .await
-                    .map(|_| ())
-                    .inspect_err(|error| {
-                        scope.fail(Stage::PermitReleased, error.release_failure());
-                    })
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
-                    None => Ok(()),
-                };
-                drop(permit);
-                permit_held.store(false, Ordering::Release);
-                close_error.or_else(|| settlement.err())
-            };
-            tokio::pin!(preparation);
-            tokio::select! {
-                prepared = &mut preparation => prepared,
-                _ = &mut deadline_sleep => {
-                    scope.fail(Stage::EndToEnd, Failure::Deadline);
-                    completion.complete(Some(unload_deadline_error(reason)));
-                    preparation.await
+        let cleanup = async {
+            drain_sealed_filesystem(&filesystem).await;
+            drained.complete();
+            let (window, close_error) = match window {
+                Some(window) => {
+                    let (window, error) = window.prepare_disposal().await;
+                    (Some(window), error)
                 }
+                None => (None, None),
+            };
+            let settlement = match window {
+                Some(window) => crate::services::resource_usage_metering::close_window(
+                    window,
+                    resource_usage_close_deadline(),
+                )
+                .await
+                .map(|_| ())
+                .inspect_err(|error| {
+                    scope.fail(Stage::PermitReleased, error.release_failure());
+                })
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
+                None => Ok(()),
+            };
+            drop(permit);
+            permit_held.store(false, Ordering::Release);
+            let close_error = close_error.or_else(|| settlement.err());
+            if let Some(error) = &close_error {
+                completion.complete(Some(error.clone()));
             }
-        };
-        if let Some(error) = &close_error {
-            completion.complete(Some(error.clone()));
-        }
 
-        let deletion = async move {
             if let Some(before_delete) = before_delete {
                 before_delete.await;
             }
-            delete_unloaded_filesystem(filesystem).await
+            match delete_unloaded_filesystem(filesystem).await {
+                Ok(()) => {
+                    cleanup_receipt.complete();
+                    close_error
+                        .map_or(Ok(()), Err)
+                        .map_err(UnloadCleanupFailure::Other)
+                }
+                Err(failure) => Err(UnloadCleanupFailure::Filesystem {
+                    failure,
+                    close_error,
+                    release_receipt: Some(cleanup_receipt),
+                }),
+            }
         };
-        tokio::pin!(deletion);
-        let result = tokio::select! {
-            result = &mut deletion => result,
-            _ = &mut deadline_sleep => {
+        tokio::pin!(cleanup);
+        tokio::select! {
+            result = &mut cleanup => result,
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
                 scope.fail(Stage::EndToEnd, Failure::Deadline);
                 completion.complete(Some(unload_deadline_error(reason)));
-                deletion.await
+                cleanup.await
             }
-        };
-        match result {
-            Ok(()) => {
-                cleanup_receipt.complete();
-                close_error
-                    .map_or(Ok(()), Err)
-                    .map_err(UnloadCleanupFailure::Other)
-            }
-            Err(failure) => Err(UnloadCleanupFailure::Filesystem {
-                failure,
-                close_error,
-                release_receipt: Some(cleanup_receipt),
-            }),
         }
     })
 }
@@ -5823,6 +5807,116 @@ mod tests {
         deletion.wait_started().await;
         assert!(handled.load(Ordering::Acquire));
         deletion.release();
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn unload_deadline_during_drain_keeps_final_sample_and_deletion_owned() {
+        let (filesystem, control, window, _generation_handle, node) =
+            billing_metered_resident_with_open_node_for_unload_test().await;
+        control.push_close(Ok(()));
+        let close = control.block("close");
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 100,
+            filesystem_objects: 1,
+        }));
+        let sample = control.block("observe_allocation");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let settled = window.settlement_observer();
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permits = ConcurrentAgentPermitState::new(None, held.clone());
+        permits.install_window(super::ExecutionWindow::unmonitored(window));
+        let before_unload = control.calls().len();
+        let observer = unload_resident_agent_ownership(
+            ResidentAgentOwnership {
+                runtime: (),
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now(),
+            &mut permits,
+            &Arc::new(Mutex::new(None)),
+            None,
+        );
+        let cleanup = observer.cleanup.clone();
+        assert!(
+            observer
+                .await
+                .unwrap()
+                .to_string()
+                .contains("unload deadline")
+        );
+        assert!(held.load(Ordering::Acquire));
+        assert!(!settled());
+        assert!(
+            !control.calls()[before_unload..].iter().any(|call| {
+                call.starts_with("close(") || call.starts_with("delete_and_verify(")
+            })
+        );
+        drop(node);
+        close.wait_started().await;
+        close.release();
+        sample.wait_started().await;
+        assert!(held.load(Ordering::Acquire));
+        assert!(!settled());
+        sample.release();
+        deletion.wait_started().await;
+        assert!(settled());
+        assert!(!held.load(Ordering::Acquire));
+        let mut completion = Box::pin(cleanup.wait());
+        assert!(futures::poll!(completion.as_mut()).is_pending());
+        deletion.release();
+        completion.await.unwrap();
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn pending_filesystem_deletion_does_not_hold_scheduler_capacity() {
+        use crate::services::active_agents::ConcurrentAgentsScheduler;
+        use golem_common::model::AgentId;
+        use golem_common::model::account::AccountId;
+        use uuid::Uuid;
+
+        let (filesystem, control) = resident_for_unload_test().await;
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let scheduler = Arc::new(ConcurrentAgentsScheduler::new());
+        let account = AccountId(Uuid::new_v4());
+        scheduler
+            .register_account(account, Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1)))
+            .await;
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "unload-capacity".to_string(),
+        };
+        let permit = scheduler.acquire(account, agent_id.clone()).await;
+        let mut waiting = Box::pin(scheduler.acquire(account, agent_id));
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        let window =
+            crate::services::agent_filesystem::open_resource_usage_window(&filesystem, permit)
+                .await
+                .unwrap();
+        let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
+        permits.install_window(super::ExecutionWindow::unmonitored(window));
+        let observer = unload_resident_agent_ownership(
+            ResidentAgentOwnership {
+                runtime: (),
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permits,
+            &Arc::new(Mutex::new(None)),
+            None,
+        );
+        deletion.wait_started().await;
+        let replacement = waiting.await;
+        let mut observer = Box::pin(observer);
+        assert!(futures::poll!(observer.as_mut()).is_pending());
+        deletion.release();
+        assert!(observer.await.is_none());
+        drop(replacement);
     }
 
     #[test]
