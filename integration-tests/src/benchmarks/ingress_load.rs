@@ -98,6 +98,8 @@ struct Account {
     client: AccountClient,
     /// The requests for each entry of the mix.
     calls: Vec<AccountCall>,
+    /// Echo on each agent, for the warmup, so the agents are loaded for every mix.
+    warmup: AccountCall,
 }
 
 /// The requests of one entry of the mix, for each agent of an account.
@@ -108,17 +110,12 @@ struct AccountCall {
     http_api_targets: Vec<HttpApiTarget>,
 }
 
-struct RestTarget {
-    /// The body for the invoke endpoint.
-    body: bytes::Bytes,
-    /// worker-service refuses the request before it calls an executor, and that answer
-    /// counts as success. See `IngressMethod::NoInvocation`.
-    refused: bool,
+enum RestTarget {
+    /// POST to the invoke endpoint with this body.
+    Invoke(bytes::Bytes),
+    /// GET the metadata of the agent at this URL. See `IngressMethod::NoInvocation`.
+    Metadata(Url),
 }
-
-/// What worker-service answers to constructor parameters of the wrong type.
-const REFUSED_STATUS: reqwest::StatusCode = reqwest::StatusCode::BAD_REQUEST;
-const REFUSED_MESSAGE: &str = "constructor parameters type error";
 
 struct HttpApiTarget {
     get: bool,
@@ -475,10 +472,16 @@ impl IngressLoad {
         env_name: &str,
         agent_id: &ParsedAgentId,
         entry: &IngressMixEntry,
+        workers_url: &Url,
     ) -> anyhow::Result<RestTarget> {
-        let refused = entry.method == IngressMethod::NoInvocation;
         let (method_name, parameters) = match entry.method {
-            IngressMethod::NoInvocation => ("echo", data_value!("benchmark")),
+            IngressMethod::NoInvocation => {
+                let mut url = workers_url.clone();
+                url.path_segments_mut()
+                    .map_err(|_| anyhow::anyhow!("{workers_url} cannot have a path"))?
+                    .push(&agent_id.to_string());
+                return Ok(RestTarget::Metadata(url));
+            }
             IngressMethod::Echo => ("echo", data_value!("benchmark")),
             IngressMethod::Sleep => ("sleep", data_value!(entry.millis.unwrap_or_default())),
             IngressMethod::OplogHeavy => (
@@ -494,13 +497,8 @@ impl IngressLoad {
             app_name: app_name.to_string(),
             env_name: env_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            // The agent takes a string; a number is refused before any executor sees it.
-            parameters: if refused {
-                ExternalSchemaValue::try_from(data_value!(0u32).into_parts().1)
-            } else {
-                ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
-            }
-            .map_err(anyhow::Error::msg)?,
+            parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                .map_err(anyhow::Error::msg)?,
             phantom_id: agent_id.phantom_id,
             config: None,
             method_name: method_name.to_string(),
@@ -512,10 +510,16 @@ impl IngressLoad {
             deployment_revision: None,
             owner_account_email: Some(owner_email.to_string()),
         };
-        Ok(RestTarget {
-            body: bytes::Bytes::from(serde_json::to_vec(&request)?),
-            refused,
-        })
+        Ok(RestTarget::Invoke(bytes::Bytes::from(serde_json::to_vec(
+            &request,
+        )?)))
+    }
+
+    /// The URL that lists the agents of `component_id`, on the same host as the invoke URL.
+    fn workers_url(rest_url: &Url, component_id: &impl std::fmt::Display) -> Url {
+        let mut url = rest_url.clone();
+        url.set_path(&format!("/v1/components/{component_id}/workers"));
+        url
     }
 
     /// The HTTP API request of a mix entry for the agent `name`, on the domain at `base`.
@@ -559,20 +563,22 @@ impl IngressLoad {
 /// Sends one request and returns why it failed, if it did.
 async fn send(
     account: &Account,
+    call: &AccountCall,
     rest_url: &Url,
     path: Path,
-    call: usize,
     agent: usize,
     clients_created: &AtomicU64,
 ) -> Result<(), String> {
     let client = account.client.next(clients_created);
-    let call = &account.calls[call];
     let request = match path {
-        Path::Rest => client
-            .post(rest_url.clone())
-            .bearer_auth(&account.bearer)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .body(call.rest_targets[agent].body.clone()),
+        Path::Rest => match &call.rest_targets[agent] {
+            RestTarget::Invoke(body) => client
+                .post(rest_url.clone())
+                .bearer_auth(&account.bearer)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .body(body.clone()),
+            RestTarget::Metadata(url) => client.get(url.clone()).bearer_auth(&account.bearer),
+        },
         Path::HttpApi => {
             let target = &call.http_api_targets[agent];
             let mut request = if target.get {
@@ -603,10 +609,6 @@ async fn send(
         Ok(response) => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            let refused = matches!(path, Path::Rest) && call.rest_targets[agent].refused;
-            if refused && status == REFUSED_STATUS && body.contains(REFUSED_MESSAGE) {
-                return Ok(());
-            }
             Err(format!(
                 "{status}: {}",
                 body.chars().take(300).collect::<String>()
@@ -724,9 +726,9 @@ async fn drive(
                         let account = &accounts[index];
                         let result = send(
                             account,
+                            &account.calls[call],
                             &rest_url,
                             path,
-                            call,
                             agent,
                             &stats.clients_created,
                         )
@@ -871,6 +873,7 @@ impl Benchmark for IngressLoad {
             HostAddresses(Vec::new())
         };
 
+        let workers_url = Self::workers_url(&rest_url, &component.id);
         info!("Setting up {} accounts", self.config.size);
         let http1_accounts = self.config.size * settings.http1_percent.min(100) / 100;
         let owner_ref = &owner;
@@ -879,6 +882,7 @@ impl Benchmark for IngressLoad {
                 let (app_name, env_name, component_name) = (&app_name, &env_name, &component_name);
                 let domain_bases = &domain_bases;
                 let (domains, addresses, rest_host) = (&domains, &addresses, &rest_host);
+                let workers_url = &workers_url;
                 async move {
                     let user = deps.user().await?;
                     Self::share_environment(
@@ -892,8 +896,14 @@ impl Benchmark for IngressLoad {
                     .await?;
                     let owner_email = owner_ref.account_email.as_str();
                     let (base, host) = &domain_bases[index % domain_bases.len()];
+                    let echo = IngressMixEntry {
+                        method: IngressMethod::Echo,
+                        weight: 1,
+                        millis: None,
+                        length: None,
+                    };
                     let mut calls = Vec::new();
-                    for entry in &settings.mix {
+                    for entry in settings.mix.iter().chain(std::iter::once(&echo)) {
                         let mut rest_targets = Vec::new();
                         let mut http_api_targets = Vec::new();
                         for n in 0..settings.agents_per_account.max(1) {
@@ -903,6 +913,7 @@ impl Benchmark for IngressLoad {
                                 env_name,
                                 &agent(format!("a{index}-{n}")),
                                 entry,
+                                workers_url,
                             )?);
                             http_api_targets.push(Self::http_api_target(
                                 base,
@@ -930,6 +941,7 @@ impl Benchmark for IngressLoad {
                                 index,
                             ),
                         ),
+                        warmup: calls.pop().expect("the echo call for the warmup"),
                         calls,
                     })
                 }
@@ -958,26 +970,20 @@ impl Benchmark for IngressLoad {
         })
     }
 
-    /// Calls every agent once on each path, so the agents exist before the step starts. It
-    /// uses the first echo entry of the mix, or the first entry when the mix has no echo.
+    /// Calls echo on every agent once on each path, so the agents exist and are loaded
+    /// before the step starts, whatever the mix.
     async fn warmup(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) -> BenchmarkResultValue {
         let clients_created = AtomicU64::new(0);
-        let call = self
-            .settings
-            .mix
-            .iter()
-            .position(|entry| entry.method == IngressMethod::Echo)
-            .unwrap_or(0);
         let calls = context
             .accounts
             .iter()
             .enumerate()
             .flat_map(|(index, account)| {
-                (0..account.calls[call].rest_targets.len()).flat_map(move |agent| {
+                (0..account.warmup.rest_targets.len()).flat_map(move |agent| {
                     [(index, Path::Rest, agent), (index, Path::HttpApi, agent)]
                 })
             })
@@ -991,7 +997,15 @@ impl Benchmark for IngressLoad {
                 let account = &accounts[index];
                 let mut last = Ok(());
                 for _ in 0..WARMUP_ATTEMPTS {
-                    last = send(account, rest_url, path, call, agent, clients_created).await;
+                    last = send(
+                        account,
+                        &account.warmup,
+                        rest_url,
+                        path,
+                        agent,
+                        clients_created,
+                    )
+                    .await;
                     if last.is_ok() {
                         break;
                     }
