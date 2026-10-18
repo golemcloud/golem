@@ -531,6 +531,43 @@ impl LeadershipHandle {
 /// [`LeaderElection::with_confirm_hook`].
 type ConfirmHook = Arc<dyn Fn(u32) -> Option<ShardManagerError> + Send + Sync>;
 
+/// Why a waiting campaign stopped without being a failure of the service. The campaign decides
+/// what each one means: see [`LeaderElection::campaign_until_elected`].
+#[derive(Debug, thiserror::Error)]
+enum CampaignInterrupt {
+    /// A campaigner of a newer rollout generation queues behind this replica, so this one gives
+    /// way and queues again at the end.
+    #[error(
+        "moved to the end of the election queue behind rollout generation {newer} (own: {own})"
+    )]
+    YieldToNewer { own: u64, newer: u64 },
+    /// Another live replica advertises this replica's gRPC address; only a change of
+    /// configuration helps.
+    #[error(
+        "another shard manager replica ({other}) advertises the same gRPC address {address}. Every \
+         replica needs its own grpc.advertised_host, such as its pod IP; never a Service name"
+    )]
+    DuplicateAddress { address: String, other: String },
+}
+
+/// How one campaign attempt ended without winning.
+enum CampaignExit {
+    Failed(ShardManagerError),
+    Interrupted(CampaignInterrupt),
+}
+
+impl From<ShardManagerError> for CampaignExit {
+    fn from(err: ShardManagerError) -> Self {
+        Self::Failed(err)
+    }
+}
+
+impl From<CampaignInterrupt> for CampaignExit {
+    fn from(interrupt: CampaignInterrupt) -> Self {
+        Self::Interrupted(interrupt)
+    }
+}
+
 pub struct LeaderElection {
     client: Client,
     election_name: String,
@@ -652,13 +689,18 @@ impl LeaderElection {
                 Ok(elected) => return Ok(elected),
                 // Not a failure: the lease was revoked with the key, and the next campaign queues
                 // at the end, behind the newer replica.
-                Err(ShardManagerError::YieldedToNewerGeneration { own, newer }) => {
+                Err(CampaignExit::Interrupted(CampaignInterrupt::YieldToNewer { own, newer })) => {
                     info!(
                         own,
                         newer, "Moved behind a newer rollout generation in the election queue"
                     );
                 }
-                Err(err) if err.is_retriable() => {
+                // The other replica keeps renewing its key, so a new campaign would meet it
+                // again: this ends the startup.
+                Err(CampaignExit::Interrupted(duplicate)) => {
+                    return Err(ShardManagerError::Internal(duplicate.to_string()));
+                }
+                Err(CampaignExit::Failed(err)) if err.is_retriable() => {
                     metrics::record_campaign_attempt_failure();
                     warn!(error = %err, retry_in = ?backoff, "Campaign attempt failed; retrying");
                     tokio::select! {
@@ -669,12 +711,12 @@ impl LeaderElection {
                     }
                     backoff = std::cmp::min(backoff.saturating_mul(2), self.retry.max);
                 }
-                Err(err) => return Err(err),
+                Err(CampaignExit::Failed(err)) => return Err(err),
             }
         }
     }
 
-    async fn campaign_once(&self) -> Result<Elected, ShardManagerError> {
+    async fn campaign_once(&self) -> Result<Elected, CampaignExit> {
         let mut lease_client = self.client.lease_client();
 
         let ttl_secs = self.lease_ttl.as_secs() as i64;
@@ -725,7 +767,7 @@ impl LeaderElection {
         lease_client: &mut LeaseClient,
         lease_id: i64,
         granted_ttl: Duration,
-    ) -> Result<Elected, ShardManagerError> {
+    ) -> Result<Elected, CampaignExit> {
         let handshake_sent = Instant::now();
         let (keeper, stream) = self.bounded(lease_client.keep_alive(lease_id)).await?;
         let mut keepalive = LeaseKeepAlive {
@@ -748,11 +790,11 @@ impl LeaderElection {
         let response = tokio::select! {
             biased;
             lost = keepalive.drive() => {
-                return Err(ShardManagerError::LeaseLostWhileCampaigning(lost));
+                return Err(ShardManagerError::LeaseLostWhileCampaigning(lost).into());
             }
-            won = campaign => won?,
-            refused = self.watch_campaign(lease_id, granted_ttl) => return Err(refused),
-            _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested),
+            won = campaign => won.map_err(ShardManagerError::from)?,
+            interrupted = self.watch_campaign(lease_id, granted_ttl) => return Err(interrupted.into()),
+            _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested.into()),
             never = self.announce_standby() => match never {},
         };
 
@@ -769,11 +811,11 @@ impl LeaderElection {
         tokio::select! {
             biased;
             lost = keepalive.drive() => {
-                return Err(ShardManagerError::LeaseLostWhileCampaigning(lost));
+                return Err(ShardManagerError::LeaseLostWhileCampaigning(lost).into());
             }
             // Leaves through `campaign_once`'s revoke like every other error, so a shutdown here
             // releases the lease the win is holding rather than waiting the confirm out.
-            _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested),
+            _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested.into()),
             confirmed = self.confirm_fence_is_live(&fence, lease_id, confirm_budget) => confirmed?,
         }
 
@@ -894,7 +936,7 @@ impl LeaderElection {
     /// A key whose lease lifetime could not be read, or whose lease is already gone, is never
     /// refused: the first is missing information, and the second key is about to disappear with
     /// its lease. The read is tried again on the next recheck.
-    async fn watch_campaign(&self, own_lease: i64, granted_ttl: Duration) -> ShardManagerError {
+    async fn watch_campaign(&self, own_lease: i64, granted_ttl: Duration) -> CampaignInterrupt {
         let Some(mut watch) = self.watch.clone() else {
             return std::future::pending().await;
         };
@@ -908,7 +950,7 @@ impl LeaderElection {
                 if let Some(newer) =
                     newer_generation_behind(&view, own_lease, self.value.rollout_generation)
                 {
-                    return ShardManagerError::YieldedToNewerGeneration {
+                    return CampaignInterrupt::YieldToNewer {
                         own: self.value.rollout_generation.unwrap_or_default(),
                         newer,
                     };
@@ -940,7 +982,7 @@ impl LeaderElection {
                         if let Some(lifetime) = seen.lease_lifetime
                             && seen.since.elapsed() >= lifetime.saturating_add(granted_ttl)
                         {
-                            return ShardManagerError::DuplicateAdvertisedAddress {
+                            return CampaignInterrupt::DuplicateAddress {
                                 address: own.to_string(),
                                 other: other
                                     .value
