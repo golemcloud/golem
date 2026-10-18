@@ -23,13 +23,19 @@ use golem_common::model::base64::Base64;
 use golem_shard_manager::config::{
     EtcdConfig, EtcdPassword, EtcdTlsConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
-use golem_shard_manager::{Deployment, RunDetails, STATE_KEY};
+use golem_shard_manager::{
+    Deployment, LEADER_ELECTION_NAME, LeaderElection, RunDetails, STATE_KEY, ShardManagerError,
+};
 use golem_test_framework::components::etcd::docker_etcd::{DockerEtcd, DockerEtcdOptions};
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose,
 };
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, test_dep};
 use tokio::sync::oneshot;
@@ -296,14 +302,23 @@ fn spawn_replica(
     JoinHandle<anyhow::Result<()>>,
     oneshot::Receiver<anyhow::Result<RunDetails>>,
 ) {
+    spawn_replica_with_shutdown(config, CancellationToken::new())
+}
+
+/// [`spawn_replica`], stopped by `shutdown` as a SIGTERM stops the binary.
+fn spawn_replica_with_shutdown(
+    config: ShardManagerConfig,
+    shutdown: CancellationToken,
+) -> (
+    JoinHandle<anyhow::Result<()>>,
+    oneshot::Receiver<anyhow::Result<RunDetails>>,
+) {
     let (started, details) = oneshot::channel();
     let handle = tokio::spawn(async move {
         let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
         match golem_shard_manager::run(
             &config,
-            Deployment::Standalone {
-                shutdown: CancellationToken::new(),
-            },
+            Deployment::Standalone { shutdown },
             prometheus::Registry::new(),
             &mut join_set,
         )
@@ -781,5 +796,153 @@ async fn a_tls_leader_keeps_its_leadership_across_an_etcd_restart(
         leader_keys.kvs().len(),
         1,
         "The leader's election key must survive the restart"
+    );
+}
+
+/// A TLS and HTTP/2 server that takes every request and never answers it: an etcd that accepted a
+/// connection and then stalls, as one cut off by a network partition right after the handshake.
+struct SilentEtcd {
+    url: String,
+    requests: Arc<AtomicUsize>,
+    server: JoinHandle<()>,
+}
+
+impl SilentEtcd {
+    async fn start(pki: &TestPki) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "https://localhost:{}",
+            listener.local_addr().unwrap().port()
+        );
+        let certificates = CertificateDer::pem_slice_iter(pki.server_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(pki.server_key_pem.as_bytes()).unwrap();
+        let mut tls = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certificates, key)
+            .unwrap();
+        tls.alpn_protocols = vec![b"h2".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        let server = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            while let Ok((tcp, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                let counter = counter.clone();
+                connections.spawn(async move {
+                    let Ok(tls) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    let Ok(mut connection) = h2::server::handshake(tls).await else {
+                        return;
+                    };
+                    // Held, never answered; accepting keeps the connection itself alive.
+                    let mut held = Vec::new();
+                    while let Some(Ok(request)) = connection.accept().await {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        held.push(request);
+                    }
+                });
+            }
+        });
+        Self {
+            url,
+            requests,
+            server,
+        }
+    }
+
+    async fn wait_for_requests(&self, count: usize) {
+        timeout(STARTUP_TIMEOUT, async {
+            while self.requests.load(Ordering::SeqCst) < count {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("The replica should send its login to the silent etcd");
+    }
+}
+
+impl Drop for SilentEtcd {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+
+#[test]
+// The election client has no request timeout, because a campaign waits inside etcd for as long as
+// the leader lives. Its connect logs in, and a login that etcd never answers must still end; the
+// startup then tries again.
+async fn the_election_connect_gives_up_on_a_login_that_etcd_never_answers(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let silent = SilentEtcd::start(&pki).await;
+    let mut config = auth_config(&silent.url, PASSWORD, &pki);
+    let PersistenceConfig::Etcd(etcd) = &mut config.persistence else {
+        unreachable!("the auth config is an etcd config");
+    };
+    etcd.connect_timeout = Duration::from_secs(1);
+    let etcd = etcd.clone();
+
+    let result = timeout(
+        Duration::from_secs(10),
+        LeaderElection::connect(&etcd, LEADER_ELECTION_NAME),
+    )
+    .await
+    .expect("The election connect must give up on a login that etcd never answers");
+
+    assert!(
+        matches!(result, Err(ShardManagerError::Timeout)),
+        "{:?}",
+        result.map(|_| ())
+    );
+    assert!(silent.requests.load(Ordering::SeqCst) >= 1);
+
+    let logins = silent.requests.load(Ordering::SeqCst);
+    let (_replica, mut details) = spawn_replica(config);
+    silent.wait_for_requests(logins + 3).await;
+    assert!(
+        details.try_recv().is_err(),
+        "The replica must keep trying, neither starting nor stopping"
+    );
+}
+
+#[test]
+// A pod that is stopped while its startup waits for an etcd login must stop at once, not when the
+// orchestrator gives up and kills it.
+async fn a_shutdown_ends_a_startup_that_waits_for_an_etcd_login(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let silent = SilentEtcd::start(&pki).await;
+    let mut config = auth_config(&silent.url, PASSWORD, &pki);
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        // Longer than the bound below: only the shutdown can end the wait in time. The request
+        // timeout may be at most half the lease TTL.
+        etcd.request_timeout = Duration::from_secs(8);
+        etcd.leader_lease_ttl = Duration::from_secs(20);
+    }
+    let shutdown = CancellationToken::new();
+    let (_replica, details) = spawn_replica_with_shutdown(config, shutdown.clone());
+    silent.wait_for_requests(1).await;
+
+    shutdown.cancel();
+    let err = timeout(Duration::from_secs(2), details)
+        .await
+        .expect("A shutdown must end the startup at once")
+        .expect("The replica task ended without a result")
+        .map(|_| ())
+        .expect_err("The replica must not start");
+    assert!(
+        matches!(
+            err.downcast_ref::<ShardManagerError>(),
+            Some(ShardManagerError::ShutdownRequested)
+        ),
+        "{err:#}"
     );
 }

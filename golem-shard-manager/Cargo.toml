@@ -67,9 +67,11 @@ x509-parser = { workspace = true }
 base64 = { workspace = true }
 figment = { workspace = true }
 golem-test-framework = { workspace = true }
+h2 = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }
 rsa = { workspace = true }
 test-r = { workspace = true }
+tokio-rustls = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true }
 uuid = { workspace = true }

@@ -460,11 +460,19 @@ pub async fn connect_requests_with(
 }
 
 /// A client for the leadership campaign and its lease keepalive, with no request timeout.
+///
+/// The connect itself is bounded: with a user, it waits for etcd's answer to the login, and a
+/// login that is never answered - a connection cut off right after the handshake - would otherwise
+/// hold the caller for as long as TCP takes to notice.
 pub async fn connect_election_with(
     config: &EtcdConfig,
     settings: &EtcdConnectSettings,
 ) -> Result<Client, ShardManagerError> {
-    Ok(Client::connect(&config.endpoints, Some(settings.options.clone())).await?)
+    let connect = Client::connect(&config.endpoints, Some(settings.options.clone()));
+    match tokio::time::timeout(config.connect_timeout + config.request_timeout, connect).await {
+        Ok(client) => Ok(client?),
+        Err(_) => Err(ShardManagerError::Timeout),
+    }
 }
 
 #[cfg(test)]
