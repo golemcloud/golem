@@ -10,8 +10,7 @@ A trap is permanent. Return an error for a transient condition and use a retry s
 errors, the application must handle the returned error and apply that schedule; returning an error does not
 automatically activate a host retry policy.
 
-The explicit `golem:api/host.trap` function raises a deterministic trap and is never retried. Do not predicate retry
-policies on `is-idempotent`: the host no longer supplies that property. Remote-write eligibility
+Do not predicate retry policies on `is-idempotent`: the host no longer supplies that property. Remote-write eligibility
 does not guarantee exactly-once effects; the peer must enforce an idempotency key.
 
 If the maximum number of retries is reached, the agent will be marked as failed and no further invocations will be possible on it.
@@ -19,9 +18,50 @@ If the maximum number of retries is reached, the agent will be marked as failed 
 During recovery, Golem replays the oplog and reuses results already recorded for preceding durable operations. Raising an unhandled exception does not cause those earlier operations to execute again.
 
 <Callout type="warning">
-    Host retry policies govern retryable Golem operations and agent failures. They do not retry an arbitrary typed
-    failure inside an SDK's local effect abstraction; for example, `Retry.withPolicy` propagates `Effect.fail`.
+    Host retry policies govern retryable Golem operations and agent failures. They do not retry arbitrary
+    application-level errors. Handle these errors in your application.
 </Callout>
+
+### Raising a trap
+
+Use a trap to stop an invocation on an unrecoverable condition. An explicit trap cannot be caught and is never retried.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        Use the SDK's `trap` function. It never returns:
+
+        ```typescript
+        import { trap } from "@golemcloud/golem-ts-sdk"
+
+        trap("Invalid persistent state")
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The Effect SDK does not currently expose a public trap helper. Use `Effect.fail` for application-level errors that your program can handle; it is not a trap. `Retry.withPolicy` propagates these errors rather than retrying them.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The Rust SDK does not currently expose a public trap helper. Return a `Result::Err` for application-level errors that the caller can handle; it is not a trap.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Use `HostApi.trap`. It never returns:
+
+        ```scala
+        import golem.HostApi
+
+        HostApi.trap("Invalid persistent state")
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Import `golemcloud/golem_sdk/api` as `@api`, then call `trap`. It never returns:
+
+        ```moonbit
+        @api.trap("Invalid persistent state")
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The Go SDK does not currently expose a public trap helper. Return an `error` for application-level errors that the caller can handle; it is not a trap.
+    </Tabs.Tab>
+</Tabs>
 
 ### Customizing the retry policy
 
@@ -180,48 +220,18 @@ The retry policy which controls the maximum number of retries and the exponentia
 
         ```scala
         import golem.Guards
-        import golem.host.js.JsNamedRetryPolicy
+        import golem.host.Retry
 
         import scala.concurrent.Future
-        import scala.scalajs.js
+        import scala.concurrent.duration._
 
-        val policy = js.Dynamic
-          .literal(
-            "name" -> "temporary-policy",
-            "priority" -> 1000,
-            "predicate" -> js.Dynamic.literal(
-              "nodes" -> js.Array(
-                js.Dynamic.literal("tag" -> "pred-true")
-              )
-            ),
-            "policy" -> js.Dynamic.literal(
-              "nodes" -> js.Array(
-                js.Dynamic.literal(
-                  "tag" -> "count-box",
-                  "val" -> js.Dynamic.literal(
-                    "maxRetries" -> 3,
-                    "inner" -> 1
-                  )
-                ),
-                js.Dynamic.literal(
-                  "tag" -> "clamp-delay",
-                  "val" -> js.Dynamic.literal(
-                    "minDelay" -> js.BigInt("100000000"),
-                    "maxDelay" -> js.BigInt("2000000000"),
-                    "inner" -> 2
-                  )
-                ),
-                js.Dynamic.literal(
-                  "tag" -> "exponential",
-                  "val" -> js.Dynamic.literal(
-                    "baseDelay" -> js.BigInt("100000000"),
-                    "factor" -> 1.5
-                  )
-                )
-              )
-            )
-          )
-          .asInstanceOf[JsNamedRetryPolicy]
+        val policy = Retry.named(
+          "temporary-policy",
+          Retry.Policy
+            .exponential(100.millis, 1.5)
+            .clamp(100.millis, 2.seconds)
+            .maxRetries(3)
+        ).priority(1000)
 
         val result: Future[String] =
           Guards.withRetryPolicy(policy) {
@@ -229,21 +239,7 @@ The retry policy which controls the maximum number of retries and the exponentia
           }
         ```
 
-        The policy passed to `Guards.withRetryPolicy` is a `JsNamedRetryPolicy` facade:
-
-        ```scala
-        import golem.host.js.{JsNamedRetryPolicy, JsRetryPolicyTree, JsRetryPredicate}
-
-        import scala.scalajs.js
-
-        @js.native
-        sealed trait JsNamedRetryPolicy extends js.Object {
-          def name: String = js.native
-          def priority: Double = js.native
-          def predicate: JsRetryPredicate = js.native
-          def policy: JsRetryPolicyTree = js.native
-        }
-        ```
+        `Retry.named` creates a typed policy that matches all failures by default. The guard restores the previous policy when the returned `Future` completes.
     </Tabs.Tab>
     <Tabs.Tab>
         Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the high-level policy builders and `with_named_policy`:

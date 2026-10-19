@@ -1477,6 +1477,23 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     &key,
                     retry_was_live,
                 );
+            } else if matches!(kind, InterruptKind::Interrupt(_))
+                && retry_was_live
+                && self.parent.agent_mode() == AgentMode::Ephemeral
+            {
+                // The idle-stop adapter must still notify an accepted ephemeral caller
+                // waiting behind a completed constructor, without replacing that result
+                // or recording an execution of the pending method.
+                let status = self.parent.get_last_known_status().await;
+                if let Some(key) = status
+                    .pending_invocations
+                    .iter()
+                    .find_map(|pending| pending.idempotency_key().cloned())
+                {
+                    self.parent
+                        .store_invocation_failure(&key, &TrapType::Interrupt(kind))
+                        .await;
+                }
             }
         }
         match decision {

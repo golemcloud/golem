@@ -457,8 +457,10 @@ may already have signalled Restart. There is no frozen elected cause or shared p
 The invocation loop takes the exact queued request and waits for its establishment. At an idle permit
 wait it drops acquisition before that wait. It keeps deferred commands and filesystem-limit replies. A taken
 no-body stop retains its unwritten lifecycle marker through disposal, and the unloaded-stop handler
-writes it once. This does not replace a completed invocation's result or invent a result for queued
-work that has not started. A Restart can leave the same loop waiting without a loaded Store.
+writes it once. It preserves completed results. If a terminal Interrupt stops a live ephemeral owner
+after constructor success but before its accepted method starts, it notifies that pending key through
+`store_invocation_failure`. It records no method Started or Finished and leaves constructor success
+unchanged. A Restart can leave the same loop waiting without a loaded Store.
 
 Startup uses main's establishment-tail/current-pointer and idle-queue check before reopening entity
 admission. The wallet installer remains the sole owner-generation reset. The resident counter records
@@ -507,7 +509,7 @@ error recorded as Recovery before any guest invocation starts.
 The monitor submits a proposal to the existing Worker state actor. Acceptance revalidates the cached
 owner, startup attempt, held permit, exact active window, policy status and revision, period, fuel
 generation and current exhaustion. The private Worker slot and exact window identity reject targets
-from replaced executions. Fingerprint and resident generation remain diagnostic fields.
+from replaced executions.
 It queues the same ordinary interruption
 and advances the establishment tail before reporting acceptance. Capacity and request-state locks
 are released before asynchronous establishment. The invocation loop remains the sole primary-Store

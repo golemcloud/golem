@@ -730,10 +730,21 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     worker
         .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
         .await?;
-    // Suspend cancels and joins the blocked startup without acquiring the held permit.
+    assert!(
+        executor.worker_has_pending_startup(&owned).await,
+        "Suspend waits for normal permit wakeup before startup can process it"
+    );
+    assert!(!worker.concurrent_agent_permit_is_held().await);
+    tokio::select! {
+        biased;
+        result = &mut read => panic!("permit-wait Suspend discarded the read: {result:?}"),
+        _ = tokio::task::yield_now() => {}
+    }
+    drop(held_permit);
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_has_pending_startup(&owned).await
             || executor.worker_is_loaded(&owned).await
+            || worker.concurrent_agent_permit_is_held().await
         {
             tokio::task::yield_now().await;
         }
@@ -746,7 +757,6 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         result = &mut read => panic!("permit-wait Suspend discarded the read: {result:?}"),
         _ = tokio::task::yield_now() => {}
     }
-    drop(held_permit);
     executor
         .resume(&agent, false)
         .await

@@ -6,9 +6,7 @@ import { Callout, Tabs } from "nextra/components"
 
 Golem agents are single threaded. To achieve parallel execution, it is possible to spawn _child agents_ and communicate with them using RPC, as described on the [Agent to Agent communication page](/v1.6/develop/rpc).
 
-A simpler way is to use the **fork API**. The fork API consists of a single host function, defined as the following:
-
-The declarations below show the public interface shape; use the SDK calls shown in the usage examples rather than copying these declarations into an application.
+A simpler way is to use the **fork API**, defined as follows:
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -342,8 +340,7 @@ The high level idea is the following:
 - When the new agent is done with the work it was forked for, it completes the promise and includes some arbitrary payload it wants to send back to the original agent.
 - The original agent, after doing some additional work in parallel to the forked one, can suspend its execution to wait for the promise to be completed. When the promise is completed, the original agent resumes execution and receives the payload sent by the forked agent.
 
-The following code snippet demonstrates this pattern:
-
+Each example below creates a promise before forking. The original agent prepares a local greeting, then waits for a JSON-encoded greeting from the forked agent and logs both messages. Both greetings include the agent's `name` constructor parameter.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
@@ -413,24 +410,50 @@ The following code snippet demonstrates this pattern:
   </Tabs.Tab>
   <Tabs.Tab>
   ```typescript
-  import { Effect } from "effect"
-  import { Agents } from "@golemcloud/effect-golem"
+  import { Effect, Schema } from "effect"
+  import { Agents, defineAgent, method } from "@golemcloud/effect-golem"
 
-  const run = Effect.gen(function* () {
-    const promiseId = yield* Agents.Promises.create
+  type RunResult = {
+    message: string
+  }
 
-    switch ((yield* Agents.fork).tag) {
-      case "original": {
-        const rawResult = yield* Agents.Promises.await(promiseId)
-        console.log(new TextDecoder().decode(rawResult))
-        break
-      }
-      case "forked": {
-        const result = new TextEncoder().encode("Hello from the forked agent")
-        yield* Agents.Promises.complete(promiseId, result)
-        break
-      }
-    }
+  export const ExampleAgent = defineAgent({
+    name: "ExampleAgent",
+    id: { name: Schema.String },
+    methods: {
+      run: method({ input: {}, success: Schema.Void }),
+    },
+  }).implement({
+    init: ({ name }) => Effect.succeed({ name }),
+    methods: (state) => ({
+      run: () => Effect.gen(function* () {
+        const promiseId = yield* Agents.Promises.create
+
+        switch ((yield* Agents.fork).tag) {
+          case "original": {
+            const localResult: RunResult = {
+              message: `Hello from original agent with name: ${state.name}`,
+            }
+
+            const rawForkResult = yield* Agents.Promises.await(promiseId)
+            const forkResult: RunResult = JSON.parse(new TextDecoder().decode(rawForkResult))
+
+            console.log("local result :", localResult.message)
+            console.log("forked result:", forkResult.message)
+            break
+          }
+          case "forked": {
+            const result: RunResult = {
+              message: `Hello from forked agent with name: ${state.name}`,
+            }
+
+            const rawResult = new TextEncoder().encode(JSON.stringify(result))
+            yield* Agents.Promises.complete(promiseId, rawResult)
+            break
+          }
+        }
+      }),
+    }),
   })
   ```
   </Tabs.Tab>
@@ -443,7 +466,7 @@ use golem_rust::{
 use serde::{Deserialize, Serialize};
 
 struct ExampleAgentImpl {
-    id: String,
+    name: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -453,14 +476,14 @@ struct RunResult {
 
 #[agent_definition]
 pub trait ExampleAgent {
-    fn new(id: String) -> Self;
+    fn new(name: String) -> Self;
     async fn run(&self) -> Result<(), String>;
 }
 
 #[agent_implementation]
 impl ExampleAgent for ExampleAgentImpl {
-    fn new(id: String) -> Self {
-        ExampleAgentImpl { id }
+    fn new(name: String) -> Self {
+        ExampleAgentImpl { name }
     }
 
     async fn run(&self) -> Result<(), String> {
@@ -469,7 +492,7 @@ impl ExampleAgent for ExampleAgentImpl {
         match fork().map_err(|err| err.to_string())? {
             ForkResult::Original(_) => {
                 let local_result = RunResult {
-                    message: format!("Hello from original agent with id: {}", self.id),
+                    message: format!("Hello from original agent with name: {}", self.name),
                 };
 
                 let forked_result: RunResult = await_promise_json(&promise_id)
@@ -483,10 +506,8 @@ impl ExampleAgent for ExampleAgentImpl {
             }
             ForkResult::Forked(_) => {
                 let result = RunResult {
-                    message: format!("Hello from forked agent with id: {}", self.id),
+                    message: format!("Hello from forked agent with name: {}", self.name),
                 };
-
-                println!("forked result : {}", result.message);
 
                 complete_promise_json(&promise_id, result).map_err(|err| err.to_string())?;
 
@@ -538,8 +559,6 @@ final class ExampleAgentImpl(@unused private val name: String) extends ExampleAg
       case ForkResult.Forked(_) =>
         val result = RunResult(s"Hello from forked agent with name: $name")
 
-        println(s"forked result : ${result.message}")
-
         HostApi.completePromiseJson(promiseId, result)
         Future.successful(())
     }
@@ -548,6 +567,8 @@ final class ExampleAgentImpl(@unused private val name: String) extends ExampleAg
   ```
   </Tabs.Tab>
   <Tabs.Tab>
+  Import `moonbitlang/core/encoding/utf8` as `@utf8` in `moon.pkg`, alongside the SDK, JSON, and logging imports.
+
   ```moonbit
 #derive.agent
 struct ExampleAgent {
@@ -564,18 +585,6 @@ fn ExampleAgent::new(name : String) -> ExampleAgent {
   { name, }
 }
 
-fn string_to_bytes(value : String) -> Bytes {
-  Bytes::from_array(value.to_array().map(fn(char) { char.to_int().to_byte() }))
-}
-
-fn bytes_to_string(bytes : Bytes) -> String {
-  let chars : Array[Char] = []
-  for i in 0..<bytes.length() {
-    chars.push(Int::unsafe_to_char(bytes[i].to_int()))
-  }
-  String::from_array(chars)
-}
-
 pub async fn ExampleAgent::run(self : Self) -> Unit {
   let promise_id = @api.create_promise()
 
@@ -586,7 +595,7 @@ pub async fn ExampleAgent::run(self : Self) -> Unit {
       }
 
       let raw_fork_result = @api.await_promise(promise_id)
-      let json = @json.parse(bytes_to_string(raw_fork_result)) catch {
+      let json = @json.parse(@utf8.decode(raw_fork_result)) catch {
         _ => panic()
       }
       let forked_result : RunResult = @json.from_json(json) catch {
@@ -601,12 +610,10 @@ pub async fn ExampleAgent::run(self : Self) -> Unit {
         message: "Hello from forked agent with name: " + self.name,
       }
 
-      logger.info("forked result : " + result.message)
-
       ignore(
         @api.complete_promise(
           promise_id,
-          string_to_bytes(result.to_json().stringify()),
+          @utf8.encode(result.to_json().stringify()),
         ),
       )
     }
@@ -642,8 +649,6 @@ func init() {
 
 		if forked, _ := golem.MustForkSelf(); forked {
 			result := RunResult{Message: "Hello from forked agent with name: " + ctx.State.name}
-
-			fmt.Println("forked result :", result.Message)
 
 			golem.CompletePromise(promise.ID(), result)
 		} else {

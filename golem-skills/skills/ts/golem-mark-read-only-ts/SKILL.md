@@ -45,7 +45,7 @@ export const CounterAgentImpl = CounterAgent.implement({
 ```
 
 > **Cache policy.** `readOnly: true` uses the `until-write` cache policy (the base-SDK default). For finer control, pass an object instead of the boolean:
-> `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean }` — `no-cache` never caches, `until-write` caches until a mutating (non-read-only) method runs, `{ ttlNanos }` caches for that time-to-live, and `usesPrincipal: true` keys the cache per caller principal. Reach for a regular (non-read-only) method whenever you need a side effect.
+> `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> } }` — `no-cache` never caches, `until-write` caches until a mutating (non-read-only) method runs, and `{ ttlNanos }` caches for that time-to-live. A direct `s.principal()` method input automatically keys the cache per caller principal. Principal values nested in other inputs or returned by the method do not enable per-principal caching. Reach for a regular (non-read-only) method whenever you need a side effect.
 
 ## What Works in a Read-Only Method
 

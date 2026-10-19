@@ -1,0 +1,334 @@
+import { Callout } from "nextra/components"
+
+# Set up XFS storage
+
+Production filesystem snapshots require Linux 5.8 or later and a dedicated XFS filesystem with reflink for each executor. This guide covers storage and quota-daemon deployment. Then [configure the key, blob storage and snapshots](/next/operate/filesystem_snapshots/configuration). See the [overview](/next/operate/filesystem_snapshots) for shared deployment requirements.
+
+## Choose a storage mode
+
+| Requirement | `ReflinkXfs` | `ManagedXfs` |
+| --- | --- | --- |
+| Per-agent disk limit (`max_disk_space_per_worker`) | Not enforced; logged at startup | Enforced by each agent's project quota |
+| Filesystem metering (`resource_usage_metering.filesystem`) | Refused at startup | Supported |
+| Volume free-space checks, capture admission and write pressure recovery | Supported | Supported |
+| Mount option | `noquota` | `prjquota` |
+| Privilege | No capability | `CAP_SYS_ADMIN` for the separate `xfs-quotad` process; host user namespace |
+
+Use `ReflinkXfs` unless you need per-agent disk quotas or filesystem metering. The executor needs no capability in either mode.
+
+## Prepare storage without project quotas
+
+<Callout type="warning">
+  `mkfs.xfs` creates a filesystem and destroys existing data on the selected device. Back up any data you need and verify the device before running it.
+</Callout>
+
+Create a dedicated XFS filesystem with reflink and mount it without project quotas:
+
+```shell
+mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
+mount -t xfs -o noquota /dev/<device> /var/lib/golem/agents
+```
+
+Persist the mount in `/etc/fstab`:
+
+```text
+/dev/<device>  /var/lib/golem/agents  xfs  noquota  0 0
+```
+
+Give the filesystem root to the executor user. The executor image uses uid and gid 65534:
+
+```shell
+chown 65534:65534 /var/lib/golem/agents
+```
+
+The root must have no project id or project-inherit flag. The executor never changes them in `ReflinkXfs`. If an earlier tool set them, clear them once as root:
+
+```shell
+xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents
+```
+
+Set the mount point as the storage root:
+
+```toml
+[filesystem_storage.mode]
+type = "ReflinkXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+
+`ReflinkXfs` refuses mounts with project quota accounting, including `prjquota` or `pqnoenforce`. It has these limits:
+
+- **No per-agent disk limit.** The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup. One agent can fill the volume. The pressure targets still apply to the whole volume. When a write finds the volume full, the executor unloads idle agents and retries. If that frees too little space, the write fails with an out-of-space error, never a quota error. Capture admission skips snapshots while the volume is below its targets.
+- **No filesystem metering.** Set `[resource_usage_metering] filesystem = false`. With `true`, startup fails with `filesystem metering requires XFS storage with project quotas`.
+
+See [configuration](/next/operate/filesystem_snapshots/configuration) for pressure settings.
+
+## Prepare storage with project quotas
+
+Use `ManagedXfs` when you need per-agent disk quotas or filesystem metering. Create a dedicated XFS filesystem with reflink and mount it with project quotas.
+
+<Callout type="warning">
+  `mkfs.xfs` destroys existing data on the selected device. Back up any data you need and verify the device before running it.
+</Callout>
+
+```shell
+mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
+mount -t xfs -o prjquota /dev/<device> /var/lib/golem/agents
+```
+
+Persist the mount in `/etc/fstab`:
+
+```text
+/dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
+```
+
+Make the root writable by the executor. The executor image uses uid and gid 65534:
+
+```shell
+chown 65534:65534 /var/lib/golem/agents
+```
+
+In Kubernetes, `fsGroup: 65534` makes supported volumes, such as local persistent volumes, writable by that group. A `hostPath` keeps the host directory's owner.
+
+The executor removes any project from the root. Linux allows only the directory owner to change its project. Give the root to uid 65534, or clear its project once as root:
+
+```shell
+xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents
+```
+
+Set the storage mode:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`. Also configure the socket as described in [Run xfs-quotad](/next/operate/filesystem_snapshots/xfs#run-xfs-quotad).
+
+The executor sets directory projects. Linux permits this only in the initial user namespace. Containers must use the host user namespace, even if they have `CAP_SYS_ADMIN`.
+
+## Run the executor in a container
+
+The image runs as `golem`, uid and gid 65534. Drop all capabilities and set `no_new_privs`:
+
+```shell
+docker run --cap-drop ALL --security-opt no-new-privileges \
+  --mount type=bind,source=/var/lib/golem/agents,target=/var/lib/golem/agents \
+  -e GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs \
+  -e GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents \
+  golemservices/golem-worker-executor:<version>
+```
+
+Use this Kubernetes container security context:
+
+```yaml
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+```
+
+For `ReflinkXfs`, the root must belong to uid 65534. For `ManagedXfs`, run `xfs-quotad` beside the executor. Use Docker's `--userns host` when the daemon remaps user namespaces. In Kubernetes, do not set `hostUsers: false`. The executor never changes its capabilities.
+
+## Run xfs-quotad
+
+Only `ManagedXfs` needs `xfs-quotad`. Linux requires `CAP_SYS_ADMIN` to read and set XFS project quotas. This capability also permits `XFS_IOC_OPEN_BY_HANDLE`, which can open any file on the volume, including for writing, without a permission check. Never give it to the executor that runs guest Wasm.
+
+The executor sends quota calls over a Unix socket to the separate `xfs-quotad` process. The daemon serves one XFS root and runs no agent code. It accepts only three calls: read the volume's quota state, read a project's quota, and set a project's limits. It refuses other changes. The protocol cannot open files.
+
+An escape from the Wasm sandbox into the executor gains no file access through the daemon. It still has the executor's own access: it can change all agents' files on the volume and can change or remove any project's limits through the daemon.
+
+The image is `golemservices/golem-xfs-quotad`. Its entrypoint is `golem-xfs-quotad`:
+
+```shell
+golem-xfs-quotad --root /var/lib/golem/agents --listen /run/golem-quota/xfs-quotad.sock
+```
+
+### Configure the daemon and socket
+
+- `--root` must be on the same XFS filesystem as the executor's root. Mount it read-write: setting limits writes to the volume.
+- `--listen` names the socket. Use a directory shared only by the daemon and executor. Any process can open the socket file, but the daemon accepts only its own uid, or the uid named by `--allow-uid` when the processes use different users.
+- The daemon serves at most eight connections; the executor holds one. It locks `<socket>.lock` beside the socket. A second daemon on the same socket refuses startup.
+- The daemon needs the host user namespace and a seccomp profile that allows `quotactl_fd`.
+
+The image runs as uid and gid 65534. Its binary has the file capability `cap_sys_admin+ep`. The container must add `SYS_ADMIN` and allow privilege escalation for Linux to grant it. Without `SYS_ADMIN`, the binary cannot run: `exec ./golem-xfs-quotad failed: Operation not permitted`. The daemon changes no capability itself. If it starts without the capability, it refuses startup with `xfs-quotad needs CAP_SYS_ADMIN, which this process does not hold`, followed by the required settings.
+
+Configure the executor's socket:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+xfs_quotad_socket = "/run/golem-quota/xfs-quotad.sock"
+```
+
+The socket environment variable is `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET`.
+
+The executor checks the protocol version and filesystem identity on connect. Each call, including connection establishment, has a five-second deadline. If the connection breaks, the executor reconnects and sends the call once more. The daemon changes limits only on the newest connection, so a late call from an old connection cannot undo a later change.
+
+Start the daemon before the executor. The executor connects at startup and stops if the daemon does not answer.
+
+### Deploy on Kubernetes
+
+Run the daemon as a native sidecar: an init container with `restartPolicy: Always` and a startup probe on the socket. This delays the executor until the daemon listens. Kubernetes requires `allowPrivilegeEscalation: true` when adding `SYS_ADMIN`.
+
+Use `fsGroupChangePolicy: OnRootMismatch` to avoid an ownership walk over the whole agent volume on every pod start. With the default, `Always`, the kubelet walks the volume each time. A CSI driver with `VOLUME_MOUNT_GROUP` applies the group itself and ignores both policies.
+
+```yaml
+securityContext:
+  fsGroup: 65534
+  fsGroupChangePolicy: OnRootMismatch
+initContainers:
+  - name: xfs-quotad
+    image: golemservices/golem-xfs-quotad:<version>
+    restartPolicy: Always
+    args: [--root, /var/lib/golem/agents, --listen, /run/golem-quota/xfs-quotad.sock]
+    startupProbe:
+      exec:
+        command: [test, -S, /run/golem-quota/xfs-quotad.sock]
+      periodSeconds: 1
+      failureThreshold: 30
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      allowPrivilegeEscalation: true
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: [ALL]
+        add: [SYS_ADMIN]
+    volumeMounts:
+      - { name: agents, mountPath: /var/lib/golem/agents }
+      - { name: quota-socket, mountPath: /run/golem-quota }
+containers:
+  - name: worker-executor
+    image: golemservices/golem-worker-executor:<version>
+    env:
+      - name: GOLEM__FILESYSTEM_STORAGE__MODE__TYPE
+        value: ManagedXfs
+      - name: GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT
+        value: /var/lib/golem/agents
+      - name: GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET
+        value: /run/golem-quota/xfs-quotad.sock
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
+    volumeMounts:
+      - { name: agents, mountPath: /var/lib/golem/agents }
+      - { name: quota-socket, mountPath: /run/golem-quota }
+volumes:
+  - name: quota-socket
+    emptyDir: { medium: Memory, sizeLimit: 1Mi }
+```
+
+Supply the `agents` volume from your deployment's XFS mount.
+
+### Deploy with Docker Compose
+
+Run the daemon as a second service:
+
+```yaml
+services:
+  golem-xfs-quotad:
+    image: golemservices/golem-xfs-quotad:<version>
+    command: [--root, /var/lib/golem/agents, --listen, /run/golem-quota/xfs-quotad.sock]
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN]
+    volumes:
+      - /var/lib/golem/agents:/var/lib/golem/agents
+      - quota-socket:/run/golem-quota
+    healthcheck:
+      test: [CMD, test, -S, /run/golem-quota/xfs-quotad.sock]
+      interval: 1s
+      retries: 30
+  golem-worker-executor:
+    # ...
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    environment:
+      GOLEM__FILESYSTEM_STORAGE__MODE__TYPE: ManagedXfs
+      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT: /var/lib/golem/agents
+      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET: /run/golem-quota/xfs-quotad.sock
+    volumes:
+      - /var/lib/golem/agents:/var/lib/golem/agents
+      - quota-socket:/run/golem-quota
+    depends_on:
+      golem-xfs-quotad:
+        condition: service_healthy
+volumes:
+  quota-socket:
+```
+
+The image owns `/run/golem-quota` as uid 65534. A new volume mounted there lets the daemon create its socket. If Docker remaps user namespaces, use the host user namespace for both services.
+
+### Deploy with systemd
+
+Run the daemon and executor as services of the same user. Give only the daemon the ambient capability. The daemon does not notify systemd when it listens, so wait for the socket in `ExecStartPost`:
+
+```ini
+# golem-xfs-quotad.service
+[Service]
+User=golem
+ExecStart=/usr/local/bin/golem-xfs-quotad --root /var/lib/golem/agents --listen /run/golem-quota/xfs-quotad.sock
+ExecStartPost=/bin/sh -c 'until test -S /run/golem-quota/xfs-quotad.sock; do sleep 0.1; done'
+TimeoutStartSec=30
+AmbientCapabilities=CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_ADMIN
+NoNewPrivileges=yes
+RuntimeDirectory=golem-quota
+
+# golem-worker-executor.service
+[Unit]
+After=golem-xfs-quotad.service
+Requires=golem-xfs-quotad.service
+
+[Service]
+User=golem
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+```
+
+### Confine the daemon
+
+The separate container or service can have a tighter policy than the executor. The runtime's default seccomp profile permits `quotactl_fd` with `SYS_ADMIN`, but also permits unused calls such as `mount`, `unshare`, `setns` and `bpf`.
+
+A daemon-specific profile can allow only the calls it uses: `quotactl_fd` with its three commands, `fstatfs`, `openat`, socket calls (`accept4`, `read`, `write`, `getsockopt` for peer credentials), and Rust runtime calls for threads and memory. SELinux or AppArmor can confine it to its volume and socket.
+
+## Check the storage before startup
+
+Both XFS modes require the filesystem's root directory, not a subdirectory, a bind mount of a subdirectory or a Kubernetes `subPath`. For example, use a `hostPath` at the host mount point. The mount's root in `/proc/self/mountinfo` must be `/`.
+
+Use one XFS root per executor. The executor takes an exclusive lock at startup; a second executor on the root cannot start. Names must be case-sensitive. A filesystem created with `mkfs.xfs -n version=ci` is refused.
+
+Startup checks must also confirm:
+
+- The executor can open and identify the XFS root, read its geometry, validate its block size, and reopen it through its stable descriptor.
+- Pressure byte and object targets fit within the volume's capacity.
+- The volume is writable, its identity has not changed, and free-space observations work.
+- The executor can create `.scratch` and `.initial-files` with no project identity and remove stale contents. Captures use `.scratch`. Both directories are outside agent directories and, in `ManagedXfs`, outside agent quotas.
+
+`ManagedXfs` additionally checks:
+
+- The daemon serves the same filesystem. Project quota accounting and enforcement are enabled, and quota queries and updates work.
+- A 32-bit project quota query works. Project id `2147483648`, reserved for the startup probe, is unused.
+- The executor can create and remove `.golem-xfs-project-probe`, set its project, verify inheritance and reflink copies, and clear its project.
+- The executor can remove any project and project-inherit flag from the root and verify its neutral project identity.
+
+`ReflinkXfs` additionally checks that project quota accounting is absent and the root has no project identity. It creates `.golem-xfs-reflink-probe`, reflinks a file, reads the copy and removes the directory. A filesystem created with `-m reflink=0` fails with `Operation not supported`.
+
+Failed checks stop startup. Errors use `failed to <check> filesystem <path>`, sometimes followed by `: <cause>`. The check names the failed operation. The path can name the configured root, a descendant, `/proc/self/fd/`, `/proc/self/mountinfo`, `<filesystem-volume>` for free-space reads, or `<configuration>` for invalid settings.

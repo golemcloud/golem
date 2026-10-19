@@ -15,6 +15,12 @@ Do not push tags, dispatch workflows, publish releases, or change settings witho
 explicit authorization for those actions. Draft publication is a separate human
 decision; preparation never publishes the Golem draft. Commands below are a
 runbook, not authorization. Substitute approved versions and commit IDs.
+Release authorization does not authorize direct pushes or merges to `main`.
+
+At release start, record the current public `main` commit and create a preparation
+branch from it. Keep that baseline throughout the release. Commit release fixes
+and version pins on the preparation branch; do not merge or rebase later `main`
+changes into it. Development on `main` can continue independently.
 
 An administrator must configure GitHub Environment `golem-release` to allow only
 release tags. Required reviewers are recommended. Set its variable
@@ -26,8 +32,11 @@ Normal CI must not receive a built-in write token. Do not print credentials.
 ## 1. Publish the shared snapshot
 
 Use full history and tags; unshallow a shallow checkout before history checks.
-Start with clean committed source and passing branch CI. Choose an unused shared
-version. With authorization:
+Start with clean committed source and choose an unused shared version. The
+publication workflow gates uploads on the release-tooling checks and the three
+shared-library test suites. Full platform CI is not a prerequisite for this step;
+do not wait for unrelated worker, service, or CLI integration tests. The Golem
+preparation step runs the full preflight later. With authorization:
 
 ```shell
 git tag golem-shared-v1.6.0 <approved-shared-commit>
@@ -38,7 +47,8 @@ gh release create golem-shared-v1.6.0 --repo golemcloud/golem --title 'Shared cr
 The GitHub release-published event, not the tag push, starts
 `publish-golem-shared.yaml`. Its version comes from the tag. Wait for successful
 publication of `golem-schema-derive`, `golem-schema`, then `golem-tool-metadata`.
-Do not mark the shared release as the latest Golem release.
+For an RC, add `--prerelease` to the release command. Do not mark the shared
+release as the latest Golem release.
 Consumers select the nearest `golem-shared-v*` tag on first-parent history, not by
 version sorting. Missing tags or multiple shared tags on the selected commit fail.
 A tag reachable only through a merged side branch is not a first-parent tag.
@@ -53,7 +63,8 @@ cargo make verify-shared-crates
 ```
 
 A changed snapshot needs a new shared version and a Rust SDK release against it.
-Never move tags or overwrite registry versions.
+Never overwrite registry versions. Keep tags immutable except for the narrowly
+authorized failed pipeline-test recovery described below.
 
 ## 2. Publish and pin all six SDKs
 
@@ -69,8 +80,16 @@ git tag golem-ts-v1.6.0 <approved-ts-commit>
 git tag golem-effect-v1.6.0 <approved-effect-commit>
 git tag golem-scala-v1.6.0 <approved-scala-commit>
 git tag golem-moonbit-v1.6.0 <approved-moonbit-commit>
-git push origin golem-rust-v1.6.0 golem-ts-v1.6.0 golem-effect-v1.6.0 golem-scala-v1.6.0 golem-moonbit-v1.6.0
+git push origin golem-rust-v1.6.0
+git push origin golem-ts-v1.6.0
+git push origin golem-effect-v1.6.0
+git push origin golem-scala-v1.6.0
+git push origin golem-moonbit-v1.6.0
 ```
+
+Push these tags separately and confirm that each publication workflow starts.
+GitHub does not create tag-push events when more than three tags are pushed at
+once. Do not combine these pushes with the Go module tags or use `git push --tags`.
 
 SDK versions need not equal the Golem or shared version. These five SDKs publish
 on tag pushes. Go releases through module tags, with no publish workflow. First
@@ -92,11 +111,21 @@ versions are separate: all eight use the Golem version without its leading `v`.
 ## 3. Tag and prepare Golem
 
 The source must be clean, the exact public tag must match the checked source, and
-its commit must be an ancestor of public `main`. A maintenance-only commit does
-not qualify. A shared tag on another history path does not fix snapshot selection.
+its commit must be the exact head of a PR merged into `golemcloud/golem`'s `main`.
+The PR's merge commit must remain reachable from public `main`. Validation uses
+the GitHub API and requires an authenticated `gh` session with pull requests read
+access. In CI, `GITHUB_TOKEN` supplies that read access independently of the
+contents-only publication token in `GH_TOKEN`.
+A maintenance-only PR does not qualify. A shared tag on another history path
+does not fix snapshot selection.
 The preparation workflow must be available on the default branch for dispatch and
 present at the selected tag. Do not dispatch on a branch or pass a separate tag input.
-With authorization:
+Use a reviewed PR to merge the preparation branch into `main` without importing
+newer `main` changes into the release source. Use the repository's normal squash
+merge. Record the PR's exact head before merging, then tag that preparation-branch
+commit, not the squash commit on `main`. The tag preserves the frozen source and
+its first-parent shared snapshot; validation proves that this exact source was merged.
+Obtain explicit approval before merging. With authorization:
 
 ```shell
 git tag v1.6.0 <approved-golem-commit>
@@ -143,11 +172,25 @@ Partial publication is not transactional. Reruns verify existing packages and
 assets, publish only missing ones, and verify the complete public set. An existing
 manifest must be identical and is reused. A mismatch stops publication; never
 delete or overwrite assets, use `--clobber`, or move tags. Changed source or bytes
-requires a new release tag. A failed shared publication can likewise rerun at its
-same tag after checking registry state and provenance.
+requires a new release tag, except for the pipeline-test case below. A failed
+shared publication can likewise rerun at its same tag after checking registry
+state and provenance.
 
-For explicitly authorized local recovery, use the exact clean tag, full history,
-and authenticated write access to both repositories:
+During an explicitly identified pipeline test, a failed shared tag and GitHub
+release can be recreated at a fixed commit only with explicit approval for that
+deletion and recreation. First verify that all three crate versions are absent
+from crates.io, the release has no assets, and no SDK or Golem release consumes
+the failed shared tag. General release authorization is not enough. Once any
+crate is published, preserve the tag and use normal immutable recovery.
+
+If a bulk tag push created SDK tags but no publication runs, verify the missing
+runs before retrying. Pushing an existing tag again does not create an event.
+With explicit approval to delete and recreate those tags, recreate each at its
+original commit and push it separately. Keep all source commits and versions
+unchanged; do not delete the Go tags, which need no publication workflow.
+
+For explicitly authorized local recovery, use Python 3.14 as `python3`, the exact
+clean tag, full history, and authenticated write access to both repositories:
 
 ```shell
 BUILTIN_VERSION=1.6.0 cargo make validate-builtin-release
@@ -159,3 +202,9 @@ BUILTIN_VERSION=1.6.0 cargo make publish-builtin-artifacts
 Validation fetches refs but does not build; dry run builds/packages without
 publication or manifest creation. Local recovery keeps all immutability and
 provenance checks. Never bypass the CI guard or give normal CI write credentials.
+Builds on different hosts can produce different WASM bytes from the same source.
+Do not replace a package when a rebuild differs. To retain a complete package
+already verified by the original publisher and publish only missing components,
+follow [recovery across build hosts](../../../BUILTIN_ARTIFACTS.md#recovery-across-build-hosts).
+This manual procedure requires explicit publication authorization and the original
+verification evidence; it does not relax the all-entry publisher's byte checks.

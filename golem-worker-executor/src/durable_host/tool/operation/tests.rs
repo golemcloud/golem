@@ -1430,7 +1430,7 @@ async fn nonterminal_unload_preserves_independent_owner_failures() {
 
 #[test]
 #[timeout("5s")]
-async fn guest_lifecycle_interrupt_does_not_elect_a_trap() {
+async fn host_interruption_preserves_exact_owner_trap() {
     let timestamp = golem_common::model::Timestamp::now_utc();
     for kind in [
         InterruptKind::Suspend(timestamp),
@@ -1448,20 +1448,26 @@ async fn guest_lifecycle_interrupt_does_not_elect_a_trap() {
             false,
         )
         .await;
-        assert!(matches!(failure, ByteStreamFailure::Cancelled));
-        assert!(owner.selected_owner_failure().is_none());
+        assert!(matches!(
+            failure,
+            ByteStreamFailure::Failed(details) if details == "tool sidecar trapped"
+        ));
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Trap(TrapType::Interrupt(selected))) if selected == kind
+        ));
         assert!(matches!(
             operation.winner_if_active(),
-            Some(ToolOperationWinner::Open)
+            Some(ToolOperationWinner::Trap)
         ));
         assert!(
-            owner
+            !owner
                 .select_owner_failure(OwnerFailureWinner::Lifecycle(kind))
                 .await
         );
         assert!(matches!(
             owner.selected_owner_failure(),
-            Some(OwnerFailureWinner::Lifecycle(selected)) if selected == kind
+            Some(OwnerFailureWinner::Trap(TrapType::Interrupt(selected))) if selected == kind
         ));
         operation.settle().await;
     }

@@ -1,13 +1,16 @@
 use golem_rust::agentic::SnapshotRestoreContext;
 use golem_rust::{SchemaValue, agent_definition, agent_implementation, endpoint};
 
-#[agent_definition(mount = "/snapshot-counters/{name}")]
+#[agent_definition(mount = "/snapshot-counters/{name}", snapshotting = "every(5)")]
 pub trait CounterWithSnapshotAgent {
     // The agent constructor, it's parameters identify the agent
     fn new(name: String) -> Self;
 
     #[endpoint(post = "/increment")]
     fn increment(&mut self) -> u32;
+
+    #[endpoint(get = "/value")]
+    fn value(&self) -> u32;
 }
 
 struct CounterImpl {
@@ -15,7 +18,7 @@ struct CounterImpl {
     count: u32,
 }
 
-#[agent_implementation(mount = "/snapshot-counters/{name}")]
+#[agent_implementation]
 impl CounterWithSnapshotAgent for CounterImpl {
     fn new(name: String) -> Self {
         Self {
@@ -24,10 +27,13 @@ impl CounterWithSnapshotAgent for CounterImpl {
         }
     }
 
-    #[endpoint(post = "/increment")]
     fn increment(&mut self) -> u32 {
         self.count += 1;
         log::info!("The new value is {}", self.count);
+        self.count
+    }
+
+    fn value(&self) -> u32 {
         self.count
     }
 

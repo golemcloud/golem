@@ -250,7 +250,7 @@ pub(super) async fn pending_reconnect_handshake(
         ensure!(held.number == 3);
         executor.commit_oplog(&id).await?;
         let open = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let start = reconnect_pool::operation_start(&open, path, 0)?;
+        let start = reconnect_pool::operation_start(&open, path, 0, 0)?;
         assert_invocation(&open, &key, 0)?;
         assert_invocation(&open, &first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&open, OplogIndex::INITIAL) == (3, 2));
@@ -275,7 +275,19 @@ pub(super) async fn pending_reconnect_handshake(
             else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
             if path == Path::Direct { peer.closed(3).await?; }
             let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(reconnect_pool::operation_start(&completed, path, 1)? == start);
+            ensure!(reconnect_pool::operation_start(&completed, path, 1, 1)? == start);
+            ensure!(reconnect_pool::operation_start(&completed, path, 1, 0).is_err(), "Finished cannot retain an undelivered operation");
+            let delivery = completed.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start => Some(entry.oplog_index),
+                _ => None,
+            }).context("completed operation delivery")?;
+            let before_delivery: Vec<_> = completed.iter()
+                .filter(|entry| entry.oplog_index < delivery)
+                .cloned()
+                .collect();
+            // An oplog read can observe the real End before the guest takes its result.
+            ensure!(reconnect_pool::operation_start(&before_delivery, path, 1, 0)? == start);
+            ensure!(reconnect_pool::operation_start(&before_delivery, path, 1, 1).is_err(), "completed history still requires its delivery marker");
             if path == Path::Accessor {
                 assert_receive_terminal(&completed, start, 1)?;
             }
@@ -321,7 +333,7 @@ pub(super) async fn pending_reconnect_handshake(
         drop(slot);
         peer.assert_effects(3, 2, 2)?;
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(reconnect_pool::operation_start(&stopped, path, 0)? == start);
+        ensure!(reconnect_pool::operation_start(&stopped, path, 0, 0)? == start);
         assert_invocation(&stopped, &key, 0)?;
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         ensure!(entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 1);
@@ -351,7 +363,8 @@ pub(super) async fn pending_reconnect_handshake(
         executor.commit_oplog(&id).await?;
         let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
-        ensure!(intermediate_terminals <= 1 && reconnect_pool::operation_start(&repairing, path, intermediate_terminals)? == start);
+        let intermediate_deliveries = usize::from(repairing.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)));
+        ensure!(intermediate_terminals <= 1 && reconnect_pool::operation_start(&repairing, path, intermediate_terminals, intermediate_deliveries)? == start);
         if path == Path::Accessor { assert_invocation(&repairing, &key, 0)?; }
         peer.assert_effects(4, 3, 2)?;
         if path == Path::Accessor { fourth.send.send("repaired".into()).map_err(|_| anyhow::anyhow!("repair frame gate closed"))?; }
@@ -361,7 +374,7 @@ pub(super) async fn pending_reconnect_handshake(
         else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
         if path == Path::Direct { peer.closed(4).await?; }
         let repaired = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(reconnect_pool::operation_start(&repaired, path, 1)? == start);
+        ensure!(reconnect_pool::operation_start(&repaired, path, 1, 1)? == start);
         if path == Path::Accessor {
             assert_receive_terminal(&repaired, start, 1)?;
         }
@@ -402,7 +415,7 @@ pub(super) async fn pending_reconnect_handshake(
         ensure!(noop.into_typed::<String>()? == "ok");
         peer.assert_effects(4, 3, if path == Path::Accessor { 3 } else { 2 })?;
         let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(reconnect_pool::operation_start(&replayed, path, 1)? == start);
+        ensure!(reconnect_pool::operation_start(&replayed, path, 1, 1)? == start);
         assert_invocation(&replayed, &key, 1)?;
         assert_invocation(&replayed, &noop_key, 1)?;
         if let Some(probe_key) = &terminal_probe_key {

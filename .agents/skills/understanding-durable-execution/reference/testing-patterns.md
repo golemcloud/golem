@@ -129,6 +129,38 @@ Compare the complete raw prefix after each stop and later
 reconstruction. A repeated-key result is not enough; the next fresh Counter result must also prove
 that completed replay did not repeat its effect.
 
+### Live observations and incomplete history
+
+Completed-replay tests first unload the worker, then invoke a fresh `noop` and check results,
+peer effects and committed history. They do not count resident creations or observe a private window.
+
+Reconnect history checks count End and CompletionDelivered separately. A live repair snapshot may
+contain one End and no delivery yet; a Finished invocation still requires exactly one of each, in
+that order. The completion-first controls validate a read-only prefix ending before delivery and
+reject that prefix when a completed-history check requires the marker.
+
+Snapshot and physical-pressure fixtures on reflink XFS without quotas or APFS use an explicit
+unlimited per-agent disk policy. They exercise snapshot or volume-pressure recovery, not quota
+enforcement. A finite limit on unaccounted storage must still fail production validation; turning
+filesystem metering off does not disable that independent safety requirement.
+
+Managed XFS CI restores native binaries and component WASMs from the same run. With
+`GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES=1`, the runner requires a nonempty restored initial-filesystem
+WASM and skips its timestamp-based rebuild. A fresh checkout can be newer than that valid artifact.
+Missing prebuilt input is a setup failure, not permission to rebuild the CLI in the VM. Local build
+mode retains its source-timestamp check.
+
+P3 `wait-for` records its outer Start before the host-internal clock Start and End. A live history
+snapshot can end at either Start. The sleep-history helper waits for the clock input before checking
+the original deadline; it still rejects duplicate calls and malformed completed history. Its prefix
+regression uses read-only slices of real history, not a replay-cursor change or an injected runtime
+pause.
+
+Test observers use `test_observer_filter` at DEBUG with an accurate maximum-level hint. An unbounded
+hint enables expensive dependency TRACE argument construction even when output filters discard it.
+Keep the exact observer-stack bound and DEBUG-evidence regression; production output filters remain
+independent.
+
 ## Pattern 5: completed replay performs no new effect
 
 Mistake caught: re-executing a recorded call during replay.

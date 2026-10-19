@@ -1506,13 +1506,14 @@ staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/shared-crates-release"
 mkdir ${staging}
 crates = array golem-schema-derive golem-schema golem-tool-metadata
 attempts = array before-publication after-publication
+http_code_format = concat "%" "{http_code}"
 for crate in ${crates}
     metadata_path = set "${staging}/${crate}.json"
     url = set "https://crates.io/api/v1/crates/${crate}/${version}"
     found = set false
     for attempt in ${attempts}
         if not ${found}
-            response = exec --fail-on-error curl --silent --show-error --location --retry 3 --retry-max-time 180 --connect-timeout 15 --max-time 60 --output ${metadata_path} --write-out "%{http_code}" --user-agent golem-release ${url}
+            response = exec --fail-on-error curl --silent --show-error --location --retry 3 --retry-max-time 180 --connect-timeout 15 --max-time 60 --output ${metadata_path} --write-out ${http_code_format} --user-agent golem-release ${url}
             status = trim ${response.stdout}
             if equals ${status} 200
                 found = set true
@@ -2489,7 +2490,7 @@ end
 '''
 
 [tasks.validate-golem-release-source]
-description = "Checks the clean public Golem tag and its ancestry before release preparation"
+description = "Checks the clean public Golem tag and its merged preparation PR"
 dependencies = ["check-builtin-publication-context"]
 script_runner = "@duckscript"
 script = '''
@@ -2519,7 +2520,28 @@ if not equals ${head} ${public_tag}
     trigger_error "The public release tag must equal HEAD"
 end
 exec --fail-on-error git fetch https://github.com/golemcloud/golem.git main
-exec --fail-on-error git merge-base --is-ancestor ${head} FETCH_HEAD
+publication_token = get_env GH_TOKEN
+workflow_token = get_env GITHUB_TOKEN
+if not is_empty ${workflow_token}
+    set_env GH_TOKEN ${workflow_token}
+end
+pulls = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/commits/${head}/pulls?per_page=100" --jq ".[] | select(.merged_at != null and .head.sha == \"${head}\" and .base.ref == \"main\" and .base.repo.full_name == \"golemcloud/golem\") | .merge_commit_sha"
+if not is_empty ${workflow_token}
+    set_env GH_TOKEN ${publication_token}
+end
+commits = split ${pulls.stdout} "\n"
+merged = set false
+for commit in ${commits}
+    if not is_empty ${commit}
+        reachable = exec git merge-base --is-ancestor ${commit} FETCH_HEAD
+        if equals ${reachable.code} 0
+            merged = set true
+        end
+    end
+end
+if not ${merged}
+    trigger_error "The release tag must identify the exact head of a PR merged into public main"
+end
 '''
 
 [tasks.validate-builtin-release]

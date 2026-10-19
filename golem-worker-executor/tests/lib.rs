@@ -169,6 +169,25 @@ pub struct Tracing;
 
 static TRACING_INIT: Once = Once::new();
 
+fn test_observer_filter(
+    predicate: impl Fn(&tracing::Metadata<'_>) -> bool + Send + Sync + 'static,
+) -> impl tracing_subscriber::layer::Filter<tracing_subscriber::Registry> + Send + Sync {
+    // An unbounded hint makes dependency TRACE arguments expensive even when output is filtered.
+    tracing_subscriber::filter::filter_fn(move |metadata| {
+        *metadata.level() <= tracing::Level::DEBUG && predicate(metadata)
+    })
+    .with_max_level_hint(tracing::level_filters::LevelFilter::DEBUG)
+}
+
+fn test_observer_layers()
+-> Vec<Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>> {
+    vec![
+        invocation_waits::layer(),
+        scheduler_waits::layer(),
+        entity_fence_waits::layer(),
+    ]
+}
+
 impl Tracing {
     pub fn init() -> Self {
         TRACING_INIT.call_once(|| {
@@ -176,11 +195,7 @@ impl Tracing {
                 &TracingConfig::test_pretty_without_time("worker-executor-tests")
                     .with_env_overrides(),
                 golem_common::tracing::filter::for_all_outputs::default_debug_env(),
-                vec![
-                    invocation_waits::layer(),
-                    scheduler_waits::layer(),
-                    entity_fence_waits::layer(),
-                ],
+                test_observer_layers(),
             );
         });
         Self

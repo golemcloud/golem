@@ -387,6 +387,11 @@ failed join but does not authorize primary completion. Wakeups use the original 
 channel, and host waits subscribe before checking the settled-failure latch so a late subscriber
 cannot miss completion. None of this invents entity terminals or changes oplog recovery.
 
+Trap selection retains a host-classified `TrapType::Interrupt` with its exact interruption kind.
+The native host adapter still reports that trap to the operation owner. A previously selected
+lifecycle failure wins instead; a later lifecycle candidate cannot overwrite the selected trap.
+Closing admission during ordinary unload alone elects neither candidate.
+
 ### Native bodies
 
 Native tools use the same owner-oplog entity boundary with a retained worker context instead of

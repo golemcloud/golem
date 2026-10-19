@@ -1,0 +1,4 @@
+{
+  "type": "agent",
+  "description": "A counter that snapshots its state every five invocations"
+}

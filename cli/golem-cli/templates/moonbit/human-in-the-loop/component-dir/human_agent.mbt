@@ -35,7 +35,7 @@ pub fn HumanAgent::list_pending_approvals(self : Self) -> Array[String] {
 /// Makes a decision on a workflow approval request
 #derive.prompt_hint("Approve or reject a workflow")
 #derive.endpoint(post="/decisions")
-pub fn HumanAgent::decide(
+pub fn HumanAgent::decide_approval(
   self : Self,
   workflow_id : String,
   decision : String,

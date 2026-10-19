@@ -4,15 +4,15 @@ use golem_rust::{
     agent_definition, agent_implementation, await_promise_json, create_promise, description,
     endpoint, prompt,
 };
-use uuid::Uuid;
 
-#[agent_definition(mount = "/workflows", phantom_agent = true)]
+#[agent_definition(mount = "/workflows/{workflow_id}")]
 pub trait WorkflowAgent {
-    fn new() -> Self;
+    fn new(workflow_id: String) -> Self;
 
     #[prompt("Start approval process")]
     #[description("Starts a workflow that requires human approval before continuing")]
-    async fn start(&mut self) -> String;
+    #[endpoint(post = "/start")]
+    async fn start(&mut self, approver: String) -> String;
 }
 
 struct WorkflowAgentImpl {
@@ -21,20 +21,17 @@ struct WorkflowAgentImpl {
 
 #[agent_implementation]
 impl WorkflowAgent for WorkflowAgentImpl {
-    fn new() -> Self {
-        Self {
-            id: Uuid::new_v4().to_string(),
-        }
+    fn new(workflow_id: String) -> Self {
+        Self { id: workflow_id }
     }
 
-    #[endpoint(post = "/")]
-    async fn start(&mut self) -> String {
+    async fn start(&mut self, approver: String) -> String {
         // 1. Create a promise that represents waiting for human input
         let approval_promise_id = create_promise();
 
         // Normally you would send this ID to some UI, email, etc.
         // For demo purposes, we'll just tell you where to send the approval
-        let mut approver = HumanAgentClient::get("bob".to_string());
+        let mut approver = HumanAgentClient::get(approver);
         approver
             .request_approval(self.id.clone(), approval_promise_id.clone())
             .await;

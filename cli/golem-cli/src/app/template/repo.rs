@@ -428,6 +428,29 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn public_agent_templates_share_the_core_examples() {
+        let repo = AppTemplateRepo::get(false).unwrap();
+        for language in repo.languages() {
+            let actual = repo
+                .agent_templates(*language)
+                .unwrap()
+                .keys()
+                .map(|name| name.name())
+                .collect::<BTreeSet<_>>();
+            let mut expected =
+                BTreeSet::from(["default", "human-in-the-loop", "json", "streaming"]);
+            // Go snapshot recovery is not supported.
+            if *language != GuestLanguage::Go {
+                expected.insert("snapshotting");
+            }
+            if *language == GuestLanguage::TypeScript {
+                expected.extend(["counter-arktype", "counter-valibot"]);
+            }
+            assert_eq!(actual, expected, "template set for {language}");
+        }
+    }
+
+    #[test]
     fn builtin_component_templates_declare_their_languages() {
         let repo = AppTemplateRepo::get(false).unwrap();
         let languages = repo

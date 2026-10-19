@@ -1,0 +1,41 @@
+import { Callout } from "nextra/components"
+
+# Durable Streams Compatibility
+
+Golem implements the Durable Streams read, append, producer, deletion, expiry, and fork wire contracts on **typed invocation-session paths**. The unmodified `@durable-streams/client` can read, write, long-poll, subscribe with SSE, close, and delete Golem stream URLs. Golem does not claim to be an arbitrary-path generic stream store.
+
+## What is compatible
+
+Golem supports the following [Durable Streams protocol](https://github.com/durable-streams/durable-streams/blob/main/PROTOCOL.md) features:
+
+- JSON and byte creation, metadata, catch-up, long-poll, and SSE
+- `-1`, `now`, opaque offset resume, cursors, ETags, and binary SSE base64 encoding
+- append and atomic close, including idempotent producer duplicate, fencing, sequence-gap, and closed-stream behavior
+- stream deletion and retained `410` tombstones
+- sliding TTL and absolute expiry on a session
+- exact-prefix forks, fork retries, sub-offsets, and source/fork divergence
+- client-side subscription cancellation, which does not mutate the server stream
+
+Golem also adds invocation-session manifests and cooperative session cancellation. `Stream-Cancelled` is a Golem response extension that identifies cancelled EOF.
+
+## Intentional differences
+
+| Area | Golem behavior |
+| --- | --- |
+| Paths | Streams are declared by an agent method schema and live under `{base}/invocations/{session}/streams/{slot}`. Clients cannot create arbitrary paths or undeclared slots. |
+| Types | JSON items are validated against the pinned method schema. Direct byte streams are opaque; other streams are JSON. |
+| Deletion | Stream `DELETE` is a durable soft tombstone. Later authenticated/admitted `GET`, `HEAD`, `POST`, and `DELETE` return `410`; `PUT` returns `409`. The slot cannot be recreated within that existing session. |
+| Retention | Golem retains stream and tombstone history with the agent oplog. There is no configurable retention horizon and no protocol `410` for data falling before a horizon. Retained history still consumes durable storage. |
+| Expiry | Expiry applies to the complete invocation session. After expiry the family is `404`, and a durable session can be freshly created with the same public session ID. This differs from a retained manual-delete tombstone. |
+| Subscriptions | Reserved `__ds` subscription paths are not exposed and return `404`. Use `live=sse` for live reads; subscription-management resources are not available. |
+| Session cancellation | Session `DELETE` cooperatively cancels streams but does not interrupt agent computation, roll back state, or undo external effects. |
+| Forks | A protocol fork is a Golem agent fork at the stream cut, not a storage-layer alias. It has an independent continuation and agent state. |
+
+<Callout type="warning">
+  Do not treat manual deletion and expiry as equivalent. Manual deletion cannot
+  recreate a slot within its existing session. If that durable session later
+  expires, an explicit session `PUT` or eligible slot `PUT` can create a new
+  invocation under the same public session ID. Lazy `POST` returns `404` instead.
+</Callout>
+
+For the exact statuses and headers, see [Exposing Durable Streams over HTTP](/v1.6/invoke/making-custom-apis/durable-streams#operation-and-status-reference).
