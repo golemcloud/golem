@@ -124,6 +124,19 @@ impl<S: tracing::Subscriber> Layer<S> for Collector {
 }
 
 #[test]
+fn observer_layers_keep_debug_evidence_without_enabling_trace_work() {
+    let subscriber = tracing_subscriber::registry().with(crate::test_observer_layers());
+    assert_eq!(
+        tracing::Subscriber::max_level_hint(&subscriber),
+        Some(tracing::level_filters::LevelFilter::DEBUG),
+        "test observers must not enable dependency trace argument construction"
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(tracing::enabled!(target: TARGET, tracing::Level::DEBUG));
+    });
+}
+
+#[test]
 fn scheduler_wait_matches_only_the_exact_existing_event_and_unindexes_before_delivery(
     _tracing: &Tracing,
 ) {

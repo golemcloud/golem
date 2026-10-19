@@ -2287,11 +2287,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(error) = missing_cleanup_error {
             return Err(error);
         }
-        let result = match cleanup {
+        match cleanup {
             Some(cleanup) => cleanup.wait().await,
             None => Ok(()),
-        };
-        result
+        }
     }
 
     pub(crate) async fn ensure_created(
