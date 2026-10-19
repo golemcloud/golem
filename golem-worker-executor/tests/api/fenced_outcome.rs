@@ -46,7 +46,11 @@ async fn selected_writer_fence(
         .invoke_and_await_agent(&component, &name, "add", data_value!(1u64))
         .await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let worker = executor
+        .production_active_agent(&owned)
+        .await
+        .unwrap()
+        .primary();
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
     let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
     let key = IdempotencyKey::fresh();
@@ -179,7 +183,11 @@ async fn selected_writer_fence(
             "the new owner reconstructs the seed effect and executes the uncommitted invocation once"
         );
     }
-    let replacement = executor.active_agent(&owned).await.unwrap().primary();
+    let replacement = executor
+        .production_active_agent(&owned)
+        .await
+        .unwrap()
+        .primary();
     assert!(!Arc::ptr_eq(&worker, &replacement));
     assert_eq!(
         replacement.get_initial_worker_metadata().fingerprint,

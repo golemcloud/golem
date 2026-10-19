@@ -132,7 +132,8 @@ fn observer_layers_keep_debug_evidence_without_enabling_trace_work() {
         "test observers must not enable dependency trace argument construction"
     );
     tracing::subscriber::with_default(subscriber, || {
-        assert!(tracing::enabled!(target: TARGET, tracing::Level::DEBUG));
+        assert!(tracing::event_enabled!(target: TARGET, tracing::Level::DEBUG));
+        assert!(!tracing::event_enabled!(target: TARGET, tracing::Level::TRACE));
     });
 }
 
