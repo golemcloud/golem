@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::hash::Hasher;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex, MutexGuard, Notify};
 use tracing::{debug, warn};
@@ -233,6 +233,15 @@ enum ReplayTransitionPhase {
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
 type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
+
+/// The consuming invocation's progress past deferred guest imports. Zero means none;
+/// otherwise the watermark is one past the highest issued ordinal. Direct calls do not
+/// advance it: they must claim their recorded work before a later native read is delivered.
+#[derive(Clone)]
+pub(super) struct GuestReadOrder {
+    pub anchor: OplogIndex,
+    pub issued: Arc<AtomicU64>,
+}
 
 /// Storage coordinates only; neither a Start claim nor permission to publish an effect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

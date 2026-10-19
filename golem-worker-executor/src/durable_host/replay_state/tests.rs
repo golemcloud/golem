@@ -4827,6 +4827,120 @@ async fn replay_start_claim_cannot_cross_a_guest_stream_observation() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn guest_stream_observation_waits_for_unreached_direct_calls() {
+    for terminal in [false, true] {
+        let mut start = start_now();
+        let OplogEntry::Start { invocation_id, .. } = &mut start else {
+            unreachable!()
+        };
+        *invocation_id = Some(test_invocation_id(7));
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start,
+            end_for(2, 42),
+            consumer_observation(0, true, terminal),
+            remove_retry_policy(),
+        ])
+        .await;
+        let order = GuestReadOrder {
+            anchor: OplogIndex::from_u64(1),
+            issued: Arc::new(AtomicU64::new(0)),
+        };
+        rs.record_deferred_import(&order, 6);
+        let mut delivery =
+            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(4), Some(order)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), delivery.as_mut())
+                .await
+                .is_err()
+        );
+        let ReplayStartClaimOutcome::Claimed { handle: call, .. } = rs
+            .claim_start_or_replay_end(
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .with_invocation_id(Some(test_invocation_id(7))),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("recorded direct call must be claimed")
+        };
+        let barrier = delivery.await.unwrap();
+        // A direct call can finish with the native read holding the advance gate.
+        assert!(
+            matches!(rs.await_resolution(call).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(3))
+        );
+        barrier.acknowledge();
+        assert_eq!(
+            rs.get_oplog_entry(None).await.unwrap().0,
+            OplogIndex::from_u64(5)
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn guest_stream_observation_does_not_wait_for_issued_or_other_invocation_calls() {
+    for same_invocation in [false, true] {
+        let mut start = start_now();
+        let OplogEntry::Start { invocation_id, .. } = &mut start else {
+            unreachable!()
+        };
+        *invocation_id = Some(test_invocation_id(7));
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start,
+            end_for(2, 42),
+            consumer_observation(0, true, false),
+            remove_retry_policy(),
+        ])
+        .await;
+        let order = GuestReadOrder {
+            anchor: OplogIndex::from_u64(if same_invocation { 1 } else { 10 }),
+            issued: Arc::new(AtomicU64::new(0)),
+        };
+        let mut delivery = Box::pin(
+            rs.await_guest_stream_observation(OplogIndex::from_u64(4), Some(order.clone())),
+        );
+        if same_invocation {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), delivery.as_mut())
+                    .await
+                    .is_err()
+            );
+            // Issuance alone must wake the waiter. Host admission still needs the Store.
+            rs.record_deferred_import(&order, 7);
+        }
+        let barrier = delivery.await.unwrap();
+        let ReplayStartClaimOutcome::Claimed { handle: call, .. } = rs
+            .claim_start_or_replay_end(
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .with_invocation_id(Some(test_invocation_id(7))),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("recorded deferred call must be claimed")
+        };
+        assert!(matches!(
+            rs.await_resolution(call).await.unwrap(),
+            Resolution::Completed { .. }
+        ));
+        barrier.acknowledge();
+    }
+}
+
+#[test]
 async fn replay_delivery_marker_skips_following_hints_after_guest_boundary() {
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -5377,7 +5491,7 @@ async fn claim_rechecks_retention_after_initial_miss_without_losing_its_gate_que
     // the gate's current owner retains B and transfers that same gate to A's delivery barrier.
     let mut tx = rs.cursor.tx_with_gate(gate).await.unwrap();
     let gate = tx
-        .consume_delivery_boundary(Some(OplogIndex::from_u64(2)), OplogIndex::from_u64(6))
+        .consume_delivery_boundary(Some(OplogIndex::from_u64(2)), OplogIndex::from_u64(6), None)
         .await
         .unwrap()
         .unwrap();
