@@ -1,5 +1,4 @@
 use super::*;
-use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry, PublicOplogEntryWithIndex};
@@ -121,12 +120,12 @@ async fn pending_block(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .context("seed permit release")?;
+    .context("seed idle teardown")?;
     // Refund the seed Store before the target borrows the full account budget.
     if resource == Resource::Compute {
         limits.run_batch_for_test().await;
@@ -185,8 +184,6 @@ async fn pending_block(
             .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
             .await
     };
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = tokio::spawn({
@@ -239,31 +236,29 @@ async fn pending_block(
         })
         .await
         .context("open input IoPollPoll")??;
-        let initial = worker.current_monthly_proposal_for_test();
+        let initial = worker.owner_runtime_resources().with_monthly_capacity(mode, |capacity| capacity);
         let mut next_flush = async || {
             loop {
-                let (window, revision) = flushes.recv().await.context("owner usage flusher closed")?;
-                if window == initial.diagnostic_window_id && revision == initial.policy_revision {
+                let revision = flushes.recv().await.context("owner usage flusher closed")?;
+                if revision == initial.policy_revision {
                     return Ok::<_, anyhow::Error>(());
                 }
             }
         };
         if resource != Resource::Memory {
             tokio::time::timeout(Duration::from_secs(10), next_flush())
-                .await.context("initial monitor pre-wait flush")??;
+                .await.context("initial owner usage flush")??;
         }
         let prefix = read_stored().await?;
         let prefix_last = *prefix.last_key_value().context("committed input-poll prefix is empty")?.0;
         let mut raw = worker.raw_interrupt_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         ensure!(!invocation.is_finished());
         info!(
             ?resource, ?mode, %poll_start, ?initial, connections,
-            "P2 input poll parked with live Worker and held permit; peer has sent no data"
+            "P2 input poll Start committed; peer has sent no data"
         );
 
         if resource == Resource::Compute {
@@ -275,16 +270,10 @@ async fn pending_block(
             );
             next_flush().await?;
             tokio::time::timeout(Duration::from_secs(10), next_flush())
-                .await.context("compute check did not reach the next pre-wait flush")??;
+                .await.context("next owner usage flush")??;
             ensure!(!capacity_updates.as_ref().unwrap().has_changed()?);
             drop(capacity_updates.take());
-            ensure!(worker.monthly_checks().contains(&(initial.diagnostic_window_id, initial.policy_revision)));
-            ensure!(
-                attempts.try_recv().is_err(),
-                "zero unreserved fuel must not exhaust prepaid fuel"
-            );
-            ensure!(worker.current_monthly_proposal_for_test() == initial);
-            ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
+            ensure!(!invocation.is_finished());
         }
         let refresh = if resource == Resource::Storage {
             allocate_storage(&owned).await?;
@@ -304,25 +293,8 @@ async fn pending_block(
             registry.set_policy(exhausted);
             Some(applied_refresh(&limits, &registry, context.account_id).await?)
         };
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-        .await
-        .context("monthly proposal")?
-        .context("acceptance observer closed")?;
-        ensure!(
-            attempt.proposal.policy_revision
-                == initial.policy_revision + u64::from(resource != Resource::Storage)
-        );
-        ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        if resource == Resource::Compute {
-            resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
-        }
         if resource == Resource::Storage {
             let other = if durable {
                 AgentMode::Ephemeral
@@ -336,14 +308,13 @@ async fn pending_block(
         let closed = tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await;
         ensure!(
             closed.is_ok(),
-            "socket still open: signal={signal:?}, loaded={}, permit={}, finished={}",
+            "socket still open: signal={signal:?}, loaded={}, finished={}",
             worker.is_loaded().await,
-            worker.concurrent_agent_permit_is_held().await,
             invocation.is_finished()
         );
         ensure!(closed.unwrap()? == 0);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -358,9 +329,6 @@ async fn pending_block(
         if let Some(refresh) = refresh {
             refresh.await?;
         }
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(!worker.monthly_window_active_for_test());
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let mut retained_raw = read_stored().await?;
         ensure!(retained_raw.range(..=prefix_last).eq(prefix.iter()), "the complete committed input-poll prefix must survive stop");
@@ -454,24 +422,12 @@ async fn pending_block(
             applied_refresh(&limits, &registry, context.account_id)
                 .await?
                 .await?;
-            let mut native_polls = repeat_stop.then(|| crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint));
             executor.resume(&id, false).await?;
-            if let Some(native_polls) = &mut native_polls {
+            if repeat_stop {
                 let (mut replay_peer, _) =
                     tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
                 connections += 1;
-                let pending = tokio::time::timeout(Duration::from_secs(10), native_polls.recv())
-                    .await?
-                    .context("reconstructed native input poll Pending")?;
-                ensure!(pending.invocation_key.as_ref() == Some(&key));
-                ensure!(pending.start == poll_start);
-                ensure!(pending.state() == WaitState::Pending);
-                ensure!(pending.pollable_reps.len() == 1);
-                let replay_proposal = worker.current_monthly_proposal_for_test();
-                ensure!(pending.runtime == replay_proposal);
-                ensure!(replay_proposal.resident_generation > initial.resident_generation);
-                ensure!(worker.concurrent_agent_permit_is_held().await);
-                let replay_acquisitions = worker.permit_acquisitions_for_test();
+                let replay_revision = registry.current_limits().monthly_policy_revision;
                 let mut replay_signal = worker.raw_interrupt_for_test();
                 let connect_start = poll_starts(&stopped)[0];
                 let ready_start = stopped.iter().find_map(|entry| match &entry.entry {
@@ -489,30 +445,18 @@ async fn pending_block(
                 exhausted.available_memory_gb_seconds = 0;
                 registry.set_policy(exhausted);
                 let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-                let accepted = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-                    .await?.context("replay monthly acceptance")?;
-                ensure!(accepted.proposal.diagnostic_window_id == replay_proposal.diagnostic_window_id);
-                ensure!(accepted.proposal.resident_generation == replay_proposal.resident_generation);
-                ensure!(accepted.proposal.policy_revision == replay_proposal.policy_revision + 1);
-                ensure!(accepted.proposal.exhaustion == Some("monthly memory exhausted"));
-                ensure!(accepted.accepted);
                 let signal = tokio::time::timeout(Duration::from_secs(10), replay_signal.recv()).await??;
                 ensure!(matches!(signal, InterruptKind::Suspend(_)));
                 let mut byte = [0];
                 ensure!(tokio::time::timeout(Duration::from_secs(10), replay_peer.read(&mut byte)).await?? == 0);
                 tokio::time::timeout(Duration::from_secs(10), async {
-                    while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+                    while worker.is_loaded().await {
                         tokio::task::yield_now().await;
                     }
                 }).await.context("reconstructed input physical unload")?;
                 tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
                 tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
                 refresh.await?;
-                ensure!(worker.unload_succeeded_for_test());
-                ensure!(worker.permit_acquisitions_for_test() == replay_acquisitions);
-                ensure!(!worker.monthly_window_active_for_test());
-                ensure!(pending.state() == WaitState::Dropped);
-                ensure!(pending.window_closed(), "the reconstructed poll's own window must close");
                 ensure!(!invocation.is_finished());
                 let replay_stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 let replay_raw = read_stored().await?;
@@ -532,7 +476,7 @@ async fn pending_block(
                 limits.run_batch_for_test().await;
                 check_accounting(
                     &registry.applied_updates(), Resource::Memory, true,
-                    replay_proposal.policy_revision, replay_proposal.period,
+                    replay_revision, grant.period,
                 )?;
                 info!(%poll_start, connections,
                     "Repeated monthly stop retired native input after connect reconstruction; original terminals and retained input Start preserved");

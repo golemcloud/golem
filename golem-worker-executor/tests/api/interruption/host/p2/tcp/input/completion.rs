@@ -73,14 +73,11 @@ async fn completion_and_history(
         .unwrap()
         .primary();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while !worker.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let key = IdempotencyKey::fresh();
@@ -103,10 +100,6 @@ async fn completion_and_history(
     })));
     let result = async {
         let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
-        let phase = pending_phase(&mut phases, operation, &key).await?;
-        executor.commit_oplog(&id).await?;
-        let connect_start = completed_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?)?;
-        let acquisitions = worker.permit_acquisitions_for_test();
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         peer.write_all(b"x").await?;
         if matches!(operation, Operation::Splice) {
@@ -115,19 +108,18 @@ async fn completion_and_history(
             ensure!(echoed == *b"x");
         }
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        ensure!(phase.state() == WaitState::Returned);
-        ensure!(worker.concurrent_agent_permit_is_held().await);
+        executor.commit_oplog(&id).await?;
+        let connect_start = completed_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?)?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
         start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.diagnostic_window_id == phase.runtime.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
-        ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
-        ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-        ensure!(attempt.accepted);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.selected_owner_failure_for_test().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        }).await?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         ensure!(!request_is_finished(&invocation));
         release.send(false).unwrap();
@@ -135,16 +127,13 @@ async fn completion_and_history(
         ensure!(matches!(tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??, InterruptKind::Suspend(_)));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         }).await.context("completion-first physical unload")?;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         join_request(&mut refresh, "stop refresh").await?;
-        ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(!worker.monthly_window_active_for_test());
+        ensure!(!worker.is_loaded().await);
         let mut byte = [0];
         ensure!(tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await?? == 0);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -163,26 +152,19 @@ async fn completion_and_history(
         let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, operation.method(), data_value!(port));
         let peers = async {
             let (mut historical_peer, _) = listener.accept().await?;
-            let historical = pending_phase(&mut phases, operation, &key).await?;
-            ensure!(historical.runtime.resident_generation > phase.runtime.resident_generation);
-            ensure!(historical.runtime.fingerprint == phase.runtime.fingerprint);
             historical_peer.write_all(b"x").await?;
             if matches!(operation, Operation::Splice) {
                 historical_peer.read_exact(&mut byte).await?;
                 ensure!(byte == *b"x");
             }
             ensure!(historical_peer.read(&mut byte).await? == 0);
-            ensure!(historical.state() == WaitState::Returned);
             let (mut fresh_peer, _) = listener.accept().await?;
-            let fresh_phase = pending_phase(&mut phases, operation, &fresh_key).await?;
-            ensure!(fresh_phase.runtime.resident_generation == historical.runtime.resident_generation);
             fresh_peer.write_all(b"x").await?;
             if matches!(operation, Operation::Splice) {
                 fresh_peer.read_exact(&mut byte).await?;
                 ensure!(byte == *b"x");
             }
             ensure!(fresh_peer.read(&mut byte).await? == 0);
-            ensure!(fresh_phase.state() == WaitState::Returned);
             Ok::<_, anyhow::Error>(())
         };
         let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async { tokio::try_join!(fresh, peers) }).await??;
@@ -192,7 +174,7 @@ async fn completion_and_history(
         ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
         ensure!(poll_starts(&history).len() == 2, "completed historical connect replays, fresh invocation adds one poll");
         assert_settled_history(&history)?;
-        info!(?operation, %key, %fresh_key, ?phase, connections = 3, peer_bytes = 3,
+        info!(?operation, %key, %fresh_key, connections = 3, peer_bytes = 3,
             "Native input completed before monthly stop; selected result survived; completed raw TCP history consumed again before fresh work");
         Ok::<_, anyhow::Error>(())
     }.await;

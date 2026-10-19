@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::execution_observations::{ExecutorObservations, WorkerObservations};
+use crate::execution_observations::WorkerObservations;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use axum::Router;

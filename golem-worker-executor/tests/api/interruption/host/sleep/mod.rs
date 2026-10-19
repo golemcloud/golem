@@ -88,7 +88,7 @@ pub(super) async fn pending_sleep(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -124,8 +124,7 @@ pub(super) async fn pending_sleep(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
+    let admitted_revision = registry.current_limits().monthly_policy_revision;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -157,13 +156,9 @@ pub(super) async fn pending_sleep(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed open sleep Start")??;
-        let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
-        ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         ensure!(!invocation.is_finished());
         ensure!(original.deadline > history::unix_nanos() + STOP_BOUND.as_nanos() as u64,
             "setup left too little time to prove stop before guest deadline: {original:?}");
@@ -171,14 +166,6 @@ pub(super) async fn pending_sleep(
         // Apply exhaustion while the original sleep remains pending. This bounds a hang,
         // not the product's quota-detection latency.
         tokio::time::timeout(STOP_BOUND, async {
-            if resource == Resource::Compute {
-                ensure!(initial.fuel_generation.is_some());
-                ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
-                ensure!(account.monthly_capacity_is_exhausted_for_test(mode), "Store must prepay the remaining fuel");
-                ensure!(attempts.try_recv().is_err(), "zero unreserved fuel cannot exhaust prepaid fuel");
-                ensure!(worker.current_monthly_proposal_for_test() == initial);
-                ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
-            }
             if resource == Resource::Storage {
                 allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable).await?;
             }
@@ -191,34 +178,19 @@ pub(super) async fn pending_sleep(
             }
             registry.set_policy(exhausted);
             let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
-            let attempt = attempts.recv().await.context("acceptance observer closed")?;
-            ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1 + u64::from(resource == Resource::Storage));
-            ensure!(attempt.proposal.period == initial.period);
-            ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-            ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-            ensure!(attempt.proposal.start_attempt == initial.start_attempt);
-            ensure!(attempt.proposal.fingerprint == initial.fingerprint);
-            ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-            ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-            ensure!(attempt.accepted);
             let signal = raw.recv().await?;
             ensure!(matches!(signal, InterruptKind::Suspend(_)));
             ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
-            if resource == Resource::Compute {
-                resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
-            }
             if resource == Resource::Storage {
                 let other = if durable { AgentMode::Ephemeral } else { AgentMode::Durable };
                 ensure!(!account.monthly_capacity_is_exhausted_for_test(other));
             }
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+            while worker.is_loaded().await { tokio::task::yield_now().await; }
             worker.join_accepted_stops_for_test().await?;
             worker.retained_cleanup_for_test().await?;
             if let Some(refresh) = refresh { refresh.await?; }
-            ensure!(worker.unload_succeeded_for_test());
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
             ensure!(history::unix_nanos() < original.deadline, "quota stop must precede guest readiness");
-            info!(?abi, ?resource, ?mode, ?signal, proposal = ?attempt.proposal,
+            info!(?abi, ?resource, ?mode, ?signal,
                 stop_elapsed = ?stop_started.elapsed(), remaining_nanos = original.deadline - history::unix_nanos(),
                 "Typed quota stop physically unloaded sleep Worker before real guest deadline");
             Ok::<_, anyhow::Error>(())
@@ -250,7 +222,7 @@ pub(super) async fn pending_sleep(
         executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(5)).await?;
         flush_stopped_usage(&limits, &registry, resource).await?;
         let settled = registry.applied_updates();
-        check_accounting(&settled, resource, durable, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
+        check_accounting(&settled, resource, durable, admitted_revision + u64::from(resource == Resource::Storage), policy.period)?;
         let settled_count = settled.len();
         info!(?abi, ?resource, ?mode, ?settled, "Stopped sleep window accounting settled");
         // Wait out the real recorded deadline with no Store. Restarting a fresh duration on
@@ -263,8 +235,7 @@ pub(super) async fn pending_sleep(
         } else {
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
-        ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
+        ensure!(!worker.is_loaded().await);
         if resource == Resource::Storage { assert_storage_deleted(&owned)?; }
         limits.run_batch_for_test().await;
         for update in &registry.applied_updates()[settled_count..] {
@@ -285,7 +256,6 @@ pub(super) async fn pending_sleep(
             executor.resume(&id, false).await?;
             let resumed = tokio::time::timeout(Duration::from_secs(5), &mut invocation).await.context("sleep must retain its expired original deadline, not start another duration")???;
             abi.check_result(resumed)?;
-            ensure!(worker.observed_creation_count() > initial.resident_generation);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(history::sleep_record(&recovered, &key, abi, true)? == Some(original), "replay changed recorded now, duration or original wait identity");
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
@@ -295,15 +265,13 @@ pub(super) async fn pending_sleep(
                 "Original clock input and deadline replayed; retained wait ended and invocation finished once");
             tokio::time::timeout(Duration::from_secs(5), async {
                 while !worker.stop_if_idle().await { tokio::task::yield_now().await; }
-                while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+                while worker.is_loaded().await { tokio::task::yield_now().await; }
                 worker.join_accepted_stops_for_test().await?;
                 worker.retained_cleanup_for_test().await
             }).await.context("idle eviction before completed clock replay")??;
-            let generation = worker.observed_creation_count();
             let fresh_key = IdempotencyKey::fresh();
             let healthy = tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "healthcheck", data_value!())).await??;
             ensure!(healthy.into_typed::<bool>()?);
-            ensure!(worker.observed_creation_count() > generation);
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(history::sleep_record(&replayed, &key, abi, true)? == Some(original));
             history::invocation(&replayed, &fresh_key, 1)?;
@@ -316,8 +284,7 @@ pub(super) async fn pending_sleep(
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!failed.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))));
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-            ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
+            ensure!(!worker.is_loaded().await);
         }
         Ok::<_, anyhow::Error>(())
     }.await;

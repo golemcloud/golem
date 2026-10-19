@@ -89,7 +89,7 @@ async fn nonmatching_storage(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while seed.eviction_class().await.is_none() {
             tokio::task::yield_now().await;
         }
     })
@@ -138,8 +138,6 @@ async fn nonmatching_storage(
     let mut capacity_updates = limits
         .subscribe_capacity_updates_for_test(context.account_id)
         .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
@@ -176,19 +174,19 @@ async fn nonmatching_storage(
     })
     .await
     .context("open receive chunk")??;
-    let initial = worker.current_monthly_proposal_for_test();
+    let initial_revision = registry.current_limits().monthly_policy_revision;
+    let initial_period = policy.period;
     let mut next_flush = async |revision| {
         loop {
-            let (window, observed_revision) =
-                flushes.recv().await.context("owner usage flusher closed")?;
-            if window == initial.diagnostic_window_id && observed_revision == revision {
+            let observed_revision = flushes.recv().await.context("owner usage flusher closed")?;
+            if observed_revision == revision {
                 return Ok::<_, anyhow::Error>(());
             }
         }
     };
-    tokio::time::timeout(Duration::from_secs(10), next_flush(initial.policy_revision))
+    tokio::time::timeout(Duration::from_secs(35), next_flush(initial_revision))
         .await
-        .context("initial monitor pre-wait flush")??;
+        .context("initial usage flush")??;
     let oplog = worker.all().oplog_service();
     let read_stored = async || {
         let last = oplog.get_last_index(&owned, mode).await?;
@@ -201,10 +199,8 @@ async fn nonmatching_storage(
         .last_key_value()
         .context("committed invocation prefix is empty")?
         .0;
-    let acquisitions = worker.permit_acquisitions_for_test();
     let mut raw = worker.raw_interrupt_for_test();
     let account = limits.initialize_account(context.account_id).await?;
-    assert_eq!(initial.exhaustion, None);
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
     assert!(!account.monthly_capacity_is_exhausted_for_test(other));
 
@@ -233,10 +229,9 @@ async fn nonmatching_storage(
     } else {
         opposite_exhausted.available_durable_storage_byte_seconds = 0;
     }
-    let update_started = tokio::time::Instant::now();
     registry.set_policy(opposite_exhausted);
     let revision = registry.current_limits().monthly_policy_revision;
-    assert!(revision > initial.policy_revision);
+    assert!(revision > initial_revision);
     let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
     tokio::time::timeout(Duration::from_secs(10), capacity_updates.changed())
         .await
@@ -257,8 +252,8 @@ async fn nonmatching_storage(
     // Positive matching byte-time proves the managed XFS filesystem meter was enabled.
     let updates = registry.applied_updates();
     assert!(updates.iter().any(|update| {
-        update.monthly_policy_revision == initial.policy_revision
-            && update.period == initial.period
+        update.monthly_policy_revision == initial_revision
+            && update.period == initial_period
             && if durable {
                 update.durable_storage_byte_seconds_delta > 0
             } else {
@@ -278,35 +273,12 @@ async fn nonmatching_storage(
             0
         );
     }
-    // Healthy iterations flush after wake and before the next wait. The first new-
-    // revision observation can already be pre-wait; six observations cover at least
-    // two completed checks. If the first wake was a tick racing the policy update,
-    // they also include the pending update check and a later complete periodic check.
-    // Memory metering is off, and no further capacity update may supply those wakes.
-    // These are dependency observations, not assertions that a sleep was polled.
-    for _ in 0..6 {
-        next_flush(revision).await?;
-    }
-    assert!(update_started.elapsed() >= Duration::from_secs(30));
+    // A dependency flush observes the applied policy; it does not identify a monitor tick.
+    tokio::time::timeout(Duration::from_secs(35), next_flush(revision)).await??;
     assert!(!capacity_updates.has_changed()?);
     drop(capacity_updates);
-    assert!(
-        worker
-            .monthly_checks()
-            .contains(&(initial.diagnostic_window_id, revision))
-    );
-    let sampled = worker.current_monthly_proposal_for_test();
-    assert_eq!(sampled.policy_revision, revision);
-    assert_eq!(sampled.period, initial.period);
-    assert_eq!(sampled.diagnostic_window_id, initial.diagnostic_window_id);
-    assert_eq!(sampled.resident_generation, initial.resident_generation);
-    assert_eq!(sampled.exhaustion, None);
     assert!(account.monthly_capacity_is_exhausted_for_test(other));
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
-    assert!(matches!(
-        attempts.try_recv(),
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-    ));
     assert!(matches!(
         raw.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -318,9 +290,6 @@ async fn nonmatching_storage(
             .is_err(),
         "opposite storage exhaustion must not close the silent socket"
     );
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    assert!(worker.monthly_window_active_for_test());
     assert!(!invocation.is_finished());
     executor.commit_oplog(&id).await?;
     let pending = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -347,7 +316,7 @@ async fn nonmatching_storage(
         .expect_err("ordinary user interruption must terminate the pending invocation");
     assert!(!error.to_string().contains("monthly"));
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
     })
@@ -355,8 +324,6 @@ async fn nonmatching_storage(
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     tokio::time::timeout(Duration::from_secs(10), refresh).await??;
-    assert!(attempts.try_recv().is_err());
-    assert!(!worker.monthly_window_active_for_test());
     let stopped_raw = read_stored().await?;
     assert_eq!(
         stopped_raw.range(..=prefix_last).collect::<Vec<_>>(),

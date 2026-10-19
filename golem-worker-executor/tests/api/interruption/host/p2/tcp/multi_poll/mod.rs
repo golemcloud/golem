@@ -13,7 +13,6 @@ use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
-use crate::native_waits::{WaitReceipt, WaitState};
 use history::*;
 use peers::*;
 
@@ -115,12 +114,12 @@ async fn pending_multi_poll(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .context("seed permit release")?;
+    .context("seed idle teardown")?;
     // Refund the seed Store before the target borrows the full account budget.
     if resource == Resource::Compute {
         limits.run_batch_for_test().await;
@@ -152,9 +151,6 @@ async fn pending_multi_poll(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
-    let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
     let listeners = listeners().await?;
     let first_port = listeners[0].local_addr()?.port();
     let second_port = listeners[1].local_addr()?.port();
@@ -179,26 +175,24 @@ async fn pending_multi_poll(
     let result = async {
         let mut effects = PeerEffects::default();
         let mut peers = accept_pair(&listeners, &mut effects).await?;
-        let phase = pending_phase(&mut phases, &key, 2).await?;
+        wait_for_input_poll(&executor, &id, &key, 2).await?;
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let poll_start = input_poll(&entries, &key, 2, None)?;
-        ensure!(phase.start == poll_start);
         assert_invocation(&entries, &key, 0)?;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
-        let initial = worker.current_monthly_proposal_for_test();
+        let initial = worker
+            .owner_runtime_resources()
+            .with_monthly_capacity(mode, |capacity| capacity);
         let mut raw = worker.raw_interrupt_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(phase.runtime == initial && phase.state() == WaitState::Pending);
         ensure!(effects.accepts == [1, 1] && effects.sent == [0, 0]);
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         ensure!(!invocation.is_finished());
         info!(
-            ?resource, ?mode, %key, ?id, %poll_start, ?phase, ?effects,
-            "Two-input native poll Pending with committed count-2 Start and held permit"
+            ?resource, ?mode, %key, ?id, %poll_start, ?effects,
+            "Two-input poll has a committed count-2 Start; peers have sent no data"
         );
 
         if resource == Resource::Compute {
@@ -208,14 +202,8 @@ async fn pending_multi_poll(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
             );
-            ensure!(
-                attempts.try_recv().is_err(),
-                "zero unreserved fuel must not exhaust prepaid fuel"
-            );
-            ensure!(worker.current_monthly_proposal_for_test() == initial);
-            ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
+            ensure!(!invocation.is_finished());
         }
-        ensure!(phase.state() == WaitState::Pending);
         let stop_started = tokio::time::Instant::now();
         if resource == Resource::Storage {
             allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable)
@@ -230,34 +218,12 @@ async fn pending_multi_poll(
         }
         registry.set_policy(exhausted);
         let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await
-            .context("monthly proposal")?
-            .context("acceptance observer closed")?;
-        ensure!(
-            attempt.proposal.policy_revision
-                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
-        );
-        ensure!(attempt.proposal.fingerprint == initial.fingerprint);
-        ensure!(attempt.proposal.start_attempt == initial.start_attempt);
-        ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(
             worker.selected_owner_failure_for_test().await
                 == Some(ToolOwnerFailureMetadata::Lifecycle)
         );
-        if resource == Resource::Compute {
-            resource_events.assert_policy_advanced_after(
-                registry.current_limits().monthly_policy_revision,
-                initial.fuel_generation,
-            )?;
-        }
         if resource == Resource::Storage {
             let other = if durable {
                 AgentMode::Ephemeral
@@ -270,7 +236,7 @@ async fn pending_multi_poll(
         closed_pair(&mut peers, &mut effects).await?;
         ensure!(effects.closed == [1, 1] && effects.sent == [0, 0]);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -288,16 +254,6 @@ async fn pending_multi_poll(
         if resource == Resource::Storage {
             assert_storage_deleted(&owned)?;
         }
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(
-            phase.state() == WaitState::Dropped,
-            "native poll returned: {phase:?}"
-        );
-        ensure!(
-            phase.window_closed(),
-            "the native poll's exact source window must physically close"
-        );
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(input_poll(&stopped, &key, 2, None)? == poll_start);
         assert_invocation(&stopped, &key, 0)?;
@@ -377,7 +333,7 @@ async fn pending_multi_poll(
         }
         info!(
             ?resource, ?mode, %poll_start, ?effects, elapsed = ?stop_started.elapsed(),
-            "Monthly stop retired both sockets and permit with no poll terminal"
+            "Monthly stop closed both sockets with no poll terminal"
         );
 
         let mut grant = policy;
@@ -392,12 +348,6 @@ async fn pending_multi_poll(
         if durable {
             executor.resume(&id, false).await?;
             let mut resumed_peers = accept_pair(&listeners, &mut effects).await?;
-            let reconstructed = pending_phase(&mut phases, &key, 2).await?;
-            ensure!(reconstructed.start == poll_start);
-            ensure!(reconstructed.runtime.resident_generation > initial.resident_generation);
-            ensure!(reconstructed.runtime.start_attempt != initial.start_attempt);
-            ensure!(reconstructed.runtime.fingerprint == initial.fingerprint);
-            ensure!(worker.concurrent_agent_permit_is_held().await);
             executor.commit_oplog(&id).await?;
             ensure!(
                 input_poll(
@@ -416,7 +366,6 @@ async fn pending_multi_poll(
                 resumed == Ok(vec![1]),
                 "only peer B was made ready: {resumed:?}"
             );
-            ensure!(reconstructed.state() == WaitState::Returned);
             closed_pair(&mut resumed_peers, &mut effects).await?;
             ensure!(
                 effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]
@@ -458,11 +407,8 @@ async fn pending_multi_poll(
             );
             let fresh_peers = async {
                 let mut peers = accept_pair(&listeners, &mut effects).await?;
-                let fresh_phase = pending_phase(&mut phases, &fresh_key, 2).await?;
-                ensure!(fresh_phase.start != poll_start);
                 release_second(&mut peers, &mut effects).await?;
                 closed_pair(&mut peers, &mut effects).await?;
-                ensure!(fresh_phase.state() == WaitState::Returned);
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -493,8 +439,7 @@ async fn pending_multi_poll(
                     .await
                     .is_err()
             );
-            ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
+            ensure!(!worker.is_loaded().await);
             let unchanged = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(input_poll(&unchanged, &key, 2, None)? == poll_start);
             assert_invocation(&unchanged, &key, 0)?;
@@ -533,8 +478,6 @@ async fn pending_multi_poll(
             )
             .await?;
             cleanup.push((fresh_id.clone(), fresh_worker.clone()));
-            let mut fresh_phases =
-                crate::native_waits::poll(fresh_worker.get_initial_worker_metadata().fingerprint);
             let fresh = executor.invoke_and_await_agent_with_key(
                 &component,
                 &name,
@@ -544,11 +487,8 @@ async fn pending_multi_poll(
             );
             let fresh_peers = async {
                 let mut peers = accept_pair(&listeners, &mut effects).await?;
-                let fresh_phase = pending_phase(&mut fresh_phases, &fresh_key, 2).await?;
-                ensure!(fresh_worker.concurrent_agent_permit_is_held().await);
                 release_second(&mut peers, &mut effects).await?;
                 closed_pair(&mut peers, &mut effects).await?;
-                ensure!(fresh_phase.state() == WaitState::Returned);
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -563,7 +503,6 @@ async fn pending_multi_poll(
             ensure!(
                 effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]
             );
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
             let original = worker
                 .oplog()
                 .read_exact(

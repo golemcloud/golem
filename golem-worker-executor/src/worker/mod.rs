@@ -746,7 +746,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
     release_scope: StdMutex<crate::metrics::resource_release::ReleaseScope>,
     monthly_window: StdMutex<Option<Arc<monthly_limits::MonthlyWindowTarget>>>,
-    resident_generation: AtomicU64,
     monthly_stop: StdMutex<
         Option<(
             InterruptKind,
@@ -2292,16 +2291,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(cleanup) => cleanup.wait().await,
             None => Ok(()),
         };
-        if let Some(resolved) = self.resolved.get() {
-            resolved.owner_runtime_resources.trace_usage_flushers(
-                &self.owned_agent_id,
-                if result.is_ok() {
-                    "cleanup_completed"
-                } else {
-                    "cleanup_failed"
-                },
-            );
-        }
         result
     }
 
@@ -2750,7 +2739,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
             release_scope: StdMutex::default(),
             monthly_window: StdMutex::new(None),
-            resident_generation: AtomicU64::new(0),
             monthly_stop: StdMutex::new(None),
             runtime_append_tasks,
             infrastructure_recovery_retry_config: deps.config().retry.clone(),
@@ -2847,9 +2835,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .reconcile_durable_stream_attachments_for(&worker)
                 .await?;
         }
-        debug!(fingerprint = %worker.initial_worker_metadata.fingerprint,
-            worker_shell = Arc::as_ptr(self) as usize as u64,
-            execution_event = "metadata_resolved", "Worker metadata resolved");
         Ok((worker, reconstructed_ephemeral))
     }
 
@@ -3017,8 +3002,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(meter) = linear_memory.meter_if_enabled() {
             self.owner_runtime_resources
                 .register_resource_usage_flusher(meter.usage_flusher());
-            self.owner_runtime_resources
-                .trace_usage_flushers(&self.owned_agent_id, "entity_registered");
         }
 
         Ctx::create(
@@ -4189,24 +4172,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> JoinHandle<Result<Option<Receiver<()>>, WorkerExecutorError>> {
         let worker = self.clone();
         let establishment = pending.establishment.clone();
-        let (interrupt_kind, interrupt_timestamp): (_, Option<prost_types::Timestamp>) =
-            match pending.kind {
-                InterruptKind::Interrupt(timestamp) => ("interrupt", Some(timestamp.into())),
-                InterruptKind::Suspend(timestamp) => ("suspend", Some(timestamp.into())),
-                InterruptKind::Restart => ("restart", None),
-                InterruptKind::Jump => ("jump", None),
-                InterruptKind::ShardLost => ("shard_lost", None),
-            };
-        debug!(
-            execution_event = "interrupt_establishment_started",
-            fingerprint = %self.get_initial_worker_metadata().fingerprint,
-            worker_shell = Arc::as_ptr(self) as usize as u64,
-            request_id = Arc::as_ptr(&establishment) as usize as u64,
-            interrupt_kind,
-            interrupt_seconds = interrupt_timestamp.as_ref().map(|timestamp| timestamp.seconds),
-            interrupt_nanos = interrupt_timestamp.as_ref().map(|timestamp| timestamp.nanos),
-            "Starting accepted interrupt establishment"
-        );
         let scope = self.release_scope();
         let receipt = scope.accepted_driver();
         tokio::spawn(async move {
@@ -11304,11 +11269,7 @@ impl WaitingWorker {
                     %agent_id,
                     agent_type = %worker_trace.agent_type
                 ))
-                .await
-                .observe_owner(
-                    parent.initial_worker_metadata.fingerprint,
-                    Arc::as_ptr(&parent) as usize as u64,
-                );
+                .await;
             concurrent_agent_permit.observe_release(&release_scope);
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::ConcurrencySlot,
@@ -13039,9 +13000,6 @@ impl RunningWorker {
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
     ) {
-        debug!(fingerprint = %parent.initial_worker_metadata.fingerprint,
-            worker_shell = Arc::as_ptr(&parent) as usize as u64,
-            execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
         let release_scope = parent.release_scope();
         let mut invocation_loop = InvocationLoop {
             receiver,

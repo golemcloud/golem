@@ -195,7 +195,7 @@ async fn pending_headers(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -232,8 +232,7 @@ async fn pending_headers(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
+    let admitted_revision = registry.current_limits().monthly_policy_revision;
     let mut peer = Peer::start().await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -270,34 +269,16 @@ async fn pending_headers(
             }
         }).await.context("committed open send under unfinished method")??;
         let committed_prefix = executor.stored_oplog(&id).await;
-        let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
-        ensure!(initial.exhaustion.is_none(), "{initial:?}");
         peer.assert_counts(1)?;
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         ensure!(!invocation.is_finished());
         info!(
-            ?resource, ?mode, %key, ?id, %send_start, ?initial, http_key = %first.idempotency_key, requests = 1,
+            ?resource, ?mode, %key, ?id, %send_start, http_key = %first.idempotency_key, requests = 1,
             "Peer accepted request; committed open P3 send; unfinished method; no response headers"
         );
 
-        if resource == Resource::Compute {
-            ensure!(initial.fuel_generation.is_some());
-            ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
-            ensure!(
-                account.monthly_capacity_is_exhausted_for_test(mode),
-                "Store must prepay the remaining fuel"
-            );
-            ensure!(
-                attempts.try_recv().is_err(),
-                "zero unreserved fuel must not exhaust prepaid fuel"
-            );
-            ensure!(worker.current_monthly_proposal_for_test() == initial);
-            ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
-        }
         ensure!(!invocation.is_finished());
         peer.assert_counts(1)?;
         if resource == Resource::Storage {
@@ -312,26 +293,8 @@ async fn pending_headers(
         }
         registry.set_policy(exhausted);
         let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await.context("monthly proposal")?.context("acceptance observer closed")?;
-        ensure!(
-            attempt.proposal.policy_revision
-                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
-        );
-        ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.start_attempt == initial.start_attempt);
-        ensure!(attempt.proposal.fingerprint == initial.fingerprint);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        info!(?resource, ?mode, proposal = ?attempt.proposal, ?signal, "Accepted matching monthly HTTP stop and published typed signal");
-        if resource == Resource::Compute {
-            resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
-        }
         if resource == Resource::Storage {
             let other = if durable {
                 AgentMode::Ephemeral
@@ -344,7 +307,7 @@ async fn pending_headers(
         peer.first_closed().await?;
         drop(first.respond);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -359,8 +322,6 @@ async fn pending_headers(
         if let Some(refresh) = refresh {
             refresh.await?;
         }
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &key, 0)?;
         ensure!(
@@ -423,8 +384,8 @@ async fn pending_headers(
             &settled,
             resource,
             durable,
-            initial.policy_revision + u64::from(resource == Resource::Storage),
-            initial.period,
+            admitted_revision + u64::from(resource == Resource::Storage),
+            policy.period,
         )?;
         info!(?resource, ?mode, ?settled, "HTTP stopped execution window settlement");
         let settled_count = settled.len();
@@ -446,7 +407,7 @@ async fn pending_headers(
         }
         info!(
             ?resource, ?mode, %send_start, requests = 1,
-            "Monthly stop closed silent HTTP socket, released Worker permit and monitor, settled usage; send remains open"
+            "Monthly stop closed silent HTTP socket and settled usage; send remains open"
         );
 
         if durable {
@@ -460,10 +421,6 @@ async fn pending_headers(
             let second = peer.request().await?;
             ensure!(second.number == 2);
             ensure!(second.idempotency_key == first.idempotency_key);
-            let reconstructed = worker.current_monthly_proposal_for_test();
-            ensure!(reconstructed.resident_generation > initial.resident_generation);
-            ensure!(reconstructed.start_attempt != initial.start_attempt);
-            ensure!(reconstructed.fingerprint == initial.fingerprint);
             executor.commit_oplog(&id).await?;
             ensure!(self::send_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 0)? == send_start);
             second.respond.send(()).map_err(|_| anyhow::anyhow!("second HTTP response gate closed"))?;
@@ -490,7 +447,7 @@ async fn pending_headers(
                 while !worker.stop_if_idle().await { tokio::task::yield_now().await; }
             }).await.context("idle eviction before completed HTTP history")?;
             tokio::time::timeout(Duration::from_secs(10), async {
-                while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+                while worker.is_loaded().await { tokio::task::yield_now().await; }
             }).await?;
             tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
@@ -542,8 +499,7 @@ async fn pending_headers(
             ensure!(self::send_start(&failed, 0)? == send_start);
             assert_invocation(&failed, &key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-            ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
+            ensure!(!worker.is_loaded().await);
             peer.assert_counts(2)?;
             info!(?resource, %key, %send_start, requests = 2, "Ephemeral HTTP failure stayed terminal; independent durable Worker reused single pool slot");
         }

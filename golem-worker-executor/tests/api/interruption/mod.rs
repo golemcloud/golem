@@ -1,5 +1,4 @@
 use super::*;
-use crate::resource_limit_observations::ResourceEntryObservations;
 use golem_worker_executor::durable_host::tool::ToolOwnerFailureMetadata;
 use periodic_limits::PeriodicResourceLimits as ResourceLimitsGrpc;
 use support::*;

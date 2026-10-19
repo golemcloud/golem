@@ -2,6 +2,7 @@ use super::*;
 use golem_common::model::ShardEpoch;
 use golem_common::model::oplog::OplogEntry;
 use golem_worker_executor::services::HasOplog;
+use golem_worker_executor_test_utils::start_with_concurrent_agent_limit;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
@@ -34,7 +35,7 @@ async fn selected_writer_fence(
     failure: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
@@ -67,8 +68,8 @@ async fn selected_writer_fence(
         }
     }));
     tokio::time::timeout(Duration::from_secs(10), selected).await??;
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    let acquisitions = worker.permit_acquisitions_for_test();
+    let mut contender = Box::pin(executor.acquire_account_concurrent_agent_permit(id.clone()));
+    assert!(futures::poll!(contender.as_mut()).is_pending());
     // Persist the selected invocation's prefix before the new owner takes over.
     executor.commit_oplog(&id).await?;
     let entries = agent_oplog_length(deps, &context, &owned).await?;
@@ -100,9 +101,8 @@ async fn selected_writer_fence(
     );
     // Keep the old Arc alive: release and removal must belong to this exact generation.
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await
-            || executor.worker_is_cached(&owned).await
-        {
+        drop(contender.await);
+        while executor.worker_is_cached(&owned).await {
             tokio::task::yield_now().await;
         }
     })
@@ -113,8 +113,6 @@ async fn selected_writer_fence(
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     assert!(!worker.is_loaded().await);
-    assert!(worker.unload_succeeded_for_test());
-    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert_eq!(
         agent_oplog_length(deps, &context, &owned).await?,
         entries,

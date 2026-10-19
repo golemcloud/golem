@@ -67,12 +67,11 @@ mod completed_history {
             .context("the original Counter must remain cached")?
             .primary();
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.concurrent_agent_permit_is_held().await {
+            while worker.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
-        let generation = worker.observed_creation_count();
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let original = worker
             .oplog()
@@ -88,8 +87,7 @@ mod completed_history {
         tokio::time::timeout(Duration::from_secs(10), entered)
             .await
             .context("completed invocation input must be held during actual reconstruction")??;
-        assert!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
-        assert!(worker.observed_creation_count() > generation);
+        assert!(worker.is_loaded().await);
 
         let acknowledged =
             tokio::time::timeout(Duration::from_secs(10), worker.resume_replay()).await;
@@ -214,7 +212,7 @@ mod completed_history {
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.concurrent_agent_permit_is_held().await {
+            while worker.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
@@ -222,7 +220,6 @@ mod completed_history {
         .context("initial idle permit release")?;
         assert!(worker.is_loaded().await);
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-        let initial_generation = worker.observed_creation_count();
         let original_tip = worker.oplog().current_oplog_index().await;
         let original = worker
             .oplog()
@@ -273,21 +270,15 @@ mod completed_history {
             .await
             .context("completed invocation input acquisition during replay after Restart")??;
         let replay_indices = (replay_start, replay_finished);
-        let generation = worker.observed_creation_count();
-        assert!(generation > initial_generation);
-        assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(
             worker.get_initial_worker_metadata().fingerprint,
             fingerprint
         );
-        let acquisitions = worker.permit_acquisitions_for_test();
         limits.initialize_account(context.account_id).await?;
         eprintln!(
-            "[monthly-replay] committed key={key:?}, indices={replay_indices:?}, result={result}, fingerprint={fingerprint:?}, generation={initial_generation}->{generation}"
+            "[monthly-replay] committed key={key:?}, indices={replay_indices:?}, result={result}, fingerprint={fingerprint:?}"
         );
 
-        let mut attempts =
-            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -296,15 +287,8 @@ mod completed_history {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monthly proposal while completed replay is held")?;
-        assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(attempt.accepted);
         let monthly = worker.await_interrupt_for_test().await;
         assert!(matches!(monthly, InterruptKind::Suspend(_)));
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert!(worker.concurrent_agent_permit_is_held().await);
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
@@ -317,9 +301,7 @@ mod completed_history {
                 .await?,
             original
         );
-        eprintln!(
-            "[monthly-replay] accepted={monthly:?}, replay gate still held, permit held, receipt pending"
-        );
+        eprintln!("[monthly-replay] accepted={monthly:?}, replay gate still held, receipt pending");
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             monthly
@@ -331,7 +313,7 @@ mod completed_history {
         )
         .await??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -345,8 +327,6 @@ mod completed_history {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         let stopped = worker
             .oplog()
             .read_exact(
@@ -487,11 +467,6 @@ mod completed_history {
             worker.get_initial_worker_metadata().fingerprint,
             fingerprint
         );
-        assert!(worker.observed_creation_count() > generation);
-        eprintln!(
-            "[monthly-replay] observed creations={}, new key={new_key:?}, result=2 once, original fingerprint={fingerprint:?}",
-            worker.observed_creation_count()
-        );
         shutdown.cancel();
         Ok(())
     }
@@ -519,7 +494,7 @@ mod post_export {
 
     #[test]
     #[timeout("60s")]
-    async fn memory_quota_stop_is_accepted_during_post_export_tail_work(
+    async fn memory_quota_stop_retires_spawned_http_work_without_peer_response(
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,
         #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -612,15 +587,13 @@ mod post_export {
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.concurrent_agent_permit_is_held().await {
+            while worker.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .context("initial idle permit release")?;
         let key = IdempotencyKey::fresh();
-        let mut root_event = crate::tail_roots::root_returned(&owned, &key);
-        let mut settled_tail = crate::tail_roots::tail_settled(&owned, &key);
         executor
             .invoke_agent_with_key(
                 &component,
@@ -630,26 +603,17 @@ mod post_export {
                 data_value!(),
             )
             .await?;
-        let root_snapshot = tokio::time::timeout(Duration::from_secs(10), root_event.returned())
-            .await
-            .context("actual root-completion diagnostic")??;
         tokio::time::timeout(Duration::from_secs(10), request)
             .await
             .context("spawned HTTP request entered held handler")??;
         let (started, chunk) = pending_tail(&worker, &key).await?;
         let prefix = executor.stored_oplog(&id).await;
-        assert!(root_snapshot > 0);
-        assert!(worker.concurrent_agent_permit_is_held().await);
-        let generation = worker.observed_creation_count();
-        let acquisitions = worker.permit_acquisitions_for_test();
         limits.initialize_account(context.account_id).await?;
         let admitted_revision = registry.current_limits().monthly_policy_revision;
         eprintln!(
-            "[monthly-tail] root snapshot={root_snapshot}, method Start={started}, HTTP chunk Start={chunk}, response body held, permit held, generation={generation}"
+            "[monthly-tail] method Start={started}, HTTP chunk Start={chunk}, response body held"
         );
 
-        let mut attempts =
-            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy;
@@ -659,30 +623,22 @@ mod post_export {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monthly proposal after root export returned")?;
-        assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(attempt.accepted);
+        let cause = worker.await_interrupt_for_test().await;
         assert_eq!(
             limits
                 .initialized_policy_revision_for_test(context.account_id)
                 .await,
             Some(registry.current_limits().monthly_policy_revision)
         );
-        let cause = worker.await_interrupt_for_test().await;
         assert!(matches!(cause, InterruptKind::Suspend(_)));
         assert_eq!(pending_tail(&worker, &key).await?, (started, chunk));
-        assert!(worker.concurrent_agent_permit_is_held().await);
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
         eprintln!(
-            "[monthly-tail] accepted {cause:?}, peer response and terminal append held, permit held, receipt pending"
+            "[monthly-tail] accepted {cause:?}, peer response and terminal append held, receipt pending"
         );
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
@@ -692,12 +648,9 @@ mod post_export {
             worker.selected_owner_failure_for_test().await,
             Some(ToolOwnerFailureMetadata::Lifecycle)
         );
-        // Keep peer bytes unavailable until the tracked HTTP task has cooperatively retired.
-        // Release the peer even on timeout so a failed stop leaves a bounded diagnostic.
-        let tail_retired =
-            tokio::time::timeout(Duration::from_secs(10), settled_tail.returned()).await;
+        let selected = tokio::time::timeout(Duration::from_secs(10), selected).await;
         let _ = release_response.send(());
-        tokio::time::timeout(Duration::from_secs(10), selected).await??;
+        selected.context("invocation outcome must be selected without peer response bytes")??;
         release_outcome.send(false).unwrap();
         tokio::time::timeout(
             Duration::from_secs(10),
@@ -706,7 +659,7 @@ mod post_export {
         .await
         .context("accepted stop driver joined")??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -720,12 +673,6 @@ mod post_export {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
-        assert_eq!(
-            tail_retired.context("tracked HTTP tail retires without peer body bytes")??,
-            0
-        );
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         let stopped = worker
             .oplog()

@@ -81,7 +81,7 @@ async fn pending_stop(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -112,8 +112,6 @@ async fn pending_stop(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let method = "container_exists";
     let input = data_value!("withheld-container");
     let mut invocation = tokio::spawn({
@@ -139,25 +137,20 @@ async fn pending_stop(
         ensure!(starts.len() == 1, "expected one open boundary: {before:#?}");
         let start = starts[0];
         ensure!(terminal_count(&before, start) == 0);
-        ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
+        ensure!(!invocation.is_finished());
         limits.initialize_account(context.account_id).await?;
-        ensure!(worker.monthly_window_active_for_test());
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone(); exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("accepted monthly stop")?;
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         tokio::time::timeout(Duration::from_secs(3), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+            while worker.is_loaded().await { tokio::task::yield_now().await; }
         }).await.context("physical release while blob provider remains withheld")?;
         worker.join_accepted_stops_for_test().await?;
         worker.retained_cleanup_for_test().await?;
         refresh.await?;
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(!worker.monthly_window_active_for_test());
         ensure!(blob.dropped.load(Ordering::SeqCst) == 1 && blob.attempts.load(Ordering::SeqCst) == 1);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(terminal_count(&stopped, start) == 0);

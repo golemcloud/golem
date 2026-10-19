@@ -856,36 +856,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem_generation_handle.clone()
     }
 
-    pub(crate) fn native_wait_diagnostic(
-        &self,
-        operation: &'static str,
-        stream_rep: Option<u32>,
-        start: Option<OplogIndex>,
-        pollable_reps: impl Iterator<Item = u32>,
-    ) -> Option<crate::native_wait_diagnostics::WaitDiagnostic> {
-        self.native_wait_context()
-            .map(|context| context.start(operation, stream_rep, start, pollable_reps))
-    }
-
-    pub(crate) fn native_wait_context(
-        &self,
-    ) -> Option<crate::native_wait_diagnostics::WaitContext> {
-        if !crate::native_wait_diagnostics::enabled() {
-            return None;
-        }
-        let window = self.public_state.worker().resident_window_trace();
-        let capacity = window.as_ref().and_then(|_| {
-            self._owner_resources
-                .published_monthly_capacity(self.agent_mode())
-        });
-        Some(crate::native_wait_diagnostics::WaitContext {
-            window,
-            capacity,
-            key: self.state.get_current_idempotency_key(),
-            owner: Some(self.owned_agent_id.clone()),
-        })
-    }
-
     pub(crate) fn activate_resident_generation_handle(
         &mut self,
         generation_handle: FilesystemGenerationHandle,

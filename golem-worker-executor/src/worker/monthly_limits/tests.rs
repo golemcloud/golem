@@ -9,7 +9,7 @@ use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use test_r::{test, timeout};
 
 const STOP_FUEL_BATCH: u64 = 1_000_000_000;
@@ -17,9 +17,7 @@ const STOP_FUEL_BATCH: u64 = 1_000_000_000;
 // Only the queue/admission inputs live here. Establishment and physical cleanup are exercised
 // through the real Worker in integration tests, not a second test-side stop implementation.
 struct MonthlyStopOwner {
-    fingerprint: AgentFingerprint,
     start_attempt: Uuid,
-    generation: u64,
     target: Arc<MonthlyWindowTarget>,
     current: Mutex<Option<Arc<MonthlyWindowTarget>>>,
     permit: crate::services::active_agents::ConcurrentAgentPermit,
@@ -29,19 +27,10 @@ struct MonthlyStopOwner {
     monthly: Mutex<Option<(InterruptKind, MonthlyResourceExhaustion)>>,
 }
 
-fn target(
-    fingerprint: AgentFingerprint,
-    start_attempt: Uuid,
-    generation: u64,
-) -> Arc<MonthlyWindowTarget> {
+fn target(start_attempt: Uuid) -> Arc<MonthlyWindowTarget> {
     Arc::new(MonthlyWindowTarget {
-        diagnostic_window_id: 1,
-        trace_origin: golem_common::tracing::TraceOrigin::none(),
-        fingerprint,
         start_attempt,
-        resident_generation: generation,
         active: Mutex::new(true),
-        active_span: Mutex::new(None),
         failure: Mutex::new(None),
     })
 }
@@ -50,15 +39,11 @@ impl MonthlyStopOwner {
     fn new(
         entry: Arc<AtomicResourceEntry>,
         permit: crate::services::active_agents::ConcurrentAgentPermit,
-        generation: u64,
     ) -> Self {
-        let fingerprint = AgentFingerprint::new();
         let start_attempt = Uuid::new_v4();
-        let target = target(fingerprint, start_attempt, generation);
+        let target = target(start_attempt);
         Self {
-            fingerprint,
             start_attempt,
-            generation,
             current: Mutex::new(Some(target.clone())),
             target,
             permit,
@@ -143,30 +128,9 @@ async fn prepaid_stop_owners() -> (Arc<AtomicResourceEntry>, MonthlyStopOwner, M
         .await;
     (
         entry.clone(),
-        MonthlyStopOwner::new(entry.clone(), caller, 7),
-        MonthlyStopOwner::new(entry, callee, 8),
+        MonthlyStopOwner::new(entry.clone(), caller),
+        MonthlyStopOwner::new(entry, callee),
     )
-}
-
-#[test]
-fn trace_context_requires_the_actual_active_monthly_target() {
-    let fingerprint = AgentFingerprint::new();
-    let attempt = Uuid::new_v4();
-    let target = target(fingerprint, attempt, 1);
-    let current = Mutex::new(Some(target.clone()));
-    let trace = target.trace_if_current(&current).unwrap();
-    assert_eq!(trace.id, target.diagnostic_window_id);
-    assert_eq!(trace.fingerprint, fingerprint);
-    assert_eq!(trace.start_attempt, attempt);
-    assert_eq!(trace.resident_generation, 1);
-    let replacement = self::target(fingerprint, attempt, 1);
-    *current.lock().unwrap() = Some(replacement.clone());
-    assert!(target.trace_if_current(&current).is_none());
-    assert!(replacement.trace_if_current(&current).is_some());
-    *replacement.active.lock().unwrap() = false;
-    assert!(replacement.trace_if_current(&current).is_none());
-    *current.lock().unwrap() = None;
-    assert!(target.trace_if_current(&current).is_none());
 }
 
 #[test]
@@ -649,7 +613,9 @@ async fn monthly_body_rejects_changed_capacity_inactive_target_and_terminal_clai
 
 async fn unmetered_window() -> (
     ExecutionWindow,
-    Arc<AtomicBool>,
+    std::pin::Pin<
+        Box<dyn Future<Output = crate::services::active_agents::ConcurrentAgentPermit> + Send>,
+    >,
     crate::metrics::resource_release::tests::TestMetrics,
 ) {
     let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
@@ -683,12 +649,21 @@ async fn unmetered_window() -> (
             },
         )
         .await;
-    let mut window = resource_usage_metering::open_window(&meter, permit)
+    let window = resource_usage_metering::open_window(&meter, permit)
         .await
         .unwrap();
-    let held = Arc::new(AtomicBool::new(false));
-    window.track_permit_for_test(held.clone());
-    assert!(held.load(Ordering::Acquire));
+    let mut contender = Box::pin(async move {
+        scheduler
+            .acquire(
+                account_id,
+                AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "waiting-for-close".into(),
+                },
+            )
+            .await
+    });
+    assert!(futures::poll!(contender.as_mut()).is_pending());
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
     let window = ExecutionWindow::unmonitored_with_scope(window, scope.clone());
@@ -697,7 +672,7 @@ async fn unmetered_window() -> (
         crate::metrics::resource_release::Cause::Interrupt,
     );
     scope.seal();
-    (window, held, metrics)
+    (window, contender, metrics)
 }
 
 #[test]
@@ -705,7 +680,7 @@ async fn unmetered_window() -> (
 async fn owned_window_close_joins_monitor_and_drops_capacity_observer() {
     use crate::services::resource_limits::tests::assert_capacity_observers;
 
-    let (mut window, held, metrics) = unmetered_window().await;
+    let (mut window, mut contender, metrics) = unmetered_window().await;
     let (entry, owner, _other) = prepaid_stop_owners().await;
     assert_capacity_observers(&entry, 0);
     let check = MonthlyMemoryCheck::new(entry.clone(), None);
@@ -731,22 +706,22 @@ async fn owned_window_close_joins_monitor_and_drops_capacity_observer() {
     assert!(futures::poll!(closing.as_mut()).is_pending());
     stopped_rx.await.unwrap();
     assert_capacity_observers(&entry, 1);
-    assert!(held.load(Ordering::Acquire));
+    assert!(futures::poll!(contender.as_mut()).is_pending());
     release_tx.send(()).unwrap();
     closing.await.unwrap();
     assert_capacity_observers(&entry, 0);
-    assert!(!held.load(Ordering::Acquire));
+    drop(contender.await);
     metrics.assert_finished("accepted_stop", "released");
 }
 
 #[test]
 #[timeout("5s")]
 async fn all_off_ready_close_spawns_no_task_and_releases_its_permit() {
-    let (window, held, metrics) = unmetered_window().await;
+    let (window, contender, metrics) = unmetered_window().await;
     let close_tasks = window.close_tasks.clone();
     let closing = window.close(Instant::now() + Duration::from_secs(1));
     assert_eq!(close_tasks.load(Ordering::Relaxed), 0);
-    assert!(!held.load(Ordering::Acquire));
+    drop(contender.await);
     assert!(closing.now_or_never().unwrap().is_ok());
     metrics.assert_finished("accepted_stop", "released");
     assert_eq!(
@@ -758,7 +733,7 @@ async fn all_off_ready_close_spawns_no_task_and_releases_its_permit() {
 #[test]
 #[timeout("5s")]
 async fn window_releases_its_permit_before_the_stopping_state_changes() {
-    let (window, held, metrics) = unmetered_window().await;
+    let (window, mut contender, metrics) = unmetered_window().await;
     let instance = WorkerInstance::Stopping(super::super::StoppingWorker {
         notify: golem_common::one_shot::OneShotEvent::new(),
         final_state: super::super::FinalWorkerState::Unloaded {
@@ -766,7 +741,7 @@ async fn window_releases_its_permit_before_the_stopping_state_changes() {
         },
         pending_live_invocations: super::super::PendingLiveInvocationDisposition::Preserve,
     });
-    assert!(held.load(Ordering::Acquire));
+    assert!(futures::poll!(contender.as_mut()).is_pending());
     assert_eq!(metrics.pending("accepted_stop", "permit_released"), 1.0);
     assert_eq!(
         metrics.count("accepted_stop", "permit_released", "released"),
@@ -777,7 +752,7 @@ async fn window_releases_its_permit_before_the_stopping_state_changes() {
         .await
         .unwrap();
     assert!(matches!(instance, WorkerInstance::Stopping(_)));
-    assert!(!held.load(Ordering::Acquire));
+    drop(contender.await);
     metrics.assert_finished("accepted_stop", "released");
     assert_eq!(
         metrics.count("accepted_stop", "permit_released", "released"),
@@ -788,7 +763,7 @@ async fn window_releases_its_permit_before_the_stopping_state_changes() {
 #[test]
 #[timeout("5s")]
 async fn window_close_preserves_policy_unavailability_without_cleanup_failure() {
-    let (mut window, held, metrics) = unmetered_window().await;
+    let (mut window, contender, metrics) = unmetered_window().await;
     let (_entry, owner, _other) = prepaid_stop_owners().await;
     let target = owner.target.clone();
     target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
@@ -801,7 +776,7 @@ async fn window_close_preserves_policy_unavailability_without_cleanup_failure() 
         .close(Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    assert!(!held.load(Ordering::Acquire));
+    drop(contender.await);
     assert!(target.cleanup_failure().is_none());
     assert!(!*target.active.lock().unwrap());
     assert!(target.policy_is_unavailable());
@@ -817,7 +792,7 @@ async fn window_close_preserves_policy_unavailability_without_cleanup_failure() 
 #[test]
 async fn policy_outage_does_not_erase_or_create_window_cleanup_failure() {
     for policy_first in [false, true] {
-        let target = target(AgentFingerprint::new(), Uuid::new_v4(), 1);
+        let target = target(Uuid::new_v4());
         if policy_first {
             target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
             assert!(target.cleanup_failure().is_none());
@@ -837,7 +812,7 @@ async fn policy_outage_does_not_erase_or_create_window_cleanup_failure() {
 #[test]
 #[timeout("5s")]
 async fn failed_monitor_join_retains_cleanup_failure_after_target_closure() {
-    let target = target(AgentFingerprint::new(), Uuid::new_v4(), 1);
+    let target = target(Uuid::new_v4());
     target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
     *target.active.lock().unwrap() = false;
     let monitor = MonthlyMonitor {
@@ -916,7 +891,7 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
     assert!(owner.target.matches_running_owner(&running, &owner.current));
     // A retry can keep its start attempt. Window identity must reject the queued sample
     // even before the old monitor is deactivated and with unchanged exhausted capacity.
-    let retry = target(owner.fingerprint, owner.start_attempt, owner.generation + 1);
+    let retry = target(owner.start_attempt);
     *owner.current.lock().unwrap() = Some(retry.clone());
     assert!(*owner.target.active.lock().unwrap());
     assert_eq!(owner.sample(), proposed);
@@ -930,7 +905,7 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
     }
     assert!(owner.monthly.lock().unwrap().is_none());
     assert!(Arc::ptr_eq(&original_tail, &owner.tail.lock().unwrap()));
-    let replacement = target(owner.fingerprint, Uuid::new_v4(), owner.generation + 1);
+    let replacement = target(Uuid::new_v4());
     *owner.current.lock().unwrap() = Some(replacement.clone());
     *owner.target.active.lock().unwrap() = false;
     let running = super::super::lifecycle_tests::running_lifecycle(
@@ -941,15 +916,10 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
     assert_eq!(owner.sample(), proposed);
     assert!(proposed.exhaustion.is_some());
     assert_ne!(replacement.start_attempt, owner.start_attempt);
-    assert!(replacement.resident_generation > owner.generation);
     assert!(!Arc::ptr_eq(&owner.target, &replacement));
     assert!(!owner.target.matches_running_owner(&running, &owner.current));
     assert!(replacement.matches_running_owner(&running, &owner.current));
-    let equal_fields = target(
-        replacement.fingerprint,
-        replacement.start_attempt,
-        replacement.resident_generation,
-    );
+    let equal_fields = target(replacement.start_attempt);
     *owner.current.lock().unwrap() = Some(equal_fields.clone());
     assert_eq!(owner.sample(), proposed);
     assert!(!replacement.matches_running_owner(&running, &owner.current));
@@ -1082,7 +1052,7 @@ async fn monthly_running_owner_guard_checks_start_permit_and_target() {
             .target
             .matches_running_owner(&running, &Mutex::new(None))
     );
-    let equal_fields = target(owner.fingerprint, owner.start_attempt, owner.generation);
+    let equal_fields = target(owner.start_attempt);
     assert!(
         !owner
             .target

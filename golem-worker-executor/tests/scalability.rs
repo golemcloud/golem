@@ -564,7 +564,6 @@ async fn interrupt_during_oom_backoff_is_durable_before_restart(
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &worker);
     let owner = executor.active_agent(&owned).await.unwrap().primary();
-    let generation = owner.observed_creation_count();
     let key = IdempotencyKey::fresh();
     let invocation = {
         let executor = executor.clone();
@@ -588,9 +587,6 @@ async fn interrupt_during_oom_backoff_is_durable_before_restart(
     .await?;
     assert!(executor.worker_is_cached(&owned).await);
     owner.retained_cleanup_for_test().await?;
-    assert!(!owner.concurrent_agent_permit_is_held().await);
-    assert_eq!(owner.observed_creation_count(), generation);
-    let acquisitions = owner.permit_acquisitions_for_test();
     assert_eq!(
         owner.selected_owner_failure_for_test().await,
         None,
@@ -602,8 +598,6 @@ async fn interrupt_during_oom_backoff_is_durable_before_restart(
     executor
         .wait_for_status(&worker, AgentStatus::Interrupted, Duration::from_secs(5))
         .await?;
-    assert_eq!(owner.observed_creation_count(), generation);
-    assert_eq!(owner.permit_acquisitions_for_test(), acquisitions);
     assert!(
         tokio::time::timeout(Duration::from_secs(5), invocation)
             .await??

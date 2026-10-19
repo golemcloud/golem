@@ -92,8 +92,6 @@ fn instance_id_from(pod_name: Option<String>, hostname: Option<String>) -> Optio
 /// a poor thing to put in a deployment. Changing one of these is a breaking change
 /// to the operator-facing contract.
 pub mod target {
-    /// Native waits and the permit-held execution windows which own them.
-    pub const NATIVE_WAIT: &str = "golem::native_wait";
     /// Log output from oplog-processor plugin agents, which is mirrored into the
     /// server log because it cannot be watched with the CLI. How much of it there
     /// is, is decided by the plugin, so a long-running invocation can hold a great

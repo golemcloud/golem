@@ -208,8 +208,6 @@ async fn pending_pool_acquire(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut peer = Peer::start().await?;
     let holder_name = agent_id!("WebsocketTest", "monthly-ws-pool-holder");
     // Start the holder only after fallible target setup; everything after this spawn
@@ -249,12 +247,9 @@ async fn pending_pool_acquire(
         ensure!(count_agent_invocation_pair_since(&holder_history, OplogIndex::INITIAL) == (2, 2));
         receive_start(&holder_history, 1)?;
         peer.assert_counts(1, 1)?;
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while holder.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
-        }).await.context("holder idle permit release")?;
+        executor.wait_for_status(&holder_id, AgentStatus::Idle, Duration::from_secs(10)).await?;
         ensure!(holder.is_loaded().await, "STOP: holder must remain loaded idle");
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
         {
             let acquire = pool.acquire();
             tokio::pin!(acquire);
@@ -264,7 +259,7 @@ async fn pending_pool_acquire(
         // subsequent positive usage update occurs while the holder is idle.
         limits.run_batch_for_test().await;
         let target_updates_start = registry.applied_updates().len();
-        info!(?resource, ?mode, %holder_id, %holder_key, "Completed holder method; live socket owns pool slot while its Worker is loaded idle without monthly permit");
+        info!(?resource, ?mode, %holder_id, %holder_key, "Completed holder method; live socket owns pool slot while its Worker is idle");
 
         invocation = Some(tokio::spawn({
             let executor = executor.clone();
@@ -287,11 +282,10 @@ async fn pending_pool_acquire(
                 tokio::task::yield_now().await;
             }
         }).await.context("target committed open connect under pool contention")??;
-        let initial = worker.current_monthly_proposal_for_test();
+        let initial = worker.owner_runtime_resources().with_monthly_capacity(mode, |capacity| capacity);
         let mut raw = worker.raw_interrupt_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         ensure!(!invocation.as_ref().unwrap().is_finished());
         peer.assert_counts(1, 1)?;
         {
@@ -303,9 +297,7 @@ async fn pending_pool_acquire(
             ensure!(initial.fuel_generation.is_some());
             ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
             ensure!(account.monthly_capacity_is_exhausted_for_test(mode), "target Store must prepay fuel");
-            ensure!(attempts.try_recv().is_err(), "prepaid fuel cannot stop at zero unreserved fuel");
-            ensure!(worker.current_monthly_proposal_for_test() == initial);
-            ensure!(!invocation.as_ref().unwrap().is_finished() && worker.concurrent_agent_permit_is_held().await);
+            ensure!(!invocation.as_ref().unwrap().is_finished());
         }
         if resource == Resource::Storage {
             allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable).await?;
@@ -319,25 +311,13 @@ async fn pending_pool_acquire(
         }
         registry.set_policy(exhausted);
         let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await.context("monthly proposal")?.context("acceptance observer closed")?;
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1 + u64::from(resource == Resource::Storage));
-        ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.start_attempt == initial.start_attempt);
-        ensure!(attempt.proposal.fingerprint == initial.fingerprint);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        if resource == Resource::Compute { resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?; }
         if resource == Resource::Storage {
             let other = if durable { AgentMode::Ephemeral } else { AgentMode::Durable };
             ensure!(!account.monthly_capacity_is_exhausted_for_test(other));
         }
-        ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await, "STOP: account cap also stopped idle holder");
+        ensure!(holder.is_loaded().await, "STOP: account cap also stopped idle holder");
         {
             let acquire = pool.acquire();
             tokio::pin!(acquire);
@@ -347,14 +327,12 @@ async fn pending_pool_acquire(
         info!(?resource, ?mode, %connect, ?signal, %id, %key, "Typed monthly stop accepted while target still waits for holder's pool permit; no target peer connection");
 
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+            while worker.is_loaded().await { tokio::task::yield_now().await; }
         }).await.context("target physical unload before holder release")?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         if let Some(refresh) = refresh { refresh.await?; }
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await, "STOP: holder unloaded under target's cap");
+        ensure!(holder.is_loaded().await, "STOP: holder unloaded under target's cap");
         peer.assert_counts(1, 1)?;
         {
             let acquire = pool.acquire();
@@ -399,7 +377,7 @@ async fn pending_pool_acquire(
         for update in &registry.applied_updates()[settled_count..] {
             ensure!(update.fuel_delta == 0 && update.memory_gb_seconds_delta == 0 && update.memory_byte_nanoseconds_remainder == 0 && update.durable_storage_byte_seconds_delta == 0 && update.durable_storage_byte_nanoseconds_remainder == 0 && update.ephemeral_storage_byte_seconds_delta == 0 && update.ephemeral_storage_byte_nanoseconds_remainder == 0, "closed window accrued: {update:?}");
         }
-        info!(?resource, ?mode, %connect, ?errors, suspends, target_updates_start, target_updates = settled.len() - target_updates_start, handshakes = 1, frames = 1, "Stopped target with incomplete connect; physical target permit and monthly window released before holder pool slot");
+        info!(?resource, ?mode, %connect, ?errors, suspends, target_updates_start, target_updates = settled.len() - target_updates_start, handshakes = 1, frames = 1, "Stopped target with incomplete connect before holder released pool slot");
 
         tokio::time::timeout(Duration::from_secs(10), async {
             while !holder.stop_if_idle().await {
@@ -410,7 +388,7 @@ async fn pending_pool_acquire(
         .context("holder must become idle and unload after target stop settles")?;
         peer.closed(1).await?;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while holder.is_loaded().await || holder.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+            while holder.is_loaded().await { tokio::task::yield_now().await; }
         }).await?;
         tokio::time::timeout(Duration::from_secs(10), holder.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), holder.retained_cleanup_for_test()).await??;
@@ -425,10 +403,6 @@ async fn pending_pool_acquire(
             executor.resume(&id, false).await?;
             let second = peer.handshake().await?;
             ensure!(second.number == 2);
-            let reconstructed = worker.current_monthly_proposal_for_test();
-            ensure!(reconstructed.resident_generation > initial.resident_generation);
-            ensure!(reconstructed.start_attempt != initial.start_attempt);
-            ensure!(reconstructed.fingerprint == initial.fingerprint);
             let repairing = tokio::time::timeout(Duration::from_secs(15), async {
                 loop {
                     executor.commit_oplog(&id).await?;
@@ -461,14 +435,13 @@ async fn pending_pool_acquire(
             }).await.context("idle target eviction before offline completed replay")?;
             peer.closed(2).await?;
             tokio::time::timeout(Duration::from_secs(10), async {
-                while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+                while worker.is_loaded().await { tokio::task::yield_now().await; }
             }).await?;
             tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
             let noop_key = IdempotencyKey::fresh();
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
-            ensure!(worker.current_monthly_proposal_for_test().resident_generation > reconstructed.resident_generation);
             peer.assert_counts(2, 2)?;
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(connect_start(&replayed, 1, 1)? == connect);
@@ -517,8 +490,7 @@ async fn pending_pool_acquire(
             ensure!(connect_start(&failed, 0, 0)? == connect);
             assert_invocation(&failed, &key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-            ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
+            ensure!(!worker.is_loaded().await);
             executor.wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(10)).await?;
             info!(?resource, %key, %connect, handshakes = 2, frames = 2, "Ephemeral failure remained terminal; independent Worker used freed slot");
         }
@@ -558,11 +530,8 @@ async fn pending_pool_acquire(
                 concat!($label, " retained cleanup"),
                 $owner.retained_cleanup_for_test()
             );
-            if $owner.is_loaded().await || $owner.concurrent_agent_permit_is_held().await {
-                cleanup_errors.push(format!(
-                    "{} still has a resident instance or execution permit",
-                    $label
-                ));
+            if $owner.is_loaded().await {
+                cleanup_errors.push(format!("{} still has a resident instance", $label));
             }
         }};
     }

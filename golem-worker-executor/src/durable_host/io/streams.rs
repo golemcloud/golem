@@ -17,7 +17,6 @@ use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::event::InternalWorkerEvent;
-use crate::native_wait_diagnostics::WaitDiagnostic;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     FilesystemInputStreamRead, FilesystemInputStreamSkip, FilesystemOutputStreamCheckWrite,
@@ -99,17 +98,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<Vec<u8>, StreamError> {
         self.observe_function_call("io::streams::input_stream", "blocking_read");
         if self.state.open_tcp_input_streams.contains(&self_.rep()) {
-            let diagnostic = self.native_wait_diagnostic(
-                "blocking_read",
-                Some(self_.rep()),
-                None,
-                std::iter::empty(),
-            );
             let interrupt = NativeIoWait::new(self.interrupt_sources());
-            let native = WaitDiagnostic::observe(
-                diagnostic,
-                HostInputStream::blocking_read(self.table(), self_, len),
-            );
+            let native = HostInputStream::blocking_read(self.table(), self_, len);
             interruptible_tcp_input(native, interrupt).await
         } else if self
             .state
@@ -176,17 +166,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<u64, StreamError> {
         self.observe_function_call("io::streams::input_stream", "blocking_skip");
         if self.state.open_tcp_input_streams.contains(&self_.rep()) {
-            let diagnostic = self.native_wait_diagnostic(
-                "blocking_skip",
-                Some(self_.rep()),
-                None,
-                std::iter::empty(),
-            );
             let interrupt = NativeIoWait::new(self.interrupt_sources());
-            let native = WaitDiagnostic::observe(
-                diagnostic,
-                HostInputStream::blocking_skip(self.table(), self_, len),
-            );
+            let native = HostInputStream::blocking_skip(self.table(), self_, len);
             interruptible_tcp_input(native, interrupt).await
         } else if self
             .state
@@ -405,16 +386,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             readiness?;
         }
         let raw_tcp_output = self.state.open_tcp_output_streams.contains(&rep);
-        let diagnostic = (tcp_input && (raw_tcp_output || file_output))
-            .then(|| {
-                self.native_wait_diagnostic(
-                    "blocking_splice",
-                    Some(src.rep()),
-                    None,
-                    std::iter::empty(),
-                )
-            })
-            .flatten();
         // Dropping observation retains any entered file work under the filesystem owner.
         let file_splice = file_output
             && (tcp_input
@@ -425,10 +396,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let file_interrupt = file_splice.then(|| self.create_interrupt_signal());
         let interrupt =
             (tcp_input && raw_tcp_output).then(|| NativeIoWait::new(self.interrupt_sources()));
-        let native = WaitDiagnostic::observe(
-            diagnostic,
-            HostOutputStream::blocking_splice(self.table(), self_, src, len),
-        );
+        let native = HostOutputStream::blocking_splice(self.table(), self_, src, len);
         match (interrupt, file_interrupt) {
             (Some(interrupt), _) => interruptible_tcp_input(native, interrupt).await,
             (_, Some(interrupt)) => observe_file_stream(interrupt, native).await,

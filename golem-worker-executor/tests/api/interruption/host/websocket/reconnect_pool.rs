@@ -1,5 +1,4 @@
 use super::*;
-use crate::native_waits::WaitState;
 use test_r::test;
 
 const CLOSE: &str = "golem:websocket/client::close";
@@ -219,7 +218,7 @@ async fn pending_reconnect(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -280,10 +279,9 @@ async fn pending_reconnect(
         assert_receive_terminal(&original, starts_named(&original, RECEIVE)[0], 1)?;
         assert_invocation(&original, &first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&original, OplogIndex::INITIAL) == (2, 2));
-        tokio::time::timeout(Duration::from_secs(10), async { while worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; } }).await.context("target initial idle release")?;
         tokio::time::timeout(Duration::from_secs(10), async { while !worker.stop_if_idle().await { tokio::task::yield_now().await; } }).await.context("target idle eviction")?;
         peer.closed(1).await?;
-        tokio::time::timeout(Duration::from_secs(10), async { while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; } }).await?;
+        tokio::time::timeout(Duration::from_secs(10), async { while worker.is_loaded().await { tokio::task::yield_now().await; } }).await?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         let slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
@@ -295,8 +293,6 @@ async fn pending_reconnect(
             limits.run_batch_for_test().await;
         }
         let target_updates_start = registry.applied_updates().len();
-        let mut attempts = crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
-        let mut native = crate::native_waits::websocket_reconnect_pool(worker.get_initial_worker_metadata().fingerprint);
         let holder_key = IdempotencyKey::fresh();
         holder_invocation = Some(tokio::spawn({
             let executor = executor.clone(); let component = component.clone(); let key = holder_key.clone(); let url = peer.url.clone();
@@ -308,19 +304,8 @@ async fn pending_reconnect(
         let held = tokio::time::timeout(Duration::from_secs(15), holder_invocation.as_mut().unwrap()).await??;
         holder_joined = true;
         ensure!(held?.into_typed::<String>()? == "holder");
-        tokio::time::timeout(Duration::from_secs(10), async { while holder.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; } }).await?;
+        executor.wait_for_status(&holder_id, AgentStatus::Idle, Duration::from_secs(10)).await?;
         ensure!(holder.is_loaded().await, "holder must stay loaded idle");
-        if resource == Resource::Compute {
-            let account = limits.initialize_account(context.account_id).await?;
-            let mut receipts = crate::resource_limit_observations::observe(&account);
-            limits.run_batch_for_test().await;
-            let unreserved = receipts.take("policy_applied", registry.current_limits().monthly_policy_revision).last().context("pre-start refresh receipt")?.effective_fuel.context("refresh fuel")?;
-            ensure!(unreserved > FUEL_BUDGET && unreserved <= policy.available_fuel);
-            policy.available_fuel -= unreserved - FUEL_BUDGET;
-            registry.set_policy(policy.clone());
-            applied_refresh(&limits, &registry, context.account_id).await?.await?;
-            ensure!(receipts.take("policy_applied", registry.current_limits().monthly_policy_revision).last().context("adjusted fuel policy receipt")?.effective_fuel == Some(FUEL_BUDGET), "one full prepayment remains before target startup");
-        }
         {
             let acquire = pool.acquire(); tokio::pin!(acquire);
             ensure!(futures::poll!(acquire).is_pending(), "holder must own the real socket pool slot");
@@ -331,26 +316,24 @@ async fn pending_reconnect(
             let executor = executor.clone(); let component = component.clone(); let key = key.clone(); let name = name.clone();
             async move { executor.invoke_and_await_agent_with_key(&component, &name, &key, method, data_value!()).await }
         }));
-        let pending = tokio::time::timeout(Duration::from_secs(15), native.recv()).await?.context("target native reconnect pool acquire did not poll Pending")?;
-        executor.commit_oplog(&id).await?;
-        let open = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let open = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                executor.commit_oplog(&id).await?;
+                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                if operation_start(&entries, path, 0).is_ok() { break Ok::<_, anyhow::Error>(entries); }
+                tokio::task::yield_now().await;
+            }
+        }).await??;
         let start = operation_start(&open, path, 0)?;
         assert_invocation(&open, &key, 0)?;
         assert_invocation(&open, &first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&open, OplogIndex::INITIAL) == (3, 2));
-        ensure!(pending.start == start && pending.invocation_key.as_ref() == Some(&key));
-        ensure!(pending.operation == if path == Path::Accessor { "websocket_reconnect_pool_accessor" } else { "websocket_reconnect_pool_direct" });
-        ensure!(pending.state() == WaitState::Pending);
-        let pending_runtime = worker.current_monthly_proposal_for_test();
-        ensure!(pending.runtime == pending_runtime && pending_runtime.exhaustion.is_none(), "Pending must belong to fresh target runtime");
-        let initial = worker.current_monthly_proposal_for_test();
-        ensure!(initial.exhaustion.is_none() && initial.resident_generation == pending.runtime.resident_generation);
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && holder.is_loaded().await);
-        let acquisitions = worker.permit_acquisitions_for_test();
+        let initial = worker.owner_runtime_resources().with_monthly_capacity(AgentMode::Durable, |capacity| capacity);
+        ensure!(initial.exhaustion.is_none());
+        ensure!(worker.is_loaded().await && holder.is_loaded().await);
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
         peer.assert_counts(2, 2)?;
-        info!(?path, ?resource, %start, ?key, "real target reconnect pool acquire Pending; historical Connect already completed; holder owns sole socket");
+        info!(?path, ?resource, %start, ?key, "reconnect operation recorded while holder owns sole socket");
         if completion_first {
             evict_holder(&holder, &pool, &mut peer, false).await?;
             let third = peer.handshake().await?;
@@ -361,7 +344,6 @@ async fn pending_reconnect(
             if path == Path::Accessor { ensure!(done?.into_typed::<String>()? == "completed"); }
             else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
             if path == Path::Direct { peer.closed(3).await?; }
-            ensure!(pending.state() == WaitState::Returned);
             let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(operation_start(&completed, path, 1)? == start);
             if path == Path::Accessor {
@@ -382,9 +364,6 @@ async fn pending_reconnect(
         let mut raw = worker.raw_interrupt_for_test();
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some() && !account.prepaid_fuel_is_exhausted(AgentMode::Durable, initial.fuel_generation));
-            ensure!(account.monthly_capacity_is_exhausted_for_test(AgentMode::Durable), "target Store prepaid fuel");
-            ensure!(attempts.try_recv().is_err(), "zero unreserved fuel cannot stop prepaid Store");
-            ensure!(worker.current_monthly_proposal_for_test() == initial);
         }
         if resource == Resource::Storage {
             allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, true).await?;
@@ -397,28 +376,18 @@ async fn pending_reconnect(
         }
         registry.set_policy(exhausted);
         let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await.context("monthly proposal")?.context("acceptance observer closed")?;
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1 + u64::from(resource == Resource::Storage));
-        ensure!(attempt.proposal.period == initial.period && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation && attempt.proposal.start_attempt == initial.start_attempt);
-        ensure!(attempt.proposal.fingerprint == initial.fingerprint && attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(true)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await);
+        ensure!(holder.is_loaded().await);
         peer.assert_counts(2, 2)?;
-        info!(?path, ?resource, %start, ?signal, "typed monthly stop accepted while target native acquire Pending and holder still loaded");
+        info!(?path, ?resource, %start, ?signal, "monthly stop while holder still owns socket");
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+            while worker.is_loaded().await { tokio::task::yield_now().await; }
         }).await.context("target physical unload before holder eviction")?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         if let Some(refresh) = refresh { refresh.await?; }
-        ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(pending.state() == WaitState::Dropped);
-        ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await);
+        ensure!(holder.is_loaded().await);
         {
             let acquire = pool.acquire(); tokio::pin!(acquire);
             ensure!(futures::poll!(acquire).is_pending(), "holder socket released before target teardown");
@@ -443,7 +412,6 @@ async fn pending_reconnect(
             ensure!(update.fuel_delta == 0 && update.memory_gb_seconds_delta == 0 && update.memory_byte_nanoseconds_remainder == 0 && update.durable_storage_byte_seconds_delta == 0 && update.durable_storage_byte_nanoseconds_remainder == 0 && update.ephemeral_storage_byte_seconds_delta == 0 && update.ephemeral_storage_byte_nanoseconds_remainder == 0, "closed window accrued: {update:?}");
         }
         if resource == Resource::Storage { ensure!(!account.monthly_capacity_is_exhausted_for_test(AgentMode::Ephemeral)); }
-        if resource == Resource::Compute { resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?; }
 
         evict_holder(&holder, &pool, &mut peer, true).await?;
         let mut grant = policy;
@@ -453,8 +421,6 @@ async fn pending_reconnect(
         executor.resume(&id, false).await?;
         let third = peer.handshake().await?;
         ensure!(third.number == 3);
-        let reconstructing = worker.current_monthly_proposal_for_test();
-        ensure!(reconstructing.resident_generation > initial.resident_generation && reconstructing.start_attempt != initial.start_attempt && reconstructing.fingerprint == initial.fingerprint);
         executor.commit_oplog(&id).await?;
         let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
@@ -482,7 +448,7 @@ async fn pending_reconnect(
         peer.assert_effects(3, 3, if path == Path::Accessor { 3 } else { 2 })?;
         tokio::time::timeout(Duration::from_secs(10), async { while !worker.stop_if_idle().await { tokio::task::yield_now().await; } }).await?;
         if path == Path::Accessor { peer.closed(3).await?; }
-        tokio::time::timeout(Duration::from_secs(10), async { while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; } }).await?;
+        tokio::time::timeout(Duration::from_secs(10), async { while worker.is_loaded().await { tokio::task::yield_now().await; } }).await?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         let noop_key = IdempotencyKey::fresh();
@@ -513,10 +479,7 @@ async fn pending_reconnect(
         pool::settle_invocation("target", handle, &mut cleanup_errors).await;
     }
     let target_cleanup_error_count = cleanup_errors.len();
-    if target_cleanup_error_count == 0
-        && !worker.is_loaded().await
-        && !worker.concurrent_agent_permit_is_held().await
-    {
+    if target_cleanup_error_count == 0 && !worker.is_loaded().await {
         handshake::retire_handshake_worker(
             &executor,
             &holder,
@@ -536,7 +499,7 @@ async fn pending_reconnect(
         }
     } else {
         cleanup_errors.push(format!(
-            "holder retained: target cleanup had {target_cleanup_error_count} error(s) or physical Store/permit release could not be verified"
+            "holder retained: target cleanup had {target_cleanup_error_count} error(s) or Store release could not be verified"
         ));
         if let Some(handle) = holder_invocation.as_mut().filter(|_| !holder_joined) {
             pool::settle_invocation("holder", handle, &mut cleanup_errors).await;
@@ -571,7 +534,7 @@ pub(super) async fn evict_holder(
     .context("holder idle eviction")?;
     peer.closed(2).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while holder.is_loaded().await || holder.concurrent_agent_permit_is_held().await {
+        while holder.is_loaded().await {
             tokio::task::yield_now().await;
         }
     })

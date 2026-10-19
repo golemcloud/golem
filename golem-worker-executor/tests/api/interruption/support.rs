@@ -5,22 +5,50 @@ use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::workerctx::default::Context as WorkerContext;
 
+pub(super) trait ResourceEntryObservations {
+    fn monthly_capacity_is_exhausted_for_test(
+        &self,
+        mode: golem_common::model::agent::AgentMode,
+    ) -> bool;
+    fn prepaid_fuel_is_exhausted(
+        &self,
+        mode: golem_common::model::agent::AgentMode,
+        generation: Option<u64>,
+    ) -> bool;
+}
+
+impl ResourceEntryObservations
+    for golem_worker_executor::services::resource_limits::AtomicResourceEntry
+{
+    fn monthly_capacity_is_exhausted_for_test(
+        &self,
+        mode: golem_common::model::agent::AgentMode,
+    ) -> bool {
+        self.with_monthly_capacity(mode, None, |capacity| capacity.exhaustion.is_some())
+    }
+
+    fn prepaid_fuel_is_exhausted(
+        &self,
+        mode: golem_common::model::agent::AgentMode,
+        generation: Option<u64>,
+    ) -> bool {
+        self.with_monthly_capacity(mode, generation, |capacity| capacity.exhaustion == Some(golem_worker_executor::services::resource_limits::MonthlyResourceExhaustion::Compute))
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ObservedUsageFlusher {
     pub(super) owner: std::sync::Weak<Worker<WorkerContext>>,
-    pub(super) send: tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+    pub(super) send: tokio::sync::mpsc::UnboundedSender<u64>,
 }
 
 impl ResourceUsageFlusher for ObservedUsageFlusher {
     fn flush_usage(&self) {
-        if let Some(owner) = self.owner.upgrade()
-            && owner.monthly_horizon_was_registered()
-            && owner.monthly_window_active_for_test()
-        {
-            let current = owner.current_monthly_proposal_for_test();
-            let _ = self
-                .send
-                .send((current.diagnostic_window_id, current.policy_revision));
+        if let Some(owner) = self.owner.upgrade() {
+            let revision = owner
+                .owner_runtime_resources()
+                .with_monthly_capacity(owner.agent_mode(), |capacity| capacity.policy_revision);
+            let _ = self.send.send(revision);
         }
     }
 }

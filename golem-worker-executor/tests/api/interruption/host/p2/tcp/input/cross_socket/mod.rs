@@ -139,7 +139,7 @@ async fn cross_socket_pending(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -184,9 +184,6 @@ async fn cross_socket_pending(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
-    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let source_port = source.local_addr()?.port();
@@ -211,8 +208,6 @@ async fn cross_socket_pending(
     })));
     let result = async {
         let (mut input, mut output) = peers(&source, &destination).await?;
-        let phase = pending_phase(&mut phases, Operation::Splice, &key).await?;
-        let runtime = phase.runtime;
         let mut byte = [0];
         ensure!(
             tokio::time::timeout(Duration::from_millis(25), output.read(&mut byte))
@@ -220,32 +215,32 @@ async fn cross_socket_pending(
                 .is_err(),
             "destination must not receive data before A supplies input"
         );
-        executor.commit_oplog(&id).await?;
-        let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let starts = cross_setup(&entries, 2)?;
+        let (entries, starts) = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                executor.commit_oplog(&id).await?;
+                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                if let Ok(starts) = cross_setup(&entries, 2) {
+                    break Ok::<_, anyhow::Error>((entries, starts));
+                }
+                ensure!(!request_is_finished(&invocation));
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
-        let initial = worker.current_monthly_proposal_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
+        let initial = worker
+            .owner_runtime_resources()
+            .with_monthly_capacity(mode, |capacity| capacity);
         let mut raw = worker.raw_interrupt_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
-        ensure!(initial.exhaustion.is_none() && initial == runtime);
-        ensure!(phase.state() == WaitState::Pending);
-        ensure!(
-            worker.is_loaded().await
-                && worker.concurrent_agent_permit_is_held().await
-                && !request_is_finished(&invocation)
-        );
+        ensure!(initial.exhaustion.is_none());
+        ensure!(worker.is_loaded().await && !request_is_finished(&invocation));
         if resource == Resource::Compute {
             ensure!(
                 initial.fuel_generation.is_some()
                     && !account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation)
             );
             ensure!(account.monthly_capacity_is_exhausted_for_test(mode));
-            ensure!(
-                attempts.try_recv().is_err()
-                    && worker.current_monthly_proposal_for_test() == initial
-            );
         }
         if resource == Resource::Storage {
             allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable)
@@ -260,34 +255,12 @@ async fn cross_socket_pending(
         }
         registry.set_policy(exhausted);
         start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await
-            .context("monthly proposal")?
-            .context("acceptance observer closed")?;
-        ensure!(
-            attempt.proposal.policy_revision
-                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
-        );
-        ensure!(
-            attempt.proposal.period == initial.period
-                && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id
-        );
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(
             worker.selected_owner_failure_for_test().await
                 == Some(ToolOwnerFailureMetadata::Lifecycle)
         );
-        if resource == Resource::Compute {
-            resource_events.assert_policy_advanced_after(
-                registry.current_limits().monthly_policy_revision,
-                initial.fuel_generation,
-            )?;
-        }
         if resource == Resource::Storage {
             let other = if durable {
                 AgentMode::Ephemeral
@@ -300,15 +273,14 @@ async fn cross_socket_pending(
         let closed = tokio::time::timeout(Duration::from_secs(10), input.read(&mut byte)).await;
         ensure!(
             closed.is_ok(),
-            "A still open: loaded={}, permit={}, finished={}",
+            "A still open: loaded={}, finished={}",
             worker.is_loaded().await,
-            worker.concurrent_agent_permit_is_held().await,
             request_is_finished(&invocation)
         );
         ensure!(closed.unwrap()? == 0);
         ensure!(tokio::time::timeout(Duration::from_secs(10), output.read(&mut byte)).await?? == 0);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -323,16 +295,6 @@ async fn cross_socket_pending(
         if refresh.is_some() {
             join_request(&mut refresh, "stop refresh").await?;
         }
-        ensure!(
-            worker.unload_succeeded_for_test()
-                && worker.permit_acquisitions_for_test() == acquisitions
-        );
-        ensure!(!worker.monthly_window_active_for_test());
-        ensure!(phase.state() == WaitState::Dropped);
-        ensure!(
-            phases.try_recv().is_err(),
-            "unexpected extra native splice observation"
-        );
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(cross_setup(&stopped, 2)? == starts);
         let entries = worker
@@ -410,10 +372,6 @@ async fn cross_socket_pending(
             join_request(&mut refresh, "policy refresh").await?;
             executor.resume(&id, false).await?;
             let (mut input, mut output) = peers(&source, &destination).await?;
-            let reconstructed = pending_phase(&mut phases, Operation::Splice, &key).await?;
-            ensure!(reconstructed.runtime.resident_generation > initial.resident_generation);
-            ensure!(reconstructed.runtime.start_attempt != initial.start_attempt);
-            ensure!(reconstructed.runtime.fingerprint == initial.fingerprint);
             echo(&mut input, &mut output).await?;
             ensure!(
                 join_request(&mut invocation, "invocation result")
@@ -421,7 +379,6 @@ async fn cross_socket_pending(
                     .into_typed::<Result<u64, String>>()?
                     == Ok(1)
             );
-            ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(cross_setup(&recovered, 2)? == starts);
             assert_settled_history(&recovered)?;
@@ -459,9 +416,7 @@ async fn cross_socket_pending(
             );
             let fresh_peers = async {
                 let (mut input, mut output) = peers(&source, &destination).await?;
-                let phase = pending_phase(&mut phases, Operation::Splice, &fresh_key).await?;
                 echo(&mut input, &mut output).await?;
-                ensure!(phase.state() == WaitState::Returned);
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {

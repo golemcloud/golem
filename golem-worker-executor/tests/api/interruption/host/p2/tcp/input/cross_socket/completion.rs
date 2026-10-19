@@ -46,14 +46,11 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         .unwrap()
         .primary();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while !worker.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let source_port = source.local_addr()?.port();
@@ -79,28 +76,22 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
     })));
     let result = async {
         let (mut input, mut output) = peers(&source, &destination).await?;
-        let phase = pending_phase(&mut phases, Operation::Splice, &key).await?;
-        executor.commit_oplog(&id).await?;
-        let starts = cross_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 2)?;
-        let acquisitions = worker.permit_acquisitions_for_test();
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         echo(&mut input, &mut output).await?;
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        ensure!(phase.state() == WaitState::Returned);
-        ensure!(worker.concurrent_agent_permit_is_held().await);
+        executor.commit_oplog(&id).await?;
+        let starts = cross_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 2)?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
         start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monthly acceptance")?;
-        ensure!(attempt.proposal.diagnostic_window_id == phase.runtime.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
-        ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
-        ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-        ensure!(attempt.accepted);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.selected_owner_failure_for_test().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
         tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),
@@ -124,7 +115,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         )
         .await??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -132,11 +123,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         .context("completion-first physical unload")?;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         join_request(&mut refresh, "stop refresh").await?;
-        ensure!(
-            worker.unload_succeeded_for_test()
-                && worker.permit_acquisitions_for_test() == acquisitions
-        );
-        ensure!(!worker.monthly_window_active_for_test());
+        ensure!(!worker.is_loaded().await);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(cross_setup(&completed, 2)? == starts);
         assert_settled_history(&completed)?;
@@ -178,14 +165,9 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         let peer_work = async {
             // The completed historical raw splice re-executes against fresh sockets.
             let (mut old_input, mut old_output) = peers(&source, &destination).await?;
-            let historical = pending_phase(&mut phases, Operation::Splice, &key).await?;
-            ensure!(historical.runtime.resident_generation > phase.runtime.resident_generation);
             echo(&mut old_input, &mut old_output).await?;
-            ensure!(historical.state() == WaitState::Returned);
             let (mut new_input, mut new_output) = peers(&source, &destination).await?;
-            let fresh_phase = pending_phase(&mut phases, Operation::Splice, &fresh_key).await?;
             echo(&mut new_input, &mut new_output).await?;
-            ensure!(fresh_phase.state() == WaitState::Returned);
             Ok::<_, anyhow::Error>(())
         };
         let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {

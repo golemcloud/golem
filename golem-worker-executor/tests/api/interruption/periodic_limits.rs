@@ -185,34 +185,13 @@ async fn periodic_registry_choreography_preserves_usage_and_capacity(_tracing: &
         );
         let account = AccountId::new();
         let entry = limits.initialize_account(account).await.unwrap();
-        let mut events = crate::resource_limit_observations::observe(&entry);
         // Let the loop capture before the mutation, so the driver must also drain a stale batch.
         let mut captured = limits.control.as_ref().unwrap().captured.subscribe();
         while *captured.borrow_and_update() == 0 {
             captured.changed().await.unwrap();
         }
         assert!(entry.borrow_fuel(37));
-        if enabled {
-            assert_eq!(
-                events
-                    .take("fuel_borrowed", 0)
-                    .last()
-                    .unwrap()
-                    .effective_fuel,
-                Some(966)
-            );
-        }
         entry.return_fuel(11);
-        if enabled {
-            assert_eq!(
-                events
-                    .take("fuel_settled", 0)
-                    .last()
-                    .unwrap()
-                    .effective_fuel,
-                Some(977)
-            );
-        }
         let mut exhausted = policy;
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
@@ -222,7 +201,9 @@ async fn periodic_registry_choreography_preserves_usage_and_capacity(_tracing: &
             Some(1)
         );
         assert_eq!(
-            entry.monthly_capacity_is_exhausted_for_test(AgentMode::Durable),
+            entry.with_monthly_capacity(AgentMode::Durable, None, |capacity| capacity
+                .exhaustion
+                .is_some()),
             enabled
         );
         assert_eq!(
@@ -233,18 +214,6 @@ async fn periodic_registry_choreography_preserves_usage_and_capacity(_tracing: &
                 .sum::<i64>(),
             if enabled { 26 } else { 0 }
         );
-        if enabled {
-            events.assert_policy_advanced_after(1, Some(1)).unwrap();
-            entry.record_memory_gb_seconds(AgentMode::Durable, 1);
-            assert_eq!(
-                events
-                    .take("memory_overshoot", 1)
-                    .last()
-                    .unwrap()
-                    .memory_overshoot,
-                Some(golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND)
-            );
-        }
         limits.run_batch_for_test().await;
         assert_eq!(
             registry

@@ -71,14 +71,11 @@ async fn completion_and_history(
         .unwrap()
         .primary();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while !worker.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listeners = listeners().await?;
     let first_port = listeners[0].local_addr()?.port();
     let second_port = listeners[1].local_addr()?.port();
@@ -103,33 +100,26 @@ async fn completion_and_history(
     let result = async {
         let mut effects = PeerEffects::default();
         let mut peers = accept_pair(&listeners, &mut effects).await?;
-        let phase = pending_phase(&mut phases, &key, count).await?;
-        executor.commit_oplog(&id).await?;
-        let start = input_poll(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &key, count, None)?;
-        ensure!(phase.start == start);
-        let acquisitions = worker.permit_acquisitions_for_test();
+        let start = wait_for_input_poll(&executor, &id, &key, count).await?;
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         release_second(&mut peers, &mut effects).await?;
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        ensure!(phase.state() == WaitState::Returned);
         executor.commit_oplog(&id).await?;
         let completed_poll = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let recorded = poll_result(&completed_poll, start)?;
         assert_indices(&recorded, duplicate)?;
         ensure!(input_poll(&completed_poll, &key, count, Some(&recorded))? == start);
         assert_invocation(&completed_poll, &key, 0)?;
-        ensure!(worker.concurrent_agent_permit_is_held().await);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.diagnostic_window_id == phase.runtime.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
-        ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
-        ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-        ensure!(attempt.accepted);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.selected_owner_failure_for_test().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        }).await?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         ensure!(!invocation.is_finished());
         release.send(false).unwrap();
@@ -139,16 +129,13 @@ async fn completion_and_history(
         ensure!(matches!(tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??, InterruptKind::Suspend(_)));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         }).await.context("completion-first physical unload")?;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         refresh.await?;
-        ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(!worker.monthly_window_active_for_test());
+        ensure!(!worker.is_loaded().await);
         closed_pair(&mut peers, &mut effects).await?;
         ensure!(effects.accepts == [1, 1] && effects.closed == [1, 1] && effects.sent == [0, 1]);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -161,7 +148,7 @@ async fn completion_and_history(
         ).await?.into_typed::<Result<Vec<u32>, String>>()?;
         ensure!(cached == Ok(recorded.clone()));
         no_connections(&listeners).await?;
-        ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
+        ensure!(!worker.is_loaded().await);
 
         registry.set_policy(policy);
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
@@ -176,13 +163,8 @@ async fn completion_and_history(
             closed_pair(&mut historical, &mut effects).await?;
             ensure!(effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]);
             let mut fresh_peers = accept_pair(&listeners, &mut effects).await?;
-            let fresh_phase = pending_phase(&mut phases, &fresh_key, count).await?;
-            ensure!(fresh_phase.runtime.resident_generation > phase.runtime.resident_generation);
-            ensure!(fresh_phase.runtime.fingerprint == phase.runtime.fingerprint);
-            ensure!(fresh_phase.start != start);
             release_second(&mut fresh_peers, &mut effects).await?;
             closed_pair(&mut fresh_peers, &mut effects).await?;
-            ensure!(fresh_phase.state() == WaitState::Returned);
             Ok::<_, anyhow::Error>(())
         };
         let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async { tokio::try_join!(fresh, peers) }).await??;

@@ -27,7 +27,6 @@ use crate::workerctx::WorkerCtx;
 use futures::future::Either;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt, pin_mut};
-use golem_common::model::OplogIndex;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::payload::types::{
     SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
@@ -270,17 +269,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
 
         let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
 
-        let diagnostic = accessor.with(|mut access| {
-            access.get().native_wait_diagnostic(
-                "websocket_handshake_initial",
-                None,
-                Some(call.start_index()),
-                std::iter::empty(),
-            )
-        });
         let connect_fut = connect_async(request);
-        let connect_fut =
-            crate::native_wait_diagnostics::WaitDiagnostic::observe(diagnostic, connect_fut);
         pin_mut!(connect_fut);
         let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
             Either::Left((result, _)) => result,
@@ -381,14 +370,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(
-            accessor,
-            &self_,
-            call.start_index(),
-            ReconnectPath::Direct,
-        )
-        .await
-        {
+        match ensure_websocket_connection_live_access(accessor, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketSendResponse {
@@ -496,14 +478,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(
-            accessor,
-            &self_,
-            call.start_index(),
-            ReconnectPath::Direct,
-        )
-        .await
-        {
+        match ensure_websocket_connection_live_access(accessor, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketCloseResponse {
@@ -609,14 +584,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(
-            accessor,
-            &self_,
-            call.start_index(),
-            ReconnectPath::Accessor,
-        )
-        .await
-        {
+        match ensure_websocket_connection_live_access(accessor, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveResponse {
@@ -653,18 +621,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             Ok(Ok(live)) => {
                 let mut reader = live.reader.lock().await;
                 let recv_fut = read_next_user_or_close(&mut reader);
-                let diagnostic = accessor.with(|mut access| {
-                    let diagnostic = access.get().native_wait_diagnostic(
-                        "websocket_receive",
-                        None,
-                        Some(call.start_index()),
-                        std::iter::empty(),
-                    )?;
-                    diagnostic.record_connection(self_.rep());
-                    Some(diagnostic)
-                });
-                let recv_fut =
-                    crate::native_wait_diagnostics::WaitDiagnostic::observe(diagnostic, recv_fut);
                 pin_mut!(recv_fut);
                 match futures::future::select(recv_fut, interrupt_signal).await {
                     Either::Left((result, _)) => result,
@@ -753,14 +709,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(
-            accessor,
-            &self_,
-            call.start_index(),
-            ReconnectPath::Accessor,
-        )
-        .await
-        {
+        match ensure_websocket_connection_live_access(accessor, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveWithTimeoutResponse {
@@ -792,32 +741,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 };
             (interrupt_signal, live_lookup)
         });
-        let mut diagnostic = accessor.with(|mut access| {
-            access.get().native_wait_diagnostic(
-                "websocket_timed_receive",
-                None,
-                Some(call.start_index()),
-                std::iter::empty(),
-            )
-        });
-
         let live_result: Result<Option<Message>, Error> = match live_lookup {
             Ok(Ok(live)) => {
                 let reader_lock = live.reader.lock();
-                let lock_diagnostic = accessor.with(|mut access| {
-                    let diagnostic = access.get().native_wait_diagnostic(
-                        "websocket_timed_reader_lock",
-                        None,
-                        Some(call.start_index()),
-                        std::iter::empty(),
-                    )?;
-                    diagnostic.record_connection(self_.rep());
-                    Some(diagnostic)
-                });
-                let reader_lock = crate::native_wait_diagnostics::WaitDiagnostic::observe(
-                    lock_diagnostic,
-                    reader_lock,
-                );
                 let mut reader = reader_lock.await;
                 let deadline = Instant::now() + Duration::from_millis(timeout_ms);
                 pin_mut!(interrupt_signal);
@@ -827,10 +753,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                         break Ok(None);
                     }
                     let next_frame = reader.next();
-                    let next_frame = crate::native_wait_diagnostics::WaitDiagnostic::observe(
-                        diagnostic.take(),
-                        next_frame,
-                    );
                     let next_frame = tokio::time::timeout(remaining, next_frame);
                     pin_mut!(next_frame);
                     match futures::future::select(next_frame, interrupt_signal.as_mut()).await {
@@ -997,20 +919,11 @@ async fn write_websocket_access<U: Send + 'static, Ctx: WorkerCtx>(
     Ok(result)
 }
 
-// Labels diagnostics only; both paths use the same reconnect and publication owners.
-#[derive(Clone, Copy)]
-enum ReconnectPath {
-    Accessor,
-    Direct,
-}
-
 /// Store windows are only used for table lookups and entry replacement, while reconnect
 /// coordination, permit acquisition and the websocket handshake await outside the store.
 async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     resource: &Resource<WebSocketConnectionEntry>,
-    start: OplogIndex,
-    path: ReconnectPath,
 ) -> anyhow::Result<Result<(), Error>> {
     let rep = resource.rep();
 
@@ -1119,19 +1032,7 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         }
     };
 
-    let diagnostic = accessor.with(|mut access| {
-        access.get().native_wait_diagnostic(
-            match path {
-                ReconnectPath::Accessor => "websocket_reconnect_pool_accessor",
-                ReconnectPath::Direct => "websocket_reconnect_pool_direct",
-            },
-            None,
-            Some(start),
-            std::iter::empty(),
-        )
-    });
     let acquire = pool.acquire();
-    let acquire = crate::native_wait_diagnostics::WaitDiagnostic::observe(diagnostic, acquire);
     let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
     let permit =
         match acquire_websocket_connection_or_interrupt_future(acquire, interrupt_signal).await? {
@@ -1143,20 +1044,7 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         };
     let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
 
-    let diagnostic = accessor.with(|mut access| {
-        access.get().native_wait_diagnostic(
-            match path {
-                ReconnectPath::Accessor => "websocket_handshake_accessor_reconnect",
-                ReconnectPath::Direct => "websocket_handshake_direct_reconnect",
-            },
-            None,
-            Some(start),
-            std::iter::empty(),
-        )
-    });
     let connect_fut = connect_async(request);
-    let connect_fut =
-        crate::native_wait_diagnostics::WaitDiagnostic::observe(diagnostic, connect_fut);
     pin_mut!(connect_fut);
     let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
         Either::Left((result, _)) => result,

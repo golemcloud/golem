@@ -52,9 +52,7 @@ mod invocation_waits;
 pub mod key_value_storage;
 pub mod keyvalue;
 pub mod mcp_stdout;
-mod monthly_acceptance;
 pub mod namespace_routed_key_value_storage;
-mod native_waits;
 pub mod observability;
 pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
@@ -66,9 +64,7 @@ pub mod permission_cards_scala;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
-mod resource_limit_observations;
 pub mod resource_limits;
-mod resource_producers;
 pub mod retry_lifecycle;
 pub mod retry_policies;
 pub mod revert;
@@ -79,7 +75,6 @@ pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
 pub mod suspension_races;
-mod tail_roots;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
 pub mod tool_streaming;
@@ -182,15 +177,9 @@ impl Tracing {
                     .with_env_overrides(),
                 golem_common::tracing::filter::for_all_outputs::default_debug_env(),
                 vec![
-                    native_waits::layer(),
                     invocation_waits::layer(),
                     scheduler_waits::layer(),
                     entity_fence_waits::layer(),
-                    execution_observations::layer(),
-                    resource_producers::layer(),
-                    resource_limit_observations::layer(),
-                    tail_roots::layer(),
-                    monthly_acceptance::layer(),
                 ],
             );
         });

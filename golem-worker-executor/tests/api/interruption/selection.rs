@@ -123,11 +123,8 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
         .await??;
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
-        let generation = worker.observed_creation_count();
         let mut raw = worker.raw_interrupt_for_test();
         let mut helper = worker.await_interrupt_for_test();
-        let mut attempts =
-            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let (failure_selected, release_failure) =
             executor.gate_next_invocation_outcome_append(&id).await;
         assert!(
@@ -145,10 +142,6 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monthly proposal for pending TCP")?;
-        assert!(attempt.accepted);
         let quota_stop = worker.await_interrupt_for_test().await;
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
         // Request priority is tested on the actual queue. This native case retains the TCP
@@ -156,8 +149,6 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
         tokio::time::timeout(Duration::from_secs(10), failure_selected).await??;
         let late = worker.await_interrupt_for_test();
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert!(worker.concurrent_agent_permit_is_held().await);
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -322,12 +313,13 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
         }
         let mut raw = after_selection.then(|| worker.raw_interrupt_for_test());
         let receipt;
-        let expected;
+        let mut expected = None;
         let mut refresh = None;
         if after_selection {
-            expected = InterruptKind::Interrupt(Timestamp::now_utc());
+            let kind = InterruptKind::Interrupt(Timestamp::now_utc());
+            expected = Some(kind);
             let mut accepted_receipt = worker
-                .set_interrupting(expected)
+                .set_interrupting(kind)
                 .await?
                 .context("late user stop has no receipt")?;
             tokio::time::timeout(
@@ -342,11 +334,7 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             ));
             receipt = Some(accepted_receipt);
         } else {
-            let runtime = worker.current_monthly_proposal_for_test();
-            let prior_requests = worker.interrupt_establishment_receipts().len();
-            let mut acceptances = crate::monthly_acceptance::observe(
-                worker.get_initial_worker_metadata().fingerprint,
-            );
+            let mut fence = crate::entity_fence_waits::lifecycle_fence(&owned);
             let mut exhausted = policy.clone();
             exhausted.available_memory_gb_seconds = 0;
             registry.set_policy(exhausted);
@@ -354,30 +342,8 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
                 let limits = limits.clone();
                 async move { limits.run_batch_for_test().await }
             }));
-            let acceptance = acceptances.recv().await.expect("monthly capacity proposal");
-            assert_eq!(acceptance.proposal.fingerprint, runtime.fingerprint);
-            assert_eq!(acceptance.proposal.start_attempt, runtime.start_attempt);
-            assert_eq!(
-                acceptance.proposal.resident_generation,
-                runtime.resident_generation
-            );
-            assert_eq!(
-                acceptance.proposal.diagnostic_window_id,
-                runtime.diagnostic_window_id
-            );
-            assert_eq!(acceptance.proposal.period, runtime.period);
-            assert_eq!(
-                acceptance.proposal.exhaustion,
-                Some("monthly memory exhausted")
-            );
-            assert!(acceptance.accepted);
+            tokio::time::timeout(Duration::from_secs(10), fence.entered()).await??;
             worker.join_accepted_stops_for_test().await?;
-            let requests = worker.interrupt_establishment_receipts();
-            let [(_, kind)] = &requests[prior_requests..] else {
-                anyhow::bail!("expected one accepted monthly request: {requests:?}");
-            };
-            expected = *kind;
-            assert!(matches!(expected, InterruptKind::Suspend(_)));
             assert_eq!(
                 worker.selected_owner_failure_for_test().await,
                 Some(ToolOwnerFailureMetadata::Lifecycle)
@@ -391,7 +357,7 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             selected_write.take().unwrap().1.send(false).unwrap();
         }
         if let Some(raw) = &mut raw {
-            assert_eq!(raw.recv().await?, expected);
+            assert_eq!(Some(raw.recv().await?), expected);
         }
         if let Some(mut receipt) = receipt {
             receipt.recv().await?;
@@ -409,7 +375,6 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             worker.await_ready_to_process_commands().await?;
             worker.retained_cleanup_for_test().await?;
             assert!(!worker.is_loaded().await);
-            assert!(!worker.concurrent_agent_permit_is_held().await);
             refresh.take().unwrap().await?;
             let oplog = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             assert_eq!(
@@ -509,8 +474,6 @@ async fn quota_stop_preserves_selected_independent_guest_failure(
             .unwrap()
             .primary();
         let (at_outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
-        let mut attempts =
-            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let key = IdempotencyKey::fresh();
         let invocation = tokio::spawn({
             let executor = executor.clone();
@@ -530,8 +493,6 @@ async fn quota_stop_preserves_selected_independent_guest_failure(
             }
         });
         at_outcome.await?;
-        let acquisitions = worker.permit_acquisitions_for_test();
-        let generation = worker.observed_creation_count();
         let mut exhausted = policy;
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
@@ -539,11 +500,6 @@ async fn quota_stop_preserves_selected_independent_guest_failure(
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monthly proposal behind selected guest-failure writer")?;
-        assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(attempt.accepted);
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
@@ -557,14 +513,12 @@ async fn quota_stop_preserves_selected_independent_guest_failure(
         tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;
         worker.join_accepted_stops_for_test().await?;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
         worker.retained_cleanup_for_test().await?;
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        assert_eq!(worker.observed_creation_count(), generation);
         refresh.await?;
         let entries = worker
             .oplog()
@@ -740,11 +694,7 @@ async fn deadline_selection(
         })
         .await??;
         let committed_prefix = executor.stored_oplog(&id).await;
-        let generation = worker.observed_creation_count();
-        let acquisitions = worker.permit_acquisitions_for_test();
         let selected_first = timeout_first || success_first;
-        let mut attempts =
-            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let mut raw = worker.raw_interrupt_for_test();
         let (at_outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
         if timeout_first {
@@ -757,10 +707,6 @@ async fn deadline_selection(
             assert!(matches!(
                 raw.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                attempts.try_recv(),
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
             ));
         }
         if success_first {
@@ -779,10 +725,6 @@ async fn deadline_selection(
                     .unwrap(),
                 golem_worker_executor::model::ExecutionStatus::Running { .. }
             ));
-            assert!(matches!(
-                attempts.try_recv(),
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-            ));
         }
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -791,17 +733,12 @@ async fn deadline_selection(
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monthly proposal in timer selection integration")?;
-        assert!(attempt.accepted);
         let quota_stop = worker.await_interrupt_for_test().await;
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         if !selected_first {
             tokio::time::timeout(Duration::from_secs(10), at_outcome.take().unwrap()).await??;
         }
-        assert!(worker.concurrent_agent_permit_is_held().await);
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -830,14 +767,12 @@ async fn deadline_selection(
             Ok(0) | Err(_)
         ));
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
         worker.retained_cleanup_for_test().await?;
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         let entries = worker
             .oplog()
             .read_exact(

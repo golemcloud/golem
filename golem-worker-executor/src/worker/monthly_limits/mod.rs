@@ -6,7 +6,7 @@ use crate::services::resource_usage_metering::{
 };
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
-use golem_common::model::{AgentFingerprint, Timestamp};
+use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -81,13 +81,8 @@ impl MonthlyMemoryCheck {
 }
 
 pub(super) struct MonthlyWindowTarget {
-    diagnostic_window_id: u64,
-    trace_origin: golem_common::tracing::TraceOrigin,
-    fingerprint: AgentFingerprint,
     start_attempt: Uuid,
-    resident_generation: u64,
     active: Mutex<bool>,
-    active_span: Mutex<Option<tracing::Span>>,
     failure: Mutex<Option<MonthlyMonitorFailure>>,
 }
 
@@ -128,29 +123,6 @@ impl MonthlyWindowTarget {
         } else {
             None
         }
-    }
-
-    fn trace_if_current(
-        self: &Arc<Self>,
-        current: &Mutex<Option<Arc<Self>>>,
-    ) -> Option<crate::native_wait_diagnostics::WindowTrace> {
-        let active = self.active.lock().unwrap();
-        if !*active
-            || !current
-                .lock()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|value| Arc::ptr_eq(value, self))
-        {
-            return None;
-        }
-        Some(crate::native_wait_diagnostics::WindowTrace {
-            id: self.diagnostic_window_id,
-            fingerprint: self.fingerprint,
-            start_attempt: self.start_attempt,
-            resident_generation: self.resident_generation,
-            origin: self.trace_origin.clone(),
-        })
     }
 
     fn matches_running_owner(
@@ -273,25 +245,6 @@ impl ExecutionWindow {
     ) -> Self {
         let release_scope = worker.release_scope();
         window.observe_permit_release(&release_scope);
-        let resident_generation = worker
-            .resident_generation
-            .load(std::sync::atomic::Ordering::Acquire);
-        let (diagnostic, span) = crate::native_wait_diagnostics::WindowTrace::open(
-            worker.initial_worker_metadata.fingerprint,
-            start_attempt,
-            resident_generation,
-        );
-        span.record("worker_shell", Arc::as_ptr(worker) as usize as u64);
-        span.record(
-            "agent_id",
-            tracing::field::display(&worker.owned_agent_id.agent_id),
-        );
-        span.record(
-            "environment_id",
-            tracing::field::display(&worker.owned_agent_id.environment_id),
-        );
-        let diagnostic_window_id = diagnostic.id;
-        window.observe_window(span);
         if !worker.resource_entry.monthly_metering_enabled() {
             return Self {
                 window: Some(window),
@@ -307,39 +260,16 @@ impl ExecutionWindow {
                 worker
                     .owner_runtime_resources
                     .register_resource_usage_flusher(flusher);
-                worker.owner_runtime_resources.trace_usage_flushers(
-                    &worker.owned_agent_id,
-                    "primary_registered",
-                );
             }
             let target = Arc::new(MonthlyWindowTarget {
-                diagnostic_window_id,
-                trace_origin: diagnostic.origin.clone(),
-                fingerprint: worker.initial_worker_metadata.fingerprint,
                 start_attempt,
-                resident_generation,
                 active: Mutex::new(true),
-                active_span: Mutex::new(Some(tracing::debug_span!(
-                    target: golem_common::tracing::target::NATIVE_WAIT, parent: None,
-                    "monthly_horizon", window_id = diagnostic_window_id,
-                    worker_shell = Arc::as_ptr(worker) as usize as u64,
-                    fingerprint_high = (worker.initial_worker_metadata.fingerprint.0.as_u128() >> 64) as u64,
-                    fingerprint_low = worker.initial_worker_metadata.fingerprint.0.as_u128() as u64,
-                ))),
                 failure: Mutex::new(None),
             });
-            tracing::debug!(
-                execution_event = "monthly_horizon_registered",
-                fingerprint = %worker.initial_worker_metadata.fingerprint,
-                worker_shell = Arc::as_ptr(worker) as usize as u64,
-                trace_enabled = target.active_span.lock().unwrap().as_ref().is_some_and(|span| !span.is_disabled()),
-                "Registered monthly horizon lifetime"
-            );
             *worker.monthly_window.lock().unwrap() = Some(target.clone());
             let cancelled = CancellationToken::new();
             let stop = cancelled.clone();
             let target_task = target.clone();
-            let diagnostic_task = diagnostic.clone();
             let weak_worker = Arc::downgrade(worker);
             let actor = worker.state_actor.clone();
             let memory = window.monthly_memory_tracker();
@@ -395,7 +325,6 @@ impl ExecutionWindow {
                                 capacity,
                             )?;
                         }
-                        diagnostic_task.event("monthly_checked", Some(capacity), None);
                     }
                     if let Some(worker) = weak_worker.upgrade() {
                         worker.owner_runtime_resources.settle_resource_usage();
@@ -571,7 +500,6 @@ fn stop_monitor(monitor: &Option<MonthlyMonitor>) {
     if let Some(monitor) = monitor {
         let mut active = monitor.target.active.lock().unwrap();
         *active = false;
-        drop(monitor.target.active_span.lock().unwrap().take());
         drop(active);
         monitor.cancelled.cancel();
     }
@@ -621,13 +549,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap()
             .as_ref()
             .and_then(|target| target.take_policy_failure())
-    }
-
-    pub(crate) fn resident_window_trace(
-        &self,
-    ) -> Option<crate::native_wait_diagnostics::WindowTrace> {
-        let target = self.monthly_window.lock().unwrap().clone()?;
-        target.trace_if_current(&self.monthly_window)
     }
 
     async fn fail_monthly_monitor(
@@ -688,35 +609,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target: Arc<MonthlyWindowTarget>,
         proposed: MonthlyCapacity,
     ) {
-        let diagnostic = crate::native_wait_diagnostics::WindowTrace {
-            id: target.diagnostic_window_id,
-            fingerprint: target.fingerprint,
-            start_attempt: target.start_attempt,
-            resident_generation: target.resident_generation,
-            origin: target.trace_origin.clone(),
-        };
-        let accepted = self.try_accept_monthly_capacity(target, proposed).await;
-        diagnostic.event("monthly_acceptance", Some(proposed), Some(accepted));
-    }
-
-    async fn try_accept_monthly_capacity(
-        self: &Arc<Self>,
-        target: Arc<MonthlyWindowTarget>,
-        proposed: MonthlyCapacity,
-    ) -> bool {
         if !self.is_current_cached_owner().await {
-            return false;
+            return;
         }
         let lifecycle = self.instance.lock().await;
         if !target.matches_running_owner(&lifecycle, &self.monthly_window) {
-            return false;
+            return;
         }
         let active = target.active.lock().unwrap();
         if !*active {
-            return false;
+            return;
         }
         let Some(mut interrupts) = self.interrupt_signal.try_lock() else {
-            return false;
+            return;
         };
         self.owner_runtime_resources
             .with_monthly_capacity(self.agent_mode(), |current| {
@@ -727,10 +632,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &self.interrupt_establishment_tail,
                     &self.monthly_stop,
                 ) else {
-                    return false;
+                    return;
                 };
                 drop(self.start_interrupt_establishment(pending, true));
-                true
-            })
+            });
     }
 }

@@ -132,10 +132,6 @@ mod initialization {
                 .iter()
                 .any(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationStarted(_)))
         );
-        let generation = worker.observed_creation_count();
-        let acquisitions = worker.permit_acquisitions_for_test();
-        let mut attempts =
-            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let mut raw = worker.raw_interrupt_for_test();
         let helper = worker.await_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -145,14 +141,8 @@ mod initialization {
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
         });
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monthly proposal during core initialization")?;
-        assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(attempt.accepted);
         let quota_stop = worker.await_interrupt_for_test().await;
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
-        assert!(worker.concurrent_agent_permit_is_held().await);
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
@@ -176,7 +166,7 @@ mod initialization {
         .await
         .context("preparation stop joins")??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -184,8 +174,6 @@ mod initialization {
         .context("preparation physical unload")?;
         worker.retained_cleanup_for_test().await?;
         refresh.await?;
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         let entries = worker
             .oplog()
             .read_exact(
@@ -364,7 +352,6 @@ mod loaded_compute_admission {
                 ..
             } if method == "increment"
         ));
-        let acquisitions = worker.permit_acquisitions_for_test();
         // Both requests queue a wake while the real Finished append holds the invocation.
         // The invocation drains both markers in its existing window, leaving stale wakes.
         let mut first_ready = std::pin::pin!(worker.await_ready_to_process_commands());
@@ -393,19 +380,12 @@ mod loaded_compute_admission {
         )
         .await?
         .map_err(|(owner, error)| anyhow::anyhow!("filesystem update for {owner}: {error}"))?;
-        assert_eq!(
-            worker.permit_acquisitions_for_test(),
-            acquisitions,
-            "the stale work wake must not reopen an idle billing window"
-        );
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.concurrent_agent_permit_is_held().await {
+            while worker.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
-        assert!(!worker.monthly_window_active_for_test());
-        assert!(!worker.concurrent_agent_permit_is_held().await);
         assert!(
             worker
                 .get_last_known_status()
@@ -414,19 +394,15 @@ mod loaded_compute_admission {
                 .is_empty()
         );
         assert!(worker.is_loaded().await);
-        let generation = worker.observed_creation_count();
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let mut exhausted = policy.clone();
         exhausted.available_fuel = 0;
         registry.set_policy(exhausted.clone());
         tokio::time::timeout(Duration::from_secs(10), limits.run_batch_for_test()).await?;
         assert!(worker.is_loaded().await);
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert!(!worker.concurrent_agent_permit_is_held().await);
         assert_eq!(worker.selected_owner_failure_for_test().await, None);
         let key = IdempotencyKey::fresh();
         let before = executor.oplog_max_index(&id).await?;
-        let acquisitions = worker.permit_acquisitions_for_test();
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
@@ -435,15 +411,13 @@ mod loaded_compute_admission {
             .await?;
         worker.join_accepted_stops_for_test().await?;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .context("compute admission must physically stop without entering the queued invocation")?;
         worker.retained_cleanup_for_test().await?;
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions + 1);
         let stopped_prefix = executor.stored_oplog(&id).await;
         let entries = worker
             .oplog()
@@ -497,7 +471,6 @@ mod loaded_compute_admission {
             worker.get_initial_worker_metadata().fingerprint,
             fingerprint
         );
-        assert!(worker.observed_creation_count() > generation);
         let recovered = worker
             .oplog()
             .read_exact(

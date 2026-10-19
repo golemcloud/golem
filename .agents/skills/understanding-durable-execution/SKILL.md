@@ -6,8 +6,9 @@ description: "Explains how the Golem worker executor implements durable executio
 # Understanding Durable Execution
 
 The worker executor runs WASM agents whose progress survives the loss of the process running
-them. Everything below is verified against `golem-worker-executor/src/` and `tests/`; when code
-and guide disagree, the code wins and the guide needs a fix. The scoped `AGENTS.md` files under
+them. Read this guide alongside `golem-worker-executor/src/` and `tests/`; when code
+and guide disagree, the code wins and the guide needs a fix. Combined verification of
+the instrumentation removal and adapted tests is pending. The scoped `AGENTS.md` files under
 `golem-worker-executor/` state the mandatory rules; this skill explains the mechanisms.
 
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
@@ -263,8 +264,8 @@ detached status, durable pending work and snapshot policy. A notification whose 
 does not reopen a billing window. Detached status still wakes ordinary repair before work selection.
 The loaded compute-admission test queues two real readiness requests while the actual Finished
 append is withheld by the oplog dependency. An awaited filesystem update joins the earlier
-notifications on the same command queue; the acquisition count then proves that the stale wake
-did not reopen another window.
+notifications on the same command queue. Check queued-work results and accounting;
+this no longer measures the number of execution-window acquisitions.
 
 During guest execution, `Context::ensure_fuel`, the `FuelManagement` implementation in
 `workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check enabled live compute,
@@ -410,18 +411,13 @@ graph. The actor case holds the actual Start commit of a later live RPC after ob
 successful allocation result and its real idle release; no idle-close control remains. Monthly monitoring
 uses the same ordinary Tokio timer in production and test builds.
 
-The actor-loss change removes both test-only actor-stop methods and the monthly target's exit
-token and task guard. Native tests fail a real positive GrowMemory append through the existing oplog
-fixture. Counter.allocate_memory supplies actual guest allocation at a later idle boundary; the TCP
-case uses the checkpoint from its running invocation. Test-only capture matches the existing
-before-fence event by target, owner, failure kind and message. It proves the stop path was entered,
-not physical drainage. The tests still require the exact lost-actor error, successful physical
-deletion, retained failed health and startup refusal. The completed-result case accounts for the
-later RPC's acquisition, requires unchanged resident generation, and allows no more acquisitions
-through cleanup or refused startup. Test-side capture of ordinary debug diagnostics replaces Worker-owned counters.
-Initial idle precedes guest execution, so its manual-stop-only actor cell retires with that producer.
-Real monitor failure and startup refusal remain covered there. No Worker scheduling control remains
-in these actor-loss tests.
+Actor-loss tests fail a real positive GrowMemory append through the existing oplog
+fixture. Counter.allocate_memory supplies guest allocation; the TCP case uses its
+running invocation. The existing entity-fence log can establish stop-path entry,
+not physical drainage. Check the lost-actor error, physical deletion, retained failed
+health, startup refusal and original invocation records. Execution-lifetime tracing
+does not supply generation or permit-acquisition counts. Initial idle precedes guest
+execution, so a guest-growth fault cannot establish that initial boundary.
 
 The settlement-loss selector is removed. It previously completed settlement
 successfully, then dropped the reply through Worker and window flags. The ordinary ObserverLost
@@ -432,9 +428,9 @@ Missing acknowledgement alone does not prove that settlement failed or authorize
 this test's known clock fault occurs before settlement.
 The native fake reply-drop cells retire with their producer; the native health helper retains its
 other exact cleanup and startup assertions. This is not native settlement-task panic coverage.
-Post-removal library, combined native, strict lint, production and browser checks pass locally.
-Actor-loss removal has separate validation above. The post-success test uses the real RPC commit
-boundary described in the linked testing patterns, without an idle-close gate.
+Earlier library, native, lint, production and browser results are historical;
+combined verification after instrumentation removal is pending. The post-success
+test uses the real RPC commit boundary described in the linked testing patterns.
 
 A temporary Registry policy outage is an execution failure, not a disposal failure. The monitor
 requests the same cooperative stop and retains this error separately from cleanup health. After
@@ -448,11 +444,8 @@ task. Its first cleanup failure remains authoritative; a policy outage cannot re
 monitor join records that same health even after the target closes. Operational policy failure is
 consumed separately when the unloaded loop reports it to current waiters. A healthy settlement
 therefore does not turn a policy outage into failed cleanup, and policy recovery cannot erase a
-real monitor failure. Native health assertions remain unchanged; the affected body/native scopes,
-strict lint and production compilation passed for that ownership change. The subsequent establishment
-restoration also passes its combined library/native, real entity-blob, ordinary deadline/no-Store,
-strict lint, production and browser checks locally. Remaining F10/F11 controls and native filesystem
-proof/profile gaps are not covered by that statement.
+real monitor failure. Native filesystem proof/profile gaps remain separate from
+monitor-health checks.
 
 Interruption uses main's `InterruptEstablishment`. Queueing moves the tail in the same locked step
 that accepts the request. An independently spawned task waits for its predecessor, begins the owner
@@ -481,51 +474,22 @@ leader/follower progress and seal/successor ordering retire with those producers
 effects, invocation identity, committed prefixes, exact results and terminals, and physical cleanup.
 Their receipt comes from ordinary `ExecutionStatus::Interrupting`, observed in test-side support
 while provider or oplog work remains held. No private publication receipt remains on Worker.
-The monthly-acceptance observer removal deletes the Worker-owned sender, setter, constructor
-wiring, exported acceptance envelope and pre/post acceptance producer branches. Tests capture the
-existing `monthly_acceptance` diagnostic only after the actual acceptance result. It carries the
-sampled policy and owner/window identity and the exact acceptance boolean. There is no replacement
-runtime channel or completion future. Receiving this event is not evidence of when a proposal was
-first sampled, interruption completion or physical cleanup. A dual-observation baseline checks
-Registry rejection, tick rejection and later acceptance against the old observer before removal.
-Native same-window/replacement checks use the real unique diagnostic window ID with attempt and
-generation, not a projected Arc address; unit tests still exercise the actual Arc guard. The read-only
-current-window snapshot remains. Library, strict lint and production checks pass on that Rust source.
-The canary and selected native cases, including every earlier timeout case, pass in small exact-name
-batches with the approved thermal/CI-time guard. Earlier broad failures and the killed run remain
-failed/aborted evidence, not a passing parallel-suite claim. The subsequent combined-source custom
-suspension proofs have their own scope in
-[custom scopes compose with suspension](reference/testing-patterns.md#custom-scopes-compose-with-suspension).
+Monthly acceptance has no test observation event or collector. Colocated tests exercise
+the actual owner/window guard and acceptance result. Native tests apply capacity changes
+and check execution status, typed outcomes, accounting, effects and committed history;
+they do not infer an exact rejection or private window identity from missing events.
 
-The teardown-fence removal deletes its Worker field, gate/snapshot types, setter and pre-fence
-await. Ordinary owner failure selection and EntityFence drainage remain unchanged. Before producer
-deletion, the native consumers pass without calling it: the pending writer still blocks its actual
-FIFO contender, and later startup cases distinguish old and new acceptance through physical cleanup
-and real permit contention. The two artificial release-order variants retire together; a real
-loaded-idle compute-admission case retains Counter effects, keys, exact history and the committed raw
-prefix through reconstruction. Private pre-fence snapshots and forced Pending/held projections retire
-with their producer, not as weaker replacements for surviving effects or cleanup. Separate
-post-removal library, affected native and custom-suspension/acceptance regression batches, strict
-lint, production compilation and browser checks pass. No replacement runtime gate or diagnostic
-producer is added.
+Real pending outcome appends and account-capacity contention exercise teardown without
+a private pre-fence pause. Completed-history replay tests hold the exact stored invocation
+input at the existing oplog dependency. Its Started/Finished pair and uncached payload
+reference come from committed history; no replay flag or cursor is changed. A dependency
+hold is not a guest-instruction or native-syscall Pending observation.
 
-The completed-history replay-gate removal deletes its Worker field, gate type, setter, history-scan
-helper and pre-invocation await. Its consumers pass beforehand without that producer. They use the
-supported external-payload threshold and hold the exact stored invocation input at the existing
-oplog dependency adapter. The Started/Finished pair and uncached payload reference come from actual
-committed history; no replay flag or cursor is changed. The receipt witnesses Pending of withheld
-dependency delivery, not a guest instruction or native filesystem syscall. All native acceptance,
-window identity, policy, receipt, cleanup and result assertions remain, with full raw-prefix and
-no-Jump checks added. Separate post-removal library, affected native and custom-suspension/acceptance
-regression batches, strict executor/test-utils lint, production compilation and browser checks pass.
-The adapter and its interests remain entirely in test-utils, outside Worker ownership and production
-replay code.
-
-The Worker-owned tail observer is removed after passing dual observation.
-Normal root-completion diagnostics and live reads of the existing owner tracker replace its transport;
-see [root completion and live tail ownership](reference/testing-patterns.md#root-completion-and-live-tail-ownership).
-Post-success tests hold real dependency operations rather than pausing idle teardown;
-feature gating alone is not a reason to retain a runtime control.
+Tail tests withhold actual HTTP response bytes and check incomplete chunks, interruption,
+accounting, committed prefixes and recovery. No root-completion or resource-producer
+observation replaces the deleted instrumentation. Exact active-task counts and private
+root/settlement ordering are not native integration guarantees. See
+[root completion and live tail ownership](reference/testing-patterns.md#root-completion-and-live-tail-ownership).
 
 An interrupt during initial `WaitingForPermit` queues the ordinary request and signals Loading
 subscribers without cancelling the waiting task. Once permits arrive, the invocation loop handles
@@ -578,8 +542,8 @@ The invocation deadline uses the same configured Tokio timer with and without `t
 is no Worker watch channel or forced-expiry setter. Native selection tests leave TCP input silent,
 observe the timer's actual typed interrupt and hold the ordinary outcome append before requesting
 a later quota stop. Their other cases let quota or success finish first. They require the exact
-five-second timeout text and complete committed raw prefix. Native cases, strict lint and production
-compilation passed for the timer-control removal. Establishment restoration has separate validation.
+five-second timeout text and complete committed raw prefix. Prior validation is historical,
+not verification of the instrumentation removal.
 Before recording a typed interruption, the ordinary failure callback acknowledges only its exact
 matching, already-observed terminal request. A different kind or an unobserved queued request is
 left untouched. This prevents later monthly observations from replacing an observed stop without
@@ -589,8 +553,7 @@ The monthly body test applies the ordinary callback's pure monthly mapper while 
 stop guard. A deadline remains unchanged and the queued stop retains its own exact cause.
 Admission has no test-only pause. Real Worker selection tests retain actual timer expiry, storage
 append backpressure, effect/key/raw-prefix assertions and ordinary reconstruction. Their queued-work
-window is not a pre-admission timing claim. Teardown controls remain separate. Establishment
-restoration passes its affected checks. The retained startup, health and permit-wait changes have
+window is not a pre-admission timing claim. The retained startup, health and permit-wait changes have
 concrete monthly admission or cleanup dependencies, not a stronger quota/completion ordering rule.
 
 After guest success, the invocation loop uses the ordinary `Interrupts::claim_pending_terminal`
@@ -621,7 +584,7 @@ checks through the real oplog dependency. Selection and host completion cases re
 key/history and ordinary reconstruction, but no longer require raw stop signalling to wait for the
 callback's commit. The idle-after-success observer and private pending/committed-writer projections
 are removed with their protocol. Setup uses actual invocation completion and execution-permit release.
-The local restoration removes the general stop protocol and passes its affected checks. Monthly
+The general stop protocol is removed. Monthly
 monitoring uses ordinary timers; test-side observations do not own result or cleanup transitions.
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
@@ -644,11 +607,11 @@ file-readiness revalidation stay outside that race. `NativeIoWait` uses the same
 subscription as `DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation
 and tail-work deadlines and settled owner failure, then also observes entity cancellation. A deadline
 can leave `ExecutionStatus` Running, so its latch is required for a late subscriber.
-`tests/api/interruption/host/p2/tcp/poll.rs` observes real silent input Pending after connect
+`tests/api/interruption/host/p2/tcp/poll.rs` keeps the TCP peer silent after connect
 reconstruction, then applies a second monthly stop. It retains the original connect poll and ready
-terminals and incomplete input Start, verifies joined Store/permit/window cleanup and accounting,
-and recovers the same invocation key. The integration test proves window closure through the real
-cleanup join, inactive target and removed capacity subscription. Its immediate post-close flush
+terminals and incomplete input Start, checks observable cleanup and accounting,
+and recovers the same invocation key. These observations do not prove the native poll state
+or private window identity. Its immediate post-close flush
 does not establish an elapsed billing interval. The colocated production-window test
 `closed_owner_window_does_not_accrue_over_known_metering_intervals` advances the existing MeteringClock
 after physical permit release, retains allocated memory and the same owner/meter, and asserts no
@@ -712,37 +675,20 @@ process's cause/stage delta alone cannot attribute an event to a particular invo
 work can update the same series. Use an existing isolated registry attached to real owners for
 attributable owner tests; keep that evidence distinct from real-Worker DB/KV composition.
 
-### Native wait tracing
+### Native wait verification
 
-Native waits use ordinary `tracing` spans/events through the existing common OpenTelemetry/OTLP
-pipeline, including P2 input, RPC, UDP and WebSocket observation. Read
-[native wait tracing](../../../golem-worker-executor/native-wait-tracing.md) when
-configuring export to Tempo or interpreting the span/field contract. There is no deployed diagnostic
-registry, backend, exporter, transport or history store. The actual concurrent-agent permit owns its
-window span; physical release precedes span close. Monthly targets retain only `TraceOrigin`, not
-the span. Disabled intended spans capture no ambient origin. Short linked transitions can export
-Pending while the wait/window spans remain open, subject to filtering, sampling, batching and delivery.
-This is not an immediate-visibility or end-to-end delivery guarantee.
+Native waits have no dedicated tracing wrapper, window/permit tracing receipts or
+test collector. Keep functional `NativeIoWait` cancellation and the operational
+permit-held eviction flag. Existing release Prometheus metrics and invocation-result,
+scheduler and entity-fence logging remain; they are not a replacement observation protocol.
 
-The wrapper forwards each underlying poll and waker unchanged. It reports the first actual Pending,
-Returned including native errors, or Dropped after actual future destruction. Pollable bindings keep
-their order and duplicates. Published-capacity capture only reads existing facts; it does not settle,
-rotate periods, borrow, refresh, prune reservations or perform I/O. IDs are process-local attributes,
-not oplog inputs, guest identity, billing keys or execution authority. All-off windows still own a
-permit span but have no monthly target to supply native window/capacity correlation. Missing fields
-also cover closed or replaced targets. For test collection and the separate native-body/Worker proof
-layers, read [native wait observations](reference/testing-patterns.md#native-wait-observations-without-worker-hooks).
-
-RPC/UDP have no Worker-owned observer modules or fields. Their actual futures supply Pending and
-terminal observations through that same tracing path. UDP records its actual local binding only
-when diagnostics are enabled; missing addresses remain unavailable. Read the linked proof patterns
-for socket binding, diagnostic-window correlation and the separate production Arc-identity check.
-
-WebSocket handshake, reconnect-pool and timed-frame observation also have no Worker-owned passive
-observer modules or fields. Existing tracing wraps each original future; operation labels retain
-initial/accessor/direct provenance. Timed receive still observes only its first frame future after
-the reader lock. Reader-order gates and reader-lock observation state are also removed; native
-contention tests use an own-agent promise and the actual frame/lock tracing described below.
+Use dependency/peer boundaries, execution APIs, results, oplog records and accounting
+for integration tests. An open Start, quiet peer or guest promise does not prove exact
+native Pending, resource creation, reader-lock ordering or a private window identity.
+Test precise polling and ownership on existing colocated primitives. Preserve main's
+preexisting clock gate; do not add instrumentation to recover removed assertions.
+Read [native wait verification boundaries](../../../golem-worker-executor/native-wait-tracing.md)
+and [native wait observations](reference/testing-patterns.md#native-wait-observations-without-worker-hooks).
 
 ### Blobstore and filesystem guest observation
 
@@ -879,9 +825,8 @@ Even completed historical raw input executes again when a fresh invocation recon
 unloaded Worker. Deterministic peer data is required to reproduce the recorded invocation result;
 this does not provide exactly-once TCP consumption.
 
-`tests/api/interruption/host/p2/tcp/input/mod.rs` covers each export with memory, prepaid compute and matching
-managed-XFS storage in both modes. Its test-only structured subscriber reads the production trace's
-actual first `Poll::Pending` and return/drop fields across spawns without gating native progress.
+`tests/api/interruption/host/p2/tcp/input/mod.rs` exercises each export with memory, prepaid compute and matching
+managed-XFS storage in both modes through a controlled TCP peer and execution APIs.
 Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
 cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
 completion tests let native input finish, hold the actual selected terminal append, then accept
@@ -914,11 +859,9 @@ exactly the spliced byte in the file, with matching byte count and file size. Th
 itself still has no durable Start; surrounding filesystem calls keep their ordinary records. This
 does not add transactional byte effects or an external exactly-once guarantee.
 
-`tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket/mod.rs` observe the actual splice
-future's first Pending through standard tracing for same-socket and cross-socket pairs. Production
-tracing adds no `check_write` preflight. The precise writable-output/blocked-input proof belongs to
-the actual native-body test below, not a provider-internal phase inferred from the Worker trace.
-Both configurations exposed accepted-stop physical-teardown failures.
+`tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket/mod.rs`
+use real same-socket and cross-socket peers. The precise writable-output/blocked-input
+proof belongs to the actual native-body test below, not an inferred internal phase.
 Each now has memory, prepaid-compute and matching managed-XFS storage cases in both agent modes.
 They check socket closure and joined Store/permit/window cleanup before any input byte, durable
 same-key reconnection or ephemeral terminal/probe, and completion-first cached success. The
@@ -935,8 +878,8 @@ invocation/tail-work deadline or entity cancellation before construction or duri
 require the typed trap and no output effect, then delete both real table resources. A completion-first
 case transfers exactly one byte before a later stop. Raw selection remains unbiased; no ready/stop
 tie priority is claimed. This is native source-to-wait evidence, not whole-Worker deadline/entity
-coverage or real socket teardown. The peer-backed matrices retain native Pending, two-socket closure,
-joined permit/window cleanup and same-key effects. Their immediate post-close flush is not an elapsed
+coverage or real socket teardown. Peer-backed matrices check socket closure,
+observable cleanup and same-key effects, not native Pending. Their immediate post-close flush is not an elapsed
 billing interval; the deterministic closed-owner-window test above proves that separate guarantee.
 
 Like raw read/skip, splice has no durable host Start or recorded byte result. Completed guest
@@ -954,7 +897,7 @@ were removed with that unsupported API.
 Raw P2/P3 TCP and UDP fixtures explicitly enable `agent_sockets.enabled` in their executor setup.
 The production default remains disabled. Host HTTP, WebSocket and RDBMS clients do not depend on
 that setting. A fixture without this opt-in can return access-denied before reaching the intended
-native wait, so an absent Pending observation alone is not evidence of failed monthly interruption.
+native wait. Check the actual error rather than assuming the intended wait was reached.
 
 P3 UDP `receive` in `durable_host/p3/sockets/udp/mod.rs` selects the same typed signal only
 around the native live receive. `run_read_access` leaves an interrupted
@@ -962,18 +905,13 @@ around the native live receive. `run_read_access` leaves an interrupted
 `InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
 bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
 
-`tests/api/interruption/host/p3/udp/mod.rs` covers explicitly bound, unconnected receive in both modes with
-memory, prepaid compute and matching managed-XFS storage. A test-side tracing subscriber observes the
-real receive future's first Pending and native local address, then distinguishes return from drop.
-The guest binds loopback port zero and never reads that varying port. After physical unload,
-rebinding the observed address proves socket retirement; UDP has no EOF. Reconstruction binds
-again and the test sends one datagram to the newly observed address. The original Start gets one
-End and delivery, and the retained invocation finishes once. Idle eviction then forces completed
-history to replay with the sender gone. The next native receive belongs only to fresh work.
-A completion-first control verifies End and delivery before a monthly stop, then preserves the
-selected invocation result through commit and notification. These tests do not establish
-exactly-once datagram consumption across the receive-before-End crash window. Connected UDP
-reconstruction and incomplete batched sends remain separate, unresolved contracts.
+UDP tests use fixture-controlled endpoints, results, oplog records and accounting.
+A receive Start does not prove that a socket was created, bound or polled Pending.
+Port reuse requires an independently known endpoint; UDP has no EOF. Completion-first
+controls verify End and delivery, then preserve the selected invocation result through
+commit and notification. These tests do not establish exactly-once datagram consumption
+across the receive-before-End crash window. Connected UDP reconstruction and incomplete
+batched sends remain separate, unresolved contracts.
 
 WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
 Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
@@ -989,9 +927,9 @@ repairs the original connect Start and invocation key after the slot is freed; e
 remains terminal. Peer handshakes and frames are counted as attempts, not external exactly-once
 effects.
 
-The initial `connect_async` handshake begins after a free pool permit is acquired. A passive
-observer in `tests/api/interruption/host/websocket/handshake.rs` reports its first native Pending while an
-in-process TCP peer holds back the Upgrade response. Six resource/mode cells stop the Worker,
+The initial `connect_async` handshake begins after a free pool permit is acquired.
+`tests/api/interruption/host/websocket/handshake.rs` uses an in-process TCP peer
+that reads the Upgrade request and holds back the response. Resource/mode cases stop the Worker,
 close the half-open socket and return both permits while 101 remains withheld. Durable replay
 repairs the original Connect Start with a new handshake; ephemeral failure is typed and a fresh
 Worker probes the released pool. A completion-first control lets 101 arrive before exhaustion.
@@ -1001,12 +939,12 @@ Completed durable Connect replay instead restores a `Replay` connection handle w
 connection. A fresh Receive or Close opens its own Start, then acquires a pool slot before
 reconnecting through the shared accessor helper. Store access ends before reconnect coordination,
 permit acquisition and handshake waits. `tests/api/interruption/host/websocket/reconnect_pool.rs`
-holds the only slot with another loaded-idle Worker and observes the *target's* native acquire
-Pending. Both operations select the composed typed signal. The holder stays loaded until the
+holds the only slot with another loaded-idle Worker. This establishes pool contention,
+not an observed Pending poll. Both operations select the composed typed signal. The holder stays loaded until the
 stopped target physically unloads. After holder eviction and capacity grant, each original Start
 gains End then CompletionDelivered, with one new handshake and no historical replay traffic. `tests/api/interruption/host/websocket/reconnect_handshake.rs` instead starts with the pool free
-and withholds the third TCP Upgrade response after the target's actual reconnect `connect_async`
-reports Pending. The typed stop closes that socket and frees the slot before the peer supplies
+and withholds the third TCP Upgrade response after receiving the reconnect request.
+The typed stop closes that socket and frees the slot before the peer supplies
 101; recovery repairs the same operation Start on a fourth TCP connection. Receive and Close
 have durable memory, prepaid compute and managed-XFS durable-storage cases and completion-first
 controls for each wait. Both post-permit handshakes use the composed interrupt signal.
@@ -1016,9 +954,9 @@ reader/writer locks and send/close transport back-pressure remain unproved by th
 
 A timed WebSocket receive is another distinct frame read: `live.reader.lock().await` completes
 before `reader.next()` is wrapped by the timeout and raced against the composed typed signal.
-`tests/api/interruption/host/websocket/timed_receive.rs` observes the *native read's* first Pending after a
-valid Upgrade while the peer withholds its frame, matched to the timed Receive Start, invocation
-key and runtime. The guest's 300-second deadline remains an ordinary guest timer. Six
+`tests/api/interruption/host/websocket/timed_receive.rs` withholds the peer frame after a
+valid Upgrade and checks the timed Receive Start and invocation result. This does not
+identify an exact frame-future poll. The guest's deadline remains an ordinary guest timer. The
 resource/mode cases check stop and physical socket/Store/permit/window release with the frame
 still withheld, durable same-key repair of the original timed Start and ephemeral typed failure
 with a fresh Worker probe. A separate one-second timeout-first control returns `None` before
@@ -1030,15 +968,15 @@ real allocation measurement in the privileged managed-XFS suite.
 A second timed receive on the **same** guest WebSocket can reach the reader mutex while an
 untimed receive holds it in its native frame read. `tests/api/interruption/host/websocket/reader_lock.rs`
 uses a promise created by that same guest invocation before either receive. The timed branch
-awaits it before entering receive-with-timeout. After the untimed frame future reports actual
-Pending with its guard held, the test verifies the committed create response and completes that
-promise. Existing tracing then reports actual timed `reader.lock()` Pending on the same connection,
-invocation and runtime with an ordered Start. No Worker ordering gate or observer remains.
-Guest import or Start order alone does not establish lock ownership. Six resource/mode cells
+awaits it before entering receive-with-timeout. The test verifies the committed create
+response and completes that promise through the normal API. No Worker ordering gate or
+observer remains. Guest import, promise completion or Start order does not establish
+lock ownership or a Pending lock poll. Resource/mode cases
 exercise **stop-only** physical cleanup with both frames withheld. The first
 interruptible read releases its guard on an owner monthly stop, so the missing select around
-the second lock await has no demonstrated normal-Worker RED. A separate control shows the timed
-deadline begins only after lock acquisition. An earlier durable two-read continuation failed
+the second lock await has no demonstrated normal-Worker RED. The timed deadline begins
+after lock acquisition in the implementation; native tests no longer observe that private
+ordering. An earlier durable two-read continuation failed
 because replay accessors independently reconnected one saved handle through a one-slot pool.
 The per-handle reconnect gate now serializes reconstruction: queued accessors recheck Live or
 Terminal and do not acquire a second permit. Ordinary interruption/reconstruction tests in

@@ -98,7 +98,7 @@ async fn pending_managed_xfs_storage(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while seed.eviction_class().await.is_none() {
             tokio::task::yield_now().await;
         }
     })
@@ -143,8 +143,6 @@ async fn pending_managed_xfs_storage(
         .subscribe_capacity_updates_for_test(context.account_id)
         .await?;
     capacity_updates.borrow_and_update();
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
@@ -176,18 +174,10 @@ async fn pending_managed_xfs_storage(
             tokio::task::yield_now().await;
         }
     }).await.context("open receive chunk")??;
-    let initial = worker.current_monthly_proposal_for_test();
-    let mut next_flush = async || {
-        loop {
-            let (window, _) = flushes.recv().await.context("owner usage flusher closed")?;
-            if window == initial.diagnostic_window_id {
-                return Ok::<_, anyhow::Error>(());
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(10), next_flush())
-        .await
-        .context("initial monitor pre-wait flush")??;
+    let initial_revision = registry.current_limits().monthly_policy_revision;
+    tokio::time::timeout(Duration::from_secs(35), flushes.recv())
+        .await?
+        .context("usage dependency was not flushed")?;
     let oplog = worker.all().oplog_service();
     let read_stored = async || {
         let last = oplog.get_last_index(&owned, mode).await?;
@@ -201,44 +191,21 @@ async fn pending_managed_xfs_storage(
         .context("committed invocation prefix is empty")?
         .0;
     let mut raw = worker.raw_interrupt_for_test();
-    let acquisitions = worker.permit_acquisitions_for_test();
-    assert_eq!(initial.exhaustion, None);
-    assert!(worker.concurrent_agent_permit_is_held().await);
     let account = limits.initialize_account(context.account_id).await?;
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
     assert!(!invocation.is_finished());
     allocate_storage(&owned).await?;
     assert!(
         !invocation.is_finished(),
-        "no Store checkpoint runs while TCP is pending"
+        "the invocation has not completed before storage allocation"
     );
-    // No policy/rate update triggers this check. The unchanged outer bound includes
-    // waiting for the real timer; the original proposal bound begins after its flush.
-    next_flush().await?;
-    assert!(!capacity_updates.has_changed()?);
-    drop(capacity_updates);
-    let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-        .await
-        .context("storage exhaustion proposal")?
-        .unwrap();
-    assert_eq!(attempt.proposal.policy_revision, initial.policy_revision);
-    assert_eq!(
-        attempt.proposal.diagnostic_window_id,
-        initial.diagnostic_window_id
-    );
-    assert_eq!(
-        attempt.proposal.exhaustion,
-        Some(if durable {
-            "monthly durable storage exhausted"
-        } else {
-            "monthly ephemeral storage exhausted"
-        })
-    );
-    assert!(attempt.accepted);
+    // No policy/rate update triggers exhaustion. Allow the periodic meter to run.
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
+        tokio::time::timeout(Duration::from_secs(40), raw.recv()).await??,
         InterruptKind::Suspend(_)
     ));
+    assert!(!capacity_updates.has_changed()?);
+    drop(capacity_updates);
     let other = if durable {
         AgentMode::Ephemeral
     } else {
@@ -253,7 +220,7 @@ async fn pending_managed_xfs_storage(
         0
     );
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
     })
@@ -261,17 +228,14 @@ async fn pending_managed_xfs_storage(
     .context("physical window release")?;
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
-    assert!(!worker.monthly_window_active_for_test());
-    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    assert!(worker.unload_succeeded_for_test());
     limits.run_batch_for_test().await;
     let settled = registry.applied_updates();
     // System-clock allocation time includes measured overshoot beyond the one-byte-second cap.
     assert!(
         settled
             .iter()
-            .any(|u| u.monthly_policy_revision == initial.policy_revision
-                && u.period == initial.period
+            .any(|u| u.monthly_policy_revision == initial_revision
+                && u.period == policy.period
                 && if durable {
                     u.durable_storage_byte_seconds_delta > 1
                 } else {

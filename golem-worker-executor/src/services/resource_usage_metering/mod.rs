@@ -301,12 +301,6 @@ pub(crate) async fn wait_for_enforcement_failure(
 }
 
 impl ResourceUsageMeteringWindow {
-    pub(crate) fn observe_window(&mut self, span: tracing::Span) {
-        if let Some(permit) = &mut self.permit {
-            permit.observe_window(span);
-        }
-    }
-
     pub(crate) fn observe_permit_release(
         &mut self,
         scope: &crate::metrics::resource_release::ReleaseScope,

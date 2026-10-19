@@ -521,13 +521,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             break 'outer;
                         }
                         permit = &mut permit => {
-                            let permit = permit.observe_owner(
-                                self.parent.initial_worker_metadata.fingerprint,
-                                Arc::as_ptr(&self.parent) as usize as u64,
-                            );
-                            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
-                                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
-                                execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
                             self.permit_state.install_tracked(permit);
                             continue 'outer;
                         }
@@ -1071,15 +1064,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some(error) => unloading.cleanup.with_failure(error.clone()),
                 None => unloading.cleanup.clone(),
             });
-            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
-                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
-                execution_event = "unload_cleanup_retained",
-                "Worker retained final unload cleanup");
             let unload_failure = unloading.await;
-            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
-                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
-                execution_event = "unload_completed", unload_succeeded = unload_failure.is_none(),
-                "Worker runtime unload completed");
             if let Some(error) = cleanup_failure.or(unload_failure) {
                 self.stop_cleanup_failed(error).await;
                 break;
@@ -1779,21 +1764,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let phase = agent_phase_span!(self, "create_instance");
         async {
             debug!("Creating the worker instance");
-            let generation = self
-                .parent
-                .resident_generation
-                .fetch_add(1, Ordering::AcqRel)
-                + 1;
-            let (start_attempt_hi, start_attempt_lo) = self.start_attempt.as_u64_pair();
-            debug!(
-                execution_event = "resident_creation_started",
-                fingerprint = %self.parent.get_initial_worker_metadata().fingerprint,
-                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
-                start_attempt_hi,
-                start_attempt_lo,
-                generation,
-                "Starting resident creation"
-            );
             if let super::WorkerInstance::Running(running) =
                 self.parent.instance.lock().await.deletion_runtime_mut()
             {
@@ -2629,13 +2599,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     return Ok(PermitAcquisition::CommandChannelClosed);
                 }
             };
-            let permit = permit.observe_owner(
-                self.parent.initial_worker_metadata.fingerprint,
-                Arc::as_ptr(&self.parent) as usize as u64,
-            );
-            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
-                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
-                execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
             let permit = self.permit_state.track(permit);
             match crate::services::agent_filesystem::open_resource_usage_window(
                 self.filesystem,
@@ -3872,18 +3835,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             },
             None => RetryDecision::None,
         };
-        if let RetryDecision::TryStop(timestamp) = decision {
-            let timestamp: prost_types::Timestamp = timestamp.into();
-            debug!(
-                execution_event = "invocation_suspension_recorded",
-                fingerprint = %self.parent.get_initial_worker_metadata().fingerprint,
-                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
-                idempotency_key = %idempotency_key,
-                interrupt_seconds = timestamp.seconds,
-                interrupt_nanos = timestamp.nanos,
-                "Recorded invocation suspension"
-            );
-        }
         // A lost shard writes nothing more: a terminal streaming-session failure would end an
         // invocation the shard's new owner resumes.
         if shard_lost {
@@ -6206,7 +6157,7 @@ mod tests {
     async fn startup_disposal_releases_execution_before_failed_deletion_and_repair() {
         let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
         let scope = metrics.scope();
-        let (filesystem, control, mut window, _generation_handle, node) =
+        let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test().await;
         filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
@@ -6220,8 +6171,6 @@ mod tests {
         )));
         let deletion = control.block("delete_and_verify");
         let settled = window.settlement_observer();
-        let held = Arc::new(AtomicBool::new(false));
-        window.track_permit_for_test(held.clone());
         let window = super::ExecutionWindow::unmonitored_with_scope(window, scope.clone());
         drop(node);
         let task = tokio::spawn(super::cleanup_startup_filesystem(
@@ -6231,7 +6180,7 @@ mod tests {
         ));
         deletion.wait_started().await;
         assert!(settled());
-        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.count("unload", "permit_released", "released"), 1.0);
         assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         assert!(!task.is_finished());
         deletion.release();
@@ -6245,7 +6194,7 @@ mod tests {
         assert!(error.to_string().contains("startup failed"));
         assert!(error.to_string().contains("startup deletion failure"));
         assert!(settled());
-        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.count("unload", "permit_released", "released"), 1.0);
         assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         let (cleanup, sender) = super::UnloadCleanup::new(None);
         sender
@@ -6257,12 +6206,12 @@ mod tests {
         let repair = cleanup.retry();
         repair_gate.wait_started().await;
         assert!(settled());
-        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.count("unload", "permit_released", "released"), 1.0);
         assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         repair_gate.release();
         repair.wait().await.unwrap();
         assert!(settled());
-        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.count("unload", "permit_released", "released"), 1.0);
         assert_eq!(cleanup.wait().await.unwrap_err(), original);
         metrics.assert_finished("unload", "released_with_failure");
         assert_eq!(

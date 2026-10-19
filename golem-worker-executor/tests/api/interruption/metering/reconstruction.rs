@@ -90,7 +90,6 @@ async fn identical_live_work_has_equal_compute_charge_after_real_reconstruction(
                 .await?;
                 assert!(worker.stop_if_evictable(EvictionClass::LoadedIdle).await);
                 assert!(!worker.is_loaded().await);
-                assert!(!worker.concurrent_agent_permit_is_held().await);
             }
             let result = executor
                 .invoke_and_await_agent(&component, &name, "increment", data_value!())

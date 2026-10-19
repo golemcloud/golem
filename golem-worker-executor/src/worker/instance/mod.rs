@@ -553,28 +553,6 @@ impl OwnerRuntimeResources {
         self.execution_status.clone()
     }
 
-    /// The fuel publication lock order matches enforcement, but this read neither prunes
-    /// reservations nor settles usage, changes periods, or acquires a reservation.
-    pub(crate) fn published_monthly_capacity(
-        &self,
-        mode: golem_common::model::agent::AgentMode,
-    ) -> Option<MonthlyCapacity> {
-        let _transaction = self.fuel_transaction.lock().unwrap();
-        let reservations = self.fuel_reservations.lock().unwrap();
-        let mut generation = None;
-        let mut unreserved = false;
-        for reservation in reservations.iter().filter_map(Weak::upgrade) {
-            match *reservation.lock().unwrap() {
-                Some(value) => {
-                    generation = Some(generation.map_or(value, |old: u64| old.min(value)))
-                }
-                None => unreserved = true,
-            }
-        }
-        self.resource_limits
-            .published_monthly_capacity(mode, if unreserved { None } else { generation })
-    }
-
     pub(crate) fn register_store_fuel_reservation(&self) -> StoreFuelReservationPublication {
         let _transaction = self.fuel_transaction.lock().unwrap();
         let generation = Arc::new(Mutex::new(None));
@@ -597,22 +575,6 @@ impl OwnerRuntimeResources {
         {
             registered.push(flusher);
         }
-    }
-
-    pub(crate) fn trace_usage_flushers(&self, owner: &OwnedAgentId, stage: &'static str) {
-        let live_usage_flushers = self
-            .usage_flushers
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|entry| entry.strong_count() > 0)
-            .count();
-        tracing::debug!(
-            owner_id = %owner,
-            stage,
-            live_usage_flushers,
-            "Owner resource usage producers"
-        );
     }
 
     pub(crate) fn settle_resource_usage(&self) {

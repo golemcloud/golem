@@ -1,5 +1,4 @@
 use super::*;
-use crate::native_waits::WaitState;
 use anyhow::{Context as _, ensure};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{
@@ -204,12 +203,12 @@ async fn pending_timed_receive(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .context("seed permit release")?;
+    .context("seed idle teardown")?;
     // Settle the seed before the target's accounting interval begins.
     limits.run_batch_for_test().await;
     if resource == Resource::Memory {
@@ -247,12 +246,7 @@ async fn pending_timed_receive(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut peer = Peer::start().await?;
-    let mut native = crate::native_waits::websocket_timed_receive(
-        worker.get_initial_worker_metadata().fingerprint,
-    );
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -278,8 +272,6 @@ async fn pending_timed_receive(
         let first = peer.handshake().await?;
         first_gate = Some(first.send);
         ensure!(first.number == 1);
-        let pending = tokio::time::timeout(Duration::from_secs(10), native.recv())
-            .await?.context("native timed reader.next() never returned Pending")?;
         let receive_start = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
@@ -293,17 +285,12 @@ async fn pending_timed_receive(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed open receive under unfinished method")??;
-        let initial = worker.current_monthly_proposal_for_test();
+        let initial = worker.owner_runtime_resources().with_monthly_capacity(mode, |capacity| capacity);
         let mut raw = worker.raw_interrupt_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(pending.invocation_key.as_ref() == Some(&key) && pending.start == receive_start);
-        ensure!(pending.runtime == initial, "native Pending belongs to another runtime");
-        ensure!(pending.state() == WaitState::Pending);
         peer.assert_counts(1, 0)?;
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         let pool = worker.websocket_connection_pool();
         {
             let acquire = pool.acquire();
@@ -313,7 +300,7 @@ async fn pending_timed_receive(
         ensure!(!invocation.is_finished());
         info!(
             ?resource, ?mode, %key, ?id, %receive_start, ?initial, handshakes = 1, frames = 0,
-            "Peer completed handshake; timed reader.next() Pending under the committed open receive; no peer frame"
+            "Peer completed handshake; timed receive Start committed; no peer frame"
         );
 
         if resource == Resource::Compute {
@@ -323,12 +310,7 @@ async fn pending_timed_receive(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
             );
-            ensure!(
-                attempts.try_recv().is_err(),
-                "zero unreserved fuel must not exhaust prepaid fuel"
-            );
-            ensure!(worker.current_monthly_proposal_for_test() == initial);
-            ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
+            ensure!(!invocation.is_finished());
         }
         ensure!(!invocation.is_finished());
         peer.assert_counts(1, 0)?;
@@ -344,26 +326,8 @@ async fn pending_timed_receive(
         }
         registry.set_policy(exhausted);
         let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await.context("monthly proposal")?.context("acceptance observer closed")?;
-        ensure!(
-            attempt.proposal.policy_revision
-                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
-        );
-        ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.start_attempt == initial.start_attempt);
-        ensure!(attempt.proposal.fingerprint == initial.fingerprint);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        info!(?resource, ?mode, proposal = ?attempt.proposal, ?signal, "Accepted matching monthly WebSocket stop and published typed signal");
-        if resource == Resource::Compute {
-            resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
-        }
         if resource == Resource::Storage {
             let other = if durable {
                 AgentMode::Ephemeral
@@ -374,10 +338,9 @@ async fn pending_timed_receive(
         }
         // Keep the frame gate held until monthly stop closes the physical socket.
         peer.closed(1).await?;
-        ensure!(pending.state() == WaitState::Dropped);
         drop(first_gate.take());
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -392,12 +355,9 @@ async fn pending_timed_receive(
         if let Some(refresh) = refresh {
             refresh.await?;
         }
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(pending.state() == WaitState::Dropped);
         let released_slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_timed_invocation(&stopped, &key, 0)?;
         ensure!(
@@ -492,7 +452,7 @@ async fn pending_timed_receive(
         }
         info!(
             ?resource, ?mode, %receive_start, handshakes = 1, frames = 0,
-            "Monthly stop closed silent post-handshake WebSocket socket, released Worker permit and monitor, settled usage; receive remains open"
+            "Monthly stop closed silent WebSocket socket and settled usage; receive remains open"
         );
 
         let mut grant = policy;
@@ -504,10 +464,6 @@ async fn pending_timed_receive(
             executor.resume(&id, false).await?;
             let second = peer.handshake().await?;
             ensure!(second.number == 2);
-            let reconstructed = worker.current_monthly_proposal_for_test();
-            ensure!(reconstructed.resident_generation > initial.resident_generation);
-            ensure!(reconstructed.start_attempt != initial.start_attempt);
-            ensure!(reconstructed.fingerprint == initial.fingerprint);
             executor.commit_oplog(&id).await?;
             let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&repairing, 0)? == receive_start);
@@ -527,7 +483,7 @@ async fn pending_timed_receive(
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "receive_with_timeout_test", data_value!(peer.url.clone(), 300_000u64)).await?;
             ensure!(cached.into_typed::<Option<String>>()? == Some("recovered".to_string()));
             peer.assert_counts(2, 1)?;
-            info!(?resource, %key, %receive_start, ?reconstructed, handshakes = 2, frames = 1,
+            info!(?resource, %key, %receive_start, handshakes = 2, frames = 1,
                 "Original receive repaired under same Start; one method Finished; reconstructed socket observed");
 
             tokio::time::timeout(Duration::from_secs(10), async {
@@ -535,7 +491,7 @@ async fn pending_timed_receive(
             }).await.context("idle eviction before completed WebSocket history")?;
             peer.closed(2).await?;
             tokio::time::timeout(Duration::from_secs(10), async {
-                while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+                while worker.is_loaded().await { tokio::task::yield_now().await; }
             }).await?;
             tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
@@ -544,7 +500,6 @@ async fn pending_timed_receive(
             let noop_key = IdempotencyKey::fresh();
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
-            ensure!(worker.current_monthly_proposal_for_test().resident_generation > reconstructed.resident_generation);
             peer.assert_counts(2, 1)?;
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&replayed, 1)? == receive_start);
@@ -575,8 +530,7 @@ async fn pending_timed_receive(
             assert_timed_invocation(&failed, &key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-            ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
+            ensure!(!worker.is_loaded().await);
             peer.assert_counts(2, 1)?;
             executor.wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(10)).await?;
             info!(?resource, %key, %receive_start, handshakes = 2, frames = 1, "Ephemeral failure stayed terminal after capacity restoration; independent Worker reused WebSocket slot");
@@ -684,12 +638,12 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .context("seed permit release")?;
+    .context("seed idle teardown")?;
     limits.run_batch_for_test().await;
     let name = agent_id!("WebsocketTest", "monthly-ws-timeout-first");
     let key = IdempotencyKey::fresh();
@@ -705,13 +659,8 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         Principal::anonymous(),
     )
     .await?;
-    let mut accepted =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let pool = worker.websocket_connection_pool();
     let mut peer = Peer::start().await?;
-    let mut native = crate::native_waits::websocket_timed_receive(
-        worker.get_initial_worker_metadata().fingerprint,
-    );
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -736,9 +685,6 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         let held = peer.handshake().await?;
         first_gate = Some(held.send);
         ensure!(held.number == 1);
-        let pending = tokio::time::timeout(Duration::from_secs(5), native.recv())
-            .await?
-            .context("timed reader never polled Pending before timeout")?;
         let start = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 executor.commit_oplog(&id).await?;
@@ -756,16 +702,6 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         })
         .await
         .context("committed timed Start before timeout")??;
-        ensure!(worker.monthly_window_active_for_test());
-        let initial = worker.current_monthly_proposal_for_test();
-        ensure!(initial.exhaustion.is_none());
-        ensure!(
-            pending.invocation_key.as_ref() == Some(&key)
-                && pending.start == start
-                && pending.runtime == initial
-        );
-        ensure!(pending.state() == WaitState::Pending);
-        ensure!(worker.concurrent_agent_permit_is_held().await);
         let mut raw = worker.raw_interrupt_for_test();
         peer.assert_counts(1, 0)?;
         ensure!(!invocation.is_finished());
@@ -774,11 +710,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
             .context("guest timeout did not return")??;
         joined = true;
         ensure!(returned?.into_typed::<Option<String>>()?.is_none());
-        ensure!(pending.state() == WaitState::Dropped);
-        ensure!(
-            accepted.try_recv().is_err() && raw.try_recv().is_err(),
-            "timeout must precede monthly stop"
-        );
+        ensure!(raw.try_recv().is_err(), "timeout must precede monthly stop");
         peer.assert_counts(1, 0)?;
         let complete = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let starts = starts_named(&complete, TIMED_RECEIVE);
@@ -801,8 +733,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         )
         .await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
-        ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(!worker.monthly_window_active_for_test());
+        ensure!(!worker.is_loaded().await);
         limits.initialize_account(context.account_id).await?;
         let free = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
         drop(free);

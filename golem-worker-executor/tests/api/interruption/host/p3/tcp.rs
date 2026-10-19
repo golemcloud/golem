@@ -101,7 +101,6 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
             None,
         )
     };
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let invocation = {
         let executor = executor.clone();
         let component = component.clone();
@@ -177,12 +176,6 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
     .await??;
 
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-    assert!(
-        executor
-            .concurrent_agent_permit_is_held(&owned_agent_id)
-            .await,
-        "the silent receive must retain the concurrent-agent permit"
-    );
     let admitted_revision = resource_limits_grpc
         .initialized_policy_revision_for_test(context.account_id)
         .await
@@ -227,12 +220,6 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
         executor
             .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(30))
             .await?;
-        assert!(
-            !executor
-                .concurrent_agent_permit_is_held(&owned_agent_id)
-                .await,
-            "permit release must follow the interrupted execution window"
-        );
 
         let before_invocation =
             before_invocation.expect("durable invocation has an oplog boundary");
@@ -280,7 +267,7 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
         assert_eq!(
             registry.applied_memory_byte_nanoseconds(),
             settled_usage,
-            "a second batch must not accrue memory after permit release closed the window"
+            "a second batch must not accrue memory after physical cleanup"
         );
 
         let recovered_revision = registry.current_limits().monthly_policy_revision + 1;
@@ -366,21 +353,9 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
             .await??
             .expect_err("ephemeral monthly memory exhaustion must fail the invocation");
         assert!(error.to_string().contains("monthly memory exhausted"));
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while executor
-                .concurrent_agent_permit_is_held(&owned_agent_id)
-                .await
-            {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
-        assert!(
-            !executor
-                .concurrent_agent_permit_is_held(&owned_agent_id)
-                .await,
-            "ephemeral terminal failure must release the concurrent-agent permit"
-        );
+        executor
+            .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(30))
+            .await?;
     }
 
     shutdown.cancel();

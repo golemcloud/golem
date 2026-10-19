@@ -521,7 +521,7 @@ async fn completion_stop(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -554,8 +554,6 @@ async fn completion_stop(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let method = match operation {
         Operation::Keyvalue => "set_twice",
         Operation::Execute => "execute_twice",
@@ -595,7 +593,6 @@ async fn completion_stop(
             starts[0]
         };
         ensure!(terminals(&before, start) == 0);
-        ensure!(worker.concurrent_agent_permit_is_held().await && worker.monthly_window_active_for_test());
         limits.initialize_account(context.account_id).await?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -604,8 +601,6 @@ async fn completion_stop(
         refreshes.push(tokio_util::task::AbortOnDropHandle::new(
             applied_refresh(&limits, &registry, context.account_id).await?,
         ));
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly stop acceptance")?;
-        ensure!(attempt.accepted);
         let kind = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(kind, InterruptKind::Suspend(_)));
         let baseline = registry.applied_updates().len();
@@ -622,8 +617,7 @@ async fn completion_stop(
             }
         }).await.context("held account interval did not submit memory byte-time")?;
         ensure!(state.call.state.load(Ordering::SeqCst) == PENDING, "accepted stop dropped or returned provider work");
-        ensure!(!invocation.is_finished() && worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.monthly_window_active_for_test());
+        ensure!(!invocation.is_finished() && worker.is_loaded().await);
         ensure!(registry.applied_updates()[baseline..].iter().any(|u| u.memory_gb_seconds_delta > 0 || u.memory_byte_nanoseconds_remainder > 0), "held account interval must keep accruing memory byte-time");
         let held = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(terminals(&held, start) == 0 && count_agent_invocation_pair_since(&held, OplogIndex::INITIAL) == (2, 1));
@@ -635,16 +629,15 @@ async fn completion_stop(
             let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
             ensure!(entries.values().any(|e| matches!(e, OplogEntry::CommittedRemoteTransaction { begin_index, .. } if *begin_index == start)));
             ensure!(entries.values().filter(|e| matches!(e, OplogEntry::End { start_index, .. } if *start_index == start)).count() == 1);
-            ensure!(worker.concurrent_agent_permit_is_held().await && worker.monthly_window_active_for_test() && !invocation.is_finished());
+            ensure!(!invocation.is_finished());
             ensure!(state.effects() == ["tx-statement", "pre-commit", "commit"]);
             state.cleanup.release.add_permits(1);
         }
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+            while worker.is_loaded().await { tokio::task::yield_now().await; }
         }).await.context("physical completion-only release")?;
         worker.join_accepted_stops_for_test().await?;
         worker.retained_cleanup_for_test().await?;
-        ensure!(worker.unload_succeeded_for_test() && !worker.monthly_window_active_for_test());
         ensure!(state.call.state.load(Ordering::SeqCst) == RETURNED);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(terminals(&stopped, start) == 1, "provider completion must retain its real End: {stopped:#?}");

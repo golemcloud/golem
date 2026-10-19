@@ -57,7 +57,6 @@ async fn silent_tcp_ready(
             .map_err(|error| anyhow!(error))?
     };
     let id = AgentId::from_agent_id(component.id, &physical).map_err(|error| anyhow!(error))?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = tokio::spawn({
@@ -90,13 +89,6 @@ async fn silent_tcp_ready(
             0,
             "guest closes the socket without sending data"
         );
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while executor.concurrent_agent_permit_is_held(&owned).await {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .context("normal permit release")?;
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let ready_starts: Vec<_> = entries

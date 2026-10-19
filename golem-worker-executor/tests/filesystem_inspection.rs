@@ -741,7 +741,6 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     })
     .await
     .context("file inspection pending startup and resident unload after second Suspend")??;
-    assert!(!worker.concurrent_agent_permit_is_held().await);
     tokio::select! {
         biased;
         result = &mut read => panic!("permit-wait Suspend discarded the read: {result:?}"),

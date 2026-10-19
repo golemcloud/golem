@@ -175,7 +175,7 @@ fn tcp_file_blocking_splice(port: u16) -> Result<(u64, Vec<u8>), String> {
     Ok((written, contents))
 }
 
-async fn udp_receive() -> Result<Vec<u8>, String> {
+async fn udp_receive(port: u16, ready_port: u16) -> Result<Vec<u8>, String> {
     use golem_rust::wasip3::sockets::types::{
         IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket,
     };
@@ -183,8 +183,18 @@ async fn udp_receive() -> Result<Vec<u8>, String> {
     socket
         .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
             address: (127, 0, 0, 1),
-            port: 0,
+            port,
         }))
+        .map_err(|error| format!("{error:?}"))?;
+    socket
+        .send(
+            b"ready".to_vec(),
+            Some(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: ready_port,
+            })),
+        )
+        .await
         .map_err(|error| format!("{error:?}"))?;
     socket
         .receive()
@@ -209,7 +219,7 @@ pub trait EphemeralNetworking {
         input_port: u16,
         output_port: u16,
     ) -> Result<u64, String>;
-    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String>;
+    async fn udp_receive_wait_p3(&self, port: u16, ready_port: u16) -> Result<Vec<u8>, String>;
 }
 
 pub struct EphemeralNetworkingImpl;
@@ -260,8 +270,8 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
         tcp_cross_socket_blocking_splice(input_port, output_port)
     }
 
-    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String> {
-        udp_receive().await
+    async fn udp_receive_wait_p3(&self, port: u16, ready_port: u16) -> Result<Vec<u8>, String> {
+        udp_receive(port, ready_port).await
     }
 }
 
@@ -286,7 +296,7 @@ pub trait Networking {
     fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String>;
     fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String>;
     fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String>;
-    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String>;
+    async fn udp_receive_wait_p3(&self, port: u16, ready_port: u16) -> Result<Vec<u8>, String>;
     fn probe_p2(
         &self,
         operation: String,
@@ -383,8 +393,8 @@ impl Networking for NetworkingImpl {
         tcp_cross_socket_blocking_splice(input_port, output_port)
     }
 
-    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String> {
-        udp_receive().await
+    async fn udp_receive_wait_p3(&self, port: u16, ready_port: u16) -> Result<Vec<u8>, String> {
+        udp_receive(port, ready_port).await
     }
 
     fn probe_p2(

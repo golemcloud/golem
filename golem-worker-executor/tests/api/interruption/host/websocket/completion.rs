@@ -1,5 +1,4 @@
 use super::*;
-use crate::native_waits::WaitState;
 use test_r::test;
 
 #[test]
@@ -65,8 +64,6 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         Principal::anonymous(),
     )
     .await?;
-    let mut native =
-        crate::native_waits::websocket_handshake(worker.get_initial_worker_metadata().fingerprint);
     let pool = worker.websocket_connection_pool();
     let free = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
     drop(free);
@@ -93,16 +90,10 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
     let result = async {
         let held = peer.held().await?;
         ensure!(held.number == 1);
-        let pending = tokio::time::timeout(Duration::from_secs(10), native.recv())
-            .await?
-            .context("native connect_async did not return Pending")?;
         executor.commit_oplog(&id).await?;
         let open = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let connect = pool::connect_start(&open, 0, 0)?;
-        ensure!(pending.start == connect && pending.invocation_key.as_ref() == Some(&key));
-        ensure!(pending.runtime == worker.current_monthly_proposal_for_test());
-        ensure!(pending.state() == WaitState::Pending);
-        ensure!(worker.concurrent_agent_permit_is_held().await && worker.is_loaded().await);
+        ensure!(worker.is_loaded().await);
         peer.assert_effects(1, 0, 0)?;
         held.release
             .send(())
@@ -117,7 +108,6 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         invocation_joined = true;
         let completed = completed??;
         ensure!(completed.into_typed::<String>()? == "completed");
-        ensure!(pending.state() == WaitState::Returned);
         let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(pool::connect_start(&history, 1, 1)? == connect);
         assert_invocation(&history, &key, 1)?;
@@ -174,7 +164,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
             false
         }
     };
-    if !idle && (worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await) {
+    if !idle && worker.is_loaded().await {
         match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await {
             Ok(Ok(())) => {}
             other => cleanup_errors.push(format!("retire: {other:?}")),
@@ -193,8 +183,8 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         Ok(Ok(())) => {}
         other => cleanup_errors.push(format!("retained cleanup: {other:?}")),
     }
-    if worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
-        cleanup_errors.push("completion worker still holds a Store or Worker permit".to_string());
+    if worker.is_loaded().await {
+        cleanup_errors.push("completion worker still holds a Store".to_string());
     }
     match tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await {
         Ok(Ok(permit)) => drop(permit),

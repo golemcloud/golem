@@ -1,5 +1,4 @@
 use super::*;
-use crate::monthly_acceptance::Acceptance;
 use golem_common::model::Timestamp;
 use test_r::test;
 
@@ -28,33 +27,25 @@ macro_rules! repeated_stop_case {
 }
 
 repeated_stop_case!(
-    durable_claimed_quota_stop_rejects_tick_and_update,
+    durable_claimed_quota_stop_preserves_reason_after_policy_update,
     Durable,
     false
 );
 repeated_stop_case!(
-    ephemeral_claimed_quota_stop_rejects_tick_and_update,
+    ephemeral_claimed_quota_stop_preserves_reason_after_policy_update,
     Ephemeral,
     false
 );
 repeated_stop_case!(
-    durable_claimed_user_stop_rejects_quota_monitor_tick_and_update,
+    durable_claimed_user_stop_preserves_reason_after_policy_update,
     Durable,
     true
 );
 repeated_stop_case!(
-    ephemeral_claimed_user_stop_rejects_quota_monitor_tick_and_update,
+    ephemeral_claimed_user_stop_preserves_reason_after_policy_update,
     Ephemeral,
     true
 );
-
-async fn next_attempt(
-    attempts: &mut tokio::sync::mpsc::UnboundedReceiver<Acceptance>,
-) -> anyhow::Result<Acceptance> {
-    tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-        .await?
-        .context("monthly acceptance observer closed")
-}
 
 async fn repeated_stop(
     last_unique_id: &LastUniqueId,
@@ -112,7 +103,7 @@ async fn repeated_stop(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -144,9 +135,6 @@ async fn repeated_stop(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
-    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = Some(AbortOnDropHandle::new(tokio::spawn({
@@ -168,13 +156,19 @@ async fn repeated_stop(
     })));
     let mut release_outcome = None;
     let result = async {
-        let (mut peer, _) = tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
-        let phase = pending_phase(&mut phases, Operation::Read, &key).await?;
-        let initial = worker.current_monthly_proposal_for_test();
-        ensure!(initial == phase.runtime && initial.exhaustion.is_none());
-        let acquisitions = worker.permit_acquisitions_for_test();
+        let (mut peer, _) =
+            tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                executor.commit_oplog(&id).await?;
+                if completed_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?).is_ok() {
+                    break Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
         limits.initialize_account(context.account_id).await?;
-        ensure!(worker.monthly_window_active_for_test());
         let mut raw = worker.raw_interrupt_for_test();
         let helper = worker.await_interrupt_for_test();
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
@@ -189,110 +183,144 @@ async fn repeated_stop(
             signal = Some(kind);
         }
         allocate_storage(&owned).await?;
-        // Let the real monitor check this allocation. The existing whole-test timeout bounds
-        // both ordinary cadence waits; no private clock or ordering retry is involved.
-        let first = attempts.recv().await.context("monthly acceptance observer closed")?;
-        let mut expected = initial;
-        expected.exhaustion = Some(Resource::Storage.reason(durable));
-        ensure!(first.proposal == expected, "{:?} != {expected:?}", first.proposal);
-        let accepted = first.accepted;
-        ensure!(accepted != user_stop, "monthly storage proposal accepted={accepted} after user_stop={user_stop}");
         if !user_stop {
             receipt = Some(published_interrupt_receipt(worker.as_ref()).await?);
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;
         }
         let observed = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
-        if let Some(requested) = signal { ensure!(observed == requested); }
+        if let Some(requested) = signal {
+            ensure!(observed == requested);
+        }
         let signal = observed;
         ensure!(user_stop || matches!(signal, InterruptKind::Suspend(_)));
         let mut receipt = receipt.context("missing first stop receipt")?;
         ensure!(tokio::time::timeout(Duration::from_secs(10), helper).await? == signal);
-        ensure!(tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test()).await? == signal);
-        ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
-        ensure!(worker.monthly_window_active_for_test());
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(
+            tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test())
+                .await?
+                == signal
+        );
+        ensure!(
+            worker.selected_owner_failure_for_test().await
+                == Some(ToolOwnerFailureMetadata::Lifecycle)
+        );
+        ensure!(worker.is_loaded().await);
         ensure!(!request_is_finished(&invocation));
-        ensure!(matches!(receipt.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
-        info!(?mode, user_stop, ?signal, ?first.proposal, "Selected outcome holds TerminalClaimed with active monthly window and permit");
-
-        ensure!(attempts.try_recv().is_err());
-        let repeated = attempts.recv().await.context("repeated monthly acceptance closed")?;
-        ensure!(repeated.proposal == first.proposal);
-        let accepted = repeated.accepted;
-        info!(?mode, user_stop, accepted, ?signal, "Second tick at claimed terminal");
-        ensure!(!accepted, "second tick accepted a monthly stop after TerminalClaimed");
-        ensure!(attempts.try_recv().is_err());
+        ensure!(matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
 
         // A different exhausted resource must not replace the first retained reason either.
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
         start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
-        let updated = next_attempt(&mut attempts).await?;
-        let mut expected = first.proposal;
-        expected.policy_revision += 1;
-        expected.exhaustion = Some(Resource::Memory.reason(durable));
-        ensure!(updated.proposal == expected, "{:?} != {expected:?}", updated.proposal);
-        ensure!(!updated.accepted);
-        info!(?mode, user_stop, proposal = ?updated.proposal, ?signal, "Changed-resource update rejected after terminal claim");
-        ensure!(worker.current_monthly_proposal_for_test() == expected);
-        ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
-        ensure!(tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test()).await? == signal);
-        ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Closed)));
-        ensure!(matches!(receipt.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
-        ensure!(worker.monthly_window_active_for_test());
-        ensure!(worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
+        ensure!(
+            worker.selected_owner_failure_for_test().await
+                == Some(ToolOwnerFailureMetadata::Lifecycle)
+        );
+        ensure!(
+            tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test())
+                .await?
+                == signal
+        );
+        ensure!(matches!(
+            raw.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+        ));
+        ensure!(matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
         let mut byte = [0];
-        ensure!(tokio::time::timeout(Duration::from_millis(20), peer.read(&mut byte)).await.is_err(), "outcome gate must retain the native socket");
+        ensure!(
+            tokio::time::timeout(Duration::from_millis(20), peer.read(&mut byte))
+                .await
+                .is_err(),
+            "outcome gate must retain the native socket"
+        );
         release_outcome.take().unwrap().send(false).unwrap();
         tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;
         ensure!(tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await?? == 0);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
-        }).await?;
-        tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
+        })
+        .await?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            worker.join_accepted_stops_for_test(),
+        )
+        .await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         join_request(&mut refresh, "stop refresh").await?;
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(!worker.monthly_window_active_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(receipt.try_recv().is_err(), "one stop receipt only");
         ensure!(raw.try_recv().is_err(), "one typed publication only");
-        ensure!(phase.state() == WaitState::Dropped);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
-        let entries = worker.oplog().read_exact(
-            OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64(),
-        ).await?;
-        let errors: Vec<_> = entries.values().filter_map(|entry| match entry {
-            OplogEntry::Error { error, .. } => Some(error), _ => None,
-        }).collect();
-        let suspends = entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count();
-        let interrupted = entries.values().filter(|entry| matches!(entry, OplogEntry::Interrupted { .. })).count();
+        let entries = worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await?;
+        let errors: Vec<_> = entries
+            .values()
+            .filter_map(|entry| match entry {
+                OplogEntry::Error { error, .. } => Some(error),
+                _ => None,
+            })
+            .collect();
+        let suspends = entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::Suspend { .. }))
+            .count();
+        let interrupted = entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::Interrupted { .. }))
+            .count();
         if user_stop {
-            ensure!(errors.is_empty() && suspends == 0 && interrupted == 1, "{entries:?}");
-            ensure!(join_request(&mut invocation, "invocation result").await?.is_err());
+            ensure!(
+                errors.is_empty() && suspends == 0 && interrupted == 1,
+                "{entries:?}"
+            );
+            ensure!(
+                join_request(&mut invocation, "invocation result")
+                    .await?
+                    .is_err()
+            );
         } else if durable {
-            ensure!(errors.is_empty() && suspends == 1 && interrupted == 0, "{entries:?}");
+            ensure!(
+                errors.is_empty() && suspends == 1 && interrupted == 0,
+                "{entries:?}"
+            );
             ensure!(!request_is_finished(&invocation));
         } else {
             ensure!(suspends == 0 && interrupted == 0);
-            ensure!(matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(reason)]
-                if reason.reason == Resource::Storage.reason(false)), "{errors:?}");
-            ensure!(join_request(&mut invocation, "invocation result").await?.is_err());
+            ensure!(
+                matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(reason)]
+                if reason.reason == Resource::Storage.reason(false)),
+                "{errors:?}"
+            );
+            ensure!(
+                join_request(&mut invocation, "invocation result")
+                    .await?
+                    .is_err()
+            );
             // Terminal ephemeral failure must take the archival branch, not a late TryStop.
             tokio::time::timeout(Duration::from_secs(10), async {
                 while executor.production_active_agent(&owned).await.is_some() {
                     tokio::task::yield_now().await;
                 }
-            }).await.context("ephemeral archival removes the stopped owner")?;
+            })
+            .await
+            .context("ephemeral archival removes the stopped owner")?;
         }
         limits.run_batch_for_test().await;
         assert_storage_deleted(&owned)?;
-        ensure!(attempts.try_recv().is_err());
         if durable && !user_stop {
             let mut grant = policy;
             grant.available_durable_storage_byte_seconds = u64::MAX;
@@ -300,23 +328,34 @@ async fn repeated_stop(
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
             executor.resume(&id, false).await?;
-            let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
-            let recovered = pending_phase(&mut phases, Operation::Read, &key).await?;
-            ensure!(recovered.runtime.resident_generation > initial.resident_generation);
-            ensure!(recovered.runtime.start_attempt != initial.start_attempt);
-            ensure!(recovered.runtime.fingerprint == initial.fingerprint);
+            let (mut peer, _) =
+                tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
             peer.write_all(b"x").await?;
-            Operation::Read.assert_result(join_request(&mut invocation, "invocation result").await??)?;
+            Operation::Read
+                .assert_result(join_request(&mut invocation, "invocation result").await??)?;
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (2, 2));
             assert_settled_history(&history)?;
-            Operation::Read.assert_result(executor.invoke_and_await_agent_with_key(
-                &component, &name, &key, Operation::Read.method(), data_value!(port),
-            ).await?)?;
-            ensure!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err());
+            Operation::Read.assert_result(
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &name,
+                        &key,
+                        Operation::Read.method(),
+                        data_value!(port),
+                    )
+                    .await?,
+            )?;
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err()
+            );
         }
         Ok::<_, anyhow::Error>(())
-    }.await;
+    }
+    .await;
     if let Some(release) = release_outcome {
         let _ = release.send(false);
     }

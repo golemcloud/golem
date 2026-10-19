@@ -18,7 +18,6 @@ use crate::durable_host::suspendable_wait::{
     chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
-use crate::native_wait_diagnostics::WaitDiagnostic;
 use crate::workerctx::WorkerCtx;
 use chrono::Duration;
 use futures::pin_mut;
@@ -316,16 +315,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             };
 
             let interrupt_signal = self.create_interrupt_signal();
-            let diagnostic = self.native_wait_diagnostic(
-                "poll",
-                None,
-                Some(handle.start_index()),
-                in_.iter().map(|res| res.rep()),
-            );
             let result = {
                 let mut view = self.as_wasi_view();
                 let mut io_data = view.io_data();
-                let poll = WaitDiagnostic::observe(diagnostic, Host::poll(&mut io_data, in_));
+                let poll = Host::poll(&mut io_data, in_);
                 poll_borrowed(poll, interrupt_signal, ephemeral_poll_timeout).await
             };
             let result = match result {

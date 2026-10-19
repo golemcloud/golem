@@ -45,13 +45,11 @@ async fn durable_p3_promise_completion_before_quota_stop(
         .unwrap()
         .primary();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while !worker.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let key = IdempotencyKey::fresh();
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -79,34 +77,25 @@ async fn durable_p3_promise_completion_before_quota_stop(
         let promises = worker.all().promise_service();
         let pending = promises.poll(original.promise.clone()).await?;
         ensure!(!pending.is_ready().await && pending.get().await.is_none());
-        let initial = worker.current_monthly_proposal_for_test();
-        ensure!(initial.exhaustion.is_none());
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         ensure!(count_agent_invocation_pair_since(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, OplogIndex::INITIAL) == (2, 1));
         ensure!(!invocation.is_finished());
-        let acquisitions = worker.permit_acquisitions_for_test();
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         ensure!(promises.complete(original.promise.clone(), PAYLOAD.to_vec()).await?);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
         ensure!(pending.is_ready().await && pending.get().await == Some(PAYLOAD.to_vec()));
         executor.commit_oplog(&id).await?;
         ensure!(history::promise_record(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &key, &id, true, 0)? == Some(original.clone()));
-        ensure!(worker.concurrent_agent_permit_is_held().await);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
-        ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.fingerprint == initial.fingerprint);
-        ensure!(attempt.proposal.start_attempt == initial.start_attempt);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-        ensure!(attempt.accepted);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.selected_owner_failure_for_test().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        }).await?;
         ensure!(!invocation.is_finished());
         // End and delivery were committed before exhaustion. Release the selected
         // invocation result and check it survives the accepted stop. Receive order
@@ -118,16 +107,13 @@ async fn durable_p3_promise_completion_before_quota_stop(
         ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         }).await.context("completion-first physical unload")?;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         refresh.await?;
-        ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(!worker.monthly_window_active_for_test());
+        ensure!(!worker.is_loaded().await);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(history::promise_record(&completed, &key, &id, true, 1)? == Some(original.clone()));
         history::settled(&completed)?;

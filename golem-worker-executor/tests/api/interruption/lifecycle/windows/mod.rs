@@ -10,7 +10,7 @@ mod retained_terminal;
 
 #[test]
 #[timeout("60s")]
-async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
+async fn same_cached_worker_reconstructs_and_enforces_current_quota(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
@@ -70,7 +70,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     let active = executor.production_active_agent(&owned).await.unwrap();
     let worker = active.primary();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while worker.eviction_class().await.is_none() {
             tokio::task::yield_now().await;
         }
     })
@@ -90,12 +90,12 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
         .await
         .context("old completed invocation payload acquisition")??;
     limits.initialize_account(context.account_id).await?;
-    let old_acquisitions = worker.permit_acquisitions_for_test();
-    assert!(worker.concurrent_agent_permit_is_held().await);
-
-    let initial = worker.current_monthly_proposal_for_test();
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
+    let capacity = || {
+        worker
+            .owner_runtime_resources()
+            .with_monthly_capacity(worker.agent_mode(), |capacity| capacity)
+    };
+    let initial = capacity();
     let user_suspend = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
     let mut raw = worker.raw_interrupt_for_test();
     worker.set_interrupting(user_suspend).await?;
@@ -114,18 +114,14 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     tokio::time::timeout(Duration::from_secs(10), updates.changed())
         .await
         .context("old exhausted capacity applied before recorded invocation payload delivery")??;
-    let old = worker.current_monthly_proposal_for_test();
-    assert_eq!(old.exhaustion, Some("monthly memory exhausted"));
+    let old = capacity();
+    assert_eq!(
+        old.exhaustion.map(|value| value.reason()),
+        Some("monthly memory exhausted")
+    );
     assert_eq!(old.policy_revision, initial.policy_revision + 1);
     assert_eq!(old.period, initial.period);
     assert_eq!(old.fuel_generation, initial.fuel_generation);
-    assert_eq!(old.fingerprint, initial.fingerprint);
-    assert_eq!(old.diagnostic_window_id, initial.diagnostic_window_id);
-    assert_eq!(old.start_attempt, initial.start_attempt);
-    assert_eq!(old.resident_generation, initial.resident_generation);
-    assert_eq!(old.diagnostic_window_id, initial.diagnostic_window_id);
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.permit_acquisitions_for_test(), old_acquisitions);
 
     // A same-revision credit allows ordinary reconstruction without invalidating the proposal's revision.
     assert!(!updates.has_changed()?);
@@ -135,21 +131,16 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     tokio::time::timeout(Duration::from_secs(10), updates.changed())
         .await
         .context("same-revision credit applied")??;
-    let credited = worker.current_monthly_proposal_for_test();
+    let credited = capacity();
     assert_eq!(credited.exhaustion, None);
     assert_eq!(credited.policy_revision, old.policy_revision);
     assert_eq!(credited.period, old.period);
     assert_eq!(credited.fuel_generation, old.fuel_generation);
-    assert_eq!(credited.fingerprint, old.fingerprint);
-    assert_eq!(credited.diagnostic_window_id, old.diagnostic_window_id);
-    assert_eq!(credited.start_attempt, old.start_attempt);
-    assert_eq!(credited.resident_generation, old.resident_generation);
-    assert_eq!(credited.diagnostic_window_id, old.diagnostic_window_id);
     drop(updates);
     release_old_replay.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         worker.join_accepted_stops_for_test().await?;
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
         worker.retained_cleanup_for_test().await
@@ -159,16 +150,8 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     let old_raw = executor.stored_oplog(&id).await;
     assert!(old_raw.len() >= original_raw.len());
     assert_eq!(&old_raw[..original_raw.len()], original_raw.as_slice());
-    assert_eq!(worker.permit_acquisitions_for_test(), old_acquisitions);
     tokio::time::timeout(Duration::from_secs(10), old_refresh).await??;
     tokio::time::timeout(Duration::from_secs(10), restored_refresh).await??;
-    while let Ok(attempt) = attempts.try_recv() {
-        assert!(!attempt.accepted);
-        assert_eq!(
-            attempt.proposal.diagnostic_window_id,
-            initial.diagnostic_window_id
-        );
-    }
 
     let (new_replay, release_new_replay) = executor.gate_next_oplog_payload_read(&id, payload);
     let resume = tokio::spawn({
@@ -179,7 +162,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     tokio::time::timeout(Duration::from_secs(10), new_replay)
         .await
         .context("replacement completed invocation payload acquisition")??;
-    let current = worker.current_monthly_proposal_for_test();
+    let current = capacity();
     assert!(Arc::ptr_eq(
         &worker,
         &executor
@@ -188,16 +171,9 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
             .unwrap()
             .primary()
     ));
-    assert_eq!(current.fingerprint, old.fingerprint);
-    assert_ne!(current.start_attempt, old.start_attempt);
-    assert!(current.resident_generation > old.resident_generation);
-    assert_ne!(current.diagnostic_window_id, old.diagnostic_window_id);
     assert_eq!(current.policy_revision, old.policy_revision);
     assert_eq!(current.period, old.period);
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.permit_acquisitions_for_test(), old_acquisitions + 1);
 
-    let replacement = current;
     let mut updates = limits
         .subscribe_capacity_updates_for_test(context.account_id)
         .await?;
@@ -208,33 +184,13 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     tokio::time::timeout(Duration::from_secs(10), updates.changed())
         .await
         .context("replacement exhausted at original revision")??;
-    let current = worker.current_monthly_proposal_for_test();
-    assert_eq!(current.fingerprint, replacement.fingerprint);
-    assert_eq!(
-        current.diagnostic_window_id,
-        replacement.diagnostic_window_id
-    );
-    assert_eq!(current.start_attempt, replacement.start_attempt);
-    assert_eq!(current.resident_generation, replacement.resident_generation);
-    assert_eq!(
-        current.diagnostic_window_id,
-        replacement.diagnostic_window_id
-    );
+    let current = capacity();
     assert_eq!(current.policy_revision, old.policy_revision);
     assert_eq!(current.period, old.period);
     assert_eq!(current.fuel_generation, old.fuel_generation);
     assert_eq!(current.exhaustion, old.exhaustion);
     drop(updates);
     eprintln!("[stale-target] replacement otherwise eligible: {current:?}");
-    let fresh = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-        .await?
-        .context("current actual monitor proposal")?;
-    assert_eq!(fresh.proposal, current);
-    assert!(fresh.accepted);
-    eprintln!(
-        "[stale-target] accepted current attempt: {:?}",
-        fresh.proposal
-    );
     let quota_stop = worker.await_interrupt_for_test().await;
     assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
     let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
@@ -253,7 +209,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     release_new_replay.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         worker.join_accepted_stops_for_test().await?;
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
         worker.retained_cleanup_for_test().await
@@ -268,11 +224,6 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     ));
     tokio::time::timeout(Duration::from_secs(10), new_refresh).await??;
     tokio::time::timeout(Duration::from_secs(10), resume).await???;
-    assert_eq!(
-        worker.observed_creation_count(),
-        current.resident_generation
-    );
-    assert_eq!(worker.permit_acquisitions_for_test(), old_acquisitions + 1);
     assert_eq!(
         worker
             .oplog()
@@ -383,13 +334,12 @@ mod activation {
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.concurrent_agent_permit_is_held().await {
+            while worker.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
         assert!(worker.is_loaded().await);
-        let generation = worker.observed_creation_count();
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let key = IdempotencyKey::fresh();
         let mut outcome = executor.gate_next_invocation_started(&owned).await?;
@@ -411,8 +361,6 @@ mod activation {
             }
         });
         outcome.entered().await;
-        assert!(worker.concurrent_agent_permit_is_held().await);
-        let acquisitions = worker.permit_acquisitions_for_test();
         assert!(matches!(
             &*worker
                 .owner_runtime_resources()
@@ -444,9 +392,6 @@ mod activation {
         })
         .await?;
         worker.retained_cleanup_for_test().await?;
-        assert!(!worker.concurrent_agent_permit_is_held().await);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        assert_eq!(worker.observed_creation_count(), generation);
         // The exact internal no-Store acknowledgement is proved by the publication body
         // matrix. Do not subscribe to a private receipt after this completed driver.
         let before_resume = worker
@@ -500,7 +445,6 @@ mod activation {
             worker.get_initial_worker_metadata().fingerprint,
             fingerprint
         );
-        assert!(worker.observed_creation_count() > generation);
         assert_eq!(
             executor
                 .invoke_and_await_agent(&component, &name, "increment", data_value!())
@@ -594,7 +538,6 @@ mod activation {
             }
             result => anyhow::bail!("constructor has no successful completion: {result:?}"),
         }
-        let generation = worker.observed_creation_count();
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let (selected, release_selected) = executor.gate_next_invocation_outcome_append(&id).await;
         let completed_key = IdempotencyKey::fresh();
@@ -621,8 +564,6 @@ mod activation {
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
-        assert!(worker.concurrent_agent_permit_is_held().await);
-        let acquisitions = worker.permit_acquisitions_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let accepted = InterruptKind::Interrupt(Timestamp::now_utc());
         let mut receipt = worker
@@ -681,14 +622,12 @@ mod activation {
             e,
             OplogEntry::Interrupted { .. } | OplogEntry::Suspend { .. } | OplogEntry::Error { .. }
         )));
-        assert!(worker.concurrent_agent_permit_is_held().await);
         release_selected.send(false).unwrap();
         assert_eq!(first.await??.into_typed::<u32>()?, 1);
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             accepted
         );
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         worker.join_accepted_stops_for_test().await?;
         assert_eq!(
             worker.selected_owner_failure_for_test().await,
@@ -701,7 +640,6 @@ mod activation {
         .await??;
         worker.retained_cleanup_for_test().await?;
         assert!(!worker.is_loaded().await);
-        assert!(!worker.concurrent_agent_permit_is_held().await);
         refresh.await?;
         receipt.recv().await?;
         assert!(matches!(
@@ -709,8 +647,6 @@ mod activation {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
-        assert_eq!(worker.observed_creation_count(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert!(matches!(
             raw.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty
@@ -810,7 +746,6 @@ mod activation {
             worker.get_initial_worker_metadata().fingerprint,
             fingerprint
         );
-        assert!(worker.observed_creation_count() > generation);
         shutdown.cancel();
         Ok(())
     }

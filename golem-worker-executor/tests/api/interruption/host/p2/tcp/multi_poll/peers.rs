@@ -71,40 +71,22 @@ pub(super) async fn no_connections(listeners: &[TcpListener; 2]) -> anyhow::Resu
     Ok(())
 }
 
-pub(super) async fn pending_phase(
-    phases: &mut crate::native_waits::WaitSubscription,
+pub(super) async fn wait_for_input_poll(
+    executor: &TestWorkerExecutor,
+    id: &AgentId,
     key: &IdempotencyKey,
     count: usize,
-) -> anyhow::Result<WaitReceipt> {
+) -> anyhow::Result<OplogIndex> {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let mut setup = Vec::new();
         loop {
-            let phase = phases.recv().await.context("native poll observer closed")?;
-            if phase.pollable_reps.len() == 1 {
-                setup.push(phase);
-                continue;
+            executor.commit_oplog(id).await?;
+            let entries = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+            if let Ok(start) = input_poll(&entries, key, count, None) {
+                return Ok::<_, anyhow::Error>(start);
             }
-            ensure!(
-                setup
-                    .iter()
-                    .all(|phase| phase.state() == WaitState::Returned)
-            );
-            ensure!(phase.invocation_key.as_ref() == Some(key));
-            ensure!(phase.pollable_reps.len() == count);
-            if count == 2 {
-                ensure!(phase.pollable_reps[0] != phase.pollable_reps[1]);
-            } else {
-                ensure!(count == 3);
-                ensure!(phase.pollable_reps[0] == phase.pollable_reps[2]);
-                ensure!(phase.pollable_reps[0] != phase.pollable_reps[1]);
-            }
-            ensure!(
-                phase.state() == WaitState::Pending,
-                "stale Pending: {phase:?}"
-            );
-            return Ok(phase);
+            tokio::task::yield_now().await;
         }
     })
     .await
-    .context("native two-input poll Pending")?
+    .context("committed input poll Start")?
 }

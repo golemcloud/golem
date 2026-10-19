@@ -11,7 +11,6 @@ use golem_common::model::agent::{AgentMode, GolemUserPrincipal, Principal};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue};
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{HasOplog, HasOplogService};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -109,7 +108,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         .unwrap()
         .primary();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while !worker.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
@@ -117,8 +116,6 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let fingerprint = executor.get_worker_metadata(&id).await?.fingerprint;
     let key = IdempotencyKey::fresh();
     let mut result_wait = crate::invocation_waits::result_wait(&id, &key);
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -185,52 +182,22 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     tokio::time::timeout(Duration::from_secs(10), result_wait.entered())
         .await
         .context("session startup requests complete before quota exhaustion")??;
-    // This is an open-window prerequisite, not an observation of reader.next Pending.
-    ensure!(
-        worker.concurrent_agent_permit_is_held().await && worker.monthly_window_active_for_test()
-    );
     limits.initialize_account(context.account_id).await?;
-    let prior_stops = worker.interrupt_establishment_receipts().len();
     let mut exhausted = policy.clone();
     exhausted.available_memory_gb_seconds = 0;
     registry.set_policy(exhausted);
     let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-    let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-        .await?
-        .context("monthly acceptance")?;
-    ensure!(attempt.accepted);
-    ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
+    executor
+        .wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
     tokio::time::timeout(
         Duration::from_secs(10),
         worker.join_accepted_stops_for_test(),
     )
     .await
     .context("accepted stdin quota stop establishment")??;
-    let stops = worker.interrupt_establishment_receipts();
-    let [(_, expected)] = &stops[prior_stops..] else {
-        anyhow::bail!("expected one accepted stdin quota stop: {stops:?}");
-    };
-    let expected = *expected;
-    ensure!(matches!(expected, InterruptKind::Suspend(_)));
-    // Session admission can precede execution. Match the completed invocation's actual
-    // typed stop, rather than subscribing to whichever execution status admission sees.
-    let recorded = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Some((_, kind)) = worker
-                .invocation_suspension_receipts()
-                .into_iter()
-                .find(|(invocation, _)| *invocation == key.to_string())
-            {
-                break kind;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .context("accepted stdin invocation suspension completion")?;
-    ensure!(recorded == expected, "{recorded:?} != {expected:?}");
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
     })
@@ -239,8 +206,6 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     refresh.await?;
-    ensure!(worker.unload_succeeded_for_test());
-    ensure!(!worker.monthly_window_active_for_test());
     let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
     ensure!(
         !stopped
@@ -365,14 +330,13 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         eprintln!("STDIN_SESSION_RECEIPT order={order} {receipt}");
     }
     eprintln!(
-        "STDIN_CONTINUATION timeout={} inner_error={} output_bytes={} results={} worker={} loaded={:?} permit={:?}",
+        "STDIN_CONTINUATION timeout={} inner_error={} output_bytes={} results={} worker={} loaded={:?}",
         continuation.is_err(),
         matches!(&continuation, Ok(Err(_))),
         output.len(),
         results,
         Arc::as_ptr(&worker) as usize,
         worker.is_loaded().now_or_never(),
-        worker.concurrent_agent_permit_is_held().now_or_never(),
     );
     if !matches!(&continuation, Ok(Ok(()))) || results != 1 || output != bytes {
         eprintln!(

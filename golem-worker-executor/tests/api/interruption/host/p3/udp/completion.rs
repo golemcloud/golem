@@ -45,15 +45,17 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         .unwrap()
         .primary();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while !worker.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    let mut phases =
-        crate::native_waits::udp_receive(worker.get_initial_worker_metadata().fingerprint);
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
+    let reservation = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let address = reservation.local_addr()?;
+    let port = address.port();
+    drop(reservation);
+    let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let ready_port = peer.local_addr()?.port();
     let mut failure_address = None;
     let key = IdempotencyKey::fresh();
     let mut invocation = tokio::spawn({
@@ -68,37 +70,32 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
                     &name,
                     &key,
                     "udp_receive_wait_p3",
-                    data_value!(),
+                    data_value!(port, ready_port),
                 )
                 .await
         }
     });
     let result = async {
-        let phase = pending_phase(&mut phases, &key).await?;
-        failure_address = Some(phase.local_address());
-        executor.commit_oplog(&id).await?;
-        let start = receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 0)?;
-        let acquisitions = worker.permit_acquisitions_for_test();
+        ensure!(ready_address(&peer).await? == address);
+        failure_address = Some(address);
+        let start = admitted_receive(&executor, &id).await?;
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
-        ensure!(sender.send_to(b"completed", phase.local_address()).await? == 9);
+        ensure!(sender.send_to(b"completed", address).await? == 9);
         drop(sender);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        ensure!(phase.state() == WaitState::Returned);
         executor.commit_oplog(&id).await?;
         ensure!(receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 1)? == start);
-        ensure!(worker.concurrent_agent_permit_is_held().await);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.diagnostic_window_id == phase.runtime.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
-        ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
-        ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-        ensure!(attempt.accepted);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.selected_owner_failure_for_test().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        }).await?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         ensure!(!invocation.is_finished());
         release.send(false).unwrap();
@@ -106,26 +103,23 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         ensure!(matches!(tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??, InterruptKind::Suspend(_)));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         }).await.context("completion-first physical unload")?;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         refresh.await?;
-        ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(!worker.monthly_window_active_for_test());
-        drop(tokio::net::UdpSocket::bind(phase.local_address()).await?);
+        ensure!(!worker.is_loaded().await);
+        drop(tokio::net::UdpSocket::bind(address).await?);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(receive_start(&completed, 1)? == start);
         assert_settled_history(&completed)?;
         assert_invocation(&completed, &key, 1)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
-        let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_wait_p3", data_value!()).await?;
+        let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_wait_p3", data_value!(port, ready_port)).await?;
         ensure!(cached.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"completed".to_vec()));
-        ensure!(phases.try_recv().is_err());
-        info!(%key, %start, ?phase, datagrams_sent = 1,
+        ensure!(matches!(peer.try_recv_from(&mut [0; 32]), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
+        info!(%key, %start, datagrams_sent = 1,
             "Native UDP receive End and delivery preceded monthly stop; selected invocation result committed once");
         Ok::<_, anyhow::Error>(())
     }.await;

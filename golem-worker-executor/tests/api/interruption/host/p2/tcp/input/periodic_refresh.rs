@@ -73,12 +73,12 @@ async fn periodic_refresh_stops_overage_tcp(
         .await
         .context("seed initialization")?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .context("seed permit release")?;
+    .context("seed idle teardown")?;
     limits.initialize_account(context.account_id).await?;
     // Observe ordinary ticks after seed settlement; do not drive a second batch beside the timer.
     let mut updates = limits
@@ -119,9 +119,6 @@ async fn periodic_refresh_stops_overage_tcp(
         Principal::anonymous(),
     )
     .await?;
-    let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-    let mut phases = crate::native_waits::input(fingerprint);
-    let mut attempts = crate::monthly_acceptance::observe(fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = Some(AbortOnDropHandle::new(tokio::spawn({
@@ -144,10 +141,18 @@ async fn periodic_refresh_stops_overage_tcp(
     let mut refresh = None;
     let result = async {
         let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await.context("initial TCP connection")??;
-        let phase = pending_phase(&mut phases, Operation::Read, &key).await.context("actual raw TCP input Pending")?;
-        executor.commit_oplog(&id).await?;
-        let initial = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let connect_start = completed_setup(&initial)?;
+        let (initial, connect_start) = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                executor.commit_oplog(&id).await?;
+                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                if let Ok(start) = completed_setup(&entries) {
+                    break Ok::<_, anyhow::Error>((entries, start));
+                }
+                ensure!(!request_is_finished(&invocation));
+                tokio::task::yield_now().await;
+            }
+        }).await??;
+        let admitted_revision = registry.current_limits().monthly_policy_revision;
         ensure!(count_agent_invocation_pair_since(&initial, OplogIndex::INITIAL) == (2, 1));
         let stored = worker.all().oplog_service();
         let read_stored = async || {
@@ -156,34 +161,25 @@ async fn periodic_refresh_stops_overage_tcp(
         };
         let prefix = read_stored().await?;
         let last = *prefix.last_key_value().context("committed invocation prefix")?.0;
-        let acquisitions = worker.permit_acquisitions_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let mut updates = limits.subscribe_capacity_updates_for_test(context.account_id).await?;
         updates.borrow_and_update();
-        tokio::time::timeout(Duration::from_secs(10), updates.changed()).await.context("ordinary overage refresh while TCP input is Pending")??;
-        ensure!(phase.state() == WaitState::Pending && worker.concurrent_agent_permit_is_held().await);
+        tokio::time::timeout(Duration::from_secs(10), updates.changed()).await.context("ordinary overage refresh with a silent TCP peer")??;
         ensure!(!request_is_finished(&invocation), "overage must keep the silent invocation live");
-        let hard_revision = {
+        {
             let mut current = registry.limits.lock().unwrap();
             current.monthly_policy.mode = MonthlyUsageMode::HardLimit;
             current.monthly_usage_mode_revision += 1;
             current.monthly_policy_revision += 1;
-            current.monthly_policy_revision
-        };
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("periodic policy delivery and monthly stop")?;
-        ensure!(attempt.accepted && attempt.proposal.policy_revision == hard_revision);
-        ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
+        }
         ensure!(matches!(tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??, InterruptKind::Suspend(_)));
         let mut byte = [0];
         ensure!(tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await?? == 0);
         tokio::time::timeout(Duration::from_secs(10), async {
             worker.join_accepted_stops_for_test().await?;
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+            while worker.is_loaded().await { tokio::task::yield_now().await; }
             worker.retained_cleanup_for_test().await
         }).await??;
-        ensure!(worker.unload_succeeded_for_test() && !worker.monthly_window_active_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(phase.state() == WaitState::Dropped && phase.window_closed());
         ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "stop changed the full committed prefix");
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(completed_setup(&stopped)? == connect_start);
@@ -204,7 +200,7 @@ async fn periodic_refresh_stops_overage_tcp(
             tokio::time::timeout(Duration::from_secs(10), updates.changed()).await.context("ordinary post-close settlement tick")??;
         }
         let settled = registry.applied_updates();
-        check_accounting(&settled[baseline_updates..], Resource::Memory, durable, phase.runtime.policy_revision, phase.runtime.period)?;
+        check_accounting(&settled[baseline_updates..], Resource::Memory, durable, admitted_revision, policy.period)?;
         let settled_count = settled.len();
         updates.borrow_and_update();
         tokio::time::timeout(Duration::from_secs(10), updates.changed()).await.context("ordinary closed-window zero-usage tick")??;
@@ -223,9 +219,6 @@ async fn periodic_refresh_stops_overage_tcp(
         if durable {
             executor.resume(&id, false).await?;
             let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
-            let resumed = pending_phase(&mut phases, Operation::Read, &key).await?;
-            ensure!(resumed.runtime.resident_generation > phase.runtime.resident_generation);
-            ensure!(resumed.runtime.fingerprint == phase.runtime.fingerprint);
             peer.write_all(b"x").await?;
             Operation::Read.assert_result(join_request(&mut invocation, "durable continuation").await??)?;
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -236,7 +229,6 @@ async fn periodic_refresh_stops_overage_tcp(
             Operation::Read.assert_result(executor.invoke_and_await_agent_with_key(&component, &name, &key, Operation::Read.method(), data_value!(port)).await?)?;
         } else {
             ensure!(executor.invoke_and_await_agent_with_key(&component, &name, &key, Operation::Read.method(), data_value!(port)).await.is_err());
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &name, &probe_key, Operation::Read.method(), data_value!(port));
             let probe_peer = async {

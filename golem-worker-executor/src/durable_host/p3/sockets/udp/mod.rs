@@ -409,26 +409,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         let response = call
             .run_live_action_access(store, durable_worker_ctx::<Ctx, U>, || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                let diagnostic = store.with(|mut access| {
-                    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                    let diagnostic = ctx.native_wait_diagnostic(
-                        "p3_udp_receive",
-                        None,
-                        None,
-                        std::iter::empty(),
-                    )?;
-                    if let Ok(local_address) = types::HostUdpSocket::get_local_address(
-                        &mut WasiSocketsView::sockets(ctx),
-                        Resource::new_borrow(socket.rep()),
-                    ) {
-                        diagnostic.record_socket(socket.rep(), local_address.into());
-                    }
-                    Some(diagnostic)
-                });
                 let native =
                     <WasiSockets as types::HostUdpSocketWithStore<U>>::receive(&sockets, socket);
-                let native =
-                    crate::native_wait_diagnostics::WaitDiagnostic::observe(diagnostic, native);
                 let interrupt = store.with(|mut access| {
                     durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
                 });

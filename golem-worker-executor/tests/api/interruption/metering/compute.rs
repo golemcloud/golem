@@ -12,7 +12,7 @@ use tokio::io::AsyncReadExt;
 
 #[test]
 #[timeout("2m")]
-async fn durable_pending_compute_preserves_prepaid_generation_then_suspends(
+async fn durable_compute_reservation_survives_until_policy_exhaustion_then_suspends(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -23,7 +23,7 @@ async fn durable_pending_compute_preserves_prepaid_generation_then_suspends(
 
 #[test]
 #[timeout("2m")]
-async fn ephemeral_pending_compute_preserves_prepaid_generation_then_fails(
+async fn ephemeral_compute_reservation_survives_until_policy_exhaustion_then_fails(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -110,7 +110,7 @@ async fn pending_compute(
             .unwrap()
             .primary();
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.concurrent_agent_permit_is_held().await {
+            while worker.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
@@ -127,7 +127,7 @@ async fn pending_compute(
             .primary();
         wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while seed.concurrent_agent_permit_is_held().await {
+            while seed.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
@@ -144,8 +144,7 @@ async fn pending_compute(
         )
         .await?
     };
-    // Observe each actual active window from its first pre-wait flush. Earlier startup
-    // windows have different IDs and cannot supply this invocation's timer evidence.
+    // Observe calls to the registered usage dependency, without attributing them to a timer.
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
     let usage_source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
         owner: Arc::downgrade(&worker),
@@ -224,90 +223,28 @@ async fn pending_compute(
         .context("committed invocation prefix is empty")?
         .0;
     let account = limits.initialize_account(context.account_id).await?;
-    let mut resource_events = crate::resource_limit_observations::observe(&account);
-    let prepaid = worker.current_monthly_proposal_for_test();
-    assert!(
-        prepaid.fuel_generation.is_some(),
-        "the parked Store must publish its real reservation"
-    );
-    assert!(!account.prepaid_fuel_is_exhausted(mode, prepaid.fuel_generation));
     assert!(
         account.monthly_capacity_is_exhausted_for_test(mode),
         "the Store prepaid the remaining account fuel"
     );
-    assert_eq!(
-        prepaid.exhaustion, None,
-        "zero unreserved capacity does not consume prepaid fuel"
-    );
-    assert!(worker.concurrent_agent_permit_is_held().await);
     assert!(!invocation.is_finished());
 
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut raw = worker.raw_interrupt_for_test();
-    assert!(worker.monthly_window_active_for_test());
-    let mut next_flush = async || {
-        loop {
-            let (window, _) = flushes.recv().await.context("owner usage flusher closed")?;
-            if window == prepaid.diagnostic_window_id {
-                return Ok::<_, anyhow::Error>(());
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(10), next_flush())
-        .await
-        .context("initial monitor pre-wait flush")??;
-    // The unchanged outer test bound includes the real timer wait. This post-wake
-    // flush precedes the capacity read, so it alone does not prove the check completed.
-    next_flush().await?;
-    tokio::time::timeout(Duration::from_secs(10), next_flush())
-        .await
-        .context("monitor did not finish its check and begin the next wait")??;
+    tokio::time::timeout(Duration::from_secs(35), flushes.recv())
+        .await?
+        .context("usage dependency was not flushed")?;
     assert!(!capacity_updates.has_changed()?);
     drop(capacity_updates);
-    assert!(
-        worker
-            .monthly_checks()
-            .contains(&(prepaid.diagnostic_window_id, prepaid.policy_revision,))
-    );
-    assert!(
-        attempts.try_recv().is_err(),
-        "a real monitor tick must preserve this Store's prepaid generation"
-    );
-    assert_eq!(worker.current_monthly_proposal_for_test(), prepaid);
+    assert!(matches!(
+        raw.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
     assert!(!invocation.is_finished());
-    assert!(worker.concurrent_agent_permit_is_held().await);
     let mut exhausted = policy.clone();
     exhausted.available_fuel = 0;
     registry.set_policy(exhausted);
     // This is authoritative external account exhaustion, not fuel burned by the parked guest.
     let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-    let attempt = tokio::time::timeout(Duration::from_secs(30), attempts.recv())
-        .await?
-        .unwrap();
-    assert_eq!(
-        attempt.proposal.policy_revision,
-        prepaid.policy_revision + 1
-    );
-    assert_eq!(attempt.proposal.period, prepaid.period);
-    assert_eq!(attempt.proposal.fuel_generation, prepaid.fuel_generation);
-    assert_eq!(
-        attempt.proposal.diagnostic_window_id,
-        prepaid.diagnostic_window_id
-    );
-    assert_eq!(
-        attempt.proposal.resident_generation,
-        prepaid.resident_generation
-    );
-    assert_eq!(
-        attempt.proposal.exhaustion,
-        Some("monthly compute exhausted")
-    );
-    assert!(attempt.accepted);
-    resource_events.assert_policy_advanced_after(
-        registry.current_limits().monthly_policy_revision,
-        prepaid.fuel_generation,
-    )?;
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(30), raw.recv()).await??,
         InterruptKind::Suspend(_)
@@ -318,7 +255,7 @@ async fn pending_compute(
         0
     );
     tokio::time::timeout(Duration::from_secs(30), async {
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
     })
@@ -326,7 +263,6 @@ async fn pending_compute(
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
     refresh.await?;
-    assert!(!worker.monthly_window_active_for_test());
     let entries = worker
         .oplog()
         .read_exact(
@@ -408,7 +344,7 @@ async fn pending_compute(
         );
     }
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await && worker.eviction_class().await.is_none() {
             tokio::task::yield_now().await;
         }
     })

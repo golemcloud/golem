@@ -1090,11 +1090,7 @@ impl AtomicResourceEntry {
         .then(|| self.effective_storage_byte_nanoseconds_with_revision_state(revision_state, mode))
     }
 
-    fn record_hard_limit_memory_overshoot(
-        &self,
-        revision_state: &mut UsageRevisionState,
-        amount: u128,
-    ) {
+    fn record_hard_limit_memory_overshoot(revision_state: &mut UsageRevisionState, amount: u128) {
         if amount == 0 {
             return;
         }
@@ -1111,17 +1107,6 @@ impl AtomicResourceEntry {
             .entry(key)
             .or_default();
         *overshoot = overshoot.saturating_add(amount);
-        debug!(
-            resource_entry = self as *const Self as u64,
-            resource_event = "memory_overshoot",
-            policy_revision = revision_state.current_policy_revision,
-            amount_byte_nanoseconds = amount,
-            memory_overshoot_byte_nanoseconds = gate
-                .hard_limit_memory_overshoot_byte_nanoseconds
-                .values()
-                .sum::<u128>(),
-            "Settled memory usage beyond the hard limit"
-        );
     }
 
     fn record_hard_limit_storage_overshoot(
@@ -1305,15 +1290,6 @@ impl AtomicResourceEntry {
                 })
                 .ok();
             record_fuel_borrow(borrowed);
-            debug!(
-                resource_entry = self as *const Self as u64,
-                resource_event = "fuel_borrowed",
-                borrowed,
-                effective_fuel = self.effective_fuel_with_revision_state(&revision_state),
-                policy_revision = revision,
-                settled_fuel_generation = generation,
-                "Reserved account fuel"
-            );
             FuelBorrow::Borrowed {
                 amount: borrowed,
                 revision,
@@ -1346,19 +1322,6 @@ impl AtomicResourceEntry {
         let mut state = self.usage_revision_state.lock().unwrap();
         self.update_usage_period_locked(&mut state, AccountUsagePeriod::current());
         read(self.monthly_capacity_snapshot(&state, agent_mode, fuel_generation))
-    }
-
-    /// Reads published policy and usage without settling usage or advancing the period.
-    pub(crate) fn published_monthly_capacity(
-        &self,
-        agent_mode: AgentMode,
-        fuel_generation: Option<u64>,
-    ) -> Option<MonthlyCapacity> {
-        if !self.monthly_metering_enabled() {
-            return None;
-        }
-        let state = self.usage_revision_state.lock().unwrap();
-        Some(self.monthly_capacity_snapshot(&state, agent_mode, fuel_generation))
     }
 
     fn monthly_capacity_snapshot(
@@ -1632,14 +1595,6 @@ impl AtomicResourceEntry {
                 ephemeral_memory_gb_seconds_delta: 0,
             });
         }
-        debug!(
-            resource_entry = self as *const Self as u64,
-            resource_event = "fuel_settled",
-            fuel_delta,
-            effective_fuel = self.effective_fuel_with_revision_state(&revision_state),
-            policy_revision = revision,
-            "Settled account fuel consumption or refund"
-        );
     }
 
     pub fn max_memory_limit(&self) -> usize {
@@ -1822,7 +1777,7 @@ impl AtomicResourceEntry {
         let mut accumulator = accumulator.lock().unwrap();
         if self.metering.memory {
             let overshoot = accumulator.add_memory_settlement(mode, memory, memory_limit);
-            self.record_hard_limit_memory_overshoot(&mut revision_state, overshoot);
+            Self::record_hard_limit_memory_overshoot(&mut revision_state, overshoot);
         }
         if self.metering.filesystem {
             Self::record_storage_settlement_locked(
@@ -2435,20 +2390,6 @@ impl AtomicResourceEntry {
         if let Some(captured) = retry {
             revision_state.pending.push_front(captured);
         }
-        debug!(
-            resource_entry = self as *const Self as u64,
-            resource_event = "policy_applied",
-            policy_revision = revision_state.current_policy_revision,
-            settled_fuel_generation = generation,
-            effective_fuel = self.effective_fuel_with_revision_state(&revision_state),
-            memory_overshoot_byte_nanoseconds =
-                revision_state.monthly_policy.as_ref().map_or(0, |gate| {
-                    gate.hard_limit_memory_overshoot_byte_nanoseconds
-                        .values()
-                        .sum::<u128>()
-                }),
-            "Applied monthly resource policy"
-        );
         drop(revision_state);
         self.capacity_updates
             .send_modify(|version| *version = version.wrapping_add(1));
@@ -3650,50 +3591,6 @@ pub(crate) mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
-
-    #[test]
-    fn tracing_capacity_snapshot_does_not_advance_period_or_settle_usage() {
-        #[derive(Debug)]
-        struct ForbiddenFlusher;
-        impl ResourceUsageFlusher for ForbiddenFlusher {
-            fn flush_usage(&self) {
-                panic!("tracing must never settle usage");
-            }
-        }
-        let period = usage_period(2000, 1);
-        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
-        let flusher: Arc<dyn ResourceUsageFlusher> = Arc::new(ForbiddenFlusher);
-        entry.register_resource_usage_flusher(Arc::downgrade(&flusher));
-        let before = {
-            let state = entry.usage_revision_state.lock().unwrap();
-            (
-                state.current_period,
-                state.current_policy_revision,
-                state.pending.len(),
-                state.monthly_policy.as_ref().unwrap().settled_generation,
-            )
-        };
-        let first = entry
-            .published_monthly_capacity(AgentMode::Durable, Some(4))
-            .unwrap();
-        let second = entry
-            .published_monthly_capacity(AgentMode::Durable, Some(4))
-            .unwrap();
-        assert_eq!(first, second);
-        assert_eq!(first.period, period);
-        assert_eq!(first.fuel_generation, Some(4));
-        assert_eq!(first.exhaustion, Some(MonthlyResourceExhaustion::Memory));
-        let state = entry.usage_revision_state.lock().unwrap();
-        assert_eq!(
-            before,
-            (
-                state.current_period,
-                state.current_policy_revision,
-                state.pending.len(),
-                state.monthly_policy.as_ref().unwrap().settled_generation
-            )
-        );
-    }
 
     #[test]
     fn monthly_capacity_rechecks_same_revision_restoration_and_period() {

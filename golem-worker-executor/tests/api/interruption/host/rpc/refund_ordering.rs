@@ -1,6 +1,4 @@
 use super::*;
-use crate::monthly_acceptance::Acceptance;
-use crate::native_waits::WindowReceipt;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::workerctx::default::Context;
@@ -17,7 +15,7 @@ pub(super) enum Scenario {
 
 #[test]
 #[timeout("2m")]
-async fn actual_grow_memory_predecessors_allow_original_rpc_pending(
+async fn actual_grow_memory_predecessors_allow_unfinished_rpc(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -37,7 +35,7 @@ async fn actual_grow_memory_predecessors_allow_original_rpc_pending(
 
 #[test]
 #[timeout("2m")]
-async fn prepaid_target_refund_rejects_queued_caller_stop_then_rpc_recovers(
+async fn prepaid_target_refund_restores_caller_capacity_then_rpc_recovers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -57,10 +55,7 @@ async fn prepaid_target_refund_rejects_queued_caller_stop_then_rpc_recovers(
 
 pub(super) fn observe_usage(
     worker: &Arc<Worker<Context>>,
-) -> (
-    Arc<dyn ResourceUsageFlusher>,
-    mpsc::UnboundedReceiver<(u64, u64)>,
-) {
+) -> (Arc<dyn ResourceUsageFlusher>, mpsc::UnboundedReceiver<u64>) {
     let (send, receive) = mpsc::unbounded_channel();
     let source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
         owner: Arc::downgrade(worker),
@@ -73,43 +68,21 @@ pub(super) fn observe_usage(
 }
 
 pub(super) async fn usage_flushes(
-    flushes: &mut mpsc::UnboundedReceiver<(u64, u64)>,
-    proposal: WindowReceipt,
+    flushes: &mut mpsc::UnboundedReceiver<u64>,
+    policy_revision: u64,
     count: usize,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut seen = 0;
         while seen < count {
             let current = flushes.recv().await.context("owner usage flusher closed")?;
-            if current == (proposal.diagnostic_window_id, proposal.policy_revision) {
+            if current == policy_revision {
                 seen += 1;
             }
         }
         Ok::<_, anyhow::Error>(())
     })
     .await??;
-    Ok(())
-}
-
-pub(super) fn exhausted_proposal(
-    initial: WindowReceipt,
-    observed: WindowReceipt,
-) -> anyhow::Result<()> {
-    let mut expected = initial;
-    expected.policy_revision += 1;
-    expected.exhaustion = Some("monthly compute exhausted");
-    ensure!(
-        observed == expected,
-        "changed prepaid owner identity: {observed:?}, expected {expected:?}"
-    );
-    Ok(())
-}
-
-pub(super) fn no_attempt(attempts: &mut mpsc::UnboundedReceiver<Acceptance>) -> anyhow::Result<()> {
-    ensure!(
-        matches!(attempts.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
-        "unexpected monthly attempt or closed acceptance observer"
-    );
     Ok(())
 }
 
@@ -153,16 +126,15 @@ pub(super) async fn entry_count(
 
 pub(super) async fn physical_cleanup(worker: &Arc<Worker<Context>>) -> anyhow::Result<()> {
     tokio::time::timeout(STOP_BOUND, async {
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
         worker.join_accepted_stops_for_test().await?;
         worker.retained_cleanup_for_test().await?;
-        ensure!(worker.unload_succeeded_for_test());
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .context("RPC Store and permit cleanup exceeded the existing stop bound")??;
+    .context("RPC Store cleanup exceeded the existing stop bound")??;
     Ok(())
 }
 

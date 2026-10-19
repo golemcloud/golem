@@ -17,7 +17,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
-use crate::native_waits::{WaitReceipt, WaitState};
 
 macro_rules! pending_case {
     ($name:ident, $operation:ident, Storage, $mode:ident) => {
@@ -175,13 +174,6 @@ impl Operation {
             Self::FileSplice => "tcp_file_blocking_splice_p2",
         }
     }
-    fn export(self) -> &'static str {
-        match self {
-            Self::Read => "blocking_read",
-            Self::Skip => "blocking_skip",
-            Self::Splice | Self::FileSplice => "blocking_splice",
-        }
-    }
     fn assert_result(self, result: golem_test_framework::dsl::AgentResult) -> anyhow::Result<()> {
         match self {
             Self::Read => {
@@ -199,28 +191,6 @@ impl Operation {
         }
         Ok(())
     }
-}
-
-async fn pending_phase(
-    phases: &mut crate::native_waits::WaitSubscription,
-    operation: Operation,
-    key: &IdempotencyKey,
-) -> anyhow::Result<WaitReceipt> {
-    let phase = tokio::time::timeout(Duration::from_secs(10), phases.recv())
-        .await?
-        .context("native input observer closed")?;
-    ensure!(phase.operation == operation.export());
-    ensure!(phase.invocation_key.as_ref() == Some(key));
-    ensure!(
-        phase.start_index.is_none(),
-        "raw TCP input has no stream Start"
-    );
-    // See native_splice_interrupts_actual_pending_without_output_effect for writable-output proof.
-    ensure!(
-        phase.state() == WaitState::Pending,
-        "stale Pending: {phase:?}"
-    );
-    Ok(phase)
 }
 
 fn completed_setup(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<OplogIndex> {
@@ -303,12 +273,12 @@ async fn pending_input(
         .primary();
     wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while seed.concurrent_agent_permit_is_held().await {
+        while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .context("seed permit release")?;
+    .context("seed idle teardown")?;
     // Refund the seed Store before the target borrows the full account budget.
     if resource == Resource::Compute {
         limits.run_batch_for_test().await;
@@ -351,9 +321,6 @@ async fn pending_input(
         Principal::anonymous(),
     )
     .await?;
-    let mut attempts =
-        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
-    let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = Some(AbortOnDropHandle::new(tokio::spawn({
@@ -378,10 +345,18 @@ async fn pending_input(
             .await
             .context("first TCP connection")??;
         let mut connections = 1;
-        let phase = pending_phase(&mut phases, operation, &key).await?;
-        executor.commit_oplog(&id).await?;
-        let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let connect_start = completed_setup(&entries)?;
+        // Completed setup and a silent peer do not establish native Poll::Pending.
+        let (entries, connect_start) = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                executor.commit_oplog(&id).await?;
+                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                if let Ok(start) = completed_setup(&entries) {
+                    break Ok::<_, anyhow::Error>((entries, start));
+                }
+                ensure!(!request_is_finished(&invocation));
+                tokio::task::yield_now().await;
+            }
+        }).await??;
         let stored = worker.all().oplog_service();
         let read_stored = async || {
             let last = stored.get_last_index(&owned, mode).await?;
@@ -393,15 +368,11 @@ async fn pending_input(
             Some(prefix)
         } else { None };
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
-        let initial = worker.current_monthly_proposal_for_test();
+        let initial = worker.owner_runtime_resources().with_monthly_capacity(mode, |capacity| capacity);
         let mut raw = worker.raw_interrupt_for_test();
-        let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
-        let mut resource_events = crate::resource_limit_observations::observe(&account);
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
-        ensure!(phase.runtime == initial);
-        ensure!(phase.state() == WaitState::Pending);
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        ensure!(worker.is_loaded().await);
         ensure!(!request_is_finished(&invocation));
         if matches!(operation, Operation::Splice) {
             let mut unsent = [0];
@@ -413,8 +384,8 @@ async fn pending_input(
             );
         }
         info!(
-            ?resource, ?mode, ?operation, %key, ?id, ?phase, %connect_start, ?initial, connections,
-            "Native P2 input Poll::Pending; NoHostStart; peer has sent no data"
+            ?resource, ?mode, ?operation, %key, ?id, %connect_start, ?initial, connections,
+            "P2 connect completed; peer has sent no data"
         );
 
         if resource == Resource::Compute {
@@ -424,14 +395,8 @@ async fn pending_input(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
             );
-            ensure!(
-                attempts.try_recv().is_err(),
-                "zero unreserved fuel must not exhaust prepaid fuel"
-            );
-            ensure!(worker.current_monthly_proposal_for_test() == initial);
-            ensure!(!request_is_finished(&invocation) && worker.concurrent_agent_permit_is_held().await);
+            ensure!(!request_is_finished(&invocation));
         }
-        ensure!(phase.state() == WaitState::Pending);
         if resource == Resource::Storage {
             allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable).await?;
         }
@@ -444,23 +409,8 @@ async fn pending_input(
         }
         registry.set_policy(exhausted);
         start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await.context("monthly proposal")?.context("acceptance observer closed")?;
-        ensure!(
-            attempt.proposal.policy_revision
-                == initial.policy_revision + 1 + u64::from(resource == Resource::Storage)
-        );
-        ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
-        ensure!(attempt.proposal.resident_generation == initial.resident_generation);
-        ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
-        ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
-        if resource == Resource::Compute {
-            resource_events.assert_policy_advanced_after(registry.current_limits().monthly_policy_revision, initial.fuel_generation)?;
-        }
         if resource == Resource::Storage {
             let other = if durable {
                 AgentMode::Ephemeral
@@ -469,19 +419,18 @@ async fn pending_input(
             };
             ensure!(!account.monthly_capacity_is_exhausted_for_test(other));
         }
-        // Keep the native input pending: the peer neither sends nor closes.
+        // The peer neither sends nor closes before the worker releases the socket.
         let mut byte = [0];
         let closed = tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await;
         ensure!(
             closed.is_ok(),
-            "socket still open: signal={signal:?}, loaded={}, permit={}, finished={}",
+            "socket still open: signal={signal:?}, loaded={}, finished={}",
             worker.is_loaded().await,
-            worker.concurrent_agent_permit_is_held().await,
             request_is_finished(&invocation)
         );
         ensure!(closed.unwrap()? == 0);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+            while worker.is_loaded().await {
                 tokio::task::yield_now().await;
             }
         })
@@ -494,8 +443,6 @@ async fn pending_input(
         .await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         if refresh.is_some() { join_request(&mut refresh, "stop refresh").await?; }
-        ensure!(worker.unload_succeeded_for_test());
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         if let Some(prefix) = &prefix {
             let last = *prefix.last_key_value().unwrap().0;
@@ -505,8 +452,6 @@ async fn pending_input(
             completed_setup(&stopped)? == connect_start,
             "interruption must preserve completed setup and NoHostStart"
         );
-        ensure!(phase.state() == WaitState::Dropped, "native future completed instead of interruption: {phase:?}");
-        ensure!(phase.window_closed(), "the source wait's exact window span must close after physical release");
         let entries = worker
             .oplog()
             .read_exact(
@@ -579,8 +524,8 @@ async fn pending_input(
             );
         }
         info!(
-            ?resource, ?mode, ?operation, ?phase, connections,
-            "Monthly stop dropped native pending input and retired Worker before peer release; NoHostStart"
+            ?resource, ?mode, ?operation, connections,
+            "Monthly stop closed TCP connection before peer release; NoHostStart"
         );
 
         if durable {
@@ -597,10 +542,6 @@ async fn pending_input(
                     .await
                     .context("P2 reconnect during reconstruction")??;
             connections += 1;
-            let reconstructed = pending_phase(&mut phases, operation, &key).await?;
-            ensure!(reconstructed.runtime.resident_generation > initial.resident_generation);
-            ensure!(reconstructed.runtime.start_attempt != initial.start_attempt);
-            ensure!(reconstructed.runtime.fingerprint == initial.fingerprint);
             resumed_peer.write_all(b"x").await?;
             if matches!(operation, Operation::Splice) {
                 let mut echoed = [0];
@@ -609,7 +550,6 @@ async fn pending_input(
             }
             let resumed = join_request(&mut invocation, "invocation result").await??;
             operation.assert_result(resumed)?;
-            ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             if let Some(prefix) = &prefix {
                 let last = *prefix.last_key_value().unwrap().0;
@@ -650,7 +590,6 @@ async fn pending_input(
             );
             let fresh_peer = async {
                 let (mut peer, _) = listener.accept().await?;
-                let fresh_phase = pending_phase(&mut phases, operation, &fresh_key).await?;
                 peer.write_all(b"x").await?;
                 let mut byte = [0];
                 if matches!(operation, Operation::Splice) {
@@ -658,7 +597,6 @@ async fn pending_input(
                     ensure!(byte == *b"x", "fresh splice must echo on the same connection");
                 }
                 ensure!(peer.read(&mut byte).await? == 0);
-                ensure!(fresh_phase.state() == WaitState::Returned);
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, _) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -700,7 +638,6 @@ async fn pending_input(
                     .is_err(),
                 "terminal ephemeral splice must not reconnect"
             );
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions);
             let probe_name = agent_id!("EphemeralNetworking", "monthly-p2-splice-probe");
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(

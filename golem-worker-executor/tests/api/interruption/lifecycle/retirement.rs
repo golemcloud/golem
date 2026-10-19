@@ -151,8 +151,6 @@ async fn stop_order(
         }
     })
     .await??;
-    let generation = worker.observed_creation_count();
-    let acquisitions = worker.permit_acquisitions_for_test();
     let mode = if durable {
         AgentMode::Durable
     } else {
@@ -195,34 +193,30 @@ async fn stop_order(
             .await?
             .expect("accepted user stop");
     }
-    let initial = worker.current_monthly_proposal_for_test();
+    let capacity = || {
+        worker
+            .owner_runtime_resources()
+            .with_monthly_capacity(mode, |capacity| capacity)
+    };
+    let initial = capacity();
     limits.initialize_account(context.account_id).await?;
     let mut updates = limits
         .subscribe_capacity_updates_for_test(context.account_id)
         .await?;
     drop(updates.borrow_and_update());
-    let mut attempts = crate::monthly_acceptance::observe(initial.fingerprint);
     policy.available_memory_gb_seconds = 0;
     registry.set_policy(policy);
     let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
     tokio::time::timeout(Duration::from_secs(10), updates.changed()).await??;
-    let applied = worker.current_monthly_proposal_for_test();
-    assert_eq!(applied.exhaustion, Some("monthly memory exhausted"));
+    let applied = capacity();
+    assert_eq!(
+        applied.exhaustion.map(|value| value.reason()),
+        Some("monthly memory exhausted")
+    );
     assert_eq!(applied.policy_revision, initial.policy_revision + 1);
     assert_eq!(applied.period, initial.period);
     assert_eq!(applied.fuel_generation, initial.fuel_generation);
-    assert_eq!(applied.fingerprint, initial.fingerprint);
-    assert_eq!(applied.diagnostic_window_id, initial.diagnostic_window_id);
-    assert_eq!(applied.start_attempt, initial.start_attempt);
-    assert_eq!(applied.resident_generation, initial.resident_generation);
-    assert_eq!(applied.diagnostic_window_id, initial.diagnostic_window_id);
     drop(updates);
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    let processed = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-        .await?
-        .context("monthly capacity request was not processed")?;
-    assert_eq!(processed.proposal, applied);
-    assert_eq!(processed.accepted, first == FirstStop::Quota);
     if first == FirstStop::Quota {
         tokio::time::timeout(Duration::from_secs(10), &mut selected)
             .await
@@ -274,7 +268,7 @@ async fn stop_order(
         Ok(0) | Err(_)
     ));
     tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+        while worker.is_loaded().await {
             tokio::task::yield_now().await;
         }
     })
@@ -321,8 +315,6 @@ async fn stop_order(
         );
     }
     refresh.await?;
-    assert_eq!(worker.observed_creation_count(), generation);
-    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty

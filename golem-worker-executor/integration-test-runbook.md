@@ -179,44 +179,38 @@ processes; test output remains in that batch's `test.log`.
 Some existing permission tests require dropping DAC override capabilities with `setpriv`; preserve
 that requirement for those cases. Do not change permissions or suppress assertions instead.
 
-`RUST_LOG=warn` avoids the previous volume of debug/SQLite output. Test-side tracing observers own
-their own filters, independently of the stdout filter. Verify this with the capture-only canary
-before relying on it for native tests. If an observer fails under this logging profile, investigate
-that one case; do not enable global debug logging for the whole queue. Keep one filtered local log and
+`RUST_LOG=warn` avoids excessive debug/SQLite output. Keep one filtered local log and
 do not enable additional file or OTLP outputs for this runbook without approval.
+Existing invocation-result, scheduler and entity-fence logging retain their own purposes;
+logs are not substitutes for deleted native-wait or execution-lifetime receipts.
 
-## Observer verification and subsequent main integration
+## Verification after instrumentation removal
 
-#4195 has since merged and changes Rust custom-durability scope and completion behavior. Before
-final composition validation, follow `../PR-3894-pr4195-impact.md` for coherent SDK/WIT/host
-integration and the focused suspension/custom-completion cases. Do not reuse pre-merge binaries or
-fixtures as proof of that composition. The observer removal has now passed its exact-name batches
-and is checkpointed locally. The earlier broad failures and killed run remain failed/aborted
-evidence, not proof that the large parallel cohort is fixed.
+Combined verification of the instrumentation removal and adapted tests is pending.
+Earlier exact-name batches, canaries, lint, build and browser results are historical,
+not evidence for the current source. Earlier broad failures and the killed run remain
+failed/aborted evidence, not proof that the large parallel cohort is fixed.
 
-The user has approved continuation. Inspect each batch result before starting the next; stop on
-failure or abort. The canary, acceptance/refund cases and every earlier timeout case passed in
-small explicit batches. Main integration has separate fresh-binary and rebuilt-fixture receipts;
-its native tests use the same guard. Revisit cases through explicit small manifests, not the old
-broad selector. The original observer queue was:
+Build from the combined source and rebuild affected fixtures. Select small explicit
+manifests from the current test list, not deleted collector canaries or stale test names.
+Keep the existing thermal guard and 20-minute batch maximum. Inspect each batch before
+starting the next and stop on failure or abort.
 
-1. **Capture-only canary, no Wasm executor.** Run one exact test:
-   `monthly_acceptance::acceptance_capture_keeps_exact_fields_both_results_and_optional_fuel`.
-   Check test selection, logging, monitoring, cancellation and resource release.
-2. **One native acceptance case.** Run
-   `api::interruption::metering::monitor::retries::quota_monitor_tick_retries_rejected_acceptance_on_the_same_billed_window`.
-   This checks exact rejection and acceptance on a real held TCP window. It needs the host-API fixture.
-3. **One refund-order case.** Run
-   `api::interruption::host::rpc::refund_ordering::prepaid_target_refund_rejects_queued_caller_stop_then_rpc_recovers`.
-   It needs the Rust agent-RPC fixture. Check the same original rejection, identity, accounting and
-   recovery assertions; no retry or either-result acceptance is allowed.
-4. **Remaining affected cases.** Prepare small, explicit manifests for terminal-claim rejection,
-   window replacement, selection, host waits and affected WebSocket consumers. Group related cases
-   in a batch process to reuse fixtures, while keeping the selected work below the 20-minute maximum.
-   Deferred WebSocket replay work stays out of scope.
+Cover native interruption, quota accounting and recovery through controlled dependencies
+and peers, execution APIs, invocation results and complete committed oplog prefixes.
+Check precise acceptance guards, timer cadence and ownership on the existing colocated
+primitives. Preserve the preexisting main clock gate where its tests need it.
+Do not add production telemetry or hooks to recover deleted assertions.
 
-Choose later cases from the change's coverage map, not from a large module selector. Unit tests,
-lint and production compilation have separate records and are not reasons to rerun all native tests.
+A quiet peer or held dependency does not prove an exact native Pending poll, window
+identity, resource creation, permit-acquisition count or private execution ordering.
+State the boundary each adapted test actually exercises. Keep refund and result
+assertions independent of missing diagnostic events. Genuine release Prometheus metrics
+remain, but shared aggregate deltas do not identify a particular invocation.
+
+Include the affected custom-durability suspension and completion cases in composition
+validation. Deferred WebSocket replay and privileged managed-XFS coverage remain separate.
+Unit tests, lint and production compilation need their own current records.
 
 ## After each batch
 

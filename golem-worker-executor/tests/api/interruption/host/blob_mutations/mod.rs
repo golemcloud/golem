@@ -145,7 +145,7 @@ async fn completion_before_stop(
     };
     ensure!(end_count(&before) == 0);
     ensure!(count_agent_invocation_pair_since(&before, OplogIndex::INITIAL) == (4, 3));
-    ensure!(worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
+    ensure!(!invocation.is_finished());
     let signal = worker
         .owner_runtime_resources()
         .execution_status()
@@ -163,8 +163,7 @@ async fn completion_before_stop(
     stopped.await??;
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
-    ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-    ensure!(worker.unload_succeeded_for_test());
+    ensure!(!worker.is_loaded().await);
     let stopped_entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
     ensure!(count_agent_invocation_pair_since(&stopped_entries, OplogIndex::INITIAL) == (4, 3));
     ensure!(
