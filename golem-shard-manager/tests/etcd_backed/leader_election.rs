@@ -60,6 +60,10 @@ fn election_config(etcd: &DockerEtcd) -> EtcdConfig {
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: TEST_LEASE_TTL,
         compaction_retention_revisions: 0,
+        tls: None,
+        username: None,
+        password: None,
+        password_file: None,
     }
 }
 
@@ -300,7 +304,7 @@ async fn campaign_survives_much_longer_than_the_lease_ttl(etcd: &Arc<DockerEtcd>
             "Standby B's campaign FAILED after less than {head_start:?} instead of waiting: {err}. \
              This is the signature of a request timeout on the election channel - \
              `Election.Campaign` is a unary RPC etcd does not answer until the caller wins, so an \
-             endpoint timeout aborts it. Check that `connect_for_election` still applies no \
+             endpoint timeout aborts it. Check that `connect_election_with` still applies no \
              request timeout and that nothing hands it a clone of the request client."
         ),
         Ok(Err(join_err)) => panic!("Standby B's campaign task panicked: {join_err}"),
