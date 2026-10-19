@@ -652,6 +652,7 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
         let root = ctx.cwd_path_join(format!("{language}-uuid-bridge"));
         let output = ctx
             .cli([
+                flag::YES,
                 cmd::GENERATE_BRIDGE,
                 flag::LANGUAGE,
                 language,
@@ -899,8 +900,22 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
         "#},
     )
     .unwrap();
-    let mut go_command = std::process::Command::new("go");
-    go_command.args(["run", "."]).current_dir(&go_program);
+    let toolchain = golem_cli::app::build::go_toolchain::ensure_go_toolchain(
+        &golem_cli::model::app::ApplicationConfig {
+            offline: false,
+            dev_mode: false,
+            should_colorize: false,
+            enable_wasmtime_fs_cache: false,
+        },
+    )
+    .await
+    .expect("the Golem Go toolchain");
+    let mut go_command = std::process::Command::new(&toolchain.go);
+    go_command
+        .args(["run", "."])
+        .current_dir(&go_program)
+        .env("GOTOOLCHAIN", "local")
+        .env("GOFLAGS", "-mod=mod");
     assert_generated_driver(
         run_generated_driver(go_command).await,
         "Go",
