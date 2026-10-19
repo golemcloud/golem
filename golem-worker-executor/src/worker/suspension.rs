@@ -72,6 +72,8 @@ struct DriverState {
     active_poll: bool,
     generation: u64,
     blocked_generation: Option<u64>,
+    blocked_seq: u64,
+    delivery_seq: u64,
     runtime_run: Option<RuntimeRunId>,
     runtime_run_retired: bool,
     runtime_watermark: usize,
@@ -771,6 +773,7 @@ pub(crate) struct RuntimeStore {
     owner: Arc<OwnerSuspension>,
     store_id: u64,
     guest_imports: Mutex<GuestImports>,
+    guest_blocked: tokio::sync::Notify,
 }
 
 /// The guest import calls of one Store, in the order the guest made them.
@@ -816,7 +819,31 @@ impl RuntimeStore {
             owner,
             store_id,
             guest_imports: Mutex::new(GuestImports::default()),
+            guest_blocked: tokio::sync::Notify::new(),
         })
+    }
+
+    /// Releases one async input per fresh driver block. Waking this future invalidates the
+    /// driver's blocked generation, so delivery consumes an edge, not the current level.
+    pub(crate) async fn await_guest_blocked(&self) {
+        let started_at = {
+            let state = self.owner.state.lock().unwrap();
+            state.stores[&self.store_id].driver.blocked_seq
+        };
+        loop {
+            let notified = self.guest_blocked.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let mut state = self.owner.state.lock().unwrap();
+                let driver = &mut state.stores.get_mut(&self.store_id).unwrap().driver;
+                if driver.blocked_seq > started_at && driver.blocked_seq > driver.delivery_seq {
+                    driver.delivery_seq = driver.blocked_seq;
+                    return;
+                }
+            }
+            notified.await;
+        }
     }
 
     pub(crate) fn guest_import_invocation_id(
@@ -1047,14 +1074,21 @@ impl RuntimeStore {
                 OwnerSuspension::invalidate(&mut state);
             }
             let result = future.as_mut().poll(cx);
+            let mut blocked = false;
             {
                 let mut state = self.owner.state.lock().unwrap();
                 if let Some(store) = state.stores.get_mut(&self.store_id) {
                     store.driver.active_poll = false;
                     if result.is_pending() && store.driver.runtime_candidate.is_some() {
                         store.driver.blocked_generation = Some(store.driver.generation);
+                        store.driver.blocked_seq += 1;
+                        blocked = true;
                     }
                 }
+            }
+            // A probe waker can re-enter the owner state lock.
+            if blocked {
+                self.guest_blocked.notify_waiters();
             }
             result
         }));
@@ -1324,6 +1358,63 @@ pub(crate) mod tests {
     use wasmtime::{AsContextMut, Config, Engine, Store};
 
     use test_r::test;
+
+    fn guest_block(runtime: &Arc<RuntimeStore>, run: RuntimeRunId) {
+        let block = std::future::poll_fn(|_| {
+            let generation = {
+                let state = runtime.owner.state.lock().unwrap();
+                state.stores[&runtime.store_id].driver.generation as usize
+            };
+            runtime.observe(RuntimeObservation::DriverInvalidated {
+                run,
+                generation,
+                reason: RuntimeInvalidation::Poll,
+            });
+            runtime.observe(RuntimeObservation::DriverBlocked { run, generation });
+            Poll::<wasmtime::Result<()>>::Pending
+        });
+        assert!(runtime.drive(block, None, None).now_or_never().is_none());
+    }
+
+    #[test]
+    async fn guest_delivery_requires_a_block_after_waiting_starts() {
+        let runtime = RuntimeStore::new(OwnerSuspension::new());
+        let run = runtime_run_ids(1)[0];
+        guest_block(&runtime, run);
+        let mut delivery = Box::pin(runtime.await_guest_blocked());
+        assert!(delivery.as_mut().now_or_never().is_none());
+        guest_block(&runtime, run);
+        assert!(delivery.as_mut().now_or_never().is_some());
+    }
+
+    #[test]
+    async fn guest_deliveries_consume_distinct_blocks() {
+        let runtime = RuntimeStore::new(OwnerSuspension::new());
+        let run = runtime_run_ids(1)[0];
+        let mut first = Box::pin(runtime.await_guest_blocked());
+        let mut second = Box::pin(runtime.await_guest_blocked());
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(second.as_mut().now_or_never().is_none());
+        guest_block(&runtime, run);
+        assert!(second.as_mut().now_or_never().is_some());
+        assert!(first.as_mut().now_or_never().is_none());
+        guest_block(&runtime, run);
+        assert!(first.as_mut().now_or_never().is_some());
+    }
+
+    #[test]
+    async fn consumed_guest_block_cannot_release_a_later_delivery() {
+        let runtime = RuntimeStore::new(OwnerSuspension::new());
+        let run = runtime_run_ids(1)[0];
+        let mut first = Box::pin(runtime.await_guest_blocked());
+        assert!(first.as_mut().now_or_never().is_none());
+        guest_block(&runtime, run);
+        assert!(first.as_mut().now_or_never().is_some());
+        let mut later = Box::pin(runtime.await_guest_blocked());
+        assert!(later.as_mut().now_or_never().is_none());
+        guest_block(&runtime, run);
+        assert!(later.as_mut().now_or_never().is_some());
+    }
 
     struct PendingTask;
 

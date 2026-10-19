@@ -368,7 +368,7 @@ pub(crate) async fn write_native<Ctx: WorkerCtx>(
         if delivery.is_replay_discarded() {
             std::future::pending::<()>().await;
         }
-        delivery.prepare_delivery(None).await?;
+        delivery.prepare_host_delivery(None).await?;
         delivery.delivered();
         return Ok(Ok(()));
     }
@@ -398,7 +398,7 @@ pub(crate) async fn write_native<Ctx: WorkerCtx>(
         }
     })?;
     delivery
-        .prepare_delivery(None)
+        .prepare_host_delivery(None)
         .await
         .map_err(|error| mark_durable_call_trap_context(error.into(), trap))?;
     delivery.delivered();
@@ -476,7 +476,7 @@ where
         }
     })?;
     delivery
-        .prepare_delivery(None)
+        .prepare_host_delivery(None)
         .await
         .map_err(|error| mark_durable_call_trap_context(error.into(), trap))?;
     delivery.delivered();

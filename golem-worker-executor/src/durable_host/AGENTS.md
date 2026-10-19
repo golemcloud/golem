@@ -30,7 +30,10 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   `CompletionDiscarded` as the tail operation of the host function
   (`supersede_prior_completion_delivery` hard-errors otherwise). This applies to accessor
   (concurrent) calls whose results reach the guest: replay releases each completion at its recorded boundary
-  (`CompletionDelivery::AtMarker`); a guest-facing accessor `End` without a marker is a
+  (`CompletionDelivery::AtMarker`). Live and replay release recorded async events only at a
+  blocked wait, at most one event per block, through the consuming Store's
+  `RuntimeStore::await_guest_blocked`. Non-blocking polls and yields do not admit events; a
+  busy guest must ask through recorded synchronous host calls. A guest-facing accessor `End` without a marker is a
   crash-after-completion and is withheld until the natural replay tail (`AtReplayTail`), never
   re-executed and never delivered early. `CompletionDiscarded` means the *guest* dropped the
   completion unread; an armed token or terminal guard torn by Store unload or executor shutdown
@@ -146,7 +149,9 @@ not add a feature-specific recovery path or immediate restart.
   guest; do not assume an open stream implies an incomplete RPC `Start`.
 - Native guest reads append one consumer journal record at Wasmtime's per-read consumption
   observer, not at host take time. Its oplog position is the guest boundary; there is no extra
-  durable call or delivery marker. Packed bytes record only the consumed portion. A crash before
+  durable call or delivery marker. After cursor/source readiness, guest observations wait for
+  a fresh blocked wait and share the Store's one-event-per-block gate with accessor completions,
+  live and replay alike. Host-side takes do not use this gate. Packed bytes record only the consumed portion. A crash before
   consumption leaves no record and recovery re-reads the source by offset. Host projections keep
   take-time journaling. A zero-progress native read cancellation retains the producer's receive
   and prepared observation for the next read; only dropping the readable end cancels the durable

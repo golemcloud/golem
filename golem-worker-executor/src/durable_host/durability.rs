@@ -1777,7 +1777,10 @@ fn custom_completion_delivery<Ctx: WorkerCtx>(
     start_index: OplogIndex,
     replay: Option<concurrent::ReplayDeliveryDisposition>,
 ) -> concurrent::CompletionDelivery {
-    let recorder = ctx.state.completion_marker_recorder();
+    let recorder = ctx
+        .state
+        .completion_marker_recorder()
+        .for_store(ctx.runtime_suspension.clone());
     let trap_context = DurableCallTrapContext {
         retry_from: start_index,
     };
