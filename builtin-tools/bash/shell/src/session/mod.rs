@@ -741,8 +741,8 @@ enum Stop {
 /// and every process it started: TERM for the limit as `timeout(1)` does, INT for a request as
 /// a terminal does, and KILL a second later. A script that still runs a second after that (its
 /// EXIT trap, which runs after the signal) is abandoned when this ends. The limit's timer is
-/// created first, then the request is polled, in every run alike; each second of grace is a
-/// timer created only once the wait before it has ended.
+/// created first, then the request is polled; each second of grace is a timer created only once
+/// the wait before it has ended.
 #[cfg(target_arch = "wasm32")]
 async fn stop_when_due(
     table: &brush_core::process_table::ProcessTable,
