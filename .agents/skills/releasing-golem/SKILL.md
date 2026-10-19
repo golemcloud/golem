@@ -17,6 +17,10 @@ decision; preparation never publishes the Golem draft. Commands below are a
 runbook, not authorization. Substitute approved versions and commit IDs.
 Release authorization does not authorize direct pushes or merges to `main`.
 
+Run `cargo make check-release-start` from clean committed source first. This
+read-only check verifies GitHub authentication and the protected environment's
+App configuration names. It does not validate secret values or registry access.
+
 At release start, record the current public `main` commit and create a preparation
 branch from it. Keep that baseline throughout the release. Commit release fixes
 and version pins on the preparation branch; do not merge or rebase later `main`
@@ -139,8 +143,11 @@ gh run watch <run-id> --repo golemcloud/golem --exit-status
 full reusable CI preflight. It checks published shared crates and all six published
 SDKs, without local SDK overrides, including streaming template walkthroughs.
 Only after preflight does the protected `golem-release` job create or resume the
-draft, rebuild and publish all eight inventory entries, and upload the verified
-`builtin-artifacts.release.json`. The publisher guard permits only this workflow's
+draft, rebuild and package all eight inventory entries before any built-in upload,
+then publish them and upload the verified `builtin-artifacts.release.json`.
+The existing native matrix then builds, signs, notarizes, and attaches all ten
+Golem and CLI binaries to the draft. Wait for the entire preparation to succeed.
+The publisher guard permits only this workflow's
 `workflow_dispatch` on the matching Golem tag in `golemcloud/golem`.
 
 ## 4. Human review and final publication
@@ -150,12 +157,15 @@ gh release view v1.6.0 --repo golemcloud/golem
 gh release view v1.6.0 --repo golemcloud/golem --web
 ```
 
-Review the successful preflight, release notes, draft state, all eight public
+Review the successful preparation, native binaries, release notes, draft state, all eight public
 built-in asset sets, provenance, licenses, applicable SBOMs, checksums, and the
 uploaded manifest. Follow [publishing-builtin-artifacts](../publishing-builtin-artifacts/SKILL.md)
 for packaging details. Do not commit the generated manifest. A human publishes
-the reviewed draft in GitHub. That event starts existing final binary and Docker
-release CI; preparation itself never publishes the Golem draft.
+the reviewed draft in GitHub. That event starts `publish-golem-release.yaml`,
+which checks successful preparation of the exact tag before running the existing
+Docker jobs. It does not repeat full CI or native builds. Preparation itself never
+publishes the Golem draft. Release branches do not also start push CI; PR CI and
+the tagged preparation remain in place.
 
 ## Recovery
 

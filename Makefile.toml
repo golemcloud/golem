@@ -2535,6 +2535,53 @@ if not ${merged}
 end
 '''
 
+[tasks.check-release-start]
+description = "Checks local tools, clean source, GitHub access, and the protected release environment without publication"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error git --version
+exec --fail-on-error gh --version
+exec --fail-on-error gh auth status
+status = exec --fail-on-error git status --porcelain --untracked-files=all
+status = trim ${status.stdout}
+if not is_empty ${status}
+    trigger_error "Start a release from clean committed source"
+end
+exec --fail-on-error gh api repos/golemcloud/golem/environments/golem-release
+app = exec --fail-on-error gh api repos/golemcloud/golem/environments/golem-release/variables/RELEASE_APP_ID --jq .value
+app = trim ${app.stdout}
+if is_empty ${app}
+    trigger_error "golem-release requires RELEASE_APP_ID"
+end
+key = exec --fail-on-error gh api repos/golemcloud/golem/environments/golem-release/secrets --jq ".secrets[] | select(.name == \"RELEASE_APP_PRIVATE_KEY\") | .name"
+key = trim ${key.stdout}
+if is_empty ${key}
+    trigger_error "golem-release requires RELEASE_APP_PRIVATE_KEY"
+end
+echo "Release prerequisites found; this does not validate the private key or publish anything"
+'''
+
+[tasks.check-golem-release-preparation]
+description = "Requires successful preparation of this exact tag before final Docker publication"
+script_runner = "@duckscript"
+script = '''
+version = get_env BUILTIN_VERSION
+published_at = get_env RELEASE_PUBLISHED_AT
+if is_empty ${version}
+    trigger_error "BUILTIN_VERSION is required"
+end
+if is_empty ${published_at}
+    trigger_error "RELEASE_PUBLISHED_AT is required"
+end
+head = exec --fail-on-error git rev-parse HEAD
+head = trim ${head.stdout}
+runs = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/actions/workflows/prepare-golem-release.yaml/runs?event=workflow_dispatch&status=success&head_sha=${head}&per_page=100" --jq ".workflow_runs[] | select(.head_sha == \"${head}\" and .head_branch == \"v${version}\" and .event == \"workflow_dispatch\" and .status == \"completed\" and .conclusion == \"success\" and .updated_at < \"${published_at}\") | .id"
+runs = trim ${runs.stdout}
+if is_empty ${runs}
+    trigger_error "No successful preparation of this exact tag completed before publication"
+end
+'''
+
 [tasks.validate-builtin-release]
 description = "Checks the clean tagged source and draft before built-in release preparation"
 dependencies = ["validate-golem-release-source"]
@@ -2575,6 +2622,19 @@ unset_env GOLEM_BUILTIN_RELEASE
 cm_run_task ensure-builtin-artifacts
 cm_run_task validate-builtin-release
 set_env BUILTIN_SKIP_BUILD 1
+# Finish every package, including corresponding source, before any upload.
+set_env BUILTIN_DRY_RUN 1
+for id in ${ids}
+    entry = map_get ${artifacts} ${id}
+    component = map_get ${entry} component
+    set_env BUILTIN_COMPONENT ${component}
+    cm_run_task publish-builtin-artifact
+end
+set_env BUILTIN_DRY_RUN ${dry_run}
+if equals ${dry_run} 1
+    echo "Dry run complete; no manifest or releases created"
+    exit 0
+end
 manifest_entries = set ""
 separator = set ""
 for id in ${ids}
@@ -2582,7 +2642,7 @@ for id in ${ids}
     component = map_get ${entry} component
     output = map_get ${entry} path
     set_env BUILTIN_COMPONENT ${component}
-    cm_run_task publish-builtin-artifact
+    cm_run_task publish-packaged-builtin-artifact
     sha = sha256sum ${output}
     if not equals ${dry_run} 1
         url = set "https://github.com/golemcloud/golem-builtins/releases/download/${component}-v${version}/${component}.wasm"
@@ -2690,7 +2750,7 @@ elif equals ${component} bash
     build_task = set build-bash-tool
     wasm = set builtin-tools/bash.wasm
     artifact_id = set bash
-    exports_json = set "{\"tools\":[\"bash@0.2.2\"]}"
+    exports_json = set "{\"tools\":[\"bash@0.3.0\"]}"
     licenses = set builtin-tools/bash/LICENSE
     source_notice = set builtin-tools/bash/NOTICE
     sbom = set ""
@@ -2771,28 +2831,45 @@ echo "asset:    ${staged_wasm} (${size} bytes)"
 echo "sha256:   ${sha256}"
 echo "manifest: \"${artifact_id}\": { \"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha256}\" }"
 
-dry_run = get_env BUILTIN_DRY_RUN
-if equals ${dry_run} 1
-    echo "dry run: release was not published"
-    exit 0
-end
-if not is_empty ${source_status}
-    trigger_error "refusing to publish from a dirty source tree; commit the exact source first"
-end
-existing = exec gh release view ${tag} --repo ${repository}
 notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
 if equals ${component} python
     notes = concat ${notes} "\nThe Python component statically links the LGPL-3.0-only Malachite libraries. The attached python-source.tar.gz contains their corresponding source, the application source and locked dependencies, and offline rebuild/relinking instructions in builtin-tools/python/SOURCE.md. Each source retains its own license; the Golem license does not replace the library licenses.\n"
 end
 notes_path = set "${staging}/release-notes.md"
 writefile ${notes_path} ${notes}
+dry_run = get_env BUILTIN_DRY_RUN
+if equals ${dry_run} 1
+    echo "dry run: release was not published"
+    exit 0
+end
+cm_run_task publish-packaged-builtin-artifact
+'''
+
+[tasks.publish-packaged-builtin-artifact]
+private = true
+dependencies = ["check-builtin-publication-context"]
+script_runner = "@duckscript"
+script = '''
+repository = set "golemcloud/golem-builtins"
+component = get_env BUILTIN_COMPONENT
+version = get_env BUILTIN_VERSION
+tag = set "${component}-v${version}"
+staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/${tag}"
+staged_wasm = set "${staging}/${component}.wasm"
+notes_path = set "${staging}/release-notes.md"
+source_status = exec --fail-on-error git status --porcelain
+source_status = trim ${source_status.stdout}
+if not is_empty ${source_status}
+    trigger_error "refusing to publish from a dirty source tree; commit the exact source first"
+end
 assets = array ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
 if equals ${component} python
     array_push ${assets} "${staging}/python-source.tar.gz"
     array_push ${assets} "${staging}/python-source.tar.gz.sha256"
-elif not is_empty ${sbom}
+elif is_path_exists "${staging}/${component}.spdx.json"
     array_push ${assets} "${staging}/${component}.spdx.json"
 end
+existing = exec gh release view ${tag} --repo ${repository}
 if not equals ${existing.code} 0
     exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path}
 end

@@ -1575,6 +1575,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .filter(|index| *index != OplogIndex::NONE))
     }
 
+    fn guest_read_order(&self) -> Option<replay_state::GuestReadOrder> {
+        self.invocation_anchor()
+            .map(|anchor| replay_state::GuestReadOrder {
+                anchor,
+                issued: self.state.issued_deferred_imports.clone(),
+            })
+    }
+
+    fn record_deferred_import(&self, id: golem_common::model::oplog::DurableInvocationId) {
+        if let Some(order) = self.guest_read_order()
+            && order.anchor == id.anchor
+        {
+            self.state
+                .replay_state
+                .record_deferred_import(&order, id.ordinal);
+        }
+    }
+
     /// Reserves the next ordinal in guest call order for a direct Store-holding durable call.
     pub(crate) fn direct_call_invocation_id(
         &mut self,
@@ -10012,6 +10030,9 @@ struct PrivateDurableWorkerState {
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
     invocation_ordinals: HashMap<OplogIndex, u64>,
+    /// One-past the highest deferred import ordinal in this Store invocation. Pending reads
+    /// retain this allocation, not the mutable slot used by the next invocation.
+    issued_deferred_imports: Arc<AtomicU64>,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
@@ -10439,6 +10460,7 @@ impl PrivateDurableWorkerState {
             local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             active_custom_invocations: HashMap::new(),
             invocation_ordinals: HashMap::new(),
+            issued_deferred_imports: Arc::new(AtomicU64::new(0)),
             tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
@@ -10867,6 +10889,7 @@ impl PrivateDurableWorkerState {
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
         self.invocation_ordinals.clear();
+        self.issued_deferred_imports = Arc::new(AtomicU64::new(0));
     }
 
     pub async fn get_workers(

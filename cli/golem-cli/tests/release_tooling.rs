@@ -164,3 +164,264 @@ exit 1
     git(&repo, &["checkout", "--detach", &merged]);
     validate(json!([pull]), false);
 }
+
+#[test]
+fn release_publication_requires_successful_preparation_of_the_exact_tag() {
+    let fixture = TempDir::new().unwrap();
+    let repo = fixture.path();
+    fs::copy(
+        crate::workspace_path().join("Makefile.toml"),
+        repo.join("Makefile.toml"),
+    )
+    .unwrap();
+    fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    git(repo, &["init"]);
+    git(repo, &["config", "user.name", "release-test"]);
+    git(
+        repo,
+        &["config", "user.email", "release-test@example.invalid"],
+    );
+    git(repo, &["config", "commit.gpgsign", "false"]);
+    git(repo, &["config", "core.hooksPath", "/dev/null"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "source"]);
+    let head = git(repo, &["rev-parse", "HEAD"]);
+    let bin = repo.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let gh = bin.join("gh");
+    fs::write(&gh, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --jq ]; then exec jq -r \"$2\" \"$RELEASE_TEST_RUNS\"; fi\n  shift\ndone\nexit 1\n").unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let run = json!({
+        "id": 42, "head_sha": head, "head_branch": "v9.8.7-rc1",
+        "event": "workflow_dispatch", "status": "completed", "conclusion": "success",
+        "updated_at": "2026-10-18T12:00:00Z"
+    });
+    let validate = |runs: serde_json::Value, expected| {
+        let response = repo.join("runs.json");
+        fs::write(&response, json!({"workflow_runs": runs}).to_string()).unwrap();
+        let output = Command::new("cargo")
+            .current_dir(repo)
+            .args([
+                "make",
+                "--disable-check-for-updates",
+                "--no-workspace",
+                "check-golem-release-preparation",
+            ])
+            .env_remove("CI")
+            .env("PATH", &path)
+            .env("RELEASE_TEST_RUNS", response)
+            .env("BUILTIN_VERSION", "9.8.7-rc1")
+            .env("RELEASE_PUBLISHED_AT", "2026-10-18T12:00:01Z")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            expected,
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    validate(json!([run]), true);
+    validate(json!([]), false);
+    for (field, value) in [
+        ("head_sha", json!("other-source")),
+        ("head_branch", json!("release/9.8.7-rc1")),
+        ("event", json!("push")),
+        ("status", json!("in_progress")),
+        ("conclusion", json!("failure")),
+        ("updated_at", json!("2026-10-18T12:00:02Z")),
+    ] {
+        let mut rejected = run.clone();
+        rejected[field] = value;
+        validate(json!([rejected]), false);
+    }
+}
+
+#[test]
+fn builtin_packaging_failure_precedes_every_publication() {
+    let fixture = TempDir::new().unwrap();
+    let repo = fixture.path();
+    let makefile = fs::read_to_string(crate::workspace_path().join("Makefile.toml")).unwrap();
+    fs::write(repo.join("Release.toml"), makefile).unwrap();
+    // Replace source validation and expensive compilation, not packaging or publication.
+    fs::write(repo.join("Makefile.toml"), "extend = 'Release.toml'\n[tasks.validate-builtin-release]\nclear = true\nscript_runner = '@duckscript'\nscript = 'echo validated'\n[tasks.ensure-builtin-artifacts]\nclear = true\nscript_runner = '@duckscript'\nscript = '''\nmkdir plugins\nmkdir builtin-tools\nwritefile plugins/otlp-exporter.wasm plugin\nwritefile builtin-tools/filesystem-tools.wasm tools\n'''\n").unwrap();
+    fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    fs::write(repo.join("LICENSE"), "test license").unwrap();
+    fs::write(
+        repo.join(".gitignore"),
+        "bin/\nplugins/\nbuiltin-tools/\ntarget/\nvalidated\n",
+    )
+    .unwrap();
+    fs::write(repo.join("builtin-artifacts.json"), json!({
+        "otlp_exporter": {"component": "otlp-exporter", "path": "plugins/otlp-exporter.wasm"},
+        "filesystem_tools": {"component": "filesystem-tools", "path": "builtin-tools/filesystem-tools.wasm"}
+    }).to_string()).unwrap();
+    git(repo, &["init"]);
+    git(repo, &["config", "user.name", "release-test"]);
+    git(
+        repo,
+        &["config", "user.email", "release-test@example.invalid"],
+    );
+    git(repo, &["config", "commit.gpgsign", "false"]);
+    git(repo, &["config", "core.hooksPath", "/dev/null"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "packaging source"]);
+    let bin = repo.join("bin");
+    fs::create_dir(&bin).unwrap();
+    for (name, script) in [
+        (
+            "gh",
+            "#!/bin/sh\necho 'Unexpected publication' >&2\nexit 99\n",
+        ),
+        (
+            "wasm-tools",
+            "#!/bin/sh\nif [ -f validated ] && [ -z \"$PACKAGING_SUCCEEDS\" ]; then echo 'second package failed' >&2; exit 1; fi\ntouch validated\n",
+        ),
+    ] {
+        let file = bin.join(name);
+        fs::write(&file, script).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let target = repo.join("target");
+    let output = Command::new("cargo")
+        .current_dir(repo)
+        .args([
+            "make",
+            "--disable-check-for-updates",
+            "--no-workspace",
+            "publish-builtin-artifacts",
+        ])
+        .env_remove("CI")
+        .env_remove("BUILTIN_DRY_RUN")
+        .env("PATH", &path)
+        .env("CARGO_TARGET_DIR", &target)
+        .env("BUILTIN_VERSION", "9.8.7-rc1")
+        .output()
+        .unwrap();
+    let log = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{log}");
+    assert!(log.contains("second package failed"), "{log}");
+    assert!(!log.contains("Unexpected publication"), "{log}");
+    assert!(!repo.join("builtin-artifacts.release.json").exists());
+    let packages = fs::read_dir(target.join("builtin-artifact-release")).unwrap();
+    assert_eq!(
+        packages
+            .filter(|entry| entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .join("release-notes.md")
+                .exists())
+            .count(),
+        1,
+        "the first package must finish before the injected second failure: {log}"
+    );
+
+    // Exercise the same production upload code against a local release store.
+    let gh = repo.join("bin/gh");
+    fs::write(&gh, r#"#!/bin/sh
+set -eu
+command=$2
+tag=$3
+shift 3
+case "$command" in
+  view)
+    if [ "$tag" = v9.8.7-rc1 ]; then echo '{"assets":[]}'; exit 0; fi
+    [ -d "public/$tag" ] || exit 1
+    if [ "$#" -eq 2 ]; then exit 0; fi
+    find "public/$tag" -type f -exec basename {} \; | jq -R . | jq -s '{assets: map({name: .})}'
+    ;;
+  create)
+    [ -f "$RELEASE_TEST_TARGET/builtin-artifact-release/otlp-exporter-v9.8.7-rc1/release-notes.md" ]
+    [ -f "$RELEASE_TEST_TARGET/builtin-artifact-release/filesystem-tools-v9.8.7-rc1/release-notes.md" ]
+    mkdir -p "public/$tag"
+    ;;
+  upload) mkdir -p "public/$tag"; cp "$1" "public/$tag/" ;;
+  download)
+    shift 2
+    pattern=$2
+    dir=$4
+    cp "public/$tag/$pattern" "$dir/"
+    ;;
+  *) exit 99 ;;
+esac
+"#).unwrap();
+    let curl = repo.join("bin/curl");
+    fs::write(
+        &curl,
+        r#"#!/bin/sh
+set -eu
+shift 5
+output=$1
+url=$2
+relative=${url#*/releases/download/}
+cp "public/$relative" "$output"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        repo.join(".gitignore"),
+        "bin/\nplugins/\nbuiltin-tools/\ntarget/\nvalidated\npublic/\n",
+    )
+    .unwrap();
+    git(repo, &["add", ".gitignore"]);
+    git(repo, &["commit", "-m", "ignore local release store"]);
+    let output = Command::new("cargo")
+        .current_dir(repo)
+        .args([
+            "make",
+            "--disable-check-for-updates",
+            "--no-workspace",
+            "publish-builtin-artifacts",
+        ])
+        .env_remove("CI")
+        .env_remove("BUILTIN_DRY_RUN")
+        .env("PATH", &path)
+        .env("CARGO_TARGET_DIR", &target)
+        .env("RELEASE_TEST_TARGET", &target)
+        .env("PACKAGING_SUCCEEDS", "1")
+        .env("BUILTIN_VERSION", "9.8.7-rc1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(repo.join("public/v9.8.7-rc1/builtin-artifacts.release.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["artifacts"].as_object().unwrap().len(), 2);
+    for (id, component) in [
+        ("otlp_exporter", "otlp-exporter"),
+        ("filesystem_tools", "filesystem-tools"),
+    ] {
+        let bytes =
+            fs::read(repo.join(format!("public/{component}-v9.8.7-rc1/{component}.wasm"))).unwrap();
+        assert_eq!(
+            bytes,
+            if id == "otlp_exporter" {
+                b"plugin".as_slice()
+            } else {
+                b"tools".as_slice()
+            }
+        );
+        assert_eq!(manifest["artifacts"][id]["version"], "9.8.7-rc1");
+    }
+}

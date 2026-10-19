@@ -6,7 +6,7 @@
 
 use super::concurrent::{DropEvent, LiveCallPermit, MarkerReceipt};
 use super::durability::DurableCallTrapContext;
-use super::replay_state::ReplayState;
+use super::replay_state::{GuestReadOrder, ReplayState};
 use super::tail_work::TailActivity;
 use futures::future::BoxFuture;
 use golem_common::model::OplogIndex;
@@ -28,6 +28,7 @@ pub(super) type EnqueueInputObservation = Box<
 /// Delivery ownership shared by native input adapters, independent of their journal format.
 pub(super) struct InputObservationDelivery {
     pub replay: ReplayState,
+    pub guest_order: Option<GuestReadOrder>,
     pub activity: TailActivity,
     pub runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     pub cleanup_sink: mpsc::UnboundedSender<DropEvent>,
@@ -80,7 +81,13 @@ impl InputObservationDelivery {
         let (settled, observation_settled) = oneshot::channel();
         let prepare = async {
             if let Some(index) = recorded_index {
-                let barrier = self.replay.await_stream_observation(index).await?;
+                let barrier = if completed.is_some() {
+                    self.replay.await_stream_observation(index).await?
+                } else {
+                    self.replay
+                        .await_guest_stream_observation(index, self.guest_order.clone())
+                        .await?
+                };
                 Ok((Some(barrier), None))
             } else {
                 self.replay

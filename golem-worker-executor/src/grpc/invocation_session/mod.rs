@@ -93,7 +93,9 @@ pub(super) async fn invoke_agent_session<
     executor: &WorkerExecutorImpl<Ctx, Svcs>,
     request: Request<tonic::Streaming<InvocationRequest>>,
 ) -> Result<Response<InvocationSessionStream>, Status> {
-    let inbound = request.into_inner();
+    let mut inbound = request.into_inner();
+    // A decode failure has no invocation identity and must remain a transport error.
+    let first = inbound.message().await?;
     let (responses, receiver) = mpsc::channel(32);
     let response_lease = ResponseLease::default();
     let handler_lease = response_lease.clone();
@@ -109,6 +111,7 @@ pub(super) async fn invoke_agent_session<
             scope
                 .run(Box::pin(executor.run_agent_session(
                     inbound,
+                    first,
                     responses,
                     handler_lease,
                     &scope,
@@ -884,30 +887,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn run_agent_session(
         &self,
         mut inbound: tonic::Streaming<InvocationRequest>,
+        first: Option<InvocationRequest>,
         outward: mpsc::Sender<InvocationResponse>,
         response_lease: ResponseLease,
         scope: &crate::worker::tasks::TaskScope,
     ) {
         let mut state = InvocationSessionState::default();
-        let first = match inbound.message().await {
-            Ok(Some(request)) => request,
-            Ok(None) => {
+        let first = match first {
+            Some(request) => request,
+            None => {
                 send_unvalidated_rejection(
                     &outward,
                     InvocationRejectionReason::Protocol,
                     "invocation request transport closed before start".to_string(),
-                    None,
-                    None,
-                    None,
-                )
-                .await;
-                return;
-            }
-            Err(error) => {
-                send_unvalidated_rejection(
-                    &outward,
-                    InvocationRejectionReason::Protocol,
-                    error.to_string(),
                     None,
                     None,
                     None,

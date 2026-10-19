@@ -47,7 +47,9 @@ prometheus = { workspace = true }
 prost-types = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
@@ -62,6 +64,9 @@ tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 x509-parser = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }

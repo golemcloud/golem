@@ -50,6 +50,7 @@ pub enum HttpSessionError {
     Rejected,
     Protocol(String),
     TransportUnavailable,
+    MessageTooLarge(String),
     RetainedInputLimit,
     ResumeExhausted,
     Cancelled,
@@ -63,6 +64,7 @@ impl HttpSessionError {
             Self::Rejected => "rejected",
             Self::Protocol(_) => "protocol",
             Self::TransportUnavailable => "transport_unavailable",
+            Self::MessageTooLarge(_) => "message_too_large",
             Self::RetainedInputLimit => "frame_limit",
             Self::ResumeExhausted => "resume_exhausted",
             Self::Cancelled => "cancelled",
@@ -403,4 +405,4 @@ impl HttpSession {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

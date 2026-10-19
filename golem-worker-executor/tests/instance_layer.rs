@@ -1103,7 +1103,14 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
                     let decision = authority_config_read(ctx, "control").await;
                     if fail_fetch {
                         assert!(decision.is_err(), "a new config decision must not escape a failed prefix");
-                        assert!(!ctx.test_replay_application_state().3);
+                        // The error is released before failure election; retirement follows it.
+                        tokio::time::timeout(Duration::from_secs(10), async {
+                            while ctx.test_replay_application_state().3 {
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                            }
+                        })
+                        .await
+                        .expect("the failed preparation must retire its owner wallet");
                         assert!(!outage.metadata_fetches()[fetches_before..].contains(&target.revision),
                             "dependent preparation must not run past a failed predecessor");
                         return decision.map(|_| ());

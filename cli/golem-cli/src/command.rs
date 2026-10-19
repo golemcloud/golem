@@ -788,8 +788,9 @@ pub enum GolemCliSubcommand {
     /// git branch and the last result as coloured blocks. It continues unfinished input on a new line, completes command names and paths
     /// on the agent with Tab, and keeps a history per agent. `help` explains the session and
     /// `tools` lists the tools bound to the agent. Leave with `exit`, `exit N` or Ctrl+D.
-    /// Ctrl+C clears the line; while a command runs it stops waiting for it, and the command
-    /// keeps running on the agent unless it was still queued.
+    /// Ctrl+C clears the line. While a command runs it stops the command, when the tool can stop
+    /// one, as the built-in bash tool can from 0.3.0 on. With a tool that cannot, it stops
+    /// waiting for the command, which keeps running on the agent unless it was still queued.
     ///
     /// An AI coding agent at the terminal gets a plain session instead: a one-line prompt, no
     /// colours, no editing keys and nothing drawn while a command runs.

@@ -119,13 +119,30 @@ const STALE_AUTH_TOKEN: &str = "etcdserver: revision of auth store is old";
 /// password changed - etcd refuses it: `InvalidArgument`, or `Unknown` through the election
 /// service, which loses the code. etcd-client renews a token only when etcd calls it invalid, so
 /// the caller logs in again itself.
+///
+/// A watch is refused differently: etcd checks the token as it creates the watch and cancels it at
+/// once, with the refusal's gRPC status as text in the reason, which the election watch reports as
+/// a [`etcd_client::Error::WatchError`].
 pub(crate) fn is_stale_auth_token(err: &ShardManagerError) -> bool {
-    matches!(
-        err,
-        ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
-            if matches!(status.code(), tonic::Code::InvalidArgument | tonic::Code::Unknown)
-                && status.message() == STALE_AUTH_TOKEN
-    )
+    match err {
+        ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status)) => {
+            matches!(
+                status.code(),
+                tonic::Code::InvalidArgument | tonic::Code::Unknown
+            ) && status.message() == STALE_AUTH_TOKEN
+        }
+        ShardManagerError::EtcdError(etcd_client::Error::WatchError(reason)) => {
+            is_stale_auth_token_reason(reason)
+        }
+        _ => false,
+    }
+}
+
+/// Whether the reason etcd gave for cancelling a watch is a token from before a change to its
+/// users or roles: `rpc error: code = InvalidArgument desc = etcdserver: revision of auth store is
+/// old`.
+pub(crate) fn is_stale_auth_token_reason(reason: &str) -> bool {
+    reason.ends_with(STALE_AUTH_TOKEN)
 }
 
 /// The alerts with which a TLS peer refuses a certificate.
@@ -516,6 +533,22 @@ mod tests {
             tonic::Code::Unavailable,
             stale
         )));
+    }
+
+    #[test]
+    // etcd 3.5 cancels a watch with a stale token as it creates it, and says why only in the
+    // reason, which holds the refusal's gRPC status as text.
+    fn a_watch_refused_for_a_token_from_before_an_auth_change_is_recognised() {
+        let watch = |reason: &str| {
+            ShardManagerError::EtcdError(etcd_client::Error::WatchError(reason.to_string()))
+        };
+        assert!(is_stale_auth_token(&watch(
+            "rpc error: code = InvalidArgument desc = etcdserver: revision of auth store is old"
+        )));
+        assert!(!is_stale_auth_token(&watch(
+            "rpc error: code = PermissionDenied desc = etcdserver: permission denied"
+        )));
+        assert!(!is_stale_auth_token(&watch("")));
     }
 
     #[test]

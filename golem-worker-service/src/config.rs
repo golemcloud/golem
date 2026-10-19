@@ -287,15 +287,18 @@ impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
 }
 
 /// The payload limit of every path into an agent: the gRPC message to the worker executor, the
-/// invocation session message, and the REST and MCP request body.
+/// invocation session message, and the REST, HTTP API and MCP request body.
 const AGENT_PAYLOAD_LIMIT: usize = 32 * 1024 * 1024;
 
-/// Largest request bodies, in bytes. A larger body gets `413 Payload Too Large`.
+/// Largest request bodies, in bytes. An observed overflow gets 413 before the response is
+/// returned; a later overflow fails the streaming body read without changing the response status.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RequestBodyLimits {
     /// The REST API on the API port.
     pub api: usize,
+    /// HTTP API deployments on the custom request port.
+    pub http_api: usize,
     /// MCP deployments, on the MCP port and the custom request port.
     pub mcp: usize,
 }
@@ -304,6 +307,7 @@ impl Default for RequestBodyLimits {
     fn default() -> Self {
         Self {
             api: AGENT_PAYLOAD_LIMIT,
+            http_api: AGENT_PAYLOAD_LIMIT,
             mcp: AGENT_PAYLOAD_LIMIT,
         }
     }
@@ -1340,6 +1344,7 @@ mod tests {
         config.validate_http_limits().unwrap();
 
         assert_eq!(config.body_limits.api, 32 * 1024 * 1024);
+        assert_eq!(config.body_limits.http_api, 32 * 1024 * 1024);
         assert_eq!(config.body_limits.mcp, 32 * 1024 * 1024);
         assert_eq!(config.http_server.http2_max_header_list_size, 64 * 1024);
         assert_eq!(
@@ -1388,6 +1393,7 @@ mod tests {
 
                 [body_limits]
                 api = 2000
+                http_api = 2500
                 mcp = 3000
 
                 [invocation_session.websocket]
@@ -1412,6 +1418,7 @@ mod tests {
             1024 * 1024
         );
         assert_eq!(config.body_limits.api, 2000);
+        assert_eq!(config.body_limits.http_api, 2500);
         assert_eq!(config.body_limits.mcp, 3000);
         assert_eq!(config.invocation_session.websocket.max_frame_size, 5000);
         assert_eq!(

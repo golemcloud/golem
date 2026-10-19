@@ -222,6 +222,7 @@ impl Services {
             config.http_session.clone(),
             initial_files,
             openapi_service.clone(),
+            config.body_limits.http_api,
         ));
 
         Ok(Self {

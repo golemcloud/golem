@@ -9,7 +9,7 @@ module github.com/golemcloud/golem/sdks/go/bridge
 
 go 1.23
 
-require github.com/golemcloud/golem/sdks/go/core v0.1.0-rc1
+require github.com/golemcloud/golem/sdks/go/core v0.1.0-rc2
 
 require github.com/coder/websocket v1.8.15
 

@@ -739,7 +739,11 @@ fn animation(tick: usize, loader: Loader, palette: Palette) -> String {
 
 /// The word shown beside the animation at `tick`, with a highlight running across it.
 fn verb(tick: usize, palette: Palette) -> String {
-    let word = VERBS[tick / VERB_TICKS % VERBS.len()];
+    lit(VERBS[tick / VERB_TICKS % VERBS.len()], tick, palette)
+}
+
+/// `word` and an ellipsis, with the highlight where it is at `tick`.
+fn lit(word: &str, tick: usize, palette: Palette) -> String {
     let letters = word.chars().chain(['\u{2026}']);
     let length = word.len() + 1;
     // The highlight starts three letters before the word and runs on five past its end.
@@ -757,21 +761,52 @@ fn verb(tick: usize, palette: Palette) -> String {
     )
 }
 
+/// What Ctrl+C does for the command the running line is shown for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WayOut {
+    /// It stops waiting; the command runs on.
+    StopWaiting,
+    /// It stops the command.
+    Stop,
+    /// It was pressed and the command is being stopped; pressed again, it stops waiting.
+    Stopping,
+}
+
 /// The line shown while a command runs: the animation, a word, the time and the way out.
-pub fn running(tick: usize, elapsed: Duration, loader: Loader, palette: Palette) -> String {
+pub fn running(
+    tick: usize,
+    elapsed: Duration,
+    loader: Loader,
+    palette: Palette,
+    way_out: WayOut,
+) -> String {
+    let (word, way_out) = match way_out {
+        WayOut::StopWaiting => (verb(tick, palette), "ctrl+c stops waiting"),
+        WayOut::Stop => (verb(tick, palette), "ctrl+c stops"),
+        WayOut::Stopping => (lit("stopping", tick, palette), "ctrl+c again stops waiting"),
+    };
     format!(
-        "{} {} \x1b[2m{} \u{b7} ctrl+c stops waiting\x1b[0m",
+        "{} {word} \x1b[2m{} \u{b7} {way_out}\x1b[0m",
         animation(tick, loader, palette),
-        verb(tick, palette),
         elapsed_text(elapsed)
     )
 }
 
 /// The running line for a window too narrow for [`running`]: the animation, the time and the
 /// way out.
-pub fn running_compact(tick: usize, elapsed: Duration, loader: Loader, palette: Palette) -> String {
+pub fn running_compact(
+    tick: usize,
+    elapsed: Duration,
+    loader: Loader,
+    palette: Palette,
+    way_out: WayOut,
+) -> String {
+    let way_out = match way_out {
+        WayOut::StopWaiting | WayOut::Stop => "ctrl+c",
+        WayOut::Stopping => "stopping",
+    };
     format!(
-        "{} \x1b[2m{} \u{b7} ctrl+c\x1b[0m",
+        "{} \x1b[2m{} \u{b7} {way_out}\x1b[0m",
         animation(tick, loader, palette),
         elapsed_text(elapsed)
     )
@@ -829,8 +864,8 @@ pub fn cancelled(palette: Palette) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTINUATION, Loader, Palette, Readiness, VERBS, animation, banner, cancelled, context,
-        detached, elapsed_text, finished, layout, marker, result, result_width, running,
+        CONTINUATION, Loader, Palette, Readiness, VERBS, WayOut, animation, banner, cancelled,
+        context, detached, elapsed_text, finished, layout, marker, result, result_width, running,
         running_compact, shown, shown_message, split_agent, verb,
     };
     use std::time::Duration;
@@ -839,6 +874,8 @@ mod tests {
 
     const AGENT: &str = "BashOwner(\"you\")";
     const RICH: Palette = Palette::Rich;
+    /// Ctrl+C for a command that cannot be stopped.
+    const WAITING: WayOut = WayOut::StopWaiting;
 
     /// A slab as the 256-colour palette draws it: its background and text colours, whether all
     /// of it is bold, and what is written on it.
@@ -1355,35 +1392,93 @@ mod tests {
                 0,
                 Duration::from_millis(12_900),
                 Loader::Runes,
-                RICH
+                RICH,
+                WAITING
             )),
             "\u{b7}\u{b7}\u{b7}\u{b7}\u{b7} reinforcing\u{2026} 12s \u{b7} ctrl+c stops waiting"
         );
         assert!(
-            running(0, Duration::from_secs(1), Loader::Runes, RICH)
+            running(0, Duration::from_secs(1), Loader::Runes, RICH, WAITING)
                 .ends_with(" \x1b[2m1.0s \u{b7} ctrl+c stops waiting\x1b[0m")
         );
         assert_eq!(
-            visible(&running(8, Duration::from_secs(70), Loader::Gem, RICH)),
+            visible(&running(
+                8,
+                Duration::from_secs(70),
+                Loader::Gem,
+                RICH,
+                WAITING
+            )),
             "\u{2756} reinforcing\u{2026} 1m 10s \u{b7} ctrl+c stops waiting"
         );
         // The longest line, an hour in, still fits the narrowest window the line is shown in.
-        for tick in 0..(36 * VERBS.len()) {
-            let line = visible(&running(
-                tick,
-                Duration::from_secs(3_599),
-                Loader::Runes,
-                RICH,
-            ));
-            assert!(line.width() <= 52, "tick {tick}: {line:?}");
+        for way_out in [WAITING, WayOut::Stop, WayOut::Stopping] {
+            for tick in 0..(36 * VERBS.len()) {
+                let line = visible(&running(
+                    tick,
+                    Duration::from_secs(3_599),
+                    Loader::Runes,
+                    RICH,
+                    way_out,
+                ));
+                assert!(line.width() <= 52, "{way_out:?}, tick {tick}: {line:?}");
+            }
         }
         // Sixteen colours are enough for it.
-        let basic = running(26, Duration::from_secs(5), Loader::Runes, Palette::Basic);
+        let basic = running(
+            26,
+            Duration::from_secs(5),
+            Loader::Runes,
+            Palette::Basic,
+            WAITING,
+        );
         assert!(!basic.contains("38;5;"), "{basic:?}");
         assert_eq!(
             visible(&basic),
-            visible(&running(26, Duration::from_secs(5), Loader::Runes, RICH))
+            visible(&running(
+                26,
+                Duration::from_secs(5),
+                Loader::Runes,
+                RICH,
+                WAITING
+            ))
         );
+    }
+
+    #[test]
+    fn the_running_line_of_a_command_that_can_be_stopped_says_so() {
+        let line = |way_out| {
+            visible(&running(
+                0,
+                Duration::from_millis(12_900),
+                Loader::Runes,
+                RICH,
+                way_out,
+            ))
+        };
+        assert_eq!(
+            line(WayOut::Stop),
+            "\u{b7}\u{b7}\u{b7}\u{b7}\u{b7} reinforcing\u{2026} 12s \u{b7} ctrl+c stops"
+        );
+        // After the key the word is what is happening, and the key has its other meaning.
+        assert_eq!(
+            line(WayOut::Stopping),
+            "\u{b7}\u{b7}\u{b7}\u{b7}\u{b7} stopping\u{2026} 12s \u{b7} ctrl+c again stops waiting"
+        );
+        // The word stays for as long as the command is being stopped.
+        for tick in [36, 72, 500] {
+            let line = visible(&running(
+                tick,
+                Duration::from_secs(20),
+                Loader::Gem,
+                RICH,
+                WayOut::Stopping,
+            ));
+            assert!(
+                line.contains(" stopping\u{2026} 20s "),
+                "tick {tick}: {line:?}"
+            );
+        }
     }
 
     #[test]
@@ -1537,7 +1632,8 @@ mod tests {
                 0,
                 Duration::from_millis(12_900),
                 Loader::Runes,
-                RICH
+                RICH,
+                WAITING
             )),
             "\u{b7}\u{b7}\u{b7}\u{b7}\u{b7} 12s \u{b7} ctrl+c"
         );
@@ -1546,18 +1642,39 @@ mod tests {
                 8,
                 Duration::from_secs(70),
                 Loader::Gem,
-                RICH
+                RICH,
+                WAITING
             )),
             "\u{2756} 1m 10s \u{b7} ctrl+c"
         );
-        for tick in 0..120 {
+        // It names the key whatever the key does, and after the key that the command is being
+        // stopped.
+        let compact = |way_out| {
+            visible(&running_compact(
+                0,
+                Duration::from_millis(12_900),
+                Loader::Runes,
+                RICH,
+                way_out,
+            ))
+        };
+        assert_eq!(compact(WayOut::Stop), compact(WAITING));
+        assert_eq!(
+            compact(WayOut::Stopping),
+            "\u{b7}\u{b7}\u{b7}\u{b7}\u{b7} 12s \u{b7} stopping"
+        );
+        for (way_out, tick) in [WAITING, WayOut::Stop, WayOut::Stopping]
+            .into_iter()
+            .flat_map(|way_out| (0..120).map(move |tick| (way_out, tick)))
+        {
             let line = visible(&running_compact(
                 tick,
                 Duration::from_secs(3_599),
                 Loader::Runes,
                 RICH,
+                way_out,
             ));
-            assert!(line.width() <= 24, "tick {tick}: {line:?}");
+            assert!(line.width() <= 24, "{way_out:?}, tick {tick}: {line:?}");
         }
     }
 

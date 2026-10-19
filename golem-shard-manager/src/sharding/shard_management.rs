@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::error::ShardManagerError;
-use super::healthcheck::{HealthCheck, get_unhealthy_executors};
+use super::healthcheck::{HealthCheck, get_unhealthy_executors_within};
 use super::model::{
     ExecutorAddr, ExecutorAddrs, ExecutorId, RegisterAck, ShardAssignmentPush, ShardEpoch,
     ShardLeaseGrant, ShardLeaseRevision, ShardLeaseState,
@@ -56,7 +56,9 @@ const _: () = assert!(
         < DEFAULT_STATE_READ_TIMEOUT.as_millis() as u64
 );
 
-pub(crate) const DEFAULT_INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a new leader waits for the initial health check. The check runs only when a stored
+/// lease has expired, so serving is delayed by it only after an outage longer than a lease.
+pub(crate) const DEFAULT_INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -77,6 +79,42 @@ pub struct ShardManagement {
     /// writer only ends its own request. It records the error here and wakes the loop, which
     /// checks the slot at the top of every pass and returns it.
     fatal: Arc<Mutex<Option<ShardManagerError>>>,
+}
+
+/// A [`ShardManagement`] whose state is loaded and whose executors are checked, but whose worker
+/// is not running yet. Built by [`ShardManagement::prepare`].
+pub struct PreparedShardManagement {
+    shard_management: ShardManagement,
+    worker_executors: Arc<dyn WorkerExecutorService>,
+    threshold: f64,
+}
+
+impl PreparedShardManagement {
+    /// Spawns the worker into `join_set`. Synchronous, so nothing can interrupt it half done.
+    pub fn start(self, join_set: &mut JoinSet<anyhow::Result<()>>) -> ShardManagement {
+        let Self {
+            shard_management,
+            worker_executors,
+            threshold,
+        } = self;
+
+        {
+            let shard_management = shard_management.clone();
+            join_set.spawn(
+                async move {
+                    shard_management
+                        .worker(worker_executors, threshold)
+                        .await
+                        .map_err(anyhow::Error::from)
+                }
+                .in_current_span(),
+            );
+        }
+
+        shard_management.change.notify_one();
+
+        shard_management
+    }
 }
 
 impl ShardManagement {
@@ -120,7 +158,7 @@ impl ShardManagement {
         number_of_shards: usize,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<Self, ShardManagerError> {
-        Self::new_inner(
+        Ok(Self::prepare(
             persistence_service,
             worker_executors,
             health_check,
@@ -128,11 +166,11 @@ impl ShardManagement {
             lease_ttl,
             state_read_timeout,
             state_write_timeout,
-            number_of_shards,
-            join_set,
             initial_health_check_timeout,
+            number_of_shards,
         )
-        .await
+        .await?
+        .start(join_set))
     }
 
     /// [`Self::new`] with the startup health check bound taken as a parameter, so that a test does
@@ -148,7 +186,7 @@ impl ShardManagement {
         join_set: &mut JoinSet<anyhow::Result<()>>,
         initial_health_check_timeout: Duration,
     ) -> Result<Self, ShardManagerError> {
-        Self::new_inner(
+        Self::new_with_timeouts(
             persistence_service,
             worker_executors,
             health_check,
@@ -156,15 +194,20 @@ impl ShardManagement {
             lease_ttl,
             DEFAULT_STATE_READ_TIMEOUT,
             shard_lease::default_state_write_timeout(),
+            initial_health_check_timeout,
             number_of_shards,
             join_set,
-            initial_health_check_timeout,
         )
         .await
     }
 
+    /// Everything [`Self::new_with_timeouts`] does before it spawns the worker: reads the state,
+    /// health checks the executors and restarts their leases.
+    ///
+    /// Split from [`PreparedShardManagement::start`] so that a caller can await this under its own
+    /// supervision, which it cannot do while this holds the task set.
     #[allow(clippy::too_many_arguments)]
-    async fn new_inner(
+    pub async fn prepare(
         persistence_service: Arc<dyn RoutingTablePersistence>,
         worker_executors: Arc<dyn WorkerExecutorService>,
         health_check: Arc<dyn HealthCheck>,
@@ -172,10 +215,9 @@ impl ShardManagement {
         lease_ttl: Duration,
         state_read_timeout: Duration,
         state_write_timeout: Duration,
-        number_of_shards: usize,
-        join_set: &mut JoinSet<anyhow::Result<()>>,
         initial_health_check_timeout: Duration,
-    ) -> Result<Self, ShardManagerError> {
+        number_of_shards: usize,
+    ) -> Result<PreparedShardManagement, ShardManagerError> {
         let (shard_state, external_revision) =
             match timeout(state_read_timeout, persistence_service.read()).await {
                 Ok(read) => read?,
@@ -191,33 +233,48 @@ impl ShardManagement {
         // count must do neither.
         crate::ensure_shard_count_matches(shard_state.number_of_shards, number_of_shards)?;
 
-        info!("Initial healthcheck started");
-
         let executors: Vec<(ExecutorId, ExecutorAddr, Option<String>)> =
             shard_state.get_executors_with_addrs();
-        let unhealthy_executors = match timeout(
-            initial_health_check_timeout,
-            get_unhealthy_executors(&health_check, &executors),
-        )
-        .await
-        {
-            Ok(unhealthy_executors) => unhealthy_executors,
-            Err(_) => {
-                // Dropping every executor because their probes were slow would empty the routing
-                // table; the periodic health check loop removes the ones that are really gone.
-                error!(
-                    "Initial healthcheck timed out after {initial_health_check_timeout:?}, treating all executors as healthy"
+        // A takeover within every executor's lease learns nothing from a health check that the
+        // executors' own renewals and the periodic check would not tell it, so it serves at once.
+        // After a longer outage the check decides which leases are restarted below, and which
+        // executors are dropped.
+        let unhealthy_executors = if !shard_state.has_expired_lease(Utc::now()) {
+            info!(
+                executors = executors.len(),
+                "Every stored shard lease is still valid; skipping the initial health check"
+            );
+            HashSet::new()
+        } else {
+            info!("Initial healthcheck started");
+            // The executors that answer "unhealthy" within the bound are dropped. The ones that
+            // have not answered when it runs out count as healthy: dropping every executor
+            // because their probes were slow would empty the routing table, and the periodic
+            // health check loop removes the ones that are really gone.
+            let outcome = get_unhealthy_executors_within(
+                &health_check,
+                &executors,
+                Some(initial_health_check_timeout),
+            )
+            .await;
+            if outcome.unfinished > 0 {
+                warn!(
+                    timeout = ?initial_health_check_timeout,
+                    unfinished = outcome.unfinished,
+                    unhealthy = outcome.unhealthy.len(),
+                    "Initial healthcheck timed out; the executors that had not answered count as \
+                     healthy"
                 );
-                HashSet::new()
             }
+            let unhealthy = outcome.unhealthy;
+            info!("Initial healthcheck finished");
+            unhealthy
         };
         let healthy_executors: HashSet<ExecutorId> = executors
             .iter()
             .map(|(id, _, _)| *id)
             .filter(|id| !unhealthy_executors.contains(id))
             .collect();
-
-        info!("Initial healthcheck finished");
 
         let shard_management = ShardManagement {
             shard_state: Arc::new(RwLock::new(shard_state)),
@@ -235,8 +292,8 @@ impl ShardManagement {
 
         // Lease expiries are persisted and absolute, so after any outage longer than one lease
         // every stored expiry is in the past and the first pass's housekeeping would evict the
-        // whole cluster. The health check above has just proved these executors are alive, so their
-        // lease clock restarts here - in one write, before the loop can run.
+        // whole cluster. The executors counted healthy above (all of them when the health check was
+        // skipped) have their lease clock restarted here - in one write, before the loop can run.
         if !healthy_executors.is_empty() {
             let now = Utc::now();
             let regranted = shard_management
@@ -246,26 +303,15 @@ impl ShardManagement {
                 .await?;
             info!(
                 executors = regranted,
-                "Re-granted shard leases to the executors that answered the initial health check"
+                "Restarted the shard leases of the executors counted alive at startup"
             );
         }
 
-        {
-            let shard_management = shard_management.clone();
-            join_set.spawn(
-                async move {
-                    shard_management
-                        .worker(worker_executors, threshold)
-                        .await
-                        .map_err(anyhow::Error::from)
-                }
-                .in_current_span(),
-            );
-        }
-
-        shard_management.change.notify_one();
-
-        Ok(shard_management)
+        Ok(PreparedShardManagement {
+            shard_management,
+            worker_executors,
+            threshold,
+        })
     }
 
     /// Registers the executor instance `executor_id`, listening at `addr`, and grants it a lease.

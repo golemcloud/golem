@@ -307,6 +307,11 @@ pub struct EtcdConfig {
     /// as files. Read once, at startup, as it is: only one trailing line ending is removed.
     #[serde(default)]
     pub password_file: Option<PathBuf>,
+    /// Replaces the build version in this replica's election value. **Tests only**: the replicas
+    /// of one test process share one build. Never read from configuration.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub test_version: Option<String>,
 }
 
 /// TLS to etcd. Set, every endpoint must be `https://`; unset, every endpoint must be `http://`.
@@ -540,6 +545,7 @@ impl Default for EtcdConfig {
             username: None,
             password: None,
             password_file: None,
+            test_version: None,
         }
     }
 }
@@ -559,6 +565,7 @@ impl SafeDisplay for EtcdConfig {
             username,
             password,
             password_file,
+            test_version: _,
         } = self;
 
         let mut result = String::new();
@@ -691,6 +698,15 @@ impl Default for QuotaServiceConfig {
 pub struct GrpcApiConfig {
     pub port: u16,
     pub tls: GrpcServerTlsConfig,
+    /// The host other processes reach this replica's gRPC port at: the pod IP on Kubernetes, the
+    /// service name in Docker Compose. Required in distributed mode, where a standby tells clients
+    /// the leader's advertised host and `port`; unused in local mode.
+    #[serde(default)]
+    pub advertised_host: Option<String>,
+    /// The port other processes reach this replica's gRPC port at, when it differs from `port`
+    /// (port mapping, NAT). Defaults to the bound port.
+    #[serde(default)]
+    pub advertised_port: Option<u16>,
 }
 
 impl SafeDisplay for GrpcApiConfig {
@@ -698,6 +714,8 @@ impl SafeDisplay for GrpcApiConfig {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "advertised_host: {:?}", self.advertised_host);
+        let _ = writeln!(&mut result, "advertised_port: {:?}", self.advertised_port);
 
         let _ = writeln!(&mut result, "tls:");
         let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
@@ -711,6 +729,8 @@ impl Default for GrpcApiConfig {
         Self {
             port: 9092,
             tls: GrpcServerTlsConfig::disabled(),
+            advertised_host: None,
+            advertised_port: None,
         }
     }
 }

@@ -166,13 +166,13 @@ and fix any possible errors and warnings reported by it.
 
 The six SDKs release on tag pushes (Go uses module tags). Shared crates release
 when you publish their GitHub release. Golem preparation runs manually on its
-exact tag; final binary and Docker publication starts only when a human publishes
-the prepared GitHub draft release.
+exact tag, builds the signed binaries, and attaches them to the draft. Docker
+publication starts only when a human publishes the prepared GitHub draft release.
 
 | Tag pattern                | What gets released                                                    | Workflow                                |
 |----------------------------|-----------------------------------------------------------------------|-----------------------------------------|
 | `golem-shared-v<x.y.z>`   | `golem-schema-derive`, `golem-schema`, `golem-tool-metadata` on crates.io | `.github/workflows/publish-golem-shared.yaml` |
-| `v<major>.<minor>.<patch>` | Docker images and signed Golem and CLI binaries on GitHub             | `.github/workflows/ci.yaml`             |
+| `v<major>.<minor>.<patch>` | Signed Golem and CLI binaries in the draft, then Docker images after publication | `prepare-golem-release.yaml`, then `publish-golem-release.yaml` |
 | `golem-rust-v<x.y.z>`      | The Rust SDK (`golem-rust`, `golem-rust-macro`) on crates.io          | `.github/workflows/publish-golem-rust.yaml`    |
 | `golem-ts-v<x.y.z>`        | The TypeScript SDK packages on npmjs                                  | `.github/workflows/publish-golem-ts.yaml`      |
 | `golem-effect-v<x.y.z>`    | The Effect SDK (`@golemcloud/effect-golem`) on npmjs                  | `.github/workflows/publish-golem-effect.yaml`  |
@@ -243,11 +243,19 @@ to `main`.
    reachable from public `main`. It runs the full reusable CI preflight with
    published SDK and shared-crate checks. Its protected `golem-release` job
    creates or resumes the draft, builds and publishes all eight built-in inventory
-   entries, and uploads the verified manifest. It never publishes the Golem draft.
-5. **Review and publish Golem.** Review the draft and manifest, then explicitly
-   publish the draft. This starts the existing final binary and Docker CI.
-   Release CI repeats the prerequisite checks before it publishes binaries or
-   Docker images. It does not publish the shared crates again.
+   entries, and uploads the verified manifest. All built-in packages must finish
+   before the first built-in upload. The existing native matrix then builds,
+   signs, notarizes, and attaches all Golem and CLI binaries to the draft.
+   It never publishes the Golem draft.
+5. **Review and publish Golem.** Wait for successful preparation. Review the draft,
+   binaries, and manifest, then explicitly publish the draft. This starts
+   `publish-golem-release.yaml`, which requires successful preparation of that
+   exact tag before running the existing Docker jobs. It does not repeat full
+   CI, the prerequisite checks, native builds, or shared crate publication.
+
+Run `cargo make check-release-start` before starting the release. It checks clean
+source, GitHub authentication, and the protected environment's App configuration
+names without publication. It cannot validate the private key or registry access.
 
 After shared crate publication, do not change the three crate directories, the
 root `Cargo.toml`, `Cargo.lock`, `.cargo`, or `LICENSE` before releasing the SDK

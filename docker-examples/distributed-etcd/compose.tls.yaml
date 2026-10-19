@@ -4,6 +4,22 @@
 #
 # It needs ./etcd-tls/{ca,server,server-key,client,client-key}.pem and ./etcd-password.txt, and the
 # etcd user created once before the shard manager starts; README.md shows how.
+x-aliases:
+  # The same for each of the three shard manager replicas: they share one etcd user and one client
+  # certificate.
+  shard-manager-tls: &shard-manager-tls
+    environment:
+      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
+      GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
+      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
+      GOLEM__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
+    volumes:
+      - ./etcd-tls:/etc/etcd-tls:ro
+    secrets:
+      - etcd-password
+
 services:
   etcd:
     # The whole command of compose.yaml again, with https client URLs and the TLS flags: an
@@ -38,18 +54,9 @@ services:
         - endpoint
         - health
 
-  golem-shard-manager:
-    environment:
-      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
-      GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
-      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
-      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
-      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
-      GOLEM__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
-    volumes:
-      - ./etcd-tls:/etc/etcd-tls:ro
-    secrets:
-      - etcd-password
+  golem-shard-manager-1: *shard-manager-tls
+  golem-shard-manager-2: *shard-manager-tls
+  golem-shard-manager-3: *shard-manager-tls
 
 secrets:
   etcd-password:

@@ -175,7 +175,7 @@ impl ReplayState {
         start_index: OplogIndex,
         marker_index: OplogIndex,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(Some(start_index), marker_index)
+        self.await_delivery_boundary(Some(start_index), marker_index, None)
             .await
     }
 
@@ -183,25 +183,51 @@ impl ReplayState {
         &self,
         index: OplogIndex,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(None, index).await
+        self.await_delivery_boundary(None, index, None).await
+    }
+
+    pub(in crate::durable_host) async fn await_guest_stream_observation(
+        &self,
+        index: OplogIndex,
+        order: Option<GuestReadOrder>,
+    ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
+        self.await_delivery_boundary(None, index, order).await
+    }
+
+    pub(in crate::durable_host) fn record_deferred_import(
+        &self,
+        order: &GuestReadOrder,
+        ordinal: u64,
+    ) {
+        // Ordinal reservation checks the increment before returning the id.
+        let next = ordinal + 1;
+        if order.issued.fetch_max(next, Ordering::AcqRel) < next {
+            self.cursor.progress.notify_waiters();
+        }
     }
 
     async fn await_delivery_boundary(
         &self,
         start_index: Option<OplogIndex>,
         marker_index: OplogIndex,
+        guest_order: Option<GuestReadOrder>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
 
+            let guest_order = guest_order.clone();
             let barrier = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
                             Ok(tx
-                                .consume_delivery_boundary(start_index, marker_index)
+                                .consume_delivery_boundary(
+                                    start_index,
+                                    marker_index,
+                                    guest_order.as_ref(),
+                                )
                                 .await?
                                 .map(|gate| match start_index {
                                     Some(start_index) => ReplayDeliveryBarrier::new(

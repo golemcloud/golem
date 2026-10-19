@@ -21,23 +21,17 @@ use super::registry_service::RegistryService;
 use crate::components::EnvVarBuilder;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RoutingTable;
+use golem_service_base::clients::shard_manager::{
+    GrpcShardManager, GrpcShardManagerConfig, ShardManager as _,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
 use tracing::{Level, warn};
 
 #[async_trait]
 pub trait ShardManager: Send + Sync {
-    async fn client(&self) -> ShardManagerServiceClient<Channel> {
-        new_client(&self.grpc_host(), self.grpc_port()).await
-    }
-
     fn grpc_host(&self) -> String;
     fn grpc_port(&self) -> u16;
 
@@ -47,14 +41,17 @@ pub trait ShardManager: Send + Sync {
 
     async fn get_routing_table(&self) -> crate::Result<RoutingTable> {
         // Retry with backoff to tolerate transient port-forward reconnects.
-        // The port-forward watchdog restarts in ~500ms, so 10 attempts with
-        // 1s delay gives ~10s of tolerance before giving up.
+        // The port-forward watchdog restarts in ~500ms, so 10 attempts with a 1s delay give at
+        // least ~10s of tolerance before giving up. Each attempt can take longer, because the
+        // client retries inside it. One client serves all attempts, so that the leader it learned
+        // in one attempt is the first one it calls in the next.
+        let client = routing_table_client(&self.grpc_host(), self.grpc_port());
         let max_attempts = 10;
         let retry_delay = Duration::from_secs(1);
         let mut last_err = anyhow!("get_routing_table: no attempts made");
 
         for attempt in 1..=max_attempts {
-            match try_get_routing_table(&self.grpc_host(), self.grpc_port()).await {
+            match try_get_routing_table(&client).await {
                 Ok(rt) => return Ok(rt),
                 Err(err) => {
                     warn!(
@@ -73,40 +70,21 @@ pub trait ShardManager: Send + Sync {
     }
 }
 
-async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Channel> {
-    ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .expect("Failed to connect to golem-shard-manager")
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip)
+/// Golem's own client, which follows a standby to the leader: a test environment may run several
+/// shard manager replicas behind one address.
+fn routing_table_client(host: &str, grpc_port: u16) -> GrpcShardManager {
+    GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: host.to_string(),
+        port: grpc_port,
+        ..GrpcShardManagerConfig::default()
+    })
 }
 
-async fn try_get_routing_table(host: &str, grpc_port: u16) -> crate::Result<RoutingTable> {
-    let mut client = ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
+async fn try_get_routing_table(client: &GrpcShardManager) -> crate::Result<RoutingTable> {
+    client
+        .get_routing_table()
         .await
-        .map_err(|e| anyhow!("Failed to connect to shard-manager: {e}"))?
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip);
-
-    let routing_table = client
-        .get_routing_table(GetRoutingTableRequest {})
-        .await
-        .map_err(|e| {
-            anyhow!("Unable to fetch the routing table from shard-manager-service: {e}")
-        })?;
-
-    match routing_table.into_inner() {
-        shardmanager::v1::GetRoutingTableResponse {
-            result:
-                Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
-        } => Ok(routing_table
-            .try_into()
-            .map_err(|e| anyhow!("Failed converting routing table: {e}"))?),
-        shardmanager::v1::GetRoutingTableResponse {
-            result: Some(shardmanager::v1::get_routing_table_response::Result::Failure(err)),
-        } => Err(anyhow!("Failed to get routing table: {err:?}")),
-        _ => Err(anyhow!("Failed to get routing table")),
-    }
+        .map_err(|err| anyhow!("Unable to fetch the routing table from the shard manager: {err}"))
 }
 
 async fn env_vars(

@@ -96,6 +96,83 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[timeout("2 minutes")]
+async fn oversized_invocation_opening_frame_preserves_the_transport_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.grpc.max_message_size = 1024;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let client = executor
+        .client
+        .clone()
+        .max_encoding_message_size(16 * 1024)
+        .max_decoding_message_size(16 * 1024);
+    for compressed in [false, true] {
+        let mut client = if compressed {
+            client
+                .clone()
+                .send_compressed(tonic::codec::CompressionEncoding::Gzip)
+        } else {
+            client.clone()
+        };
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                method_name: Some("x".repeat(2048)),
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                ..Default::default()
+            })),
+        };
+        let status = match client
+            .invoke_agent_session(tokio_stream::iter([request]))
+            .await
+        {
+            Err(status) => status,
+            Ok(response) => response.into_inner().message().await.unwrap_err(),
+        };
+        assert_eq!(
+            status.code(),
+            if compressed {
+                tonic::Code::ResourceExhausted
+            } else {
+                tonic::Code::OutOfRange
+            }
+        );
+        assert!(
+            golem_common::retriable_error::is_grpc_message_size_limit(&status),
+            "expected the original gRPC size-limit error, got {status}"
+        );
+        assert!(status.message().contains("1024"));
+    }
+
+    // A decodable but invalid opening frame is rejected without waiting for request EOF.
+    let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
+    request_tx.send(InvocationRequest::default()).await?;
+    let mut responses = client
+        .clone()
+        .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(request_rx))
+        .await?
+        .into_inner();
+    assert!(matches!(
+        responses.message().await?.unwrap().response,
+        Some(invocation_response::Response::Rejected(_))
+    ));
+    drop(request_tx);
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
 async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

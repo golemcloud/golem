@@ -33,7 +33,8 @@ const externalPackages = (id) =>
   embeddedPackages.has(id) ||
   id === "node:sqlite" ||
   id.startsWith("golem:") ||
-  id.startsWith("wasi:");
+  id.startsWith("wasi:") ||
+  id.startsWith("wasm-rquickjs:");
 
 const tsconfigPath = path.resolve("tsconfig.json");
 const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);

@@ -1,7 +1,7 @@
 ## Generated from default config
 bind_address = "0.0.0.0"
 http_port = 8081
-initial_health_check_timeout = "15s"
+initial_health_check_timeout = "3s"
 number_of_shards = 1024
 rebalance_threshold = 0.1
 runtime_metrics_sampling_interval = "5s"
@@ -157,7 +157,7 @@ type = "Disabled"
 ## Generated from example config: with k8s healthcheck
 # bind_address = "0.0.0.0"
 # http_port = 8081
-# initial_health_check_timeout = "15s"
+# initial_health_check_timeout = "3s"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
@@ -313,7 +313,7 @@ type = "Disabled"
 ## Generated from example config: with etcd persistence (distributed mode)
 # bind_address = "0.0.0.0"
 # http_port = 8081
-# initial_health_check_timeout = "15s"
+# initial_health_check_timeout = "3s"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
