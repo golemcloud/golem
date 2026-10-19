@@ -1028,7 +1028,7 @@ mod tests {
     use crate::durable_host::durability::HostFailureKind;
     use crate::services::blob_store::{
         BlobMutationFailure, BlobMutationFailureCause, BlobStoreError, BlobStoreMutation,
-        BlobStoreService, DefaultBlobStoreService, blob_store_error, require_known_blob_result,
+        BlobStoreService, DefaultBlobStoreService, blob_store_error,
     };
     use crate::services::resource_limits::AtomicResourceEntry;
     use crate::worker::entity_invocation::{RetainedEntityStore, await_component_entity_body};
