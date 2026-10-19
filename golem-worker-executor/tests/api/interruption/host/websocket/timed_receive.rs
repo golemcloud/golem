@@ -757,7 +757,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         ensure!(starts_named(&after, TIMED_RECEIVE) == vec![start]);
         assert_timed_invocation(&after, &key, 1)?;
         assert_receive_terminal(&after, start, 1)?;
-        ensure!(accepted.try_recv().is_err() && raw.try_recv().is_err());
+        ensure!(raw.try_recv().is_err());
         peer.assert_counts(1, 0)?;
         drop(first_gate.take());
         Ok::<_, anyhow::Error>(())

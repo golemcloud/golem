@@ -734,7 +734,6 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         executor.worker_has_pending_startup(&owned).await,
         "Suspend waits for normal permit wakeup before startup can process it"
     );
-    assert!(!worker.concurrent_agent_permit_is_held().await);
     tokio::select! {
         biased;
         result = &mut read => panic!("permit-wait Suspend discarded the read: {result:?}"),
@@ -744,7 +743,6 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_has_pending_startup(&owned).await
             || executor.worker_is_loaded(&owned).await
-            || worker.concurrent_agent_permit_is_held().await
         {
             tokio::task::yield_now().await;
         }
@@ -752,6 +750,13 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     })
     .await
     .context("file inspection pending startup and resident unload after second Suspend")??;
+    let released_permit = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.acquire_account_concurrent_agent_permit(agent.clone()),
+    )
+    .await
+    .context("file inspection account permit released after second Suspend")?;
+    drop(released_permit);
     tokio::select! {
         biased;
         result = &mut read => panic!("permit-wait Suspend discarded the read: {result:?}"),

@@ -378,7 +378,7 @@ async fn pending_response_body(
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone())).await?;
             ensure!(cached.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
             peer.assert_counts(2, 1, 1)?;
-            info!(?resource, %key, ?original, ?repaired_pending, ?reconstructed, requests = 2,
+            info!(?resource, %key, ?original, ?repaired_pending, requests = 2,
                 "Retained method finished once with one body; stable HTTP key across two external requests, not external exactly-once");
 
             tokio::time::timeout(Duration::from_secs(10), async {

@@ -8,7 +8,6 @@ use golem_worker_executor::services::UsesAllDeps;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::worker::instance::OwnerRuntimeResources;
-use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor_test_utils::AgentInitializationEnqueueGateHandle;
 use pretty_assertions::assert_eq;
 use std::sync::Mutex;

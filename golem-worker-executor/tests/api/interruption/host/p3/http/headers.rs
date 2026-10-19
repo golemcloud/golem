@@ -439,7 +439,7 @@ async fn pending_headers(
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone())).await?;
             ensure!(cached.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
             peer.assert_counts(2)?;
-            info!(?resource, %key, %send_start, ?reconstructed, requests = 2,
+            info!(?resource, %key, %send_start, requests = 2,
                 "Original HTTP send repaired under same Start and HTTP key; one method Finished; second external request observed");
 
             // Idle eviction forces completed history through a new Store before fresh work.
