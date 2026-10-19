@@ -20,7 +20,7 @@
 //! campaign uses the view to find a duplicate advertised address and a campaigner of a newer
 //! version, and the readiness check uses the time of etcd's last answer.
 
-use crate::sharding::error::ShardManagerError;
+use crate::sharding::error::{ShardManagerError, is_stale_auth_token, is_stale_auth_token_reason};
 use crate::sharding::leader_election::{ElectionValue, RetryDelays, bounded};
 use etcd_client::{Client, GetOptions, KeyValue, KvClient, WatchOptions};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -183,11 +183,32 @@ impl ElectionWatcher {
 
     /// Follows the election until the replica stops. A failure keeps the last view: it is still
     /// the best answer this replica has.
+    ///
+    /// etcd checks the token when the watcher reads the election and when it creates the watch,
+    /// but not for the events and progress answers of a watch it has created, so a change to
+    /// etcd's users or roles shows only at the next read: after the next change of the election,
+    /// or after a silence. etcd then refuses a JWT token from before the change, and the watcher
+    /// logs in again and follows the election again at once; otherwise it would keep the view
+    /// from before the change for as long as it runs.
     pub async fn run(self) -> anyhow::Result<()> {
         let mut backoff = self.retry.min;
         loop {
             let err = self.follow(&mut backoff).await;
             self.restarts.fetch_add(1, Ordering::SeqCst);
+            if is_stale_auth_token(&err) {
+                warn!(
+                    error = %err,
+                    "etcd's users or roles changed since this replica logged in; logging in again \
+                     to watch the shard manager election"
+                );
+                match bounded(self.request_timeout, self.client.refresh_token()).await {
+                    Ok(()) => continue,
+                    Err(login_failed) => warn!(
+                        error = %login_failed,
+                        "Cannot log in to etcd again to watch the shard manager election"
+                    ),
+                }
+            }
             warn!(
                 error = %err,
                 retry_in = ?backoff,
@@ -238,6 +259,16 @@ impl ElectionWatcher {
                         return ShardManagerError::Internal(
                             "the etcd watch on the election ended".to_string(),
                         );
+                    }
+                    // etcd refuses to create a watch with a token from before a change to its
+                    // users or roles by cancelling it at once, with the refusal as the reason.
+                    Ok(Some(response))
+                        if response.canceled()
+                            && is_stale_auth_token_reason(response.cancel_reason()) =>
+                    {
+                        return ShardManagerError::EtcdError(etcd_client::Error::WatchError(
+                            response.cancel_reason().to_string(),
+                        ));
                     }
                     // A compaction past the watch's revision cancels it; reading again resumes.
                     Ok(Some(response)) if response.canceled() => {

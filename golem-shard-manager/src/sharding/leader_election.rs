@@ -499,9 +499,9 @@ impl RetryDelays {
 /// so a shutdown can hand over while the keepalive task still renews.
 #[derive(Clone)]
 pub struct LeadershipHandle {
-    /// The election client: `publish_ready` sends on it, and the step-down logs in again through
-    /// it; `lease_client` is one of its sub-clients. Behind an `Arc`: a `Client` is several KB, and
-    /// this handle travels by value inside [`Elected`].
+    /// The election client: `publish_ready` sends on it, and both it and the step-down log in
+    /// again through it; `lease_client` is one of its sub-clients. Behind an `Arc`: a `Client` is
+    /// several KB, and this handle travels by value inside [`Elected`].
     client: Arc<Client>,
     lease_client: LeaseClient,
     lease_id: i64,
@@ -547,7 +547,6 @@ impl LeadershipHandle {
         retry_retriable_until(
             "marking the shard manager leader ready",
             || {
-                let mut election_client = self.client.election_client();
                 let options = ProclaimOptions::new().with_leader(self.leader_key.clone());
                 let value = value.clone();
                 let lapsed = lease.is_some_and(|belief| !belief.held());
@@ -559,9 +558,24 @@ impl LeadershipHandle {
                             self.lease_id
                         )));
                     }
-                    bounded(
+                    // The election client logged in before the campaign, which can have waited
+                    // through a change to etcd's users or roles.
+                    send_with_fresh_login(
+                        &self.client,
                         self.request_timeout,
-                        election_client.proclaim(value, Some(options)),
+                        "marking the shard manager leader ready",
+                        || {
+                            let mut election_client = self.client.election_client();
+                            let value = value.clone();
+                            let options = options.clone();
+                            async move {
+                                bounded(
+                                    self.request_timeout,
+                                    election_client.proclaim(value, Some(options)),
+                                )
+                                .await
+                            }
+                        },
                     )
                     .await
                     .map(|_| ())
@@ -1229,7 +1243,6 @@ impl LeaderElection {
     }
 }
 
-/// etcd's answer to revoking a lease it no longer holds; the leadership is released either way.
 /// Revokes `lease_id`. When etcd refuses the token because its users or roles changed since the
 /// login, logs in again and sends the revoke once more: the client's sub-clients share its token.
 async fn revoke_lease(
@@ -1255,6 +1268,7 @@ async fn revoke_lease(
     }
 }
 
+/// etcd's answer to revoking a lease it no longer holds; the leadership is released either way.
 fn is_lease_not_found(err: &ShardManagerError) -> bool {
     matches!(
         err,
@@ -1288,6 +1302,34 @@ where
         .await
         .map_err(|_| ShardManagerError::Timeout)?
         .map_err(ShardManagerError::from)
+}
+
+/// Sends a request made by `send` through `client` or one of its sub-clients. When etcd refuses
+/// the token because its users or roles changed since the login, logs in again and sends the
+/// request once more: the sub-clients share the client's token, so one login renews it for all of
+/// them. `what` names the request in the log.
+async fn send_with_fresh_login<T, F, Fut>(
+    client: &Client,
+    request_timeout: Duration,
+    what: &str,
+    mut send: F,
+) -> Result<T, ShardManagerError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, ShardManagerError>>,
+{
+    match send().await {
+        Err(err) if is_stale_auth_token(&err) => {
+            warn!(
+                error = %err,
+                operation = what,
+                "etcd's users or roles changed since this replica logged in; logging in again"
+            );
+            bounded(request_timeout, client.refresh_token()).await?;
+            send().await
+        }
+        result => result,
+    }
 }
 
 /// What a replica records under its election key. JSON, so that `etcdctl get` shows it.
@@ -1344,13 +1386,21 @@ impl LeaderLocator {
 
     /// `None` while no replica leads.
     pub async fn leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
-        let mut election_client = self.client.election_client();
-        let response = match bounded(
-            self.request_timeout,
-            election_client.leader(self.election_name.clone()),
-        )
-        .await
-        {
+        let read =
+            send_with_fresh_login(
+                &self.client,
+                self.request_timeout,
+                "reading the shard manager leader",
+                || {
+                    let mut election_client = self.client.election_client();
+                    let election_name = self.election_name.clone();
+                    async move {
+                        bounded(self.request_timeout, election_client.leader(election_name)).await
+                    }
+                },
+            )
+            .await;
+        let response = match read {
             Ok(response) => response,
             // etcd reports a leaderless election as an error with the same `Unknown` code as a
             // transport fault; the message is the only thing that tells the two apart.

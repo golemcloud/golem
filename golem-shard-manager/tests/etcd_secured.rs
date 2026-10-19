@@ -25,7 +25,8 @@ use golem_shard_manager::config::{
     EtcdConfig, EtcdPassword, EtcdTlsConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
 use golem_shard_manager::{
-    Deployment, LEADER_ELECTION_NAME, LeaderElection, RunDetails, STATE_KEY, ShardManagerError,
+    Deployment, Elected, ElectionWatch, LEADER_ELECTION_NAME, LeaderElection, LeaderLocator,
+    LeaderView, RunDetails, STATE_KEY, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::{DockerEtcd, DockerEtcdOptions};
 use rcgen::{
@@ -1326,4 +1327,154 @@ async fn a_campaign_that_starts_after_an_auth_change_with_jwt_tokens_logs_in_aga
         .await
         .expect("The campaign must log in again after the auth change")
         .expect("The campaign should win an empty election");
+}
+
+/// An etcd with TLS, authentication and JWT tokens, and the settings of a replica that logs in to
+/// it as `USER`.
+async fn jwt_etcd(pki: &TestPki) -> (DockerEtcd, EtcdConfig) {
+    let etcd = auth_etcd(pki, pki.etcd_options().with_jwt_tokens()).await;
+    let PersistenceConfig::Etcd(config) =
+        auth_config(&etcd.client_url(), PASSWORD, pki).persistence
+    else {
+        unreachable!("the auth config is an etcd config");
+    };
+    (etcd, config)
+}
+
+/// A change to etcd's users, a user added for backups: etcd then refuses every JWT token issued
+/// before it.
+async fn change_users(etcd: &DockerEtcd, pki: &TestPki) {
+    let mut auth = inspection_client_auth(&etcd.client_url(), pki)
+        .await
+        .auth_client();
+    auth.user_add("backup", "backup-password", None)
+        .await
+        .unwrap();
+}
+
+/// Campaigns into an election that has no other campaigner; the caller keeps the won lease
+/// renewed.
+async fn lead(election: &LeaderElection) -> Elected {
+    timeout(STARTUP_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("The campaign should win an empty election in time")
+        .expect("The campaign should win an empty election")
+}
+
+#[test]
+// A standby names the leader from its watch of the election. The watch stream outlives a change to
+// etcd's users, but each change of the election makes the standby read the election again, with a
+// token from before the change: the standby must log in again, or it names a leader that is gone
+// for as long as it runs.
+async fn the_election_watch_follows_the_election_after_an_auth_change_with_jwt_tokens(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let (etcd, config) = jwt_etcd(&pki).await;
+    let leader = LeaderElection::connect(&config, LEADER_ELECTION_NAME, test_address(9101))
+        .await
+        .expect("The leader's election client should connect");
+    let Elected {
+        keepalive,
+        leadership,
+        ..
+    } = lead(&leader).await;
+    let _renewing = tokio::spawn(keepalive.run());
+
+    let standby = LeaderElection::connect(&config, LEADER_ELECTION_NAME, test_address(9102))
+        .await
+        .expect("The standby's election client should connect");
+    let (mut watch, watcher) = standby.watch();
+    let _watching = tokio::spawn(watcher.run());
+    view_becomes(&mut watch, "the leader", |view| {
+        matches!(view, LeaderView::Leader(value) if value.grpc_address == test_address(9101))
+    })
+    .await;
+
+    change_users(&etcd, &pki).await;
+    leadership
+        .step_down()
+        .await
+        .expect("The step-down must log in again after the auth change");
+
+    view_becomes(&mut watch, "no leader", |view| {
+        matches!(view, LeaderView::NoLeader)
+    })
+    .await;
+}
+
+/// Waits until the watched view of the leader passes `check`.
+async fn view_becomes(watch: &mut ElectionWatch, what: &str, check: impl Fn(&LeaderView) -> bool) {
+    let followed = timeout(HANDOVER_BOUND, async {
+        while !check(&watch.leader_value()) {
+            watch.changed().await;
+        }
+    })
+    .await;
+    assert!(
+        followed.is_ok(),
+        "The watched view should show {what}, but shows {:?}",
+        watch.leader_value()
+    );
+}
+
+#[test]
+// A new leader marks its election value ready once it serves, through the election client, whose
+// token can be from before a change to etcd's users: the mark must log in again rather than fail
+// the startup, which would step down a leader that could serve.
+async fn a_leader_marks_itself_ready_after_an_auth_change_with_jwt_tokens(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let (etcd, config) = jwt_etcd(&pki).await;
+    let election = LeaderElection::connect(&config, LEADER_ELECTION_NAME, test_address(9201))
+        .await
+        .expect("The election client should connect");
+    let Elected {
+        keepalive,
+        leadership,
+        ..
+    } = lead(&election).await;
+    let _renewing = tokio::spawn(keepalive.run());
+
+    change_users(&etcd, &pki).await;
+    timeout(LEASE_TTL + HANDOVER_BOUND, leadership.publish_ready(None))
+        .await
+        .expect("The ready mark should end within its budget")
+        .expect("The ready mark must log in again after the auth change");
+
+    let root = inspection_client_auth(&etcd.client_url(), &pki).await;
+    let leader = LeaderLocator::new(root, LEADER_ELECTION_NAME, REQUEST_TIMEOUT)
+        .leader()
+        .await
+        .expect("The election should be readable")
+        .expect("The election should have a leader");
+    assert!(leader.ready, "{leader:?}");
+}
+
+#[test]
+// A standby logs who leads at a fixed cadence, reading the leader through its election client,
+// whose token can be from before a change to etcd's users: the read must log in again rather than
+// report the leader as unreadable until the standby's campaign itself is refused.
+async fn the_leader_is_readable_after_an_auth_change_with_jwt_tokens(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let (etcd, config) = jwt_etcd(&pki).await;
+    let election = LeaderElection::connect(&config, LEADER_ELECTION_NAME, test_address(9301))
+        .await
+        .expect("The election client should connect");
+    let Elected { keepalive, .. } = lead(&election).await;
+    let _renewing = tokio::spawn(keepalive.run());
+
+    change_users(&etcd, &pki).await;
+    let leader = timeout(HANDOVER_BOUND, election.current_leader())
+        .await
+        .expect("The read of the leader should end in time")
+        .expect("The read of the leader must log in again after the auth change")
+        .expect("The election should have a leader");
+    assert_eq!(leader.grpc_address, test_address(9301));
 }
