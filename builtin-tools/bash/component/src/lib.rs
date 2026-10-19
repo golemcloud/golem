@@ -163,9 +163,6 @@ pub async fn run_script(
     if let Some(stdin) = stdin {
         session.set_stop_request(stop_requested(stdin));
     }
-    // Every component call has a time limit; startup before this point has no watch.
-    #[cfg(target_arch = "wasm32")]
-    let _watch = execution::Watch::arm();
     // Natively nothing stops a script, as nothing limits its time.
     #[cfg(not(target_arch = "wasm32"))]
     drop(stdin);

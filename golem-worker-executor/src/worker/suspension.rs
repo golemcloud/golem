@@ -826,10 +826,6 @@ impl RuntimeStore {
     /// Releases one async input per fresh driver block. Waking this future invalidates the
     /// driver's blocked generation, so delivery consumes an edge, not the current level.
     pub(crate) async fn await_guest_blocked(&self) {
-        let started_at = {
-            let state = self.owner.state.lock().unwrap();
-            state.stores[&self.store_id].driver.blocked_seq
-        };
         loop {
             let notified = self.guest_blocked.notified();
             tokio::pin!(notified);
@@ -837,7 +833,7 @@ impl RuntimeStore {
             {
                 let mut state = self.owner.state.lock().unwrap();
                 let driver = &mut state.stores.get_mut(&self.store_id).unwrap().driver;
-                if driver.blocked_seq > started_at && driver.blocked_seq > driver.delivery_seq {
+                if driver.blocked_seq > driver.delivery_seq {
                     driver.delivery_seq = driver.blocked_seq;
                     return;
                 }
@@ -1377,13 +1373,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    async fn guest_delivery_requires_a_block_after_waiting_starts() {
+    async fn guest_delivery_consumes_an_already_published_block() {
         let runtime = RuntimeStore::new(OwnerSuspension::new());
         let run = runtime_run_ids(1)[0];
         guest_block(&runtime, run);
         let mut delivery = Box::pin(runtime.await_guest_blocked());
-        assert!(delivery.as_mut().now_or_never().is_none());
-        guest_block(&runtime, run);
         assert!(delivery.as_mut().now_or_never().is_some());
     }
 

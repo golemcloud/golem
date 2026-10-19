@@ -4,23 +4,7 @@ mod bindings {
 }
 
 thread_local! {
-    static WATCHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     static YIELDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-pub struct Watch;
-
-impl Watch {
-    pub fn arm() -> Self {
-        WATCHES.with(|watches| watches.set(watches.get() + 1));
-        Self
-    }
-}
-
-impl Drop for Watch {
-    fn drop(&mut self) {
-        WATCHES.with(|watches| watches.set(watches.get() - 1));
-    }
 }
 
 pub fn services() -> bash_shell::ExecutionServices {
@@ -30,15 +14,15 @@ pub fn services() -> bash_shell::ExecutionServices {
         },
         yield_now: || {
             Box::pin(async {
-                let block = WATCHES.with(|watches| watches.get() != 0)
-                    && YIELDS.with(|yields| {
-                        let next = (yields.get() + 1) % 1024;
-                        yields.set(next);
-                        next == 0
-                    });
+                let block = YIELDS.with(|yields| {
+                    let next = (yields.get() + 1) % 1024;
+                    yields.set(next);
+                    next == 0
+                });
                 if block {
-                    // Async stop/timer events arrive only at blocked waits. Amortize the
-                    // durable Start, End and CompletionDelivered cost over 1024 yields.
+                    // Every script has a time limit; async stop/timer events need blocked
+                    // waits. Amortize the durable Start, End and CompletionDelivered cost
+                    // over 1024 yields rather than recording a call on every yield.
                     bindings::wasi::clocks::monotonic_clock::wait_for(0).await;
                 } else {
                     wit_bindgen::yield_async().await;
