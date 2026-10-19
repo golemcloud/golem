@@ -209,7 +209,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │ outer loop (one iteration = one resident instance)                  │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ resume_replay│
-│    ephemeral:      replay typed initialization only, append Restart │
+│    ephemeral:      constructor-only replay, append Restart          │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
 │  ──▶ instance ends (idle / interrupt / trap / suspend)               │
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
@@ -221,6 +221,13 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 `AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
+Constructor-only replay covers restarts before the accepted invocation ran. An ephemeral agent
+never reconstructs in process once its Store has run: `on_invocation_failure` turns traps that
+would restart it into terminal failures and notifies the caller. Any other `Immediate`, `Delayed`,
+or `ReacquirePermits` decision reaching the outer loop becomes a terminal interruption plus archive,
+without replacing an already published outcome. Ordinary ephemeral agents keep `TryStop` unchanged;
+ephemeral external-tool owners also treat it as terminal. Startup retries before a Store exists
+remain unchanged. A started method never runs again live.
 Replay starts from the chosen snapshot baseline
 (see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
 scans the replayed range for recovery metadata (delivery markers, guest stream observations and
