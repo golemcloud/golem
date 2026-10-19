@@ -9,7 +9,7 @@
 export const meta = {
   title: "Golem: the durable runtime for AI agents",
   description:
-    "Golem runs AI agents, their tools and their artifacts: pages, files and live output. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
 };
 
 // =============================================================================
@@ -26,7 +26,7 @@ export const hero = {
   },
   heading: "The durable runtime for AI agents",
   subhead:
-    "Golem runs AI agents, their tools and their artifacts: pages, files and live output. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
   ctas: {
     primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
@@ -66,8 +66,8 @@ export const customerLogos = {
 export const coreVm = {
   eyebrow: "The core of Golem",
   heading: "A lightweight, durable VM with permissions agents can't bypass",
-  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can be rebuilt anywhere.",
-  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem rebuilds the agent on node 2 from the oplog. It resumes at the exact instruction with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
+  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can resume anywhere.",
+  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2 from the oplog. It resumes at the last instruction with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
   vm: { name: "Agent", where: "node 1", sub: "in its own WebAssembly VM" },
   golem: { name: "Golem", sub: "the VM's only way out" },
   calls: [
@@ -80,11 +80,11 @@ export const coreVm = {
     sub: "a log of every call, stored off the node",
     entries: [{ name: "Orders API", value: "result" }],
   },
-  rebuilt: "rebuilt after a restart, a crash or an idle wait",
+  rebuilt: "restored after a restart, a crash or an idle wait",
   restored: {
-    name: "Agent, rebuilt",
+    name: "Agent, recovered",
     where: "node 2",
-    state: "Resumes at the exact instruction",
+    state: "Resumes at the last instruction",
     sub: "memory, call stack, files and environment restored",
     reused: "Orders API not called again: the recorded result is used",
   },
@@ -92,11 +92,11 @@ export const coreVm = {
   explanations: [
     {
       title: "Lightweight",
-      body: "WebAssembly, not Linux: each VM has private memory, files and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in about 2 ms, or under 1 ms at best.",
+      body: "WebAssembly, not Linux: each VM has private memory, files and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
     },
     {
       title: "Durable",
-      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's rebuilt at the exact instruction, without repeating completed calls.",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored at the last instruction, without repeating completed calls.",
     },
     {
       title: "Secure",
@@ -148,7 +148,7 @@ export type ChapterFigure = Record<CodeLanguage, ChapterCode>;
 
 export const agentsChapter = {
   eyebrow: "Agents",
-  heading: "Agents are code, not prompts",
+  heading: "Agents are your own arbitrary code, not prompts",
   lead: "Each agent's VM keeps its whole execution durable.",
   figure: {
     ts: {
@@ -338,8 +338,8 @@ var _ = impl.Handle(Handle, func(
 
 export const toolsChapter = {
   eyebrow: "Tools",
-  heading: "Every tool call in its own VM, exactly once",
-  lead: "After a node restart or crash, rebuilding a tool call's VM re‑runs its code using recorded results, without repeating completed calls.",
+  heading: "Every tool call in its own VM, executed exactly once",
+  lead: "After a node restart or crash, restoring a tool call's state replays its code using recorded results, without repeating completed effects.",
   figure: {
     ts: {
       filename: "refund-tool.ts",
@@ -540,7 +540,7 @@ var _ = Body.Handle(func(_ *tool.Context, a Args) (Result, error) {
 
 export const artifactsChapter = {
   eyebrow: "Artifacts",
-  heading: "Artifacts your agents deploy",
+  heading: "Securely expose artifacts your agents build and deploy",
   lead: "Pages, files and live output, with each artifact in its own WebAssembly VM.",
   figure: {
     ts: {
