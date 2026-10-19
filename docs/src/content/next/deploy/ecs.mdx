@@ -28,10 +28,12 @@ One ECS service runs one task of the [`golemservices/golem` image](/next/deploy/
 | --- | --- |
 | Desired count | **1** |
 | Deployment | Minimum healthy 0%, maximum 100% |
-| Container port | 9881 |
+| Container ports | Golem 9881; Caddy 8006 for requests and 8007 for health checks |
 | Environment | The `GOLEM__` settings that [`generate-env.sh`](/next/deploy/server#environment-file) prints, and `GOLEM__ROUTER__MANAGEMENT_HOST` set to the management host |
-| Target group | Port 9881, health check `/healthcheck`, a grace period of at least 120 seconds |
+| Target group | Caddy port 8006, HTTP health check `/healthcheck` on port 8007, a grace period of at least 120 seconds |
 | Listener | The default action of the HTTPS listener forwards to the target group |
+
+Add the [Caddy sidecar](#forwarded-headers) to the task. Allow the load balancer's security group to reach ports 8006 and 8007 of the task. Keep port 9881 private. The load balancer sends health checks with the task IP address as the host, not the management host. Without the sidecar's health listener, Golem routes them to the public endpoint and returns 404.
 
 The deployment settings make ECS stop the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two servers would run on the same database, which can run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager). Do not use the AWS access key variables: the task role gives the S3 client its credentials.
 
@@ -118,7 +120,7 @@ Reserve the management host with `GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS='
 
 The load balancer keeps the `Host` header, so the server finds the deployment of each domain. It does not send `X-Forwarded-Host`, and its addresses change, so do not list it in the trusted ingress addresses. The server then sees the scheme of its own listener, `http`. This affects the URLs that it builds from the request, such as the address an [OIDC login](/next/how-to-guides/common/golem-configure-api-domain) returns to.
 
-To give the server the public scheme, run Caddy as a second container in the task that the load balancer reaches, and point the target group at Caddy's port instead. Build the image from this Caddyfile, with the port of the upstream: `9881` for the all-in-one image, `9006` for the worker service of a fixed cluster:
+To give the server the public scheme, run Caddy as a second container in the task that the load balancer reaches, and point the target group at Caddy's port instead. For the all-in-one image, build the sidecar image from this Caddyfile. Replace `golem.example.com` with the management host:
 
 ```text filename="Caddyfile" copy
 :8006 {
@@ -127,6 +129,17 @@ To give the server the public scheme, run Caddy as a second container in the tas
 		header_up X-Forwarded-Host {host}
 	}
 }
+
+:8007 {
+	handle /healthcheck {
+		reverse_proxy 127.0.0.1:9881 {
+			header_up Host golem.example.com
+			header_up X-Forwarded-Host golem.example.com
+			header_up X-Forwarded-Proto https
+		}
+	}
+	respond 404
+}
 ```
 
 ```dockerfile filename="Dockerfile" copy
@@ -134,4 +147,8 @@ FROM caddy:2
 COPY Caddyfile /etc/caddy/Caddyfile
 ```
 
-Caddy replaces the forwarded headers of every request with the host of the request and `https`, which is correct when the load balancer accepts HTTPS only. The containers of a task share one network namespace, so trust `127.0.0.1`: set `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["127.0.0.1"]'` on the all-in-one image, or `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["127.0.0.1"]'` on the worker service.
+Caddy replaces the forwarded headers of every request with the host of the request and `https`, which is correct when the load balancer accepts HTTPS only. Port 8007 forwards only `/healthcheck`, with the management host. Keep this listener separate from port 8006, so it does not replace an application's own `/healthcheck` route. Set the target group's health check port to 8007 and its success code to 200. Allow only the load balancer's security group to reach both Caddy ports.
+
+The containers of a task share one network namespace, so trust `127.0.0.1`: set `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["127.0.0.1"]'` on the all-in-one image.
+
+For the worker service of a fixed cluster, use only the `:8006` block, change its upstream port to `9006`, and set `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["127.0.0.1"]'`. Point the public target group at Caddy port 8006, but keep its health check on the worker service's management port 9005 as the [services table](#services) describes.
