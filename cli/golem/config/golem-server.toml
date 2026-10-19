@@ -159,20 +159,22 @@ blob_storage_limit = 1000000000000000000
 component_limit = 1000000000000000000
 env_limit = 1000000000000000000
 max_concurrent_agents_per_executor = 1000000000000000000
-max_disk_space_per_worker = 1000000000000000000
-max_disk_space_per_worker_user_configurable = true
-max_memory_per_worker = 1000000000000000000
-max_memory_per_worker_ceiling = 1000000000000000000
-max_memory_per_worker_user_configurable = true
+max_memory_per_agent = 1000000000000000000
+max_memory_per_agent_ceiling = 1000000000000000000
+max_memory_per_agent_user_configurable = true
+max_storage_per_agent = 1000000000000000000
+max_storage_per_agent_enabled = false
+max_storage_per_agent_user_configurable = false
 max_table_elements_per_worker = 1000000000000000000
-monthly_gas_limit = 1000000000000000000
+monthly_compute_gcu = 0
+monthly_durable_storage_gb_month = 0
+monthly_ephemeral_storage_gb_month = 0
 monthly_http_call_limit = 1000000000000000000
-monthly_memory_gb_seconds = 1000000000000000000
-monthly_memory_gb_seconds_ceiling = 1000000000000000000
-monthly_memory_gb_seconds_user_configurable = true
+monthly_memory_gb_seconds = 0
 monthly_rpc_call_limit = 1000000000000000000
 monthly_upload_limit = 1000000000000000000
 oplog_writes_per_second = 1000000000000000000
+overage_eligible = false
 per_invocation_http_call_limit = 1000000000000000000
 per_invocation_rpc_call_limit = 1000000000000000000
 plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
@@ -226,6 +228,9 @@ challenge_bytes = 16384
 document_bytes = 1048576
 request_bytes = 65536
 timeout = "20s"
+
+[registry_service.resource_grants]
+cleanup_interval = "1m"
 
 [registry_service.security_scheme]
 strict_issuer_url_validation = false
@@ -911,7 +916,6 @@ type = "Disabled"
 
 [worker_service.worker_executor.tls.config]
 
-
 ## Generated from example config: Postgres and S3
 # data_dir = "/var/lib/golem"
 #
@@ -1112,20 +1116,22 @@ type = "Disabled"
 # component_limit = 1000000000000000000
 # env_limit = 1000000000000000000
 # max_concurrent_agents_per_executor = 1000000000000000000
-# max_disk_space_per_worker = 1000000000000000000
-# max_disk_space_per_worker_user_configurable = true
-# max_memory_per_worker = 1000000000000000000
-# max_memory_per_worker_ceiling = 1000000000000000000
-# max_memory_per_worker_user_configurable = true
+# max_memory_per_agent = 1000000000000000000
+# max_memory_per_agent_ceiling = 1000000000000000000
+# max_memory_per_agent_user_configurable = true
+# max_storage_per_agent = 1000000000000000000
+# max_storage_per_agent_enabled = false
+# max_storage_per_agent_user_configurable = false
 # max_table_elements_per_worker = 1000000000000000000
-# monthly_gas_limit = 1000000000000000000
+# monthly_compute_gcu = 0
+# monthly_durable_storage_gb_month = 0
+# monthly_ephemeral_storage_gb_month = 0
 # monthly_http_call_limit = 1000000000000000000
-# monthly_memory_gb_seconds = 1000000000000000000
-# monthly_memory_gb_seconds_ceiling = 1000000000000000000
-# monthly_memory_gb_seconds_user_configurable = true
+# monthly_memory_gb_seconds = 0
 # monthly_rpc_call_limit = 1000000000000000000
 # monthly_upload_limit = 1000000000000000000
 # oplog_writes_per_second = 1000000000000000000
+# overage_eligible = false
 # per_invocation_http_call_limit = 1000000000000000000
 # per_invocation_rpc_call_limit = 1000000000000000000
 # plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
@@ -1179,6 +1185,9 @@ type = "Disabled"
 # document_bytes = 1048576
 # request_bytes = 65536
 # timeout = "20s"
+#
+# [registry_service.resource_grants]
+# cleanup_interval = "1m"
 #
 # [registry_service.security_scheme]
 # strict_issuer_url_validation = false

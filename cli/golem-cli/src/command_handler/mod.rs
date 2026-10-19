@@ -25,6 +25,9 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliGlobalFlags, GolemCliSubcommand,
 };
 use crate::command_handler::account::AccountCommandHandler;
+use crate::command_handler::account::limits::AccountLimitsCommandHandler;
+use crate::command_handler::account::permission_share::AccountPermissionShareCommandHandler;
+use crate::command_handler::account::usage::AccountUsageCommandHandler;
 use crate::command_handler::agent::AgentCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
@@ -671,6 +674,9 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
 //       if the need ever arises
 pub trait Handlers {
     fn account_handler(&self) -> AccountCommandHandler;
+    fn account_limits_handler(&self) -> AccountLimitsCommandHandler;
+    fn account_permission_share_handler(&self) -> AccountPermissionShareCommandHandler;
+    fn account_usage_handler(&self) -> AccountUsageCommandHandler;
     fn secret_handler(&self) -> SecretCommandHandler;
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler;
     fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler;
@@ -699,6 +705,18 @@ pub trait Handlers {
 impl Handlers for Arc<Context> {
     fn account_handler(&self) -> AccountCommandHandler {
         AccountCommandHandler::new(self.clone())
+    }
+
+    fn account_limits_handler(&self) -> AccountLimitsCommandHandler {
+        AccountLimitsCommandHandler::new(self.clone())
+    }
+
+    fn account_permission_share_handler(&self) -> AccountPermissionShareCommandHandler {
+        AccountPermissionShareCommandHandler::new(self.clone())
+    }
+
+    fn account_usage_handler(&self) -> AccountUsageCommandHandler {
+        AccountUsageCommandHandler::new(self.clone())
     }
 
     fn secret_handler(&self) -> SecretCommandHandler {

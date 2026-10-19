@@ -324,6 +324,8 @@ pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
             interrupt_kind,
         });
     }
+    let _usage = store.data().durable_ctx().begin_guest_resource_usage();
+    store.data().durable_ctx().activate_live_resource_usage();
     let component = store.data().component_metadata();
     let agent_id = store.data().parsed_agent_id();
     let agent_type = agent_id
@@ -725,7 +727,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             principal,
         } => {
             let guest = load_agent_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest
                     .call_initialize(accessor, agent_type, input, principal)
@@ -757,7 +759,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             expected_output,
         } => {
             let guest = load_agent_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = if expected_output.uses_streams() {
                 let result = store
                     .as_context_mut()
@@ -802,7 +804,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         }
         PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result =
                 run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
                     .await;
@@ -825,7 +827,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         }
         PreparedCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest.call_load(accessor, snapshot).await
             })
@@ -855,7 +857,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             entries,
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
-            prepare_guest_call(store, display_name).await;
+            let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 guest
                     .call_process(
@@ -898,6 +900,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             stderr,
             principal,
         } => {
+            let _usage = store.data().durable_ctx().begin_guest_resource_usage();
+            store.data().durable_ctx().activate_live_resource_usage();
             prepare_guest_call(store, display_name).await;
             let result = crate::durable_host::tool::invoke_external_tool(
                 store,
@@ -953,6 +957,44 @@ pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
             .get_public_state()
             .event_service()
             .emit_invocation_start(display_name, idempotency_key, store.data().is_live());
+    }
+}
+
+/// Rearms enabled resource enforcement before entering an agent guest call.
+async fn prepare_metered_guest_call<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    display_name: &str,
+    reconstruction: bool,
+) -> Result<Option<crate::services::linear_memory::GuestResourceUsageGuard>, WorkerExecutorError> {
+    let usage = (!reconstruction).then(|| store.data().durable_ctx().begin_guest_resource_usage());
+    rearm_fuel_check(store);
+    let current_level = store.get_fuel().unwrap_or(0);
+    let agent_mode = store.data().agent_mode();
+    if let Err(error) = store.data_mut().ensure_fuel(current_level) {
+        return Err(resource_capacity_error(agent_mode, error));
+    }
+    prepare_guest_call(store, display_name).await;
+    if !reconstruction {
+        store.data().durable_ctx().activate_live_resource_usage();
+    }
+    Ok(usage)
+}
+
+pub(crate) fn resource_capacity_error(
+    agent_mode: AgentMode,
+    error: OplogAgentError,
+) -> WorkerExecutorError {
+    match (agent_mode, &error) {
+        (
+            AgentMode::Durable,
+            OplogAgentError::EphemeralFuelExhausted(_) | OplogAgentError::EphemeralCannotSuspend(_),
+        ) => WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()),
+        },
+        _ => WorkerExecutorError::InvocationFailed {
+            error,
+            stderr: String::new(),
+        },
     }
 }
 
@@ -1965,6 +2007,54 @@ mod tests {
 
     const AGENT_TYPE: &str = "test-agent";
     const METHOD_NAME: &str = "do-work";
+
+    #[test]
+    fn unavailable_capacity_error_is_not_converted_to_quota_suspension() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let unavailable = OplogAgentError::Unknown(
+                crate::services::resource_limits::MonthlyResourceCapacityError::UNAVAILABLE_REASON
+                    .to_string(),
+            );
+            let error = resource_capacity_error(mode, unavailable.clone());
+            assert_eq!(
+                error,
+                WorkerExecutorError::InvocationFailed {
+                    error: unavailable,
+                    stderr: String::new(),
+                },
+                "unavailable capacity must remain an infrastructure failure for {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compute_exhaustion_maps_to_suspend_or_invocation_failure_by_agent_mode() {
+        let durable = resource_capacity_error(
+            AgentMode::Durable,
+            OplogAgentError::EphemeralCannotSuspend(
+                golem_common::model::oplog::EphemeralCannotSuspendError {
+                    reason: "fuel exhausted".to_string(),
+                },
+            ),
+        );
+        assert!(matches!(
+            durable,
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Suspend(_)
+            }
+        ));
+
+        let ephemeral = resource_capacity_error(
+            AgentMode::Ephemeral,
+            OplogAgentError::EphemeralFuelExhausted(
+                golem_common::model::oplog::EphemeralFuelExhaustedError { overdraft_limit: 0 },
+            ),
+        );
+        assert!(matches!(
+            ephemeral,
+            WorkerExecutorError::InvocationFailed { .. }
+        ));
+    }
 
     #[test]
     async fn live_streaming_response_is_published_exactly_once() {

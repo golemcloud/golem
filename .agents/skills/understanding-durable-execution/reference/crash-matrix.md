@@ -72,20 +72,22 @@ is not supported. Cancellation keeps the canonical policy; it is not forced to r
 
 ## Owner lifecycle handoff (`worker/mod.rs`, `worker/invocation_loop.rs`, `services/active_agents/mod.rs`)
 
-The primary Store plus current entity Stores form one resident lifecycle unit. Lifecycle
-establishment queues the event, waits for its predecessor, fences matching entity admission,
-signals the primary, drains fenced entity bodies, then completes. Startup takes a pending event and
-waits for this establishment before constructing a replacement, even when it already holds a
-concurrent-agent permit.
+The primary Store plus current entity Stores form one resident lifecycle unit. Acceptance queues
+the request and advances main's establishment tail in one locked step, then starts independently
+owned establishment. The task waits for its predecessor, begins the matching entity fence, notifies
+the primary Store and drains fenced bodies. It has no selected-writer join or immutable cause election.
+The invocation loop takes the exact request and waits for that request's establishment. Startup
+checks the current tail and idle request state before reopening entity admission. The wallet installer
+owns the one replay/tool-generation reset. Acceptance and typed notification are not physical release.
 
 | Race or loss window | Required outcome | Identity or synchronization that makes it safe |
 |---|---|---|
-| `Restart` while an entity body is running or a completed body is reconstructing | Fence new body admission, stop and drain the old primary/entity unit, then reconstruct the original owner invocation and bodies from the owner oplog; do not append a semantic tool failure or charge another semantic retry | Serialized `InterruptEstablishment`, `ActiveAgent::entity_fence_generation`, owner oplog identity |
-| Restart queued while the owner is unloaded, waiting for a permit, or already retaining its permit | Consume the restart before Store creation; a retained permit is scheduling state, not permission to bypass lifecycle control | Unconditional pending-interrupt check plus establishment wait at the top of the outer loop |
-| Explicit terminal interrupt during entity work | Drain the unit and leave the invocation interrupted until an explicit resume; do not convert it into automatic restart | The terminal interrupt remains authoritative through establishment and reconstruction gating |
+| `Restart` while an entity body is running or a completed body is reconstructing | Fence new body admission, stop and drain the old primary/entity unit, then reconstruct the original owner invocation and bodies from the owner oplog; do not append a semantic tool failure or charge another semantic retry | Independently owned establishment, exact cached owner, `ActiveAgent::entity_fence_generation`, owner oplog identity |
+| Restart queued while the owner is unloaded, waiting for a permit, or already retaining its permit | Process the restart before Store creation; if an exact blocked-start task was captured, cancel and join it without acquiring its permit. A retained permit cannot bypass lifecycle control | Pending-interrupt check, per-request establishment, current-tail/idle-state admission check and canonical wallet installation |
+| Explicit terminal interrupt during entity work | Drain the unit and leave the invocation interrupted until an explicit resume; acceptance alone does not prove drainage or physical permit release | Exact accepted request and its establishment, ordinary Store/cleanup joins, exact owner/entity generation checks |
 | Old cached owner A retires after replacement B is published under the same `AgentId` | A may finish its own cleanup but cannot remove, fence, reopen, or write lifecycle state for B; B remains usable for a fresh invocation | Concrete cached `Arc<Worker>` identity for removal/fencing; generation-checked entity-admission reopen |
 | Executor shutdown while a retained entity callback or Store task is entered | Fence captured oplog generations first; abandon transient entity execution without semantic finalization; join Store destruction and retained callbacks before closing the captured oplog layers | `InvocationLoops` shutdown token/tracker plus exact-generation `OplogShutdownHandle` |
-| Delayed retry begins with duplicate resident work notifications queued | Coalesce only the finite pre-teardown prefix; preserve one work hint and every replay request; leave post-boundary arrivals queued so genuinely new work can shorten the delay | `receiver.len()` boundary, deferred `WorkAvailable`, retained `ResumeReplay`, authoritative interrupt recheck |
+| Delayed retry begins with duplicate resident work notifications queued | Coalesce only the finite pre-teardown prefix; preserve one work hint and one coalesced replay demand; leave post-boundary arrivals queued so genuinely new work can shorten the delay | `receiver.len()` boundary, deferred `WorkAvailable`, retained `ResumeReplay`, authoritative interrupt recheck |
 
 ## Invocation (`worker/mod.rs`, `durable_host/mod.rs::on_agent_invocation_success`)
 

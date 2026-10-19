@@ -698,7 +698,7 @@ async fn completion_delivery_terminal_failure_retains_call_attribution() {
 
 #[test]
 async fn completion_delivery_cancelled_terminal_wait_preserves_append_ownership() {
-    for (teardown, terminal_fails) in [(false, false), (true, false), (false, true)] {
+    for (teardown, terminal_fails) in [(false, false), (true, false), (false, true), (true, true)] {
         let oplog = Arc::new(InMemoryOplog::new());
         let counter = Arc::new(AtomicUsize::new(0));
         let (tx, mut rx) = mpsc::unbounded_channel();

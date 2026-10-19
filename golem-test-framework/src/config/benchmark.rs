@@ -351,6 +351,7 @@ impl BenchmarkTestDependencies {
                     .concat(),
                 ),
             },
+            Vec::new(),
         )
         .map(|(_tracer, provider)| provider)
     }

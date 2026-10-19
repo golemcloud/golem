@@ -14,7 +14,9 @@
 
 use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
+use crate::services::byte_time_accumulator::MeteringTime;
 use crate::services::resource_limits::{AgentMemoryLimitTarget, AtomicResourceEntry};
+use crate::services::resource_usage_metering::ResourceUsageLiveActivation;
 use golem_common::model::agent::AgentMode;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -49,6 +51,9 @@ struct Inner {
     retained_growth_grant: Arc<Mutex<MemoryGrant>>,
     reconciling: AtomicBool,
     replaying: AtomicBool,
+    usage_live: AtomicBool,
+    guest_bodies: AtomicU64,
+    live_activation: Mutex<Option<ResourceUsageLiveActivation>>,
     historical_admission: AtomicBool,
     transitions: Arc<Mutex<()>>,
     live_reservation_activation: tokio::sync::Mutex<()>,
@@ -86,6 +91,27 @@ impl LinearMemoryTracker {
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
         now: Instant,
     ) -> Self {
+        Self::new_at(
+            bytes,
+            initially_reserved_bytes,
+            mode,
+            replaying,
+            resource_entry,
+            retained_growth_grant,
+            MeteringTime::now().at_instant(now),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_at(
+        bytes: u64,
+        initially_reserved_bytes: u64,
+        mode: AgentMode,
+        replaying: bool,
+        resource_entry: Arc<AtomicResourceEntry>,
+        retained_growth_grant: Arc<Mutex<MemoryGrant>>,
+        now: MeteringTime,
+    ) -> Self {
         Self::new_inner(
             bytes,
             initially_reserved_bytes,
@@ -113,7 +139,7 @@ impl LinearMemoryTracker {
             replaying,
             resource_entry,
             retained_growth_grant,
-            metering_enabled.then(Instant::now),
+            metering_enabled.then(MeteringTime::now),
         )
     }
 
@@ -124,7 +150,7 @@ impl LinearMemoryTracker {
         replaying: bool,
         resource_entry: Arc<AtomicResourceEntry>,
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
-        meter_started_at: Option<Instant>,
+        meter_started_at: Option<MeteringTime>,
     ) -> Self {
         let inner = Arc::new(Inner {
             bytes: AtomicU64::new(bytes),
@@ -140,14 +166,20 @@ impl LinearMemoryTracker {
             retained_growth_grant,
             reconciling: AtomicBool::new(true),
             replaying: AtomicBool::new(replaying),
+            usage_live: AtomicBool::new(!replaying),
+            guest_bodies: AtomicU64::new(0),
+            live_activation: Mutex::new(None),
             historical_admission: AtomicBool::new(replaying),
             transitions: Arc::new(Mutex::new(())),
             live_reservation_activation: tokio::sync::Mutex::new(()),
             live_reservation_activated: AtomicBool::new(false),
             resource_entry: resource_entry.clone(),
             limit_exceeded: Mutex::new(None),
-            meter: meter_started_at
-                .map(|now| AgentMemoryMeter::new(mode, bytes, false, resource_entry, now)),
+            meter: meter_started_at.map(|now| {
+                let meter = AgentMemoryMeter::new_at(mode, bytes, false, resource_entry, now);
+                meter.set_billable_at(!replaying, now);
+                meter
+            }),
         });
         let limit_target: Arc<dyn AgentMemoryLimitTarget> = inner.clone();
         inner
@@ -158,6 +190,71 @@ impl LinearMemoryTracker {
 
     pub fn current_bytes(&self) -> u64 {
         self.inner.bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn usage_is_live(&self) -> bool {
+        self.inner.usage_live.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn billable_bytes(&self) -> u64 {
+        self.inner
+            .meter
+            .as_ref()
+            .map_or(0, AgentMemoryMeter::billable_bytes)
+    }
+
+    pub(crate) fn subscribe_billable_bytes(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.inner
+            .meter
+            .as_ref()
+            .map(AgentMemoryMeter::subscribe_billable_bytes)
+    }
+
+    pub(crate) fn set_live_activation(&self, activation: ResourceUsageLiveActivation) {
+        *self.inner.live_activation.lock().unwrap() = Some(activation);
+    }
+
+    pub(crate) fn begin_reconstruction_usage(&self) {
+        let _transition = self.inner.transitions.lock().unwrap();
+        self.inner.usage_live.store(false, Ordering::Release);
+        if let Some(meter) = &self.inner.meter {
+            meter.set_billable_at(false, MeteringTime::now());
+        }
+    }
+
+    pub(crate) fn begin_guest_body(&self) -> GuestResourceUsageGuard {
+        self.inner.guest_bodies.fetch_add(1, Ordering::AcqRel);
+        GuestResourceUsageGuard(self.clone())
+    }
+
+    pub(crate) fn has_guest_body(&self) -> bool {
+        self.inner.guest_bodies.load(Ordering::Acquire) != 0
+    }
+
+    pub(crate) fn activate_live_usage_if_guest_body(&self) {
+        if self.has_guest_body() {
+            self.activate_live_usage();
+        }
+    }
+
+    pub(crate) fn activate_live_usage(&self) {
+        let _transition = self.inner.transitions.lock().unwrap();
+        let activation = self.inner.live_activation.lock().unwrap().clone();
+        match activation {
+            Some(activation) => activation.activate(
+                self.inner.meter.as_ref(),
+                self.current_bytes(),
+                &self.inner.transitions,
+            ),
+            None => {
+                if let Some(meter) = &self.inner.meter {
+                    let at = MeteringTime::now();
+                    meter.set_billable_at(true, at);
+                    meter.resume_at(self.current_bytes(), at);
+                }
+            }
+        }
+        self.inner.usage_live.store(true, Ordering::Release);
     }
 
     pub(crate) fn set_limit_exceeded_callback(&self, callback: Arc<dyn Fn() + Send + Sync>) {
@@ -472,6 +569,16 @@ impl LinearMemoryTracker {
         {
             callback();
         }
+    }
+}
+
+#[must_use]
+pub(crate) struct GuestResourceUsageGuard(LinearMemoryTracker);
+
+impl Drop for GuestResourceUsageGuard {
+    fn drop(&mut self) {
+        let previous = self.0.inner.guest_bodies.fetch_sub(1, Ordering::AcqRel);
+        assert!(previous != 0, "guest usage scope was released twice");
     }
 }
 

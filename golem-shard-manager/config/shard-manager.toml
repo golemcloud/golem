@@ -153,7 +153,6 @@ type = "Disabled"
 
 [worker_executors.tls.config]
 
-
 ## Generated from example config: with k8s healthcheck
 # bind_address = "0.0.0.0"
 # http_port = 8081

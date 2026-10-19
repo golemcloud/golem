@@ -150,6 +150,7 @@ use golem_service_base::error::worker_executor::{
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
+use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context as TaskContext, Poll};
@@ -2592,6 +2593,14 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             )
             .as_trap_type::<Ctx>()
             .expect("a failed tool guest call must classify as a trap");
+            if let crate::model::TrapType::Interrupt(kind) = &trap
+                && !replaying_completed
+                && !local_cancellation_selected
+            {
+                let _ = operation
+                    .select_failure(operation::OwnerFailureWinner::Lifecycle(*kind))
+                    .await;
+            }
             let output_failure = guest_trap_output_failure(
                 &operation,
                 trap.clone(),
@@ -5139,6 +5148,18 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
     .await
 }
 
+fn native_output_runtime_teardown_probe(
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    owner_operations: Weak<operation::OwnerToolOperations>,
+) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
+    Arc::new(move || {
+        runtime_teardown()
+            || owner_operations
+                .upgrade()
+                .is_some_and(|owner| owner.selected_owner_failure().is_some())
+    })
+}
+
 struct NativeToolTask {
     activation: Arc<ToolActivationSnapshot>,
     tool_name: ToolName,
@@ -5230,15 +5251,23 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                 create_output_attachment(accessor, false).map_err(wasmtime::Error::from_anyhow)?;
             let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
-                let runtime_teardown = access.get().stream_runtime_teardown_probe();
+                let runtime_teardown = native_output_runtime_teardown_probe(
+                    access.get().stream_runtime_teardown_probe(),
+                    Arc::downgrade(&access.get().owner_execution.tool_operations()),
+                );
+                let interrupt = access.get().create_interrupt_signal();
                 let runtime_source = access
                     .get()
                     .runtime_suspension
                     .as_ref()
                     .map(|runtime| runtime.source());
-                let (sink, stream) =
-                    accounted_byte_output_stream_pair(capacity, runtime_teardown, runtime_source)
-                        .map_err(wasmtime::Error::msg)?;
+                let (sink, stream) = accounted_byte_output_stream_pair(
+                    capacity,
+                    runtime_teardown,
+                    runtime_source,
+                    interrupt,
+                )
+                .map_err(wasmtime::Error::msg)?;
                 let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
                 reader.pipe(&mut access, sink)?;
                 stream
@@ -7176,19 +7205,26 @@ mod tests {
         WitRegisteredTool, await_native_entity_body, caller_tool_owner,
         classify_tool_discovery_error, cleanup_tool_endpoints, first_output_limit_error,
         guest_body_accepts_admission_rejection, materialize_output_writer, merge_discovered_tools,
-        native_output_handles, option_args, output_limit_error, publish_output_completions,
-        recorded_tool_body_is_skipped, resolve_tool_command, select_native_body_result,
-        terminal_tool_discovery_error, validate_declared_tool_error, validate_declared_tool_result,
-        validate_native_tool_output, validate_stream_attachments,
+        native_output_handles, native_output_runtime_teardown_probe, option_args,
+        output_limit_error, publish_output_completions, recorded_tool_body_is_skipped,
+        resolve_tool_command, select_native_body_result, terminal_tool_discovery_error,
+        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
+        validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
+    use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
+    use crate::durable_host::stream_transport::{
+        LiveStreamEndpoint, accounted_byte_output_stream_pair,
+    };
     use crate::durable_host::tool::attachment::{
         AttachmentMemory, AttachmentRead, ToolAttachmentModeMetadata, attachment_pair,
     };
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
 
     use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
     use crate::services::environment_state::ToolDiscoveryError;
+    use futures::FutureExt;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
@@ -7227,10 +7263,10 @@ mod tests {
         SchemaValue, TypeId, TypedSchemaValue,
     };
     use golem_schema::schema::SchemaValueStream;
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::Poll;
     use test_r::test;
     use test_r::timeout;
@@ -7254,6 +7290,114 @@ mod tests {
             "not an underlying capability",
             "a failed forged lookup must not consume or replace the actual table entry"
         );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn native_output_owner_failure_aborts_without_publishing_end() {
+        let owner = OwnerToolOperations::new();
+        let primary_teardown = Arc::new(|| false);
+        let runtime_teardown =
+            native_output_runtime_teardown_probe(primary_teardown.clone(), Arc::downgrade(&owner));
+        assert!(!runtime_teardown());
+        let (sink, stream) = accounted_byte_output_stream_pair(
+            4,
+            runtime_teardown.clone(),
+            None,
+            Box::pin(std::future::pending()),
+        )
+        .unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+                .await
+        );
+        assert!(!primary_teardown());
+        assert!(runtime_teardown());
+        drop(sink);
+
+        lifecycle.cancelled().await;
+        assert!(lifecycle.is_aborted());
+        assert!(matches!(
+            primary.recv().now_or_never(),
+            None | Some(Err(LiveStreamReceiveError::Closed))
+        ));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn native_output_unfenced_eof_preserves_bytes_and_end() {
+        let owner = OwnerToolOperations::new();
+        let runtime_teardown =
+            native_output_runtime_teardown_probe(Arc::new(|| false), Arc::downgrade(&owner));
+        assert!(!runtime_teardown());
+        let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+        assert!(producer.configure_live());
+        producer.write(vec![17, 255]).await.unwrap();
+        producer.finish().unwrap();
+
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let reader = StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        let (sink, stream) = accounted_byte_output_stream_pair(
+            4,
+            runtime_teardown,
+            None,
+            Box::pin(std::future::pending()),
+        )
+        .unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        let bytes = store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<Vec<u8>> {
+                accessor.with(|mut store| reader.pipe(&mut store, sink))?;
+                let mut bytes = Vec::new();
+                loop {
+                    let event = primary.recv().await.unwrap();
+                    assert_eq!(event.offset, bytes.len() as u64);
+                    match event.payload {
+                        LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => bytes.push(byte),
+                        LiveStreamEventPayload::End => break,
+                        other => panic!("unexpected native output event: {other:?}"),
+                    }
+                }
+                Ok(bytes)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes, vec![17, 255]);
+        assert!(!lifecycle.is_aborted());
+        assert!(owner.selected_owner_failure().is_none());
+    }
+
+    #[test]
+    fn native_output_teardown_probe_preserves_primary_without_retaining_owner() {
+        let owner = OwnerToolOperations::new();
+        let weak_owner = Arc::downgrade(&owner);
+        let primary_teardown = Arc::new(AtomicBool::new(false));
+        let primary_flag = primary_teardown.clone();
+        let runtime_teardown = native_output_runtime_teardown_probe(
+            Arc::new(move || primary_flag.load(Ordering::Acquire)),
+            weak_owner.clone(),
+        );
+        assert_eq!(Arc::strong_count(&owner), 1);
+        assert!(!runtime_teardown());
+        assert_eq!(Arc::strong_count(&owner), 1);
+
+        drop(owner);
+        assert!(weak_owner.upgrade().is_none());
+        assert!(!runtime_teardown());
+        primary_teardown.store(true, Ordering::Release);
+        assert!(runtime_teardown());
+        assert!(weak_owner.upgrade().is_none());
     }
 
     #[test]

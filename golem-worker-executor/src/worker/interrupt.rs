@@ -14,12 +14,14 @@
 
 //! The interrupt requests of a worker, and whether a terminal one waits.
 //!
-//! Each change of the requests goes through a method of [`Interrupts`]. The method publishes
-//! whether a terminal request waits before it releases the lock, so a reader of
-//! [`Interrupts::terminal`] never sees an older value than the last change that completed.
+//! Each change of the requests holds an [`InterruptGuard`]. The guard publishes whether a
+//! terminal request waits before it releases the lock, so a reader of [`Interrupts::terminal`]
+//! never sees an older value than the last change that completed.
 
 use super::{PendingWorkerInterrupt, WorkerInterruptState};
-use async_lock::Mutex;
+use async_lock::{Mutex, MutexGuard};
+use golem_service_base::error::worker_executor::InterruptKind;
+use std::ops::{Deref, DerefMut};
 use tokio::sync::watch;
 
 /// The interrupt requests of one worker.
@@ -39,48 +41,79 @@ impl Default for Interrupts {
     }
 }
 
+pub(super) struct InterruptGuard<'a> {
+    state: MutexGuard<'a, WorkerInterruptState>,
+    interrupts: &'a Interrupts,
+}
+
+impl Deref for InterruptGuard<'_> {
+    type Target = WorkerInterruptState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl DerefMut for InterruptGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
+impl Drop for InterruptGuard<'_> {
+    fn drop(&mut self) {
+        self.interrupts.publish(&self.state);
+    }
+}
+
 impl Interrupts {
-    /// Queues `interrupt` when the lock is free. Gives `None` when another holder has the lock,
-    /// and otherwise whether the request was queued.
-    pub(crate) fn try_queue(&self, interrupt: PendingWorkerInterrupt) -> Option<bool> {
-        let mut state = self.state.try_lock()?;
-        let queued = state.queue(interrupt);
-        self.publish(&state);
-        Some(queued)
+    pub(super) async fn lock(&self) -> InterruptGuard<'_> {
+        InterruptGuard {
+            state: self.state.lock().await,
+            interrupts: self,
+        }
     }
 
-    /// Takes the waiting request. A terminal request stays claimed until the generation stops.
+    pub(super) fn try_lock(&self) -> Option<InterruptGuard<'_>> {
+        Some(InterruptGuard {
+            state: self.state.try_lock()?,
+            interrupts: self,
+        })
+    }
+
+    /// Takes the published request. A terminal request stays claimed until the generation stops.
     pub(crate) async fn take(&self) -> Option<PendingWorkerInterrupt> {
-        let mut state = self.state.lock().await;
-        let taken = state.take();
-        self.publish(&state);
-        taken
+        self.lock().await.take()
     }
 
-    /// Takes the waiting request when it is terminal.
     pub(crate) async fn claim_pending_terminal(&self) -> Option<PendingWorkerInterrupt> {
-        let mut state = self.state.lock().await;
-        let claimed = state.claim_pending_terminal();
-        self.publish(&state);
-        claimed
+        self.lock().await.claim_pending_terminal()
+    }
+
+    /// Acknowledge only the published terminal interruption observed by the invocation.
+    pub(crate) async fn claim_observed_terminal(&self, kind: InterruptKind) -> bool {
+        let mut state = self.lock().await;
+        if matches!(&*state, WorkerInterruptState::Pending(pending)
+            if pending.kind == kind && pending.is_terminal())
+        {
+            state.claim_pending_terminal().is_some()
+        } else {
+            false
+        }
     }
 
     /// Releases a claimed terminal request, for a new generation.
     pub(crate) async fn reset_terminal_for_new_generation(&self) {
-        let mut state = self.state.lock().await;
-        state.reset_terminal_for_new_generation();
-        self.publish(&state);
+        self.lock().await.reset_terminal_for_new_generation();
     }
 
     /// Whether a request waits or a terminal request is claimed.
     pub(crate) async fn has_interrupt(&self) -> bool {
-        self.state.lock().await.has_interrupt()
+        self.lock().await.has_interrupt()
     }
 
-    /// Runs `f` while the lock is held and no request waits or is claimed. Gives `None` without
-    /// a call of `f` otherwise.
     pub(crate) async fn when_idle<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
-        let state = self.state.lock().await;
+        let state = self.lock().await;
         (!state.has_interrupt()).then(f)
     }
 
@@ -122,28 +155,73 @@ mod tests {
     }
 
     #[test]
+    async fn observed_terminal_claims_only_the_exact_published_request_once() {
+        for kind in [
+            InterruptKind::Interrupt(Timestamp::from(100_u64)),
+            InterruptKind::Suspend(Timestamp::from(100_u64)),
+            InterruptKind::ShardLost,
+        ] {
+            let interrupts = Interrupts::default();
+            let terminal = interrupts.terminal();
+            assert!(interrupts.lock().await.queue(interrupt(kind)));
+            let different = InterruptKind::Suspend(Timestamp::from(101_u64));
+            assert!(!interrupts.claim_observed_terminal(different).await);
+            assert!(*terminal.borrow());
+            assert!(interrupts.claim_observed_terminal(kind).await);
+            assert!(!*terminal.borrow());
+            assert!(interrupts.has_interrupt().await);
+            assert!(!interrupts.claim_observed_terminal(kind).await);
+            assert!(interrupts.take().await.is_none());
+        }
+    }
+
+    #[test]
+    async fn observed_nonterminal_does_not_consume_the_pending_restart() {
+        let interrupts = Interrupts::default();
+        assert!(
+            interrupts
+                .lock()
+                .await
+                .queue(interrupt(InterruptKind::Restart))
+        );
+        assert!(
+            !interrupts
+                .claim_observed_terminal(InterruptKind::Restart)
+                .await
+        );
+        assert_eq!(
+            interrupts.take().await.unwrap().kind,
+            InterruptKind::Restart
+        );
+    }
+
+    #[test]
     async fn each_change_publishes_whether_a_terminal_request_waits() {
         let interrupts = Interrupts::default();
         let terminal = interrupts.terminal();
 
-        let restart = (
-            interrupts.try_queue(interrupt(InterruptKind::Restart)),
-            interrupts.terminal_pending(),
-        );
+        let queued_restart = interrupts
+            .try_lock()
+            .unwrap()
+            .queue(interrupt(InterruptKind::Restart));
+        let restart = (queued_restart, interrupts.terminal_pending());
         let taken_restart = interrupts.take().await.is_some();
-        let suspend = (
-            interrupts.try_queue(interrupt(InterruptKind::Suspend(Timestamp::now_utc()))),
-            *terminal.borrow(),
-        );
+        let queued_suspend = interrupts
+            .try_lock()
+            .unwrap()
+            .queue(interrupt(InterruptKind::Suspend(Timestamp::now_utc())));
+        let suspend = (queued_suspend, *terminal.borrow());
+        let claimed_request = interrupts.lock().await.claim_pending_terminal().is_some();
         let claimed = (
-            interrupts.claim_pending_terminal().await.is_some(),
+            claimed_request,
             interrupts.terminal_pending(),
             interrupts.has_interrupt().await,
         );
-        let queued_again = (
-            interrupts.try_queue(interrupt(InterruptKind::Interrupt(Timestamp::now_utc()))),
-            interrupts.terminal_pending(),
-        );
+        let queued_interrupt = interrupts
+            .try_lock()
+            .unwrap()
+            .queue(interrupt(InterruptKind::Interrupt(Timestamp::now_utc())));
+        let queued_again = (queued_interrupt, interrupts.terminal_pending());
         let taken = (
             interrupts.take().await.is_some(),
             interrupts.terminal_pending(),
@@ -154,11 +232,11 @@ mod tests {
             interrupts.terminal_pending(),
         );
 
-        assert_eq!(restart, (Some(true), false));
+        assert_eq!(restart, (true, false));
         assert!(taken_restart);
-        assert_eq!(suspend, (Some(true), true));
+        assert_eq!(suspend, (true, true));
         assert_eq!(claimed, (true, false, true));
-        assert_eq!(queued_again, (Some(true), true));
+        assert_eq!(queued_again, (true, true));
         assert_eq!(taken, (true, false));
         assert_eq!(reset, (false, false));
     }
@@ -168,10 +246,16 @@ mod tests {
         let interrupts = Interrupts::default();
         let terminal = interrupts.terminal();
 
-        interrupts.try_queue(interrupt(InterruptKind::Restart));
+        interrupts
+            .try_lock()
+            .unwrap()
+            .queue(interrupt(InterruptKind::Restart));
         let after_restart = terminal.has_changed().unwrap();
         interrupts.take().await;
-        interrupts.try_queue(interrupt(InterruptKind::Suspend(Timestamp::now_utc())));
+        interrupts
+            .try_lock()
+            .unwrap()
+            .queue(interrupt(InterruptKind::Suspend(Timestamp::now_utc())));
         let after_suspend = terminal.has_changed().unwrap();
 
         assert_eq!((after_restart, after_suspend), (false, true));
@@ -180,10 +264,11 @@ mod tests {
     #[test]
     async fn a_queue_while_the_lock_is_held_gives_none_and_changes_nothing() {
         let interrupts = Interrupts::default();
-        let held = interrupts.state.lock().await;
+        let held = interrupts.lock().await;
 
-        let queued =
-            interrupts.try_queue(interrupt(InterruptKind::Interrupt(Timestamp::now_utc())));
+        let queued = interrupts.try_lock().map(|mut state| {
+            state.queue(interrupt(InterruptKind::Interrupt(Timestamp::now_utc())))
+        });
         drop(held);
 
         assert_eq!(queued, None);
@@ -192,12 +277,19 @@ mod tests {
     }
 
     #[test]
-    async fn when_idle_runs_only_without_a_request() {
+    async fn a_rejected_request_keeps_the_terminal_projection() {
         let interrupts = Interrupts::default();
-        let idle = interrupts.when_idle(|| 1).await;
-        interrupts.try_queue(interrupt(InterruptKind::Restart));
-        let busy = interrupts.when_idle(|| 2).await;
-
-        assert_eq!((idle, busy), (Some(1), None));
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        assert!(interrupts.lock().await.queue(interrupt(kind)));
+        let terminal = interrupts.terminal();
+        assert!(*terminal.borrow());
+        assert!(
+            !interrupts
+                .lock()
+                .await
+                .queue(interrupt(InterruptKind::Restart))
+        );
+        assert!(*terminal.borrow());
+        assert!(!terminal.has_changed().unwrap());
     }
 }

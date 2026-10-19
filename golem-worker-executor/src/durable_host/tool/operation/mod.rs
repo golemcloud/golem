@@ -288,6 +288,7 @@ impl Drop for AcquisitionDrainGuard {
 }
 
 struct OwnerToolOperationsState {
+    admission_closed: bool,
     owner_winner: Option<OwnerFailureWinner>,
     owner_failure_cleanup: Option<OwnerFailureCleanupState>,
     owner_failure_cleanup_complete: bool,
@@ -368,6 +369,7 @@ impl OwnerToolOperations {
         Arc::new(Self {
             next_id: AtomicU64::new(1),
             state: Mutex::new(OwnerToolOperationsState {
+                admission_closed: false,
                 owner_winner: None,
                 owner_failure_cleanup: None,
                 owner_failure_cleanup_complete: false,
@@ -393,7 +395,7 @@ impl OwnerToolOperations {
         });
         let winner_tx = {
             let mut state = self.state.lock().unwrap();
-            if state.owner_winner.is_some() {
+            if state.admission_closed {
                 drop(state);
                 tracing::debug!(
                     operation_id = id,
@@ -465,6 +467,7 @@ impl OwnerToolOperations {
                 "cannot begin an owner generation while tool operations are still active",
             ));
         }
+        state.admission_closed = false;
         state.owner_winner = None;
         state.owner_failure_cleanup = None;
         state.owner_failure_cleanup_complete = false;
@@ -475,6 +478,11 @@ impl OwnerToolOperations {
 
     pub(crate) async fn select_owner_failure(&self, winner: OwnerFailureWinner) -> bool {
         self.select_owner_failure_with_cleanup(winner, None).await
+    }
+
+    /// Closes physical admission without electing a logical invocation or lifecycle failure.
+    pub(crate) async fn fence_for_unload(&self) {
+        self.select_owner_fence(None, None).await;
     }
 
     pub(crate) async fn select_primary_infrastructure(
@@ -512,11 +520,19 @@ impl OwnerToolOperations {
         winner: OwnerFailureWinner,
         cleanup_owner: Option<OwnerFailureCleanupOwner>,
     ) -> bool {
+        self.select_owner_fence(Some(winner), cleanup_owner).await
+    }
+
+    async fn select_owner_fence(
+        &self,
+        winner: Option<OwnerFailureWinner>,
+        cleanup_owner: Option<OwnerFailureCleanupOwner>,
+    ) -> bool {
         loop {
             let wait = self.changed.notified();
             let selected = {
                 let mut state = self.state.lock().unwrap();
-                if state.owner_winner.is_some() {
+                if state.owner_winner.is_some() || (winner.is_none() && state.admission_closed) {
                     return false;
                 }
                 if state
@@ -526,7 +542,8 @@ impl OwnerToolOperations {
                 {
                     None
                 } else {
-                    state.owner_winner = Some(winner.clone());
+                    state.admission_closed = true;
+                    state.owner_winner = winner.clone();
                     state.owner_failure_cleanup =
                         cleanup_owner.map(|owner| OwnerFailureCleanupState {
                             owner,
@@ -557,8 +574,10 @@ impl OwnerToolOperations {
                     attachment.fence_owner();
                 }
                 tracing::debug!(
-                    failure_kind = winner.kind_label(),
-                    "Selected tool owner failure"
+                    failure_kind = winner
+                        .as_ref()
+                        .map_or("unload", OwnerFailureWinner::kind_label),
+                    "Fenced tool owner"
                 );
                 self.changed.notify_waiters();
                 return true;
@@ -570,7 +589,7 @@ impl OwnerToolOperations {
     pub(crate) async fn drain_owner_failure_lanes(&self) {
         let lanes = {
             let mut state = self.state.lock().unwrap();
-            if state.owner_winner.is_none() {
+            if !state.admission_closed {
                 return;
             }
             state
@@ -761,7 +780,7 @@ impl OwnerToolOperations {
 
     pub(crate) fn commit_if_owner_open(&self, commit: impl FnOnce()) -> bool {
         let state = self.state.lock().unwrap();
-        if state.owner_winner.is_some() {
+        if state.admission_closed {
             return false;
         }
         commit();
@@ -874,7 +893,7 @@ impl OwnerToolOperations {
         result_await_parent: Option<&OwnerInvocationId>,
     ) -> Result<(Vec<OwnerInvocationId>, Option<OwnerLaneWait>), WorkerExecutorError> {
         let mut state = self.state.lock().unwrap();
-        if state.owner_winner.is_some() {
+        if state.admission_closed {
             return Err(WorkerExecutorError::runtime(
                 "owner generation was fenced before tool lane registration",
             ));
@@ -1129,7 +1148,7 @@ impl OwnerToolOperation {
             let Some(operation) = state.operations.get(&self.id) else {
                 return ToolLiveAdmissionOutcome::Fenced;
             };
-            if state.owner_winner.is_some() {
+            if state.admission_closed {
                 return ToolLiveAdmissionOutcome::Fenced;
             }
             match operation.winner {
@@ -1165,7 +1184,7 @@ impl OwnerToolOperation {
         let Some(operation) = state.operations.get(&self.id) else {
             return ToolLiveAdmissionOutcome::Fenced;
         };
-        if state.owner_winner.is_some() {
+        if state.admission_closed {
             return ToolLiveAdmissionOutcome::Fenced;
         }
         match operation.winner {
@@ -1191,7 +1210,7 @@ impl OwnerToolOperation {
         boundary: Option<SerializableToolAdmissionRefusal>,
     ) -> ToolLiveAdmissionOutcome {
         let mut state = self.owner.state.lock().unwrap();
-        if state.owner_winner.is_some() {
+        if state.admission_closed {
             return ToolLiveAdmissionOutcome::Fenced;
         }
         let Some(operation) = state.operations.get_mut(&self.id) else {
@@ -1444,7 +1463,7 @@ impl OwnerToolOperation {
     #[cfg(test)]
     pub(crate) fn register_body(&self, lane: &OwnerLane) -> Result<bool, WorkerExecutorError> {
         let mut state = self.owner.state.lock().unwrap();
-        if state.owner_winner.is_some() {
+        if state.admission_closed {
             return Ok(false);
         }
         let operation = state.operations.get_mut(&self.id).unwrap();
@@ -1519,7 +1538,7 @@ impl OwnerToolOperation {
                     let wait = owner.changed.notified();
                     let should_wait = {
                         let mut state = owner.state.lock().unwrap();
-                        let owner_open = state.owner_winner.is_none();
+                        let owner_open = !state.admission_closed;
                         let operation =
                             state.operations.get_mut(&operation_id).ok_or_else(|| {
                                 WorkerExecutorError::runtime("acquiring tool operation was removed")
@@ -1573,7 +1592,7 @@ impl OwnerToolOperation {
             }
         }
         let mut state = self.owner.state.lock().unwrap();
-        let owner_open = state.owner_winner.is_none();
+        let owner_open = !state.admission_closed;
         let operation = state
             .operations
             .get_mut(&self.id)
@@ -1624,8 +1643,7 @@ impl OwnerToolOperation {
     pub(crate) fn begin_cancel(&self) -> bool {
         let attachments = {
             let mut state = self.owner.state.lock().unwrap();
-            if state.owner_winner.is_some()
-                || self.admission_refusal.lock().unwrap().historical_observed
+            if state.admission_closed || self.admission_refusal.lock().unwrap().historical_observed
             {
                 return false;
             }
@@ -1691,7 +1709,7 @@ impl OwnerToolOperation {
             let wait = self.owner.changed.notified();
             let selected = {
                 let mut state = self.owner.state.lock().unwrap();
-                if state.owner_winner.is_some() {
+                if state.admission_closed {
                     return false;
                 }
                 if matches!(
@@ -1709,6 +1727,7 @@ impl OwnerToolOperation {
                 } else if !matches!(state.operations[&self.id].winner, ToolOperationWinner::Open) {
                     return false;
                 } else {
+                    state.admission_closed = true;
                     state.owner_winner = Some(OwnerFailureWinner::Trap(trap.clone()));
                     state.owner_failure_cleanup = Some(OwnerFailureCleanupState {
                         owner: OwnerFailureCleanupOwner::Tool(self.id),
@@ -1789,7 +1808,7 @@ impl OwnerToolOperation {
 
     fn begin_selection(&self, selecting: ToolOperationWinner) -> bool {
         let mut state = self.owner.state.lock().unwrap();
-        if state.owner_winner.is_some() {
+        if state.admission_closed {
             return false;
         }
         let Some(operation) = state.operations.get_mut(&self.id) else {

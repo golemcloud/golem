@@ -293,6 +293,7 @@ jobs:
           - name: group2
           - name: group3
           - name: group4
+          - name: group5
           - name: tool-streaming
     name: worker-tests-${{ matrix.group.name }}
     steps:
@@ -388,6 +389,7 @@ jobs:
           GOLEM_MANAGED_XFS_TARGET_DIR: ${{ github.workspace }}/target
           GOLEM_MANAGED_XFS_CARGO_TEST_R: ${{ github.workspace }}/target/cargo-test-r
         run: |
+          integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh --self-test-initial-file-wasm
           cp "$(command -v cargo-test-r)" "${GOLEM_MANAGED_XFS_CARGO_TEST_R}"
           integration-tests/scripts/managed-filesystem/run-lima.sh
 

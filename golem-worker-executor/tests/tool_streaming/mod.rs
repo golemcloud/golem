@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::execution_observations::WorkerObservations;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
@@ -101,6 +102,7 @@ mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod dropped_waits;
+mod durable_entity_blob;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
@@ -863,7 +865,7 @@ struct SecretPolicyEvidence {
     leaf_revealed: bool,
 }
 
-fn deployment_state(
+pub(crate) fn deployment_state(
     owner_account_id: AccountId,
     provider_component_id: golem_common::model::component::ComponentId,
     provider_revision: ComponentRevision,
@@ -11091,10 +11093,11 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
     assert_eq!(held_operation.admission, ToolBodyAdmissionMetadata::Running);
     let drain_worker = executor.active_agent(&owned_drain_agent).await.unwrap();
     let restart = tokio::spawn(async move {
-        drain_worker
-            .primary()
+        let worker = drain_worker.primary();
+        worker
             .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
-            .await
+            .await?;
+        worker.join_accepted_stops_for_test().await
     });
     tokio::time::timeout(std::time::Duration::from_secs(30), restart)
         .await

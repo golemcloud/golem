@@ -121,7 +121,7 @@ Crash after `#20`, before `#21`: reconstruction folds status from the oplog, see
 invocation, and runs it. Crash between `#21` and `#41`: `resume_replay` replays the recorded prefix
 of this invocation, then the guest continues live from the tail. Crash after `#41`: a repeated
 call with key `K` hits `lookup_invocation_result` and returns `R` without touching the guest.
-Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart`.
+Test: `tests/api/mod.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart`.
 
 During replay `on_agent_invocation_success` compares the recomputed result with `#41` via
 `replay_equivalent`; a mismatch is an `unexpected_oplog_entry` error, i.e. a determinism failure.
@@ -153,7 +153,7 @@ execution, counter 1.
 What a test must assert: T's counter (a provider-side effect) equals 1, the key observed by T is
 identical across both attempts, and C's oplog shows one `Start` with one `End`. Asserting only
 that C got `1` proves nothing, because a duplicated increment would also return a value.
-Tests: `tests/api.rs::lost_card_transfer_response_converges_after_source_and_target_restart`
+Tests: `tests/api/mod.rs::lost_card_transfer_response_converges_after_source_and_target_restart`
 (wrapped proxy drops the response, both sides restart, two proxy attempts, one target admission);
 `tests/rpc.rs::counter_resource_test_2_with_restart` covers the weaker "completed call is not
 re-executed across restart" property (1 then 2).
@@ -309,6 +309,32 @@ The guard is deliberately narrow: durable mode, folded status `Interrupted`, and
 `Restart` still follows automatic reconstruction and clean `Idle` semantics without `Resumed`;
 ephemeral workers remain fail-stop and do not gain a resume path.
 
+### 10a. Unloaded stops write ordinary lifecycle hints
+
+```
+attempt A establishes owner generation G
+#90 Suspend (h)                  ordinary admission callback commits
+     monitor request B accepted for the same owner G
+     B freezes, fences and publishes its own cause; physical disposal joins
+#91 Suspend (h)                  unloaded stop writes its ordinary hint
+
+new Loading attempt C waits before establishing an owner
+     shared resident counter is still G
+     C accepts a Suspend and joins its own stop/disposal
+#92 Suspend (h)                  C also writes its ordinary hint
+```
+
+The unloaded path does not deduplicate lifecycle hints by status or resident provenance. Duplicate
+Suspend hints do not create invocation results or replace committed results. The ordinary callback
+and status actor retain invocation persistence, and invocation exit still uses FIFO status to avoid
+recording a second invocation failure. A taken no-body stop retains its physical-disposal obligation
+independently of public receipt availability. Resource-release observation scopes still roll over
+after an established owner; that bookkeeping does not decide whether a marker is written.
+Owners: `worker/invocation_loop.rs::handle_unloaded_interrupt`,
+`worker/mod.rs::commit_pending_terminal_stop`.
+Tests: `tests/api/interruption/lifecycle/admission.rs` and
+`tests/api/interruption/lifecycle/windows/retained_terminal.rs`.
+
 ## 11. Streaming RPC: producer restart mid-stream
 
 Caller C invokes `P.generate()` whose result is an output stream. Two oplogs are involved.
@@ -420,10 +446,38 @@ Incomplete replay (crash between #61 and #65): `ReplayingIncomplete` switches th
 Trap inside the body: no entity terminal is invented; the owner invocation fails and the owner
 group drains (`guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group`).
 Owners: `durable_host/entity.rs::{EntityInvocationDurability, drive_access}`,
-`durable_host/tool/{mod.rs,operation.rs}`, `worker/instance.rs::{OwnerExecution,
+`durable_host/tool/{mod.rs,operation.rs}`, `worker/instance/mod.rs::{OwnerExecution,
 HostedInstance::invoke_scoped}`, `worker/owner_lane.rs`.
 Tests: `tests/tool_streaming.rs::{completed_tool_replay_bypasses_current_attachment_memory_pressure,
 incomplete_tool_replay_persists_attachment_upgrade_rejection, deterministic_stream_crash_checkpoint_matrix}`.
+
+### 14a. Entity cancellation after a blob write enters its provider
+
+```
+#60 AgentInvocationStarted { key: K }
+#61 Start { parent_start_index: 60, ... }   entity tool root
+#62 Start { parent_start_index: 61, ... }   serialized blob write
+     provider Pending; service task holds original environment lock and quota
+     owner fenced; actual component entity and owner Stores destroyed
+     #61 and #62 remain incomplete; no invented terminal or delivery
+     provider completes; service settles known stock and releases original lock
+     owner oplog unchanged by detached service settlement
+     ordinary resume and same-key K repair re-enter the incomplete body/call
+#63 End { start_index: 62, response: success }
+#64 End { start_index: 61, response: tool result }
+     host-internal root and serialized blob call have no delivery/discard markers
+```
+
+This is a service-owned effect, not a resident Store kept alive for the provider. The completion-first
+control instead allows the existing host/entity terminals before fencing. The actual
+`ComponentEntityRunner` witness checks both paths, original lock/quota retention through cancellation,
+physical entity/owner cleanup and exact known stock. Incomplete effect-before-End repair may repeat
+the same object/content put without increasing its stock twice. A later cold replay of completed
+history issues no new put. Process loss, partial backend errors and unknown external outcomes retain
+their existing ambiguity; this timeline is not an external exactly-once guarantee.
+Owners: `services/blob_store.rs`, `durable_host/blobstore/container.rs`,
+`durable_host/entity.rs`, `worker/entity_invocation.rs`.
+Test: `tests/tool_streaming/durable_entity_blob.rs`.
 
 ## 15. Custom durable invocation, crash mid-body
 

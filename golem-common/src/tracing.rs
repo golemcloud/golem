@@ -649,20 +649,23 @@ pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTrac
 where
     F: Fn(Output) -> filter::Boxed,
 {
-    init_tracing_returning_provider(config, make_filter).map(|(tracer, _provider)| tracer)
+    init_tracing_returning_provider(config, make_filter, Vec::new())
+        .map(|(tracer, _provider)| tracer)
 }
 
 /// Like [`init_tracing`] but also returns the [`SdkTracerProvider`] so the
 /// caller can call [`SdkTracerProvider::shutdown`] before process exit to
 /// flush pending OTLP spans.
+/// Additional layers share the same registry; each layer owns its own filtering.
 pub fn init_tracing_returning_provider<F>(
     config: &TracingConfig,
     make_filter: F,
+    layers: Vec<Box<dyn Layer<Registry> + Send + Sync>>,
 ) -> Option<(SdkTracer, opentelemetry_sdk::trace::SdkTracerProvider)>
 where
     F: Fn(Output) -> filter::Boxed,
 {
-    let mut layers = Vec::new();
+    let mut layers = layers;
     let mut result = None;
 
     if config.otlp.enabled {

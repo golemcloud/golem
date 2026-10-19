@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::suspendable_wait::{
     chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
 };
@@ -176,11 +177,22 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // its result was persisted, and the file operation it gates re-executes for real during
         // replay. Await the real readiness too, so subsequent (non-durable) reads/writes observe
         // the same stream state as the recorded run (see
-        // `PrivateDurableWorkerState::file_stream_pollables`).
-        if !was_live && is_ready && self.state.file_stream_pollables.contains(&rep) {
-            let pollable = Resource::<Pollable>::new_borrow(rep);
-            let mut view = self.as_wasi_view();
-            HostPollable::block(&mut view.io_data(), pollable).await?;
+        // `PrivateDurableWorkerState::file_stream_pollables`). TCP connect likewise re-executes
+        // natively, so its recorded readiness must precede synchronous `finish_connect`.
+        if !was_live && is_ready {
+            if self.state.file_stream_pollables.contains(&rep) {
+                let pollable = Resource::<Pollable>::new_borrow(rep);
+                let interrupt = self.create_interrupt_signal();
+                let mut view = self.as_wasi_view();
+                crate::wasi_filesystem::observe_filesystem_operation(
+                    interrupt,
+                    HostPollable::block(&mut view.io_data(), pollable),
+                )
+                .await
+                .map_err(wasmtime::Error::from)??;
+            } else if self.state.tcp_connect_replay.needs_readiness(rep) {
+                self.revalidate_tcp_connect(rep).await?;
+            }
         }
 
         Ok(is_ready)
@@ -209,6 +221,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // Only unclassify after the resource is really gone: reps are recycled by the
         // resource table, and a failed drop leaves the pollable live.
         self.state.file_stream_pollables.remove(&child_rep);
+        self.state.tcp_connect_replay.drop_pollable(child_rep);
         self.state.p2_timer_deadlines.remove(&child_rep);
 
         // If this child belonged to a FutureInvokeResult whose drop was deferred,
@@ -260,18 +273,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         // operations they gate re-execute for real during replay. Await their
                         // real readiness too, so subsequent (non-durable) reads/writes observe
                         // the same stream state as the recorded run (see
-                        // `PrivateDurableWorkerState::file_stream_pollables`).
+                        // `PrivateDurableWorkerState::file_stream_pollables`). A reconstructed
+                        // TCP connect also needs its native future driven before `finish_connect`.
+                        // Other network pollables do not share that reconstruction contract.
                         if let Ok(ready_indices) = &response.result {
-                            let ready_file_pollables = ready_indices
+                            let ready_reconstructed_pollables = ready_indices
                                 .iter()
                                 .filter_map(|idx| in_.get(*idx as usize))
                                 .map(|pollable| pollable.rep())
-                                .filter(|rep| self.state.file_stream_pollables.contains(rep))
+                                .filter(|rep| {
+                                    self.state.file_stream_pollables.contains(rep)
+                                        || self.state.tcp_connect_replay.needs_readiness(*rep)
+                                })
                                 .collect::<Vec<_>>();
-                            for rep in ready_file_pollables {
-                                let pollable = Resource::<Pollable>::new_borrow(rep);
-                                let mut view = self.as_wasi_view();
-                                HostPollable::block(&mut view.io_data(), pollable).await?;
+                            for rep in ready_reconstructed_pollables {
+                                if self.state.file_stream_pollables.contains(&rep) {
+                                    let pollable = Resource::<Pollable>::new_borrow(rep);
+                                    let interrupt = self.create_interrupt_signal();
+                                    let mut view = self.as_wasi_view();
+                                    crate::wasi_filesystem::observe_filesystem_operation(
+                                        interrupt,
+                                        HostPollable::block(&mut view.io_data(), pollable),
+                                    )
+                                    .await
+                                    .map_err(wasmtime::Error::from)??;
+                                } else {
+                                    self.revalidate_tcp_connect(rep).await?;
+                                }
                             }
                         }
                         break 'poll response;
@@ -290,7 +318,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = {
                 let mut view = self.as_wasi_view();
                 let mut io_data = view.io_data();
-                poll_borrowed(&mut io_data, in_, interrupt_signal, ephemeral_poll_timeout).await
+                let poll = Host::poll(&mut io_data, in_);
+                poll_borrowed(poll, interrupt_signal, ephemeral_poll_timeout).await
             };
             let result = match result {
                 Ok(result) => result,
@@ -329,6 +358,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// The recorded call is already closed. Only its reconstructed native connect can be
+    /// interrupted here; replay resolution and its mandatory completion are never raced.
+    async fn revalidate_tcp_connect(&mut self, rep: u32) -> wasmtime::Result<()> {
+        let wait = NativeIoWait::new(self.interrupt_sources());
+        let readiness = async {
+            let mut view = self.as_wasi_view();
+            HostPollable::block(&mut view.io_data(), Resource::new_borrow(rep)).await
+        };
+        wait_tcp_connect(wait, readiness).await
+    }
+}
+
+pub(super) async fn wait_tcp_connect(
+    wait: NativeIoWait,
+    readiness: impl Future<Output = wasmtime::Result<()>>,
+) -> wasmtime::Result<()> {
+    wait.wait(readiness)
+        .await
+        .unwrap_or_else(|kind| Err(wasmtime::Error::from_anyhow(kind.into())))
+}
+
 #[derive(Debug)]
 enum BorrowedPollTrap {
     Interrupted(InterruptKind),
@@ -336,12 +387,10 @@ enum BorrowedPollTrap {
 }
 
 async fn poll_borrowed(
-    io: &mut wasmtime_wasi::IoData<'_>,
-    pollables: Vec<Resource<Pollable>>,
+    poll: impl Future<Output = wasmtime::Result<Vec<u32>>>,
     interrupt: Pin<Box<dyn Future<Output = InterruptKind> + Send>>,
     ephemeral_timeout: Option<std::time::Duration>,
 ) -> Result<wasmtime::Result<Vec<u32>>, BorrowedPollTrap> {
-    let poll = Host::poll(io, pollables);
     pin_mut!(poll);
     if let Some(max) = ephemeral_timeout {
         tokio::select! {
@@ -379,6 +428,128 @@ mod tests {
     use std::future::pending;
     use std::time::{Duration as StdDuration, Instant};
     use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn native_multi_poll_preserves_duplicate_indices_and_drops_pending_wait_before_resources()
+    {
+        use tokio::io::AsyncWriteExt;
+        use wasmtime_wasi::p2::bindings::io::streams::{HostInputStream, InputStream};
+        use wasmtime_wasi::p2::pipe::AsyncReadStream;
+        let (_, mut io_ctx, mut table) = crate::wasi_host::create_context(
+            &[] as &[&str],
+            std::io::empty(),
+            std::io::empty(),
+            std::io::empty(),
+            |duration| wasmtime::Error::from(SuspendForSleep(duration)),
+            None,
+            true,
+        )
+        .unwrap();
+        let (a, mut send_a) = tokio::io::duplex(8);
+        let (b, mut send_b) = tokio::io::duplex(8);
+        let a = table
+            .push(Box::new(AsyncReadStream::new(a)) as InputStream)
+            .unwrap();
+        let b = table
+            .push(Box::new(AsyncReadStream::new(b)) as InputStream)
+            .unwrap();
+        let pa = HostInputStream::subscribe(&mut table, Resource::new_borrow(a.rep())).unwrap();
+        let pb = HostInputStream::subscribe(&mut table, Resource::new_borrow(b.rep())).unwrap();
+        assert_ne!(pa.rep(), pb.rep());
+        let reps = [pa.rep(), pb.rep(), pa.rep()];
+        {
+            let mut io = wasmtime_wasi::IoData {
+                table: &mut table,
+                io_ctx: &mut io_ctx,
+            };
+            let mut poll = Box::pin(poll_borrowed(
+                Host::poll(
+                    &mut io,
+                    reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+                ),
+                Box::pin(pending()),
+                None,
+            ));
+            assert!(futures::poll!(poll.as_mut()).is_pending());
+            send_b.write_all(b"b").await.unwrap();
+            assert_eq!(poll.await.unwrap().unwrap(), vec![1]);
+        }
+        assert_eq!(
+            HostInputStream::read(&mut table, Resource::new_borrow(b.rep()), 1)
+                .await
+                .unwrap()
+                .as_slice(),
+            b"b"
+        );
+        send_a.write_all(b"a").await.unwrap();
+        {
+            let mut io = wasmtime_wasi::IoData {
+                table: &mut table,
+                io_ctx: &mut io_ctx,
+            };
+            assert_eq!(
+                poll_borrowed(
+                    Host::poll(
+                        &mut io,
+                        reps.iter().map(|rep| Resource::new_borrow(*rep)).collect()
+                    ),
+                    Box::pin(pending()),
+                    None,
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                vec![0, 2]
+            );
+        }
+        assert_eq!(
+            HostInputStream::read(&mut table, Resource::new_borrow(a.rep()), 1)
+                .await
+                .unwrap()
+                .as_slice(),
+            b"a"
+        );
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let (send, receive) = tokio::sync::oneshot::channel();
+        {
+            let mut io = wasmtime_wasi::IoData {
+                table: &mut table,
+                io_ctx: &mut io_ctx,
+            };
+            let mut poll = Box::pin(poll_borrowed(
+                Host::poll(
+                    &mut io,
+                    reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+                ),
+                Box::pin(async move { receive.await.unwrap() }),
+                None,
+            ));
+            assert!(futures::poll!(poll.as_mut()).is_pending());
+            send.send(kind).unwrap();
+            assert!(
+                matches!(poll.await, Err(BorrowedPollTrap::Interrupted(actual)) if actual == kind)
+            );
+            HostPollable::drop(&mut io, Resource::new_own(pa.rep())).unwrap();
+            HostPollable::drop(&mut io, Resource::new_own(pb.rep())).unwrap();
+        }
+        HostInputStream::drop(&mut table, Resource::new_own(a.rep()))
+            .await
+            .unwrap();
+        HostInputStream::drop(&mut table, Resource::new_own(b.rep()))
+            .await
+            .unwrap();
+        assert!(
+            table
+                .get(&Resource::<InputStream>::new_borrow(a.rep()))
+                .is_err()
+        );
+        assert!(
+            table
+                .get(&Resource::<InputStream>::new_borrow(b.rep()))
+                .is_err()
+        );
+    }
 
     struct Pending;
 
@@ -418,13 +589,15 @@ mod tests {
             io_ctx: &mut io_ctx,
         };
         assert!(matches!(poll_borrowed(
-            &mut io, reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+            Host::poll(&mut io, reps.iter().map(|rep| Resource::new_borrow(*rep)).collect()),
             Box::pin(pending()), Some(max),
         ).await, Err(BorrowedPollTrap::EphemeralTimeout(duration)) if duration == max));
         assert!(matches!(
             poll_borrowed(
-                &mut io,
-                reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+                Host::poll(
+                    &mut io,
+                    reps.iter().map(|rep| Resource::new_borrow(*rep)).collect()
+                ),
                 Box::pin(async move {
                     tokio::time::sleep(max * 2).await;
                     InterruptKind::Restart
@@ -435,7 +608,7 @@ mod tests {
             Err(BorrowedPollTrap::Interrupted(InterruptKind::Restart))
         ));
         assert!(matches!(poll_borrowed(
-            &mut io, vec![], Box::pin(pending()), None,
+            Host::poll(&mut io, vec![]), Box::pin(pending()), None,
         ).await, Ok(Err(error)) if error.to_string().contains("empty poll list")));
     }
 }

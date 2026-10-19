@@ -34,6 +34,9 @@ pub trait HttpClient4 {
     /// Sends a GET request and reads the response body in chunks.
     async fn get_and_read_body_chunked(&self) -> String;
 
+    /// Reads an arbitrary HTTP response without a guest timeout.
+    async fn get_for_quota_wait(&self, url: String) -> Result<String, String>;
+
     /// Sends a buffered POST with a body composed of: 4 bytes "HEAD", then 1024
     /// zero bytes, then 1024 bytes of 0xAB. The name is historical (the body was
     /// once produced with the wasip2 `output-stream::write-zeroes` API); the body
@@ -166,6 +169,41 @@ pub trait HttpClient4 {
     async fn get_in_spawned_task_after_return(&self) -> String;
 }
 
+#[agent_definition(ephemeral)]
+pub trait EphemeralHttpClient4 {
+    fn new() -> Self;
+
+    /// Reads an arbitrary HTTP response without a guest timeout.
+    async fn get_for_quota_wait(&self, url: String) -> Result<String, String>;
+}
+
+struct EphemeralHttpClient4Impl;
+
+#[agent_implementation]
+impl EphemeralHttpClient4 for EphemeralHttpClient4Impl {
+    fn new() -> Self {
+        Self
+    }
+
+    async fn get_for_quota_wait(&self, url: String) -> Result<String, String> {
+        do_get_for_quota_wait(url).await
+    }
+}
+
+async fn do_get_for_quota_wait(url: String) -> Result<String, String> {
+    let request = golem_rust::http::Request::get(url)
+        .body(Vec::<u8>::new())
+        .map_err(|error| error.to_string())?;
+    let response = golem_rust::http::send(request)
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    let status = response.status().as_u16();
+    let body = golem_rust::http::response_text(response)
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(format!("{status} {body}"))
+}
+
 struct HttpClient4Impl {
     last_send_error: Option<String>,
     last_full_response: Option<String>,
@@ -258,6 +296,10 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn get_and_read_body_chunked(&self) -> String {
         do_get_chunked_read().await
+    }
+
+    async fn get_for_quota_wait(&self, url: String) -> Result<String, String> {
+        do_get_for_quota_wait(url).await
     }
 
     async fn post_with_write_zeroes(&self) -> String {
