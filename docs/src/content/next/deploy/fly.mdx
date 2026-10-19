@@ -6,7 +6,7 @@ Fly.io runs the [all-in-one image](/next/deploy/server#container-image) on one M
 
 ## What Fly.io decides
 
-- **One Machine.** Run exactly one Machine: two servers on one database can run the same agent twice. Create the app with `--ha=false`, keep `fly scale count 1`, and keep the Machine running with `auto_stop_machines = "off"`. The `rolling` deploy strategy, the default, replaces the Machine in place: it stops the old one before the new one starts. Do not use `bluegreen` or `canary`, which start new Machines next to the old ones.
+- **One Machine.** Run exactly one Machine: two servers on one database can run the same agent twice. Deploy with `--ha=false`, keep `fly scale count 1`, and keep the Machine running with `auto_stop_machines = "off"`. The `rolling` deploy strategy, the default, replaces the Machine in place: it stops the old one before the new one starts. Do not use `bluegreen` or `canary`, which start new Machines next to the old ones.
 - **Volumes.** A volume belongs to one Machine on one server. If that server fails, the Machine is down until the server comes back, and a lost volume loses what only the volume had. Fly.io snapshots volumes once a day and keeps the snapshots for five days by default. Turn on [Litestream](/next/deploy/server#litestream) in mode 1, or use mode 2.
 - **Forwarded headers.** The Fly Proxy does not document `X-Forwarded-Host` or the address it connects from, so the server does not trust it. The server routes by the `Host` header and sees `http` as the scheme. This affects the URLs it builds from the request, such as the address an OIDC login returns to.
 
@@ -22,7 +22,7 @@ fly volumes create golem_data --app my-golem --region fra --size 10
 fly storage create --app my-golem
 ```
 
-The image runs the server as uid 65534. Fly.io staff describe in the community forum that Fly.io gives the mount directory of a volume to the user of the image, so the volume needs nothing; the Fly.io documentation does not say so. If the server does not start because `/var/lib/golem` is not writable by uid 65534, build the image that [Volume ownership](/next/deploy/server#volume-ownership) describes and set `[build] dockerfile` in `fly.toml` instead of `image`.
+The image runs the server as uid 65534. In the live test, a new Fly volume at `/var/lib/golem` belonged to that user, and the stock image needed no ownership change. If another volume is not writable by uid 65534, build the image that [Volume ownership](/next/deploy/server#volume-ownership) describes and set `[build] dockerfile` in `fly.toml` instead of `image`.
 
 `fly storage create` creates a Tigris bucket and sets `BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_ENDPOINT_URL_S3` as secrets of the app. Note the bucket name.
 
@@ -71,28 +71,34 @@ primary_region = "fra"
   min_machines_running = 1
 
   [[http_service.checks]]
-    grace_period = "120s"
+    grace_period = "60s"
     interval = "15s"
     timeout = "5s"
     method = "GET"
     path = "/healthcheck"
+    headers = { Host = "golem.example.com" }
 
 [[vm]]
   size = "shared-cpu-2x"
   memory = "4gb"
 ```
 
-A start that downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) takes about a minute, so the health check has a grace period. The volume keeps them, so only the first start on a new volume downloads.
+Set the probe's `Host` header to `GOLEM__ROUTER__MANAGEMENT_HOST`. Without it, the probe reaches application routing and returns 404. Fly caps the health check grace period at one minute. A first start downloads and inspects the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) and can take several minutes, so allow a longer deployment wait. The volume keeps the artifacts, so only the first start on a new volume downloads them.
 
 ### Deploy and add the domains
 
 ```shell filename="Terminal" copy
-fly deploy --ha=false
+fly deploy --ha=false --wait-timeout 10m
 fly certs add golem.example.com --app my-golem
 fly certs add api.example.com --app my-golem
+fly certs add mcp.example.com --app my-golem
 ```
 
-Add a certificate for the management host and for each domain of an HTTP API or MCP deployment, and create the DNS records that `fly certs` shows.
+Add a certificate for the management host and for each domain of an HTTP API or MCP deployment, and create the DNS records that `fly certs` shows. For a subdomain, `fly certs setup <domain> --app my-golem` also shows a CNAME target. The live test used CNAME records for separate HTTP API and MCP domains, and Fly issued certificates for both.
+
+For an initial management API test, set `GOLEM__ROUTER__MANAGEMENT_HOST` and the probe's `Host` header to the app's generated `<app>.fly.dev` host. This host already has HTTPS. HTTP API and MCP deployments need separate hosts.
+
+Set `scheme: https` in the HTTP API deployment so its OpenAPI document advertises the public HTTPS URL. This does not require trusting forwarded headers.
 
 ### Deploy an application
 
@@ -100,10 +106,14 @@ Check `https://golem.example.com/healthcheck`, and deploy an application with th
 
 </Steps>
 
-To upgrade, change the image tag in `fly.toml` and run `fly deploy`. To restore after the loss of the volume, create a new volume named `golem_data` and deploy: the image restores the databases from the Litestream replica before the server starts. The new volume has no cache of the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), so that start downloads them again from GitHub.
+To upgrade, change the image tag in `fly.toml` and run `fly deploy --ha=false --wait-timeout 10m`. Before a restore after the loss of the volume, stop and remove the old Machine so that only one container writes to the replica. Keep the app's secrets and Tigris bucket. Create a new volume named `golem_data` and deploy with the same configuration: the image restores the databases from the Litestream replica before the server starts. The new volume has no cache of the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), so that start downloads them again from GitHub.
 
 <Callout type="warning">
   Litestream is off by default; turn it on from the first start of a new volume. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. It does not replicate the cache of the built-in plugins and tools either, so a restore onto a new volume downloads them again and needs HTTPS connections to GitHub. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
+</Callout>
+
+<Callout type="info">
+  The single node test used the stock image, one `shared-cpu-2x` Machine with 4 GB RAM, a 1 GB volume and Tigris. CLI deployment, WebSocket invocations, custom-domain HTTPS API calls and MCP tool calls worked. Task state survived a rolling redeploy. After removal of the old Machine and volume, a new Machine restored the state from Tigris onto an empty volume and accepted new writes. Those writes and an MCP update survived another restart. Managed Postgres, point-in-time restore and fixed clusters still need live Fly.io tests.
 </Callout>
 
 ## Managed Postgres
