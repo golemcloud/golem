@@ -45,17 +45,19 @@ Render routes to the port that the service listens on, and `PORT=9881` names tha
 
 ### Create the web service
 
-The image runs the server as uid 65534, and Render does not document the owner of a persistent disk. If the disk belongs to root, the server does not start, and the log says that `/var/lib/golem` is not writable by uid 65534. Deploy the image that [Volume ownership](/v1.6/deploy/server#volume-ownership) describes in that case: put its `Dockerfile` in a Git repository and create the web service from the repository, or push the image to a registry.
+The stock `golemservices/golem:v1.6.0-rc3` image starts with a new Render disk at `/var/lib/golem`; the test needed no change to the disk owner. The image runs as uid 65534. If a different disk is not writable by that user, follow [Volume ownership](/v1.6/deploy/server#volume-ownership).
 
-Create a web service from the existing image `golemservices/golem:<version>`, or from that image, with a paid instance type. Before the first deploy:
+Create a web service from the existing image `golemservices/golem:<version>` with a paid instance type. The managed Postgres test used the `1c-2g` plan (1 CPU, 2 GB RAM) and a 1 GB disk. Before the first deploy:
 
 - **Environment.** Add the variables with **Add from .env** and paste `golem.env`.
 - **Disk.** Add a persistent disk with the mount path `/var/lib/golem`.
-- **Health check.** Set the health check path to `/healthcheck`. The first start on a new disk downloads the [built-in plugins and tools](/v1.6/deploy/server#built-in-plugins-and-tools), which takes about a minute.
+- **Health check.** Set the health check path to `/healthcheck`. Render accepted this probe with the service's `onrender.com` domain as the management host. The first start on a new disk downloads and inspects the [built-in plugins and tools](/v1.6/deploy/server#built-in-plugins-and-tools), which can take several minutes.
 
 ### Add the domains
 
 Add the management host (`golem.example.com`) and each domain of an HTTP API or MCP deployment as custom domains of the service. Render shows the DNS records to create and gets the certificates.
+
+For an initial management API test, use the service's generated `onrender.com` domain as `GOLEM__ROUTER__MANAGEMENT_HOST`. Use only the host name, without `https://`. HTTP API and MCP deployments each need a different domain; the management domain cannot serve them.
 
 ### Deploy an application
 
@@ -79,9 +81,21 @@ GOLEM_S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com \
 GOLEM_POSTGRES_HOST=<internal host name> GOLEM_POSTGRES_DB=<database> \
 GOLEM_POSTGRES_USER=<user> GOLEM_POSTGRES_PASSWORD=<password> \
   ./generate-env.sh > golem.env
+cat >> golem.env <<'EOF'
+AWS_ACCESS_KEY_ID=<access key>
+AWS_SECRET_ACCESS_KEY=<secret key>
+PORT=9881
+GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+EOF
 ```
 
+This command replaces `golem.env`, so it repeats the bucket credentials, port and management host. Use the actual database name from Render's connection details, not the database service name. The database can reject all external connections: Golem uses Render's private network.
+
 Leave out the Litestream variables: the state is in Postgres. **Keep the disk at `/var/lib/golem`**: it makes Render stop the old instance before it starts the new one. Point-in-time recovery of the database needs a paid Postgres instance.
+
+<Callout type="info">
+  The `v1.6.0-rc3` managed Postgres test used Render Postgres 18, a private database host and an S3-compatible bucket. CLI deployment and WebSocket invocations worked. Task state survived an image redeploy and a database restart, and new writes worked after recovery. The database restart temporarily made the service unavailable. Custom-domain HTTP API and MCP routing, SQLite with Litestream, point-in-time restore and fixed clusters still need live Render tests.
+</Callout>
 
 ## Fixed cluster
 
