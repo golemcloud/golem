@@ -81,6 +81,8 @@ Read [Fixed cluster](/next/deploy/cluster) for the settings of each service. Thi
 
 Point the hosts of the services at each other with their DNS names: `GOLEM__REGISTRY_SERVICE__HOST=registry-service.golem.internal` and so on, as the Compose file does with its service names.
 
+Give the registry service a health check grace period long enough to download and inspect the built-in plugins and tools before it opens its listeners, for example 600 seconds. With no persistent cache at `/app/builtin-artifacts`, every replacement repeats this startup work and needs HTTPS access to GitHub. Size the grace period for a start with an empty cache, not only for a warm restart.
+
 #### Shard manager
 
 Run exactly one shard manager task, in Postgres mode. With minimum healthy 0% and maximum 100%, ECS stops the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two shard managers could run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
