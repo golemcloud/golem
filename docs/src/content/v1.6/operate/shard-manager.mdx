@@ -34,14 +34,14 @@ compaction_retention_revisions = 0
 Use one load-balanced endpoint rather than a list of etcd members. An unavailable member in the client's rotation can delay writes and leader election: reads and writes that never reached etcd, and compactions, are sent again after a short delay within the retry budget, and a leadership campaign can spend tens of seconds landing on the dead member. A write that reached etcd is never sent again, so a refusal stays final. The leader's ready mark is retried on any retriable failure, because it sets the same value again.
 
 <Callout type="warning">
-  The etcd client supports only `http://` endpoints and does not configure authentication. Keep this connection on a trusted private network, or use a local proxy that secures the connection to etcd. Do not expose an unauthenticated etcd endpoint publicly.
+  The etcd client supports only `http://` endpoints and does not configure authentication. Keep this connection on a trusted private network, or use a local proxy that secures the connection to etcd. Do not expose an unauthenticated etcd endpoint publicly. A replica refuses to start with any other endpoint.
 </Callout>
 
 Check these settings before starting replicas:
 
 | Setting | Requirement |
 | --- | --- |
-| `leader_lease_ttl` | A whole number of seconds, at least `2s`; default `10s` |
+| `leader_lease_ttl` | A whole number of seconds, at least `2s`; default `10s`. Startup refuses a configuration that breaks either rule |
 | `request_timeout` | At most half of `leader_lease_ttl`; default `5s` |
 | `compaction_retention_revisions` | Default `1000`. Set to `0` on a shared etcd cluster and manage compaction separately, as in the example above |
 | etcd `--max-txn-ops` | At least `122` for quota lease updates; etcd's default `128` is sufficient |
@@ -61,13 +61,13 @@ The shard manager takes a host, which can be a DNS name or an IP address, becaus
 - A host that does not form a valid address with the port is refused at startup: for example one with a space, a `#`, a zone suffix such as `fe80::1%eth0`, or a second colon outside an IPv6 literal.
 - An advertised IPv6 address needs an IPv6 bind address. Set `GOLEM__BIND_ADDRESS: "::"`; startup refuses an IPv6 host when `bind_address` is IPv4.
 
-Each replica needs its **own** advertised address. Never use the Service name. A replica that finds another live replica advertising its address watches the lease of that replica's election key. A live replica keeps renewing its lease, which moves the end of the lease later. When the new replica has seen the end move later twice, without a change of etcd's raft leader in between, it stops with an error. A key left by an earlier process of the same pod is never renewed: its lease only runs down and the key disappears, so the replica waits it out and then leads. This holds even if the lease TTL changed before the restart, or an etcd leader change extended the lease once.
+Each replica needs its **own** advertised address. Never use the Service name. A replica that finds another election key with its address watches that key's lease. A live replica keeps renewing its lease, which moves the end of the lease later. When the new replica has seen the end move later twice, without a change of etcd's raft leader in between, it stops with an error. A key left by an earlier process of the same pod is never renewed: its lease only runs down and the key disappears, so the replica waits it out and then leads. This holds even if the lease TTL changed before the restart, or an etcd leader change extended the lease once.
 
-The replica identity, which is diagnostic only, falls back to the `HOSTNAME` environment variable. Kubernetes sets it to the pod name, so no extra identity variable is needed there.
+The replica identity, which is diagnostic only, comes from the `POD_NAME` environment variable, or else from `HOSTNAME`. Kubernetes sets `HOSTNAME` to the pod name, so no extra identity variable is needed there.
 
 ### Use TLS with the leader address
 
-With gRPC TLS enabled, a client without `shard_manager.tls.server_domain_name` checks the leader's certificate against its configured `shard_manager.host`, when that host is a DNS name. The certificate of the shard managers must then name that host, for example the Service name. A configured `server_domain_name` takes precedence.
+With gRPC TLS enabled, a client without `shard_manager.tls.config.server_domain_name` (`GOLEM__SHARD_MANAGER__TLS__CONFIG__SERVER_DOMAIN_NAME`) checks the leader's certificate against its configured `shard_manager.host`, when that host is a DNS name. The certificate of the shard managers must then name that host, for example the Service name. A configured `server_domain_name` takes precedence.
 
 ## Executor leases
 
@@ -92,7 +92,7 @@ Keep executor clocks synchronized before starting them. Lease exchange does not 
 
 ## Restarts and leader failover
 
-In distributed mode every replica serves its gRPC port (`grpc.port`) from startup, but only the leader runs calls. A standby answers each call with `UNAVAILABLE` and a `golem.shardmanager.v1.NotLeader` detail that holds the leader's host and port (`leader_host`, `leader_port`). It takes them from an in-memory view of the etcd election, so answering does not read etcd. The leader publishes its address only after its own startup has completed, so a client is never sent to a leader that cannot serve yet. A replica that has not reached its own advertised address is a standby and names the ready leader in the same way.
+In distributed mode every replica serves its gRPC port (`grpc.port`) from startup, but only the leader runs calls. A standby answers each call with `UNAVAILABLE` and a `golem.shardmanager.v1.NotLeader` detail that holds the leader's host and port (`leader_host`, `leader_port`). It takes them from an in-memory view of the etcd election, so answering does not read etcd. The worker executors and worker services follow the detail: they connect to the leader directly and keep using it until a call to it fails, and then ask their configured address again. The leader publishes its address only after its own startup has completed, so a client is never sent to a leader that cannot serve yet. A replica that has not reached its own advertised address is a standby and names the ready leader in the same way.
 
 A new leader restores shard and quota state before it serves. Existing quota leases survive a leader change because their state is in etcd. A restart or failover restarts the lease of every executor the shard manager keeps, so it never evicts a healthy cluster.
 
@@ -100,31 +100,31 @@ A new leader restores shard and quota state before it serves. Existing quota lea
 | --- | --- |
 | Graceful stop of the leader (`SIGTERM` or Ctrl-C) | The leader first refuses every call, on connections that clients already hold too. It then releases its election lease and closes its connections, so clients find the new leader. A standby takes over within milliseconds, then runs its startup |
 | Graceful stop of a standby | It leaves the election queue at once |
-| Leader crash or network partition | The leader releases nothing. A standby is elected between two thirds of `leader_lease_ttl` and the full value (`10s` by default) after the leader's last renewal. The new leader then runs its startup |
+| Leader crash or network partition | The leader releases nothing. A standby is elected between two thirds of `leader_lease_ttl` and the full value (`10s` by default) after the crash or partition. The new leader then runs its startup |
 | Startup while every stored executor lease is still valid | The normal case after a crash. The new leader skips the executor health check and serves almost at once. An executor that is dead is removed by the periodic health check, which waits `health_check.delay` (`10s` by default) and then makes its own retries: about 21 seconds after the restart for an executor that does not answer at all |
 | Startup after a longer outage | The new leader checks the executors for at most `initial_health_check_timeout` (`3s` by default) and removes those that fail |
 | Temporary etcd connection loss | A broken etcd connection is not a failover. After an etcd member restart or a raft leader change, the leader reconnects its keepalive stream. Only etcd declaring the lease gone, or a full lease period without an acknowledged renewal, ends a leadership |
-| Connection to etcd that goes silent without closing | An HTTP/2 probe, sent every `6s` while the election's watch and lease keepalive are open, finds it. The connection is replaced within about `6s` plus `request_timeout`. A write in flight fails with an unknown outcome, and a read is repeated on the new connection |
+| Connection to etcd that goes silent without closing | An HTTP/2 probe, sent every `6s` while the election's watch and lease keepalive are open, finds it. The connection is replaced within about `6s` plus `request_timeout`. On the connection for state reads and writes, the first request after `6s` of silence probes it, waits out `request_timeout`, and the connection is replaced. A read is then repeated on the new connection. A write fails with an unknown outcome |
 
 If the initial health check runs out of time, the shard manager still removes the executors that had already answered that they are unhealthy. It keeps the executors it could not finish checking and leaves them to the periodic check. An executor whose own lease lapsed during the outage resumes admitting work after its next successful renewal.
 
-A registration is persisted before it is acknowledged. If the leader loses its lease part-way through the write, the executor receives an error instead and repeats the registration within its `shard_manager.retries` budget.
+If the leader loses its lease part-way through a registration write, the executor receives an error instead and repeats the registration within its `shard_manager.retries` budget.
 
 Neither the leadership lease nor any other single setting is an upper bound on the interruption: the lease, etcd availability, the startup checks and the retry policies all add to the recovery time.
 
 ### How clients wait out a failover
 
-During a failover no replica serves. The replicas answer `UNAVAILABLE` and name the old leader until its lease expires. Clients keep asking and reach the new leader once its startup has completed.
+During a failover no replica serves. After a leader crash, the replicas name the old leader until its lease expires. Then they answer `UNAVAILABLE` without naming a leader until the new leader's startup has completed. Clients keep asking and reach the new leader once its startup has completed.
 
 - A worker service does not ride the window out on a warm routing table. The first executor-level error it hits discards the cached table, and the worker service then waits until a leader serves again.
-- A worker executor that starts inside the window waits it out too. Its registration may be repeated, and the executor repeats it within its `shard_manager.retries`. With no ready leader at all, a registration fails only after each repeat has waited out the budget described below.
+- A worker executor that starts inside the window waits it out too. Registration is a call that may be repeated, and the executor repeats it within its `shard_manager.retries`. With no ready leader at all, a registration fails only after each repeat has waited out the budget described below.
 
 The worker executors and worker services wait out a failover themselves, so no client setting needs tuning for it. A call that may be repeated keeps asking for about `15s` once a replica has named a leader that cannot be reached, or a replica itself answers `UNAVAILABLE`. The 15 seconds count from the start of the call. If the `shard_manager.retries_on_unavailable` schedule takes longer than that in all, the call keeps asking for that long instead. With the default settings this covers one leadership lease plus the startup.
 
 - A shard manager that cannot be reached at the configured address at all is not a failover. `shard_manager.retries_on_unavailable` still decides how long the client keeps trying there.
 - The 15 seconds are fixed. With a longer `leader_lease_ttl` or `initial_health_check_timeout`, raise `shard_manager.retries_on_unavailable` on the clients, because a call waits for whichever is longer.
 - A call that must not run twice is not repeated.
-- To notice a replica whose node lost power in time, the clients probe their connections to a named leader and to the configured address every `2s` and wait `5s` for the answer, also while idle, whatever their keep-alive settings say. They also use one connection to the configured address that is not replaced for its age, whatever `connection_pool_size` and `max_connection_age` say. A sidecar proxy answers such probes itself, so behind one the clients find a dead proxy but not a dead replica.
+- To notice a replica whose node lost power in time, the clients probe their connections to a named leader and to the configured address at least every `2s` and wait at most `5s` for the answer, also while idle. They also use one connection to the configured address that is not replaced for its age, whatever `connection_pool_size` and `max_connection_age` say. A sidecar proxy answers such probes itself, so behind one the clients find a dead proxy but not a dead replica.
 
 ### Use other tools against a standby
 
@@ -144,10 +144,10 @@ Use two different probes on the HTTP listener (`http_port`, `8081` by default):
 `/readyz` answers `200` or `503`:
 
 - A leader that serves is ready while it believes it holds its lease.
-- A standby is ready while etcd has answered it within one lease TTL. A replica cut off from etcd is therefore taken out of a rollout's count.
+- A standby is ready while etcd has answered it within one lease TTL. A replica cut off from etcd is therefore taken out of a rollout's count. Cut off from etcd, it keeps naming the leader it last saw.
 - A just-elected leader that is still running its startup is ready on the same terms as a standby.
 - A replica is not ready before it has connected to etcd, and in local mode not until the startup has completed.
-- In distributed mode a replica is also not ready until it has reached its own advertised address once. It makes a TCP connection to the advertised host and port and, when gRPC TLS is off, a gRPC health check. With gRPC TLS on, only the TCP connection is made. It tries again every second, and each failure logs a warning that names the address.
+- In distributed mode a replica is also not ready until it has reached its own advertised address once. It makes a TCP connection to the advertised host and port and, when gRPC TLS is off, a gRPC health check. With gRPC TLS on, only the TCP connection is made. It waits one second between attempts. While the check fails, it logs a warning that names the address, at most every 30 seconds.
 
 The own-address check finds a wrong `grpc.advertised_host` or `grpc.advertised_port`: the replica never becomes ready. A setup in which a pod cannot reach its own externally advertised address, such as some NAT or port-mapping layouts, keeps the replica unready. Without gRPC TLS the health check asks for an entry that only this process has, so an address that another process answers at is refused too, for example a Service name that reaches only other replicas.
 
@@ -168,7 +168,7 @@ Monitor these metrics across all replicas:
 
 The two gauges differ while a new leader starts. `shard_manager_is_leader` is `1` from the moment the replica wins the election, because it holds the lease from then. `shard_manager_is_serving` becomes `1` only after the replica has restored its state and checked the executors: a short time after a crash, and up to `initial_health_check_timeout` after a longer outage.
 
-Over HTTP a standby and a stuck replica look the same, and both gauges read `0` for a healthy standby and for a wedged one alike. `shard_manager_campaign_attempt_failures_total` tells them apart: rising means the replica cannot reach etcd and is retrying, flat means it is simply waiting for the leadership. See [Metrics](/v1.6/operate/metrics) for metrics collection.
+Both gauges read `0` on a healthy standby and on a stuck one alike. `/readyz` and `shard_manager_campaign_attempt_failures_total` tell them apart. A replica that etcd stopped answering, or that has not reached its own address, is not ready. A rising counter means the replica cannot reach etcd and is retrying. A ready standby with a flat counter is waiting for the leadership. See [Metrics](/v1.6/operate/metrics) for metrics collection.
 
 To read the election itself, run `etcdctl elect -l /golem/shard-manager/leader`. It prints the leader's election value, a JSON document with its identity, its gRPC address, a `ready` flag and its build `version`.
 
@@ -282,7 +282,7 @@ The worker executors and worker services set `GOLEM__SHARD_MANAGER__HOST: golem-
 
 ### Upgrade from earlier replicas
 
-Replicas of a version before leader discovery write an election value that this version cannot read. A standby of this version then names no leader, and clients retry until the old replicas are gone. Roll all shard manager replicas before you rely on redirects.
+Replicas of an earlier version, whose standbys keep their gRPC port closed, write an election value that this version cannot read. A standby of this version then names no leader, and clients retry until the old replicas are gone. Roll all shard manager replicas before you rely on redirects.
 
 ## Oplog fencing and storage
 
