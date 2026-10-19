@@ -130,8 +130,8 @@ fn write_rust_caller(ctx: &TestContext) {
             use golem_rust::{agent_definition, agent_implementation, Uuid};
 
             macro_rules! exercise {
-                ($client:ident, $agent:ident, $key:expr) => {{
-                    use $client::{$agent, UuidHolder};
+                ($client:ident, $agent:ident, $holder:ident, $key:expr) => {{
+                    use $client::{$agent, $holder};
                     let key = $key;
                     let nil = Uuid::nil();
                     let max = Uuid::from_u128(u128::MAX);
@@ -141,7 +141,7 @@ fn write_rust_caller(ctx: &TestContext) {
                     }
                     for maybe in [Some(max), None] {
                         let holder = target
-                            .nested(UuidHolder { primary: key, maybe, all: vec![key, nil, max] })
+                            .nested($holder { primary: key, maybe, all: vec![key, nil, max] })
                             .await
                             .unwrap();
                         assert_eq!(
@@ -170,10 +170,10 @@ fn write_rust_caller(ctx: &TestContext) {
                 async fn run(&self, target: String, key: String) -> String {
                     let key = Uuid::parse_str(&key).unwrap();
                     match target.as_str() {
-                        "ts" => exercise!(ts_uuid_target_guest_client, TsUuidTarget, key),
-                        "go" => exercise!(go_uuid_target_guest_client, GoUuidTarget, key),
-                        "scala" => exercise!(scala_uuid_target_guest_client, ScalaUuidTarget, key),
-                        "moonbit" => exercise!(moonbit_uuid_target_guest_client, MoonbitUuidTarget, key),
+                        "ts" => exercise!(ts_uuid_target_guest_client, TsUuidTarget, NestedInValue, key),
+                        "go" => exercise!(go_uuid_target_guest_client, GoUuidTarget, NestedInValue, key),
+                        "scala" => exercise!(scala_uuid_target_guest_client, ScalaUuidTarget, UuidHolder, key),
+                        "moonbit" => exercise!(moonbit_uuid_target_guest_client, MoonbitUuidTarget, UuidHolder, key),
                         other => panic!("unknown target {other}"),
                     }
                 }
@@ -225,7 +225,8 @@ fn write_ts(ctx: &TestContext) {
             import { defineAgent, method, s, Uuid } from '@golemcloud/golem-ts-sdk';
             import { RustUuidTarget } from 'rust-uuid-target-guest-client';
 
-            const holder = z.object({ primary: s.uuid(), maybe: z.optional(s.uuid()), all: z.array(s.uuid()) });
+            const uuid = s.uuid() as unknown as z.ZodType<Uuid, Uuid>;
+            const holder = z.object({ primary: uuid, maybe: z.optional(uuid), all: z.array(uuid) });
 
             export const TsUuidTarget = defineAgent({
               name: 'TsUuidTarget', id: { key: s.uuid() },
@@ -442,10 +443,10 @@ fn write_scala(ctx: &TestContext) {
 
             @agentDefinition()
             trait ScalaUuidTarget extends BaseAgent {
-              class Id(val key: Uuid)
-              def echo(value: Uuid): Uuid
+              class Id(val key: golem.Uuid)
+              def echo(value: golem.Uuid): golem.Uuid
               def nested(value: UuidHolder): UuidHolder
-              def identity(): Uuid
+              def identity(): golem.Uuid
               def touch(): Int
             }
 
@@ -474,7 +475,7 @@ fn write_scala(ctx: &TestContext) {
                 val max = parse("ffffffff-ffff-ffff-ffff-ffffffffffff")
                 val target = RustUuidTargetClient.get(id)
                 for {
-                  echoed <- Future.sequence(List(id, nil, max).map(target.echo))
+                  echoed <- Future.sequence(List(id, nil, max).map(v => target.echo(v)))
                   withSome <- target.nested(RustHolder(id, Some(max), List(id, nil, max)))
                   withNone <- target.nested(RustHolder(id, None, List(id, nil, max)))
                   identity <- target.identity()
@@ -584,7 +585,8 @@ fn write_moonbit(ctx: &TestContext) {
                   assert_eq(back.all, [id, nil, max])
                 }
                 assert_eq(remote.identity(), id)
-                "ok:\{remote.touch()}"
+                let touches = remote.touch()
+                "ok:" + touches.to_string()
               })
             }
 
@@ -948,7 +950,8 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
                 assert_eq(holder.all, [key, nil, max])
               }}
               assert_eq(target.identity(), key)
-              println("UUID_E2E_TOUCH \{{target.touch()}}")
+              let touches = target.touch()
+              println("UUID_E2E_TOUCH " + touches.to_string())
             }}
         "#},
     )
