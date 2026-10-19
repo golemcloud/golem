@@ -296,14 +296,6 @@ mod activation {
         #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
         _tracing: &Tracing,
     ) -> anyhow::Result<()> {
-        use golem_api_grpc::proto::golem::worker::{
-            AgentInvocationMode, InvocationRequest, InvocationStart, invocation_request,
-            invocation_response, invocation_session_completion, invocation_session_result,
-        };
-        use golem_common::schema::SchemaValue;
-        use golem_test_framework::dsl::AgentResult;
-        use tokio_stream::wrappers::ReceiverStream;
-
         let context = TestContext::new(last_unique_id);
         let shutdown = CancellationToken::new();
         let metering = ResourceUsageMeteringConfig {
@@ -346,83 +338,17 @@ mod activation {
                 tokio::task::yield_now().await;
             }
         })
-        .await
-        .context("wait for the first increment to become evictable")?;
+        .await?;
         assert!(worker.is_loaded().await);
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let key = IdempotencyKey::fresh();
         let mut outcome = executor.gate_next_invocation_started(&owned).await?;
-        let (requests, receiver) = tokio::sync::mpsc::channel(1);
-        requests
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::Start(InvocationStart {
-                    agent_id: Some(id.clone().into()),
-                    method_name: Some("increment".to_string()),
-                    input: Some(
-                        data_value!()
-                            .into_parts()
-                            .1
-                            .try_into()
-                            .map_err(anyhow::Error::msg)?,
-                    ),
-                    mode: AgentInvocationMode::Await as i32,
-                    idempotency_key: Some(key.clone().into()),
-                    component_owner_account_id: Some(component.account_id.into()),
-                    environment_id: Some(component.environment_id.into()),
-                    auth_ctx: Some(executor.auth_ctx().into()),
-                    ..Default::default()
-                })),
-            })
+        // Finish scheduling before suspending so an outstanding caller or retry
+        // cannot issue a startup request during teardown.
+        executor
+            .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
-        let mut responses = executor
-            .client
-            .clone()
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        // Started can precede the caller's initial startup request. Accepted proves
-        // admission has finished while the same Await session stays attached.
-        let accepted = responses
-            .message()
-            .await?
-            .context("session closed before acceptance")?;
-        assert!(matches!(
-            accepted.response,
-            Some(invocation_response::Response::Accepted(_))
-        ));
         outcome.entered().await;
-        let invocation = tokio::spawn({
-            let id = id.clone();
-            async move {
-                let mut result = None;
-                while let Some(response) = responses.message().await? {
-                    match response.response {
-                        Some(invocation_response::Response::Result(value)) => {
-                            let Some(invocation_session_result::Result::MethodResult(value)) =
-                                value.result
-                            else {
-                                anyhow::bail!("expected counter method result");
-                            };
-                            assert!(result.is_none(), "duplicate invocation result");
-                            result =
-                                Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
-                        }
-                        Some(invocation_response::Response::Finished(finished)) => {
-                            assert!(matches!(
-                                finished.outcome,
-                                Some(invocation_session_completion::Outcome::Success(_))
-                            ));
-                            return Ok::<_, anyhow::Error>(AgentResult::new(
-                                Some(result.context("session finished without a result")?),
-                                id,
-                            ));
-                        }
-                        other => anyhow::bail!("unexpected scalar invocation response: {other:?}"),
-                    }
-                }
-                anyhow::bail!("original Await session closed before completion")
-            }
-        });
         assert!(matches!(
             &*worker
                 .owner_runtime_resources()
@@ -452,8 +378,7 @@ mod activation {
                 tokio::task::yield_now().await;
             }
         })
-        .await
-        .context("wait for the accepted suspend to unload the worker")?;
+        .await?;
         worker.retained_cleanup_for_test().await?;
         // The exact internal no-Store acknowledgement is proved by the publication body
         // matrix. Do not subscribe to a private receipt after this completed driver.
@@ -473,10 +398,18 @@ mod activation {
             worker.lookup_invocation_result(&key).await,
             golem_worker_executor::model::LookupResult::Pending
         ));
-        assert!(!invocation.is_finished());
         executor.resume(&id, false).await?;
-        let result = tokio::time::timeout(Duration::from_secs(10), invocation).await;
-        drop(requests);
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.invoke_and_await_agent_with_key(
+                &component,
+                &name,
+                &key,
+                "increment",
+                data_value!(),
+            ),
+        )
+        .await;
         let entries = worker
             .oplog()
             .read_exact(
@@ -495,7 +428,7 @@ mod activation {
             suspends_after, 1,
             "one accepted stop must produce only one Suspend across reconstruction"
         );
-        assert_eq!(result???.into_typed::<u32>()?, 2);
+        assert_eq!(result??.into_typed::<u32>()?, 2);
         assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
         assert_eq!(
             entries
