@@ -1,0 +1,1082 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! The continuous mixed workload a chaos scenario runs a fault against.
+//!
+//! Four streams run concurrently at a shared, deliberately modest rate:
+//!
+//! | Stream | Operation | Read-back |
+//! | -- | -- | -- |
+//! | durable | `Counter.increment` | `Counter.count` |
+//! | ephemeral | `EphemeralCounter.increment` | none — no state survives |
+//! | scheduled | `ScheduleEmitter.schedule_poll_at` → `ScheduleCounter.poll` | `ScheduleCounter.polls` |
+//! | promise | `PromiseAgent.get_promise` + `complete_promise` | none — one-shot |
+//!
+//! Two properties here are load-bearing for the whole scenario, and both are
+//! easy to get subtly wrong:
+//!
+//! **Deterministic idempotency keys.** Every operation's key is derived from its
+//! stream, agent and sequence number, so a retry is the *same* operation to the
+//! platform. Minting a fresh key per attempt — which is what the general-purpose
+//! benchmark helper does — would turn every duplicate execution into a clean
+//! run, because the platform would be right to execute both.
+//!
+//! **Honest failure classification.** [`crate::chaos::errors`] decides what a
+//! failed attempt actually proves, and only a definite, non-retryable status
+//! lets an operation be called `Rejected`. Anything else that failed is
+//! `Indeterminate`: from the client side, a dropped connection is
+//! indistinguishable from a request that arrived and executed. A pod kill
+//! produces exactly these, and recording them as failures would understate what
+//! the platform did while recording them as successes would overstate it.
+
+use crate::chaos::RetryPolicy;
+use crate::chaos::errors::{self, ErrorClass};
+use crate::chaos::history::{
+    AttemptRecord, OperationHistory, OperationRecord, Outcome, Phase, Stream,
+};
+use chrono::Utc;
+use golem_common::model::IdempotencyKey;
+use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentDto;
+use golem_common::{agent_id, data_value};
+use golem_test_framework::config::BenchmarkTestDependencies;
+use golem_test_framework::config::dsl_impl::TestUserContext;
+use golem_test_framework::dsl::{AgentResult, TestDsl};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+use tracing::{debug, info, warn};
+
+/// The agent an RPC caller invokes, which is *not* the agent the driver invokes.
+///
+/// The suffix is not the driver's choice. `Counter::increment_through_rpc`
+/// builds its client as `CounterClient::get(format!("{}-inner", self.id))`, so
+/// the callee's id follows from the caller's. The driver reproduces that
+/// derivation rather than passing a target in, which is what lets it decide
+/// *before* the run which executor will own each half of the pair.
+///
+/// Free rather than a method on [`WorkloadContext`] because it depends on
+/// nothing about the run — only on what the component does — and because that
+/// is what makes the coupling testable without standing up a platform.
+pub fn rpc_callee_name(caller: &str) -> String {
+    format!("{caller}-inner")
+}
+
+/// Agent type names exported by the counters component.
+pub(crate) const COUNTER_AGENT: &str = "Counter";
+const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
+pub(crate) const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
+pub(crate) const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
+const PROMISE_AGENT: &str = "PromiseAgent";
+pub(crate) const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
+
+/// How far ahead scheduled polls are registered. Long enough that registration
+/// and firing are distinct events (so a fault can land between them), short
+/// enough that every fire has landed well before read-back at the end of the
+/// recovery phase.
+const SCHEDULE_LEAD: Duration = Duration::from_secs(10);
+
+/// Invocation-context spans added when scheduling. Zero: this scenario is about
+/// restart recovery, and extra spans only make the traces harder to read.
+const SCHEDULE_CONTEXT_SPANS: u32 = 0;
+
+/// Ceiling on operations in flight at once, across all streams. Divided evenly
+/// between the active streams, so a stream that stalls can only exhaust its own
+/// share — see the allocation site for why that matters. The rate limiter sets
+/// the pace; this only stops a stalled platform from accumulating unbounded
+/// tasks during a fault, which would turn a fault window into an out-of-memory
+/// abort.
+///
+/// It has to stay well above `ratePerSec`, because it doubles as a stall
+/// backstop: once the pool is exhausted the streams stop submitting, so a cap
+/// too close to the rate would silently clamp the workload the moment the
+/// platform slowed — and the fault window is exactly when that happens. At the
+/// suite's 100 ops/s this is ~10s of submissions, which absorbs a stall long
+/// enough to be interesting without letting a fully-stalled platform accumulate
+/// the ~12000 tasks a 120s attempt timeout would otherwise permit.
+const MAX_IN_FLIGHT: usize = 1024;
+
+/// Per-attempt timeout. Generous, because a shard-manager restart legitimately
+/// stalls in-flight work — but bounded, so an operation cannot outlive the
+/// scenario that submitted it.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Ceiling on a single read-back invocation.
+///
+/// Read-back walks every agent the run touched, and an agent that never answers
+/// would otherwise stall the whole scenario — which is not hypothetical: a
+/// quota lease lost during a fault leaves the agent's next reservation parked
+/// with no timeout on the platform side, so `invoke_and_await` against it never
+/// returns. One wedged agent must cost one entry, not the run.
+///
+/// Generous, because read-back happens on a cluster that has just been through
+/// a fault and a slow answer is still an answer.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ceiling on one fire-log read. Larger than [`READ_TIMEOUT`] because the
+/// answer carries every fire the target recorded rather than one number.
+const FIRE_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Payload written when completing a promise.
+const PROMISE_PAYLOAD: &[u8] = b"chaos";
+
+/// The phase the workload is currently submitting into, flipped by the scenario
+/// as it advances. Shared rather than passed so the flip takes effect for
+/// operations already queued.
+#[derive(Debug, Clone)]
+pub struct PhaseMarker(Arc<AtomicU8>);
+
+impl PhaseMarker {
+    pub fn new(phase: Phase) -> Self {
+        let marker = Self(Arc::new(AtomicU8::new(0)));
+        marker.set(phase);
+        marker
+    }
+
+    pub fn set(&self, phase: Phase) {
+        let code = match phase {
+            Phase::Baseline => 0,
+            Phase::Fault => 1,
+            Phase::Recovery => 2,
+        };
+        self.0.store(code, Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> Phase {
+        match self.0.load(Ordering::Relaxed) {
+            0 => Phase::Baseline,
+            1 => Phase::Fault,
+            _ => Phase::Recovery,
+        }
+    }
+}
+
+/// Everything a workload operation needs to run and record itself.
+#[derive(Clone)]
+pub struct WorkloadContext {
+    pub user: TestUserContext<BenchmarkTestDependencies>,
+    /// Counters component: durable, ephemeral and scheduled streams.
+    pub counters: ComponentDto,
+    /// Promise component.
+    pub promise: ComponentDto,
+    pub history: OperationHistory,
+    pub retry: RetryPolicy,
+    pub phase: PhaseMarker,
+    /// Prefix every agent id and idempotency key of this run shares, so a trace
+    /// or log search can be narrowed to exactly this run.
+    pub key_prefix: String,
+}
+
+impl WorkloadContext {
+    /// Agent id for the `index`-th agent of a stream, e.g.
+    /// `chaos-s12-durable-0007`.
+    pub fn agent_name(&self, stream: Stream, index: u32) -> String {
+        format!("{}-{stream}-{index:04}", self.key_prefix)
+    }
+
+    /// The scheduled stream's target agent, distinct from its emitter: keeping
+    /// them apart is what makes the fire observable independently of the
+    /// registration.
+    pub fn schedule_target_name(&self, index: u32) -> String {
+        format!("{}-scheduled-target-{index:04}", self.key_prefix)
+    }
+
+    /// The suspended-waiter scenario's agent, in the promise component rather
+    /// than the counters one.
+    pub fn waiter_name(&self, index: u32) -> String {
+        format!("{}-promise-waiter-{index:04}", self.key_prefix)
+    }
+
+    /// The deterministic key for one operation. Same inputs, same key — that is
+    /// what makes a retry the same operation rather than a new one.
+    pub fn idempotency_key(&self, agent: &str, seq: u64) -> String {
+        format!("{agent}-{seq:08}")
+    }
+}
+
+/// Outcome and value of a single invocation attempt.
+struct AttemptResult {
+    value: Option<u32>,
+    error: Option<anyhow::Error>,
+    /// Absent when the attempt succeeded.
+    class: Option<ErrorClass>,
+}
+
+/// What one operation ended up as.
+///
+/// Returned rather than only recorded because one scenario has to chain on it:
+/// [`crate::chaos::reverts`] judges a revert by the value the *next* increment
+/// reports, so it needs each operation's answer in hand rather than having to
+/// go looking for its own record in a history every other emitter is also
+/// appending to.
+#[derive(Debug, Clone)]
+pub struct OperationOutcome {
+    pub outcome: Outcome,
+    /// The value the operation returned, for the methods that return one.
+    pub value: Option<u32>,
+    /// The last error, verbatim, for callers that need to tell one refusal from
+    /// another. [`crate::chaos::deletions`] does: a delete refused because the
+    /// agent was not there means something quite different from any other
+    /// refusal.
+    ///
+    /// Only ever `Some` on a failure, so the clone costs nothing on the path
+    /// every scenario actually runs.
+    pub error: Option<String>,
+}
+
+/// Runs one operation with the configured bounded, same-key retry, and records
+/// it in the history.
+///
+/// Shared with the pinned in-flight stream in [`crate::chaos::pinned`]: the
+/// retry rule and the failure classification are the load-bearing parts of
+/// every chaos scenario, and a second copy of them would be a second place for
+/// them to drift.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_operation<F, Fut>(
+    ctx: &WorkloadContext,
+    stream: Stream,
+    agent: String,
+    method: &str,
+    key: String,
+    invoke: F,
+) -> OperationOutcome
+where
+    F: Fn(IdempotencyKey) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Option<u32>>>,
+{
+    let op_id = ctx.history.next_op_id();
+    let phase = ctx.phase.get();
+    let submitted_at = Utc::now();
+    let started = Instant::now();
+    let idempotency_key = IdempotencyKey::new(key.clone());
+
+    let mut attempts = 0u32;
+    let mut first_attempt_value = None;
+    let mut attempt_log: Vec<AttemptRecord> = Vec::new();
+    let mut last: AttemptResult;
+
+    loop {
+        attempts += 1;
+        let attempt_started_at = Utc::now();
+        let attempt_started = Instant::now();
+        last = match tokio::time::timeout(ATTEMPT_TIMEOUT, invoke(idempotency_key.clone())).await {
+            Ok(Ok(value)) => AttemptResult {
+                value,
+                error: None,
+                class: None,
+            },
+            Ok(Err(error)) => {
+                let class = errors::classify(&error);
+                AttemptResult {
+                    value: None,
+                    error: Some(error),
+                    class: Some(class),
+                }
+            }
+            Err(_) => AttemptResult {
+                value: None,
+                error: Some(anyhow::anyhow!(
+                    "attempt timed out after {ATTEMPT_TIMEOUT:?}"
+                )),
+                // A timeout is the archetypal case of not knowing: the request
+                // may well be executing right now.
+                class: Some(ErrorClass::Transport),
+            },
+        };
+
+        let succeeded = last.error.is_none();
+        attempt_log.push(AttemptRecord {
+            attempt: attempts,
+            started_at: attempt_started_at,
+            duration_ms: attempt_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            returned_value: last.value,
+            succeeded,
+            error_class: last.class,
+            error: last.error.as_ref().map(|e| format!("{e:#}")),
+        });
+
+        // Only transport failures are retried, and only under the original key.
+        // See `crate::chaos::errors` for why the other three classes are not:
+        // the retry is there to *expose* duplicate execution, not to paper over
+        // a failing platform.
+        let may_retry = attempts <= ctx.retry.max_retries
+            && !succeeded
+            && last.class.is_some_and(|class| {
+                !ctx.retry.transport_only || class.is_retryable_transport_failure()
+            });
+
+        if succeeded || !may_retry {
+            break;
+        }
+
+        // Only meaningful when the first attempt actually answered: comparing a
+        // value against nothing says nothing.
+        if first_attempt_value.is_none() {
+            first_attempt_value = last.value;
+        }
+        debug!(
+            "Chaos {stream} op {key} attempt {attempts} failed ({}), retrying with the same key in {:?}",
+            last.class.map(|c| c.as_str()).unwrap_or("unclassified"),
+            ctx.retry.delay()
+        );
+        tokio::time::sleep(ctx.retry.delay()).await;
+    }
+
+    let outcome = match last.class {
+        None => Outcome::Confirmed,
+        // A definite refusal is the only failure that proves nothing executed.
+        // Everything else — transport, platform, application — leaves doubt the
+        // read-back carries through as the width of a range.
+        Some(class) if class.is_definite_rejection() => Outcome::Rejected,
+        Some(_) => Outcome::Indeterminate,
+    };
+
+    if outcome == Outcome::Indeterminate {
+        warn!(
+            "Chaos {stream} op {key} ended indeterminate ({}) after {attempts} attempt(s): {}",
+            last.class.map(|c| c.as_str()).unwrap_or("unclassified"),
+            last.error
+                .as_ref()
+                .map(|e| e.to_string())
+                .unwrap_or_default()
+        );
+    }
+
+    let error = last.error.as_ref().map(|e| format!("{e:#}"));
+    ctx.history.record(OperationRecord {
+        op_id,
+        stream,
+        phase,
+        agent,
+        method: method.to_string(),
+        idempotency_key: key,
+        submitted_at,
+        completed_at: Some(Utc::now()),
+        attempts,
+        outcome,
+        duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        returned_value: last.value,
+        first_attempt_value,
+        error: error.clone(),
+        error_class: last.class,
+        attempt_log,
+    });
+
+    OperationOutcome {
+        outcome,
+        value: last.value,
+        error,
+    }
+}
+
+/// One `Counter.increment`, recorded under `stream`.
+///
+/// Split out of [`submit_one`] so [`crate::chaos::reverts`] can drive
+/// increments on its own stream through exactly the same retry rule and
+/// classification, rather than growing a second copy of them.
+pub(crate) async fn increment_counter(
+    ctx: &WorkloadContext,
+    stream: Stream,
+    agent: &str,
+    key: String,
+) -> OperationOutcome {
+    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    let ctx2 = ctx.clone();
+    run_operation(ctx, stream, agent.to_string(), "increment", key, |k| {
+        let ctx = ctx2.clone();
+        let parsed = parsed.clone();
+        async move {
+            let value = ctx
+                .user
+                .invoke_and_await_agent_with_key(
+                    &ctx.counters,
+                    &parsed,
+                    &k,
+                    "increment",
+                    data_value!(),
+                )
+                .await?;
+            Ok(as_u32(value))
+        }
+    })
+    .await
+}
+
+/// Extracts a `u32` return value, if the agent returned one. Absent values are
+/// not an error: several workload methods return nothing.
+///
+/// Public under a fuller name for [`crate::chaos::pinned`], which reads the same
+/// counter values back from its own invocations.
+pub fn as_u32_value(value: AgentResult) -> Option<u32> {
+    as_u32(value)
+}
+
+fn as_u32(value: AgentResult) -> Option<u32> {
+    value.into_typed::<u32>().ok()
+}
+
+/// A running workload. Dropping the handle does not stop it; call
+/// [`WorkloadHandle::stop`] so in-flight operations are recorded rather than
+/// cancelled mid-flight, which would lose exactly the operations that matter.
+pub struct WorkloadHandle {
+    stop: Arc<AtomicU8>,
+    tasks: JoinSet<()>,
+    submitted: Arc<AtomicU64>,
+}
+
+impl WorkloadHandle {
+    /// Operations submitted so far.
+    pub fn submitted(&self) -> u64 {
+        self.submitted.load(Ordering::Relaxed)
+    }
+
+    /// Signals every stream to stop and waits for in-flight operations to be
+    /// recorded.
+    pub async fn stop(mut self) {
+        self.stop.store(1, Ordering::Relaxed);
+        while self.tasks.join_next().await.is_some() {}
+        info!(
+            "Chaos workload stopped after {} operations",
+            self.submitted()
+        );
+    }
+}
+
+/// Starts the mixed workload. Returns immediately; operations continue until
+/// [`WorkloadHandle::stop`].
+pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> WorkloadHandle {
+    let stop = Arc::new(AtomicU8::new(0));
+    let submitted = Arc::new(AtomicU64::new(0));
+    let mut tasks = JoinSet::new();
+
+    // The configured rate is split evenly across the active streams. Streams
+    // with no agents configured are skipped entirely rather than run empty.
+    let active: Vec<(Stream, u32)> = [
+        (Stream::Durable, config.durable_agents),
+        (Stream::Ephemeral, config.ephemeral_agents),
+        (Stream::Scheduled, config.scheduled_agents),
+        (Stream::Promise, config.promise_agents),
+        (Stream::Quota, config.quota_agents),
+        (Stream::Rpc, config.rpc_agents),
+    ]
+    .into_iter()
+    .filter(|(_, agents)| *agents > 0)
+    .collect();
+
+    if active.is_empty() {
+        warn!("Chaos workload configured with no agents in any stream");
+        return WorkloadHandle {
+            stop,
+            tasks,
+            submitted,
+        };
+    }
+
+    let per_stream_rate = (config.rate_per_sec as f64 / active.len() as f64).max(0.1);
+    let interval = Duration::from_secs_f64(1.0 / per_stream_rate);
+    // One permit pool *per stream*, not one shared across them.
+    //
+    // A shared pool was the original design, on the reasoning that it would let
+    // a fast stream use capacity a slow one was not using. It does the opposite
+    // under the exact conditions these scenarios create. In S1 the quota stream
+    // blocks for minutes while its lease is unreachable, its operations sit on
+    // permits without completing, and the pool drains — so the four streams that
+    // cannot even see the fault stop submitting too. That run showed all five
+    // streams dropping from ~20 ops/s to ~5.7 ops/s together, which makes
+    // acceptance degradation unattributable: every stream looks affected by a
+    // fault only one of them touches.
+    //
+    // Per-stream budgets keep the blast radius inside the stream that stalled.
+    // The total ceiling is unchanged, so the out-of-memory backstop still holds.
+    let per_stream_in_flight = (MAX_IN_FLIGHT / active.len()).max(1);
+
+    info!(
+        "Chaos workload starting: {} streams, {:.2} ops/s each ({:?} between \
+         submissions), {} in flight per stream",
+        active.len(),
+        per_stream_rate,
+        interval,
+        per_stream_in_flight
+    );
+
+    for (stream, agent_count) in active {
+        let ctx = ctx.clone();
+        let stop = stop.clone();
+        let submitted = submitted.clone();
+        let in_flight = Arc::new(Semaphore::new(per_stream_in_flight));
+
+        tasks.spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut seq: u64 = 0;
+            let mut in_stream = JoinSet::new();
+
+            while stop.load(Ordering::Relaxed) == 0 {
+                ticker.tick().await;
+
+                let Ok(permit) = in_flight.clone().acquire_owned().await else {
+                    break;
+                };
+                let index = (seq % agent_count as u64) as u32;
+                let ctx = ctx.clone();
+                seq += 1;
+                submitted.fetch_add(1, Ordering::Relaxed);
+
+                in_stream.spawn(async move {
+                    let _permit = permit;
+                    submit_one(&ctx, stream, index, seq).await;
+                });
+
+                // Reap finished operations so the set does not grow unbounded.
+                while in_stream.try_join_next().is_some() {}
+            }
+
+            // Let in-flight operations finish and record themselves: an
+            // operation cancelled mid-flight is one the history cannot classify,
+            // and those are precisely the interesting ones.
+            while in_stream.join_next().await.is_some() {}
+        });
+    }
+
+    WorkloadHandle {
+        stop,
+        tasks,
+        submitted,
+    }
+}
+
+/// Submits one operation of `stream` against agent `index`.
+pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64) {
+    match stream {
+        // Driven by `crate::chaos::pinned`, not by the rate-based streams: it
+        // has no rate and its agents are chosen by shard ownership rather than
+        // by index. `start` never puts it in the active list, so reaching here
+        // means a caller wired it up by hand.
+        Stream::PinnedHttp => {
+            warn!("Chaos mixed workload cannot drive the pinned stream; see chaos::pinned");
+        }
+        // Driven by `crate::chaos::waiters` for the same reason: its agents run
+        // a round at their own pace rather than at a shared rate, and each one
+        // is blocked until its promise resolves.
+        Stream::PromiseWait => {
+            warn!("Chaos mixed workload cannot drive the waiter stream; see chaos::waiters");
+        }
+        // Driven by `crate::chaos::deletions`: a round builds an agent up and
+        // then deletes it outright, and the value the *next* round's first
+        // increment returns says whether it stayed deleted.
+        Stream::Delete => {
+            warn!("Chaos mixed workload cannot drive the delete stream; see chaos::deletions");
+        }
+        // Driven by `crate::chaos::reverts`: a round is a run of increments
+        // followed by a revert that takes some of them back, and the value the
+        // *next* round's first increment returns is what says whether that
+        // revert landed. A shared rate cannot express that ordering.
+        Stream::Revert => {
+            warn!("Chaos mixed workload cannot drive the revert stream; see chaos::reverts");
+        }
+        Stream::Durable => {
+            let agent = ctx.agent_name(Stream::Durable, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(ctx, Stream::Durable, agent.clone(), "increment", key, |k| {
+                let ctx = ctx2.clone();
+                let parsed = parsed2.clone();
+                async move {
+                    let value = ctx
+                        .user
+                        .invoke_and_await_agent_with_key(
+                            &ctx.counters,
+                            &parsed,
+                            &k,
+                            "increment",
+                            data_value!(),
+                        )
+                        .await?;
+                    Ok(as_u32(value))
+                }
+            })
+            .await;
+        }
+        Stream::Rpc => {
+            // The driver invokes the caller; the caller invokes the callee.
+            // Only the second hop is the one under test, and it is the hop the
+            // driver cannot address directly — which is the whole point, since
+            // an agent-to-agent call is the only traffic that chooses its own
+            // executor rather than being routed to one.
+            let agent = ctx.agent_name(Stream::Rpc, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Rpc,
+                agent.clone(),
+                "increment_through_rpc",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let value = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "increment_through_rpc",
+                                data_value!(),
+                            )
+                            .await?;
+                        Ok(as_u32(value))
+                    }
+                },
+            )
+            .await;
+        }
+        Stream::Ephemeral => {
+            let agent = ctx.agent_name(Stream::Ephemeral, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(EPHEMERAL_COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Ephemeral,
+                agent.clone(),
+                "increment",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let value = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "increment",
+                                data_value!(),
+                            )
+                            .await?;
+                        Ok(as_u32(value))
+                    }
+                },
+            )
+            .await;
+        }
+        Stream::Scheduled => {
+            // The emitter registers a poll on its own target agent. Read-back
+            // compares the target's `polls` count against the registrations, so
+            // emitter and target are paired one to one.
+            let emitter = ctx.agent_name(Stream::Scheduled, index);
+            let target = ctx.schedule_target_name(index);
+            let key = ctx.idempotency_key(&emitter, seq);
+            let parsed: ParsedAgentId = agent_id!(SCHEDULE_EMITTER_AGENT, emitter.clone());
+            let fire_at = std::time::SystemTime::now() + SCHEDULE_LEAD;
+            let since_epoch = fire_at
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let (secs, nanos) = (since_epoch.as_secs(), since_epoch.subsec_nanos());
+
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            let target2 = target.clone();
+            // Recorded against the target, because that is the agent read-back
+            // reads.
+            run_operation(
+                ctx,
+                Stream::Scheduled,
+                target,
+                "schedule_poll_at",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    let target = target2.clone();
+                    async move {
+                        ctx.user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "schedule_poll_at",
+                                data_value!(target, secs, nanos, SCHEDULE_CONTEXT_SPANS),
+                            )
+                            .await?;
+                        Ok(None)
+                    }
+                },
+            )
+            .await;
+        }
+        Stream::Quota => {
+            // Reserving against a held token is the point: the executor keeps
+            // the underlying lease renewed with the shard-manager, so this is
+            // the one stream a shard-manager partition can actually disturb.
+            let agent = ctx.agent_name(Stream::Quota, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Quota,
+                agent.clone(),
+                "reserve_and_increment",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let value = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "reserve_and_increment",
+                                data_value!(),
+                            )
+                            .await?;
+                        Ok(as_u32(value))
+                    }
+                },
+            )
+            .await;
+        }
+        Stream::Promise => {
+            let agent = ctx.agent_name(Stream::Promise, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(PROMISE_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Promise,
+                agent.clone(),
+                "get_promise+complete",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let created = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.promise,
+                                &parsed,
+                                &k,
+                                "get_promise",
+                                data_value!(),
+                            )
+                            .await?;
+                        let promise_id = created
+                            .into_typed::<golem_common::model::PromiseId>()
+                            .map_err(|e| anyhow::anyhow!("invalid promise id: {e:#}"))?;
+                        // Completing is the half that must survive the fault:
+                        // a promise created but never resolved leaves a worker
+                        // suspended forever.
+                        ctx.user
+                            .complete_promise(&promise_id, PROMISE_PAYLOAD.to_vec())
+                            .await?;
+                        Ok(None)
+                    }
+                },
+            )
+            .await;
+        }
+    }
+}
+
+/// Reads back a durable counter agent's value.
+/// Runs a read-back invocation under [`READ_TIMEOUT`].
+///
+/// A timeout is reported as an unreadable agent rather than propagated: the
+/// read-back already models "could not be read" as a verdict of its own, and an
+/// agent that will not answer is exactly that.
+async fn read_with_timeout<T, F>(what: &str, agent: &str, read: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    read_within(what, agent, READ_TIMEOUT, read).await
+}
+
+/// [`read_with_timeout`] with the ceiling named by the caller, for reads whose
+/// answer is much bigger than a counter.
+async fn read_within<T, F>(what: &str, agent: &str, timeout: Duration, read: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(timeout, read).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!("Chaos: reading {what} on {agent} timed out after {timeout:?}");
+            Err(format!("{what} timed out after {timeout:?}"))
+        }
+    }
+}
+
+pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("count", agent, async {
+        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "count returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+/// Reads which build of the counters component an agent is running.
+///
+/// S5 updates the component underneath running agents and then has to prove
+/// they came up on the new one. Component metadata reports the revision the
+/// platform *believes* an agent is on; this asks the code actually executing,
+/// which is the only answer that settles the question.
+pub async fn read_component_version(ctx: &WorkloadContext, agent: &str) -> Result<u32, String> {
+    read_with_timeout("component_version", agent, async {
+        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "component_version", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "component_version returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+    .map(|v| v as u32)
+}
+
+/// The platform-level id of a durable counter agent, for callers that address
+/// one directly rather than through the workload.
+///
+/// Built the same way the worker-service builds the id it routes on: the
+/// component id plus the *string form* of the parsed agent id. Anything else
+/// would name a different agent from the one the workload is driving.
+pub fn counter_agent_id(ctx: &WorkloadContext, agent: &str) -> golem_common::model::AgentId {
+    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    golem_common::model::AgentId {
+        component_id: ctx.counters.id,
+        agent_id: parsed.to_string(),
+    }
+}
+
+/// Reads back how many reservations a quota agent was refused.
+///
+/// The counterpart to [`read_counter`] for the quota stream: the counter says
+/// how much work got through, this says how much the platform turned away. A
+/// refusal during the fault is the observable cost of a lease the executor
+/// could no longer renew.
+pub async fn read_refused(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("refused", agent, async {
+        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "refused", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "refused returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+/// Reads back a quota agent's committed count.
+pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("count", agent, async {
+        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "count returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+/// Reads back the fire log of a scheduled target.
+///
+/// One `(token, scheduledMillis, observedMillis)` per fire. Bounded more
+/// generously than the counter reads: this answer is the whole run's worth of
+/// fires for one agent rather than a single number, and a slow answer after a
+/// fault is still an answer. A target that times out here becomes *unverifiable*
+/// in [`crate::chaos::fires`] rather than a target that lost work.
+pub async fn read_fires(
+    ctx: &WorkloadContext,
+    agent: &str,
+) -> Result<Vec<(String, u64, u64)>, String> {
+    read_within("fires", agent, FIRE_READ_TIMEOUT, async {
+        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "fires", data_value!())
+            .await
+        {
+            Ok(value) => value
+                .into_typed::<Vec<(String, u64, u64)>>()
+                .map_err(|e| format!("fires returned no readable value: {e:#}")),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+/// Reads back how many scheduled polls actually fired on a target agent.
+pub async fn read_polls(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("polls", agent, async {
+        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "polls", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "polls returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn ctx_names(prefix: &str) -> (String, String, String) {
+        // Only the naming helpers are exercised here; they do not need a live
+        // platform, and they are what a trace search depends on.
+        let key_prefix = prefix.to_string();
+        let agent = format!("{key_prefix}-durable-0007");
+        let target = format!("{key_prefix}-scheduled-target-0007");
+        let key = format!("{agent}-00000042");
+        (agent, target, key)
+    }
+
+    /// The callee's id is fixed by the component, not by the driver.
+    ///
+    /// `Counter::increment_through_rpc` builds its client as
+    /// `CounterClient::get(format!("{}-inner", self.id))` in
+    /// `test-components/agent-counters/src/lib.rs`, and the driver reproduces
+    /// that derivation to decide which executor owns each half of a pair
+    /// *before* the run. Nothing in the type system links the two sides, and
+    /// they live in different crates, so a change to that suffix would silently
+    /// leave S2 pairing agents that never call each other — a run that then
+    /// reports a clean control while testing nothing.
+    #[test]
+    fn the_rpc_callee_name_matches_what_the_component_derives() {
+        assert_eq!(
+            rpc_callee_name("chaos-s2-1234-1-rpc-0007"),
+            "chaos-s2-1234-1-rpc-0007-inner"
+        );
+    }
+
+    #[test]
+    fn phase_marker_round_trips_every_phase() {
+        let marker = PhaseMarker::new(Phase::Baseline);
+        assert_eq!(marker.get(), Phase::Baseline);
+        marker.set(Phase::Fault);
+        assert_eq!(marker.get(), Phase::Fault);
+        marker.set(Phase::Recovery);
+        assert_eq!(marker.get(), Phase::Recovery);
+    }
+
+    /// A flip has to be visible through a clone: the scenario holds one marker
+    /// and every stream holds a clone of the same one.
+    #[test]
+    fn phase_marker_is_shared_across_clones() {
+        let marker = PhaseMarker::new(Phase::Baseline);
+        let clone = marker.clone();
+        marker.set(Phase::Fault);
+        assert_eq!(clone.get(), Phase::Fault);
+    }
+
+    /// Keys and agent names carry the run prefix so a trace or log search can be
+    /// narrowed to one run, and they are zero-padded so they sort.
+    #[test]
+    fn agent_names_and_keys_are_prefixed_and_sortable() {
+        let (agent, target, key) = ctx_names("chaos-s12");
+        assert_eq!(agent, "chaos-s12-durable-0007");
+        assert_eq!(target, "chaos-s12-scheduled-target-0007");
+        assert!(key.starts_with(&agent));
+        assert!(
+            key > format!("{agent}-00000041"),
+            "zero-padded sequences must order lexicographically"
+        );
+    }
+
+    // ── The retry rule ──────────────────────────────────────────────────────
+    // Which failures are classified how lives in `crate::chaos::errors` and is
+    // tested there. What this covers is the rule built on top of it: at most
+    // one retry, and only for the one class that might be transient.
+
+    #[test]
+    fn retry_policy_permits_one_retry_and_only_for_transport_failures() {
+        let policy = RetryPolicy::default();
+        assert_eq!(policy.max_retries, 1);
+        assert!(policy.transport_only);
+
+        // Mirrors the predicate in `run_operation`. attempts=1 is the first
+        // attempt, which may retry once; attempts=2 has spent the budget.
+        let may_retry = |attempts: u32, class: ErrorClass| {
+            attempts <= policy.max_retries
+                && (!policy.transport_only || class.is_retryable_transport_failure())
+        };
+        assert!(
+            may_retry(1, ErrorClass::Transport),
+            "the first transport failure retries under the same key"
+        );
+        assert!(
+            !may_retry(2, ErrorClass::Transport),
+            "the retry budget is one"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Response),
+            "a definite refusal is not retried"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Platform),
+            "a transient server-side status is not a transport failure"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Application),
+            "an agent that ran and failed is not retried under the same key"
+        );
+    }
+}

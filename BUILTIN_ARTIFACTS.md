@@ -73,8 +73,8 @@ the manifest has exactly the inventory IDs and the correct component mapping.
 The normal path is `prepare-golem-release.yaml`, dispatched on the exact public
 Golem tag with `gh workflow run prepare-golem-release.yaml --ref v1.6.0
 --repo golemcloud/golem` (one command). There is no separate tag input. It checks
-clean source and main ancestry and runs the full reusable CI preflight with
-published six-SDK and shared-crate checks before publication. The protected
+clean source and the merged preparation PR. It runs the full reusable CI preflight
+with published six-SDK and shared-crate checks before publication. The protected
 `golem-release` job creates or resumes a draft, builds and publishes all eight
 inventory entries, and uploads the verified manifest. It never publishes the
 Golem draft. A human reviews and publishes it to start final binary and Docker CI.
@@ -99,15 +99,19 @@ Use the component build prerequisites and an authenticated
 `golemcloud/golem`. Explicit invocation without a safety flag approves publishing;
 obtain authorization before running it. Do not bypass the CI guard.
 
-1. Finish release preparation on main. When an implementation changes, bump its
-   exported tool version in source, registry provisioning, and defaults. Exported
+1. Finish release preparation through a PR merged into `main`. When an
+   implementation changes, bump its exported tool version in source, registry
+   provisioning, and defaults. Exported
    tool versions are distinct from component artifact versions; the latter use
    the Golem tag version without its leading `v` for every component.
 2. Commit all source and build inputs. Push the release tag and create the
    corresponding **draft** Golem GitHub release before starting release compilation.
    Check out that exact tag in a clean checkout with full history. `origin` must
-   point to `golemcloud/golem`. The task refreshes remote main and proves that the
-   tag commit is its ancestor. Confirm the public tag identifies the same commit.
+   point to `golemcloud/golem`. The task uses the GitHub API to prove that the tag
+   identifies the exact head of a PR merged into `golemcloud/golem`'s `main` and
+   that its merge commit remains reachable from public `main`. Authenticate `gh`
+   with pull requests read access. Tag the preparation-branch head, not its squash
+   commit, and confirm the public tag identifies the same commit.
 3. Validate or package without external writes:
 
    ```shell

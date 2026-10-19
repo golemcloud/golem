@@ -43,32 +43,32 @@ async function askProvider(apiKey: string, prompt: string): Promise<unknown> {
   <Tabs.Tab>
 ```typescript
 import { Effect } from "effect"
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/http"
 
 function askProvider(apiKey: string, prompt: string) {
-  return Effect.tryPromise({
-    try: async (): Promise<unknown> => {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [{ role: "user", content: prompt }],
-        }),
-      })
-      const body = await response.text()
-      if (!response.ok) throw new Error(`Provider returned HTTP ${response.status}`)
-      return JSON.parse(body)
-    },
-    catch: () => new Error("Provider request or response decoding failed"),
-  })
+  return HttpClientRequest.post("https://api.openai.com/v1/chat/completions").pipe(
+    HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+    HttpClientRequest.bodyJson({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+    }),
+    Effect.flatMap(HttpClient.execute),
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap((response) => response.json),
+    Effect.provide(FetchHttpClient.layer),
+  )
 }
 ```
 
 Return this Effect from a handler, or use `yield* askProvider(apiKey, prompt)` in
-`Effect.gen`. This uses the supported global `fetch` transport, without a Node.js HTTP client.
+`Effect.gen`. Effect's `HttpClient` handles the request and response; `FetchHttpClient.layer`
+uses the supported global `fetch` transport, without a Node.js HTTP client. Non-2xx statuses
+and JSON decoding failures remain in the Effect error channel.
   </Tabs.Tab>
   <Tabs.Tab>
 ```scala
@@ -112,41 +112,68 @@ in the component's `moon.pkg`.
 
 ```moonbit
 async fn ask_provider(api_key : String, prompt : String) -> Json {
+  // Encode the provider request as JSON.
   let payload : Json = {
     "model": "gpt-4o-mini",
     "messages": [{ "role": "user", "content": prompt }],
   }
   let bytes = @utf8.encode(payload.stringify())
+
+  // Add authentication and identify the request body as JSON.
   let headers = @http.Fields::fields()
   guard headers.append(
-    "authorization", @utf8.encode("Bearer \{api_key}").to_fixedarray(),
-  ) is Ok(_) else { abort("Invalid authorization header") }
+    "authorization",
+    @utf8.encode("Bearer \{api_key}").to_fixedarray(),
+  ) is Ok(_) else {
+    abort("Invalid authorization header")
+  }
   guard headers.append(
-    "content-type", @utf8.encode("application/json").to_fixedarray(),
-  ) is Ok(_) else { abort("Invalid content-type header") }
+    "content-type",
+    @utf8.encode("application/json").to_fixedarray(),
+  ) is Ok(_) else {
+    abort("Invalid content-type header")
+  }
+
+  // Stream the encoded body and configure the HTTPS request.
   let body = @http.Stream::produce(async fn(sink) {
-    guard sink.write_all_bytes(bytes[:]) else { abort("Upload closed") }
+    guard sink.write_all_bytes(bytes[:]) else {
+      abort("Upload closed")
+    }
     sink.close()
   })
   let (request, sent) = @http.Request::new(
-    headers, Some(body), @http.Future::ready(Ok(None)), None,
+    headers,
+    Some(body),
+    @http.Future::ready(Ok(None)),
+    None,
   )
-  guard request.set_method(Post) is Ok(_) else { abort("Invalid method") }
-  guard request.set_scheme(Some(Https)) is Ok(_) else { abort("Invalid scheme") }
+  guard request.set_method(Post) is Ok(_) else {
+    abort("Invalid method")
+  }
+  guard request.set_scheme(Some(Https)) is Ok(_) else {
+    abort("Invalid scheme")
+  }
   guard request.set_authority(Some("api.openai.com")) is Ok(_) else {
     abort("Invalid authority")
   }
   guard request.set_path_with_query(Some("/v1/chat/completions")) is Ok(_) else {
     abort("Invalid path")
   }
+
+  // Send the request and check that its body was transmitted successfully.
   let response = match @http.send(request) {
     Ok(response) => response
     Err(_) => abort("Provider transport failed")
   }
-  guard sent.get() is Ok(_) else { abort("Request transmission failed") }
+  guard sent.get() is Ok(_) else {
+    abort("Request transmission failed")
+  }
+
+  // Read the full response and check completion before decoding it.
   let status = response.get_status_code()
   let (incoming, completed) = @http.Response::consume_body(
-    response, @http.Future::ready(Ok(())),
+    response,
+    @http.Future::ready(Ok(())),
   )
   defer incoming.drop()
   let buffer = @buffer.new()
@@ -160,6 +187,8 @@ async fn ask_provider(api_key : String, prompt : String) -> Json {
     Ok(None) => ()
     Err(_) => abort("Provider response body failed")
   }
+
+  // Reject unsuccessful statuses, then return the provider's JSON response.
   guard status >= 200 && status < 300 else {
     abort("Provider returned HTTP \{status}")
   }
@@ -231,14 +260,13 @@ The Rust libraries support these areas:
 - Web Search Engines
 - Speech to Text
 - Video Generation
-- Code Snippet Execution
 
 To use one of these libraries in a Rust agent, add the corresponding core crate and the desired provider crate(s) as dependencies. The `golem.yaml` files coming from the agent templates include commented-out entries for each possible choice of implementations, so just uncomment the desired ones and provide any necessary configuration (usually in the form of environment variables).
 
 The rest of the page describes these Rust libraries, their implementations, and their core traits
 (without a full documentation of every type involved).
 
-## LLMs
+### LLMs
 
 The list of supported LLM providers is the following:
 
@@ -271,7 +299,7 @@ pub trait GuestChatStream {
 }
 ```
 
-## Graph Databases
+### Graph Databases
 
 The list of supported graph databases is the following:
 
@@ -322,7 +350,7 @@ impl Transaction {
 }
 ```
 
-## Search Engines
+### Search Engines
 
 The list of supported search engines is the following:
 
@@ -365,7 +393,7 @@ pub trait GuestSearchStream {
 }
 ```
 
-## Web Search Engines
+### Web Search Engines
 
 The list of supported web search engines is the following:
 
@@ -397,7 +425,7 @@ pub trait GuestSearchSession {
 }
 ```
 
-## Speech to Text
+### Speech to Text
 
 The list of supported speech to text providers is the following:
 
@@ -419,7 +447,7 @@ pub trait SttTranscriptionGuest {
 }
 ```
 
-## Video Generation
+### Video Generation
 
 The list of supported video generation providers is the following:
 
@@ -447,54 +475,5 @@ pub trait AdvancedGuest {
     fn upscale_video(input: BaseVideo) -> Result<String, VideoError>;
     fn generate_video_effects(options: GenerateVideoEffectsOptions) -> Result<String, VideoError>;
     fn multi_image_generation(options: MultImageGenerationOptions) -> Result<String, VideoError>;
-}
-```
-
-## Code Snippet Execution
-
-The list of supported languages is the following:
-
-- JavaScript
-- Python
-
-The core trait for code snippet execution (from the `golem-exec` crate):
-
-```rust
-/// Blocking, non-streaming execution
-/// - `lang` specifies the programming language and version.
-/// - `modules` are additional code files to include in the execution context.
-///   These can be imported in `snippet` in a language-specific way.
-/// - `snippet` is the top level code to execute.
-/// - `options` is controlling the script runner environment,
-///   see the RunOptions record for more details.
-/// The returned value captures the stdout and stderr of the executed snippet.
-pub fn run(
-    lang: &Language,
-    modules: &[File],
-    snippet: &str,
-    options: &RunOptions,
-) -> Result<ExecResult, Error>;
-
-impl Session {
-    /// Create a new session for executing code snippets in the specified language,
-    /// with a set of additional code files that can be imported in the executed snippets.
-    pub fn new(lang: &Language, modules: &[File]) -> Self;
-
-    /// Upload a data file to the session, which can be accessed in the
-    /// executed snippets through standard file system APIs.
-    pub fn upload(&self, file: &File) -> Result<(), Error>;
-
-    /// Execute a code snippet in the session in a blocking way
-    pub fn run(&self, snippet: &str, options: &RunOptions) -> Result<ExecResult, Error>;
-
-    /// Downloads a data file from the session.
-    pub fn download(&self, path: &str) -> Result<Vec<u8>, Error>;
-
-    /// Lists all the data files available in the session. These will include
-    /// the ones that were uploaded and also any other file created by the executed snippets.
-    pub fn list_files(&self, dir: &str) -> Result<Vec<String>, Error>;
-
-    /// Sets the current working directory within the session.
-    pub fn set_working_dir(&self, path: &str) -> Result<(), Error>;
 }
 ```

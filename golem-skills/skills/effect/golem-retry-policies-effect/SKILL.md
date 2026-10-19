@@ -186,7 +186,7 @@ Use the canonical Effect HTTP client so transport failures stay in the Effect ty
 They remain separate from the host policy:
 
 ```typescript
-import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
 
 const fetchStatus = (url: string) =>
   HttpClient.get(url).pipe(

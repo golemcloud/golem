@@ -367,6 +367,11 @@ ends in infrastructure recovery or in a stop with `OplogFailed` (`unreadable_opl
 pending invocation whose entry or payload does not hydrate takes the same path:
 `hydrate_pending_invocation` classifies the failure as `RecoveryRequired` or `OplogFailed`, and the
 loop does not retry it immediately.
+Status rebuilds also classify retained `StreamSession` payload reads through
+`OplogServiceOps::download_payload`: a backend failure gives `RecoveryRequired`, while
+a missing reference or undecodable payload gives `OplogFailed` for that agent, with the entry
+index and cause. Reverted payloads do not participate in the rebuild. Regions that invalidate
+even the empty status baseline are corrupt history; they do not mean the worker is absent.
 `AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
@@ -441,6 +446,8 @@ filesystem generation. Durable storage and cache authority remain fenced until v
 succeeds; old attempt handles retain their original error. Cleanup with no verifiable
 owning-component repair remains a failure: successful filesystem deletion cannot erase an
 unverified metering settlement, including `ObserverLost` during startup rollback.
+Before awaiting startup filesystem cleanup, drop any filesystem context, worker context or Store
+that owns open nodes. Cleanup drains those nodes; retaining one across the drain waits on itself.
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;

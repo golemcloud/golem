@@ -403,7 +403,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 .oplog_service
                 .download_payload(&consumer, AgentMode::Durable, record)
                 .await
-                .map_err(StreamStoreError::Oplog)?;
+                .map_err(|error| StreamStoreError::Oplog(error.into()))?;
             if let Some(original_index) = record.reobserves() {
                 let original = self
                     .oplog_service
@@ -421,7 +421,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                     .oplog_service
                     .download_payload(&consumer, AgentMode::Durable, original.clone())
                     .await
-                    .map_err(StreamStoreError::Oplog)?;
+                    .map_err(|error| StreamStoreError::Oplog(error.into()))?;
                 if original_index >= index
                     || !record.has_supported_format()
                     || !record.matches_reobserved(&original)

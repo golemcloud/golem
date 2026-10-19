@@ -1,0 +1,123 @@
+import { Callout } from "nextra/components"
+
+# Configure filesystem snapshots
+
+Prepare [XFS storage](/v1.6/operate/filesystem_snapshots/xfs) before enabling snapshots on a production executor. A standalone macOS executor can use `Apfs` for development. The [local macOS server](/v1.6/operate/filesystem_snapshots/macos) supplies the settings and key by default.
+
+## Create and retain the encryption key
+
+Generate a 64-byte key, encoded as 128 hex characters:
+
+```shell
+openssl rand -hex 64
+```
+
+Keep the key secret. Supply the same `repository_key` to every executor that can run the same agents.
+
+<Callout type="warning">
+  Keep the key for as long as you keep the snapshots. Changing it prevents restores, uploads, retention, and individual snapshot deletes in existing repositories. An agent whose recovery baseline requires one of those snapshots cannot start, and a fork that needs it fails. Deleting an entire snapshot repository does not require the key.
+</Callout>
+
+## Configure blob storage
+
+With S3, create the bucket before starting the executor and set:
+
+```toml
+[blob_storage.config]
+filesystem_snapshots_bucket = "filesystem-snapshots"
+```
+
+The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`. S3 configurations require this setting even when filesystem snapshots are disabled. An S3-compatible service must support conditional `PutObject` writes with `If-None-Match: *` and `CopyObject`.
+
+<Callout type="warning">
+  Without `namespace_prefixes`, every blob-storage bucket setting must name a different bucket. Sharing with custom agent blobs would let agents overwrite snapshots and would count snapshots against their blob quota. Services reject duplicate buckets even when snapshots are disabled. With `namespace_prefixes = true`, namespaces have separate key prefixes and can share a bucket. See [One bucket for all blobs](/v1.6/operate/persistence#one-bucket-for-all-blobs).
+</Callout>
+
+Grant the executor these permissions:
+
+| Operation | Permission |
+| --- | --- |
+| List objects | `s3:ListBucket` |
+| Read, range read, and inspect objects | `s3:GetObject` |
+| Write objects, including conditional writes | `s3:PutObject` |
+| Delete objects | `s3:DeleteObject` |
+| Copy snapshots for a fork | `s3:GetObject` on the source and `s3:PutObject` on the target |
+
+File system and SQLite blob storage need no extra snapshot setting. All executors that can run the same agents must share the file system blob-storage `root`, and its entire tree must be on one volume. See [snapshot locations](/v1.6/operate/filesystem_snapshots/recovery#where-the-snapshots-are).
+
+## Enable snapshots on every executor
+
+The following is the complete configuration with default tuning values. The key has no default; replace the placeholder with your secret key.
+
+```toml
+[filesystem_snapshots]
+type = "Enabled"
+
+[filesystem_snapshots.config]
+repository_key = "<128 hex characters>"
+max_concurrent_uploads = 4
+max_concurrent_restores = 8
+storage_call_deadline = "60s"
+restore_reader_threads = 6
+save_threads = 2
+confirmation_wait = "60s"
+store_check_limit = "5s"
+capture_wait = "5s"
+retained_periodic_snapshots = 128
+retained_update_snapshots = 2
+max_pending_deletes_per_agent = 1024
+
+[filesystem_snapshots.config.storage_retry]
+max_attempts = 5
+min_delay = "2s"
+max_delay = "2m"
+multiplier = 4.0
+```
+
+Alternatively, supply the type and key through `GOLEM__FILESYSTEM_SNAPSHOTS__TYPE` and `GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY`. Keep secret values out of committed configuration files.
+
+Enable snapshots on every executor that can run the same agents, using the same key and blob storage. `Temporary` and `Directory` do not support filesystem snapshots; enabling them on those storage modes prevents startup. Agents also need a [snapshotting policy](/v1.6/develop/snapshotting#configuring-snapshot-based-recovery).
+
+<Callout type="warning">
+  An executor with snapshots disabled skips automatic records that name a filesystem snapshot. If the authoritative recovery baseline requires one, the agent cannot start. A pending update that requires one fails with `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS`, and the agent stays on its revision.
+</Callout>
+
+## Tune capture, upload, and restore
+
+All settings below belong to `[filesystem_snapshots.config]` and apply only when enabled. Durations use [humantime](https://docs.rs/humantime), such as `"500ms"` or `"2m"`. Counts and waits must be positive. Invalid settings prevent startup.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `max_concurrent_uploads` | `4` | Limits concurrent saves, deletes, copies, and listings on one executor. Also limits concurrent clean-ups. |
+| `max_concurrent_restores` | `8` | Limits concurrent restores. Starts wait for a free slot. |
+| `storage_call_deadline` | `60s` | Deadline for one blob-storage call. Allowed range: `1s`–`112.5s`. Keep it above normal storage latency. |
+| `restore_reader_threads` | `6` | Reader threads per restore. |
+| `save_threads` | `2` | Threads per parallel stage of a save. |
+| `confirmation_wait` | `60s` | Bounds the wait for a same-executor upload and its subsequent storage check at start or automatic-update restart. Also bounds a manual update's wait for an existing upload and an upload slot. |
+| `store_check_limit` | `5s` | Bounds a storage check when a start or automatic-update restart did not wait for an upload. Also bounds a fork's baseline snapshot check. |
+| `capture_wait` | `5s` | Maximum wait for open agent file calls before abandoning a capture. |
+| `retained_periodic_snapshots` | `128` | Automatic snapshots retained per agent, in addition to protected snapshots. Limits how far back a revert can use retained snapshots instead of replay. |
+| `retained_update_snapshots` | `2` | Manual-update snapshots retained in addition to those protected by successful or pending updates. |
+| `max_pending_deletes_per_agent` | `1024` | Named snapshots from a revert that can wait in the clean-up queue for one agent. |
+
+See [Recovery and storage](/v1.6/operate/filesystem_snapshots/recovery) for confirmation, retention, and clean-up rules.
+
+### Memory and volume pressure
+
+Uploads and restore reader threads allocate memory outside agent memory. `[memory] worker_memory_ratio` defaults to `0.8`; the remaining share must hold the executor, uploads, and restores. Size concurrency and reader-thread counts for the available CPU and memory, then monitor executor memory use.
+
+Capture admission checks `[filesystem_storage.pressure] target_available_bytes` and `target_available_filesystem_objects`. If either target is unmet, or free capacity cannot be read, automatic snapshots are skipped and manual updates fail. Targets must fit within the volume's capacity. See [Monitoring and troubleshooting](/v1.6/operate/filesystem_snapshots/monitoring).
+
+## Configure storage retries
+
+Saves, restores, deletes, copies, and listings use `[filesystem_snapshots.config.storage_retry]` after blob-storage failures:
+
+| Setting | Default | Constraint |
+| --- | --- | --- |
+| `max_attempts` | `5` | Includes the first attempt; must be positive. |
+| `min_delay` | `2s` | First retry delay; cannot exceed `max_delay`. |
+| `max_delay` | `2m` | Maximum delay. |
+| `multiplier` | `4.0` | At least 1. The whole-number part multiplies each delay. |
+| `max_jitter_factor` | Unset | Optional random addition from 0 to this fraction of the delay, capped by `max_delay`. Must be between 0 and 1. |
+
+When overriding this section, supply `max_attempts`, `min_delay`, `max_delay`, and `multiplier`. Default retry delays are 2 seconds, 8 seconds, 32 seconds, and 2 minutes. Exhausting retries fails the operation. An automatic upload remains unconfirmed, so recovery uses an older snapshot; a failed manual-update upload fails the update.

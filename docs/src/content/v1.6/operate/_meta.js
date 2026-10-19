@@ -1,5 +1,7 @@
 export default {
   architecture: "Architecture",
+  "shard-manager": "Shard Manager",
+  "http-gateway": "HTTP Gateway",
   persistence: "Persistence",
   resource_metering: "Resource Metering",
   filesystem_snapshots: "Filesystem Snapshots",
