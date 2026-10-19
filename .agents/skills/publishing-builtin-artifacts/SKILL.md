@@ -25,6 +25,8 @@ and authorization gates. The normal publisher is the protected `golem-release`
 job in `prepare-golem-release.yaml`, dispatched on the exact Golem tag. It runs
 after full reusable CI preflight, creates or resumes the draft, publishes all eight
 entries, and uploads the verified manifest. It never publishes the Golem draft.
+All eight packages, including corresponding source, finish before the first
+built-in upload. The upload pass reuses those packages without repackaging.
 Only this job mints the GitHub App token from environment variable
 `RELEASE_APP_ID` and secret `RELEASE_APP_PRIVATE_KEY`. The App needs contents
 read/write on `golemcloud/golem` and `golemcloud/golem-builtins`. Restrict the
@@ -50,9 +52,10 @@ system Python. The protected publisher installs this version explicitly.
    publication is requested. All use the tag version without its leading `v`.
 4. The task verifies public bytes, generates
    `builtin-artifacts.release.json`, and uploads it to the Golem release without
-   replacement. Publish the draft only after the upload. The publication event
-   starts release CI, which fetches the manifest and sets `GOLEM_BUILTIN_RELEASE=1`
-   before compilation. Do not commit the generated manifest.
+   replacement. Wait for preparation to attach all native binaries before human
+   draft publication. That event starts Docker publication without repeating full
+   CI. Both native and Docker builds fetch the manifest and set
+   `GOLEM_BUILTIN_RELEASE=1` before compilation. Do not commit the generated manifest.
 
 The existing `cargo make publish-builtin-artifact` remains a manual packaging
 entry point with `BUILTIN_COMPONENT`, `BUILTIN_VERSION`, `BUILTIN_SKIP_BUILD=1`,

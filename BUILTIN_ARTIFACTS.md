@@ -77,7 +77,9 @@ clean source and the merged preparation PR. It runs the full reusable CI preflig
 with published six-SDK and shared-crate checks before publication. The protected
 `golem-release` job creates or resumes a draft, builds and publishes all eight
 inventory entries, and uploads the verified manifest. It never publishes the
-Golem draft. A human reviews and publishes it to start final binary and Docker CI.
+Golem draft. The existing native matrix attaches signed and notarized binaries
+before human review. A human publishes the draft to start Docker publication,
+which checks successful preparation of that exact tag without repeating full CI.
 
 Configure the `golem-release` GitHub Environment for release tags only, preferably
 with required reviewers. Its variable `RELEASE_APP_ID` and secret
@@ -136,6 +138,8 @@ system Python 3.10 rejects a valid symlink in the source archive and lacks
 The task deletes the generated outputs and rebuilds them so development WASM
 replacements cannot enter a release. It invokes `cargo make publish-builtin-artifact`
 with `BUILTIN_COMPONENT`, `BUILTIN_VERSION`, and `BUILTIN_SKIP_BUILD=1`.
+It packages all entries with `BUILTIN_DRY_RUN=1` before uploading any built-in.
+The upload pass uses those same packages without rebuilding or repackaging.
 The existing publisher retains validation, provenance, licenses, source archives,
 and applicable SPDX SBOM packaging. Component releases use immutable
 `<component>-v<version>` tags. Never replace assets or move tags.
@@ -144,8 +148,9 @@ The task verifies every component's full public asset set against the local pack
 before it writes the schema-version-1 `builtin-artifacts.release.json`. It uploads
 that manifest to the Golem release with `gh release upload`, without `--clobber`.
 Release CI must download this manifest before compilation and use its pinned
-public assets. Publish the draft Golem release only after this upload succeeds;
-the release's publication event starts release CI. Main CI builds current sources.
+public assets. Publish the draft Golem release only after preparation succeeds,
+including native binaries; the publication event starts Docker publication.
+Main CI builds current sources.
 There is no checked-in main lock. For a local release binary build, download the
 manifest beside `builtin-artifacts.json` and set `GOLEM_BUILTIN_RELEASE=1`.
 This explicit switch prevents a leftover release manifest from pinning development
