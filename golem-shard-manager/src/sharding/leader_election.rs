@@ -1328,7 +1328,8 @@ pub(crate) fn newer_version_behind(
 /// Semantic-version precedence compares an identifier with letters as text, so `rc10` would come
 /// before `rc9`. Two shapes that Golem produces are therefore rewritten into numeric identifiers
 /// first: a candidate `rcN` becomes `rc.N` (so `rc2.2` becomes `rc.2.2`), and the commit count of
-/// a `git describe` suffix `-K-gHASH` becomes the numeric identifier `K`, with the hash dropped.
+/// a `git describe` suffix `-K-gHASH` becomes the numeric identifier `K` after a `0` (so `rc2-3-g..`
+/// is `rc.2.0.3`, older than a later tag `rc2.2`), with the hash dropped.
 /// A suffix that follows a release tag directly has no candidate before it and gets the identifier
 /// `release` in front, which sorts after `rc`: such a build is newer than every candidate and,
 /// as a pre-release, still older than the release. Anything else is compared as it is written.
@@ -1355,6 +1356,11 @@ fn version_order(text: &str) -> Option<semver::Version> {
         }
     }
     if let Some(commits) = commits {
+        // A zero before the count keeps it out of the slot that a later tag of the same candidate
+        // fills: `rc2-3-g..` is `rc.2.0.3`, older than `rc2.2`, which is `rc.2.2`.
+        if !base.is_empty() {
+            identifiers.push("0".to_string());
+        }
         identifiers.push(commits.to_string());
     }
     version.pre = semver::Prerelease::new(&identifiers.join(".")).ok()?;
@@ -1618,6 +1624,13 @@ mod tests {
                 assert!(orders_before(older, newer), "{older} before {newer}");
             }
         }
+    }
+
+    #[test]
+    fn a_build_after_a_candidate_is_older_than_a_later_tag_of_that_candidate() {
+        assert!(orders_before("1.6.0-rc2-3-g0123abcde", "1.6.0-rc2.2"));
+        assert!(orders_before("1.6.0-rc2-156-g2917a80d2", "1.6.0-rc2.2"));
+        assert!(orders_before("1.6.0-rc2.2", "1.6.0-rc3"));
     }
 
     #[test]
