@@ -142,10 +142,16 @@ contain one End and no delivery yet; a Finished invocation still requires exactl
 that order. The completion-first controls validate a read-only prefix ending before delivery and
 reject that prefix when a completed-history check requires the marker.
 
-Snapshot fixtures on reflink XFS without quotas or APFS use an explicit unlimited per-agent disk
-policy. They exercise snapshot recovery, not quota enforcement. A finite limit on unaccounted
-storage must still fail production validation; turning filesystem metering off does not disable
-that independent safety requirement.
+Snapshot and physical-pressure fixtures on reflink XFS without quotas or APFS use an explicit
+unlimited per-agent disk policy. They exercise snapshot or volume-pressure recovery, not quota
+enforcement. A finite limit on unaccounted storage must still fail production validation; turning
+filesystem metering off does not disable that independent safety requirement.
+
+Managed XFS CI restores native binaries and component WASMs from the same run. With
+`GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES=1`, the runner requires a nonempty restored initial-filesystem
+WASM and skips its timestamp-based rebuild. A fresh checkout can be newer than that valid artifact.
+Missing prebuilt input is a setup failure, not permission to rebuild the CLI in the VM. Local build
+mode retains its source-timestamp check.
 
 P3 `wait-for` records its outer Start before the host-internal clock Start and End. A live history
 snapshot can end at either Start. The sleep-history helper waits for the clock input before checking

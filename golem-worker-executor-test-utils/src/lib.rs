@@ -5185,7 +5185,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
 }
 
 /// The per-agent disk limit of the default plan, 1 GiB.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const DEFAULT_PLAN_DISK_SPACE: u64 = 1024 * 1024 * 1024;
 
 /// Starts an executor on XFS storage with reflink and without project quotas, at
@@ -5368,8 +5368,8 @@ pub async fn start_with_agent_storage_quota_and_pressure_without_metering_on_man
 
 /// Starts an executor on XFS storage with reflink and without project quotas, at
 /// `reflink_xfs_root`, with the pressure settings `pressure` and without resource usage metering.
-/// The plan gives each agent the finite disk limit of the default plan, which this storage does
-/// not enforce.
+/// The fixture leaves per-agent disk space unlimited so volume pressure, not an unenforceable
+/// quota, controls the test.
 #[cfg(target_os = "linux")]
 pub async fn start_with_pressure_on_reflink_xfs(
     deps: &WorkerExecutorTestDependencies,
@@ -5382,7 +5382,7 @@ pub async fn start_with_pressure_on_reflink_xfs(
         deps,
         context,
         Arc::new(FixedFilesystemStorageQuotaResourceLimits {
-            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+            max_disk_space_bytes: u64::MAX,
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {

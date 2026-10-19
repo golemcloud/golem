@@ -100,6 +100,102 @@ select_filesystem_image_size() {
   fi
 }
 
+check_initial_file_wasm() {
+  local initial_file_wasm=$1
+  local source
+  rebuild_initial_file_wasm=false
+  if [[ ${reuse_test_binaries} == 1 ]]; then
+    # The restored publication identifies the source; checkout mtimes do not.
+    if [[ ! -f ${initial_file_wasm} || ! -s ${initial_file_wasm} ]]; then
+      echo "prebuilt initial filesystem component is missing or empty: ${initial_file_wasm}; restore the test component publication" >&2
+      return 1
+    fi
+    echo "Using restored initial filesystem component: ${initial_file_wasm}"
+    return 0
+  fi
+  if [[ ! -f ${initial_file_wasm} ]]; then
+    rebuild_initial_file_wasm=true
+  else
+    shopt -s globstar nullglob
+    for source in Cargo.toml \
+      Cargo.lock \
+      test-components/initial-file-system/Cargo.toml \
+      test-components/initial-file-system/Cargo.lock \
+      test-components/initial-file-system/golem.yaml \
+      test-components/golem-test-components-common.yaml \
+      sdks/rust/golem-rust/Cargo.toml \
+      sdks/rust/golem-rust/src/**/*.rs \
+      sdks/rust/golem-rust/wit/**/*.wit \
+      golem-rust-macro/Cargo.toml \
+      golem-rust-macro/src/**/*.rs \
+      test-components/initial-file-system/src/**/*.rs; do
+      if [[ ${source} -nt ${initial_file_wasm} ]]; then
+        rebuild_initial_file_wasm=true
+        break
+      fi
+    done
+  fi
+}
+
+if [[ ${1:-} == --self-test-initial-file-wasm ]]; then
+  fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/golem-managed-xfs-initial-file.XXXXXX")
+  trap 'rm -rf "${fixture_dir}"' EXIT
+  cd "${fixture_dir}"
+  mkdir -p test-components
+  fixture=test-components/it_initial_file_system_release.wasm
+  printf 'component' > "${fixture}"
+  touch -t 202001010000 "${fixture}"
+  touch -t 202101010000 Cargo.toml
+  reuse_test_binaries=0
+  check_initial_file_wasm "${fixture}"
+  if [[ ${rebuild_initial_file_wasm} != true ]]; then
+    echo "local fixture did not rebuild after a newer source" >&2
+    exit 1
+  fi
+  reuse_test_binaries=1
+  check_initial_file_wasm "${fixture}"
+  if [[ ${rebuild_initial_file_wasm} != false ]]; then
+    echo "prebuilt fixture was invalidated by checkout timestamps" >&2
+    exit 1
+  fi
+  if [[ ! ${fixture} -ot Cargo.toml ]]; then
+    echo "prebuilt fixture timestamps were changed instead of reusing the publication" >&2
+    exit 1
+  fi
+  mv "${fixture}" "${fixture}.saved"
+  if check_initial_file_wasm "${fixture}" 2>/dev/null; then
+    echo "prebuilt mode accepted a missing component" >&2
+    exit 1
+  fi
+  touch "${fixture}"
+  if check_initial_file_wasm "${fixture}" 2>/dev/null; then
+    echo "prebuilt mode accepted an empty component" >&2
+    exit 1
+  fi
+  rm "${fixture}"
+  mkdir "${fixture}"
+  if check_initial_file_wasm "${fixture}" 2>/dev/null; then
+    echo "prebuilt mode accepted a directory instead of a component" >&2
+    exit 1
+  fi
+  rmdir "${fixture}"
+  mv "${fixture}.saved" "${fixture}"
+  reuse_test_binaries=0
+  touch -t 202201010000 "${fixture}"
+  check_initial_file_wasm "${fixture}"
+  if [[ ${rebuild_initial_file_wasm} != false ]]; then
+    echo "local fixture newer than its sources was rebuilt" >&2
+    exit 1
+  fi
+  rm "${fixture}"
+  check_initial_file_wasm "${fixture}"
+  if [[ ${rebuild_initial_file_wasm} != true ]]; then
+    echo "local mode did not build a missing component" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 if [[ ${1:-} == --self-test-result-guard ]]; then
   guard_fixture_dir=$(mktemp -d /tmp/golem-managed-xfs-result-guard.XXXXXX)
   trap 'rm -rf "${guard_fixture_dir}"' EXIT
@@ -697,29 +793,7 @@ fi
 
 if [[ ${filesystem_workload_benchmark} == false && ${filesystem_native_workload_baseline} == false ]]; then
   initial_file_wasm=test-components/it_initial_file_system_release.wasm
-  rebuild_initial_file_wasm=false
-  if [[ ! -f ${initial_file_wasm} ]]; then
-    rebuild_initial_file_wasm=true
-  else
-    shopt -s globstar nullglob
-    for source in Cargo.toml \
-      Cargo.lock \
-      test-components/initial-file-system/Cargo.toml \
-      test-components/initial-file-system/Cargo.lock \
-      test-components/initial-file-system/golem.yaml \
-      test-components/golem-test-components-common.yaml \
-      sdks/rust/golem-rust/Cargo.toml \
-      sdks/rust/golem-rust/src/**/*.rs \
-      sdks/rust/golem-rust/wit/**/*.wit \
-      golem-rust-macro/Cargo.toml \
-      golem-rust-macro/src/**/*.rs \
-      test-components/initial-file-system/src/**/*.rs; do
-      if [[ ${source} -nt ${initial_file_wasm} ]]; then
-        rebuild_initial_file_wasm=true
-        break
-      fi
-    done
-  fi
+  check_initial_file_wasm "${initial_file_wasm}"
   if [[ ${rebuild_initial_file_wasm} == true ]]; then
     clean_cargo_cache_if_needed "${cli_target_dir}" "managed XFS CLI Cargo cache" run_test
     run_test env CARGO_TARGET_DIR="${cli_target_dir}" cargo build -p golem-cli
