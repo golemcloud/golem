@@ -52,16 +52,19 @@ fn check_endpoints(config: &EtcdConfig) -> Result<(), ShardManagerError> {
 
 /// A client for ordinary key/value requests, bounded by `request_timeout`.
 ///
-/// The connection is probed while a request is open, and not while it is idle: etcd refuses pings
-/// on a connection with no open stream unless it was started to permit them, which is not its
-/// default.
+/// The connection is probed only while a stream is open, so only during a request that lasts longer
+/// than the probe interval; with a shorter request timeout the probe rarely fires. It is not probed
+/// while idle: etcd counts a ping on a connection with no open stream as a strike and closes the
+/// connection after the third, unless it was started to permit them, which is not its default. The
+/// client library probes while idle unless told not to, so this is set explicitly.
 pub async fn connect_for_requests(config: &EtcdConfig) -> Result<Client, ShardManagerError> {
     check_endpoints(config)?;
 
     let options = ConnectOptions::new()
         .with_connect_timeout(config.connect_timeout)
         .with_timeout(config.request_timeout)
-        .with_keep_alive(KEEP_ALIVE_INTERVAL, config.request_timeout);
+        .with_keep_alive(KEEP_ALIVE_INTERVAL, config.request_timeout)
+        .with_keep_alive_while_idle(false);
 
     Ok(Client::connect(&config.endpoints, Some(options)).await?)
 }
@@ -72,15 +75,15 @@ pub async fn connect_for_requests(config: &EtcdConfig) -> Result<Client, ShardMa
 /// would otherwise hold the watch of the election and the lease keepalive for good, because a
 /// request timeout does not replace the connection. The probe finds it dead within an interval and
 /// a timeout, and the client connects again. This client always has a stream open (the watch of
-/// the election and the keepalive of the lease), so probing while it is idle costs nothing that
-/// etcd would refuse.
+/// the election and the keepalive of the lease), so it is probed whenever it is in use, and it is
+/// not probed while idle: a ping with no open stream is refused by etcd and closes the connection.
 pub async fn connect_for_election(config: &EtcdConfig) -> Result<Client, ShardManagerError> {
     check_endpoints(config)?;
 
     let options = ConnectOptions::new()
         .with_connect_timeout(config.connect_timeout)
         .with_keep_alive(KEEP_ALIVE_INTERVAL, config.request_timeout)
-        .with_keep_alive_while_idle(true);
+        .with_keep_alive_while_idle(false);
 
     Ok(Client::connect(&config.endpoints, Some(options)).await?)
 }
