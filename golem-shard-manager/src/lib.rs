@@ -28,7 +28,10 @@ use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
 use crate::leader_gate::{GatedService, LeaderGate};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
-use crate::sharding::etcd_connection::connect_for_requests;
+use crate::sharding::error::{etcd_certificate_not_valid_now, is_certificate_failure};
+use crate::sharding::etcd_connection::{
+    EtcdConnectSettings, connect_requests_with, watch_refused_certificates,
+};
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
@@ -990,6 +993,35 @@ pub(crate) fn ensure_shard_count_matches(
     Ok(())
 }
 
+/// Before the campaign, a refused certificate ends the startup with the reason: the files were just
+/// read, so a retry would present the same ones and could only wait. The exception is an etcd
+/// certificate that is not valid now: etcd's to renew, so the startup waits for it, as for an etcd
+/// that is down, and says why on every attempt.
+fn stop_on_refused_certificate(err: ShardManagerError) -> ShardManagerError {
+    match err {
+        ShardManagerError::EtcdError(err) if is_certificate_failure(&err) => {
+            if let Some(reason) = etcd_certificate_not_valid_now(&err) {
+                error!(
+                    reason,
+                    "etcd's TLS certificate is not valid now; waiting until etcd has a valid one"
+                );
+                ShardManagerError::EtcdError(err)
+            } else {
+                ShardManagerError::TlsHandshakeFailed(err)
+            }
+        }
+        other => other,
+    }
+}
+
+/// Counts a retriable etcd failure before the campaign as a failed campaign attempt: the metric
+/// that shows a replica which cannot reach etcd.
+fn count_retriable_failure(err: &ShardManagerError) {
+    if is_retriable_read(err) {
+        metrics::record_campaign_attempt_failure();
+    }
+}
+
 /// Blocks until elected, returning the etcd client and the fence every state write is guarded on.
 async fn start_distributed_mode(
     etcd: &EtcdConfig,
@@ -1030,16 +1062,48 @@ async fn start_distributed_mode(
         etcd.leader_lease_ttl
     );
 
-    let kv = connect_for_requests(etcd).await?;
+    let settings = EtcdConnectSettings::load(etcd)?;
+    // With a user, etcd-client logs in as it connects, so a connect can meet an etcd that is down:
+    // retried like the read below, while a wrong password or certificate still ends the startup.
+    let kv = retry_retriable(
+        "connecting to etcd",
+        || async {
+            connect_requests_with(etcd, &settings)
+                .await
+                .map_err(stop_on_refused_certificate)
+                .inspect_err(count_retriable_failure)
+        },
+        &shutdown,
+        etcd.retry_min_delay,
+        etcd.retry_max_delay,
+    )
+    .await?;
     info!(
         endpoints = etcd.endpoints.join(", "),
         state_key = STATE_KEY,
         "Configured the etcd client for shard lease state persistence"
     );
 
-    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME, own.clone())
-        .await?
-        .with_shutdown(shutdown.clone());
+    let election = retry_retriable(
+        "connecting the election client to etcd",
+        || async {
+            LeaderElection::connect_with(etcd, &settings, LEADER_ELECTION_NAME, own.clone())
+                .await
+                .map_err(stop_on_refused_certificate)
+                .inspect_err(count_retriable_failure)
+        },
+        &shutdown,
+        etcd.retry_min_delay,
+        etcd.retry_max_delay,
+    )
+    .await?
+    .with_shutdown(shutdown.clone());
+    if etcd.tls.is_some() {
+        join_set.spawn(
+            watch_refused_certificates(etcd.clone(), settings, kv.clone(), election.client())
+                .in_current_span(),
+        );
+    }
     let election = match &etcd.test_version {
         Some(version) => election.with_version(version.clone()),
         None => election,
@@ -1059,11 +1123,8 @@ async fn start_distributed_mode(
         || async {
             EtcdRoutingTablePersistence::stored_number_of_shards(&kv)
                 .await
-                .inspect_err(|err| {
-                    if is_retriable_read(err) {
-                        metrics::record_campaign_attempt_failure();
-                    }
-                })
+                .map_err(stop_on_refused_certificate)
+                .inspect_err(count_retriable_failure)
         },
         &shutdown,
         etcd.retry_min_delay,
@@ -1120,6 +1181,18 @@ async fn start_distributed_mode(
         }
         .in_current_span(),
     );
+
+    // A standby may outlive its auth token. Refresh before the new leader's first read.
+    if etcd.username.is_some() {
+        retry_retriable(
+            "logging in to etcd again after the election",
+            || async { kv.refresh_token().await.map_err(ShardManagerError::from) },
+            &shutdown,
+            etcd.retry_min_delay,
+            etcd.retry_max_delay,
+        )
+        .await?;
+    }
 
     Ok((kv, elected.fence, leadership, belief))
 }

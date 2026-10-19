@@ -15,7 +15,8 @@ type Task struct {
 	CreatedAt string
 }
 
-type CreateTaskIn struct{ Title string }
+type CreateTaskRequest struct{ Title string }
+type CreateTaskIn struct{ Request CreateTaskRequest }
 
 // CompleteTaskIn's Id is bound from the request path.
 type CompleteTaskIn struct{ Id int64 }

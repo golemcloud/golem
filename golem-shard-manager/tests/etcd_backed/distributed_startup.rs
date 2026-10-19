@@ -2002,6 +2002,10 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         leader_lease_ttl: LEASE_TTL,
         compaction_retention_revisions: 0,
         test_version: None,
+        tls: None,
+        username: None,
+        password: None,
+        password_file: None,
     });
 
     let shutdown = CancellationToken::new();

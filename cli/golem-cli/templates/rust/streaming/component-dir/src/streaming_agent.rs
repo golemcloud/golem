@@ -1,8 +1,10 @@
-use golem_rust::agentic::{spawn_local, AgentStream, Config, Secret};
+use golem_rust::agentic::{AgentStream, Config, Secret, spawn_local};
 use golem_rust::durable_streams::{
     DurableStreamWriter, ExternalDurableStream, ReadOptions, WriteOptions,
 };
-use golem_rust::{agent_definition, agent_implementation, endpoint, ConfigSchema};
+use golem_rust::{ConfigSchema, agent_definition, agent_implementation, endpoint};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(ConfigSchema)]
@@ -21,7 +23,7 @@ pub trait StreamingAgent {
 
     fn transform(&self, prefix: String, input: AgentStream<u32>) -> AgentStream<String>;
 
-    fn siblings(&self) -> Vec<AgentStream<u32>>;
+    fn nested(&self) -> AgentStream<AgentStream<u32>>;
 
     fn recoverable(&self) -> AgentStream<Result<u32, String>>;
 
@@ -29,11 +31,7 @@ pub trait StreamingAgent {
 
     #[endpoint(
         put = "/echo",
-        durable_streams(
-            input("input"),
-            output("$result"),
-            allow_external_writes = true,
-        )
+        durable_streams(input("input"), output("$result"), allow_external_writes = true,)
     )]
     fn durable_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
 
@@ -50,9 +48,10 @@ pub trait StreamingAgent {
 
 struct StreamingAgentImpl {
     auth: Arc<golem_rust::schema::wit::wire::Secret>,
+    cancelled_producers: Rc<Cell<u32>>,
 }
 
-fn stream<T>(values: Vec<T>) -> AgentStream<T>
+fn stream<T>(values: Vec<T>, cancelled_producers: Rc<Cell<u32>>) -> AgentStream<T>
 where
     T: golem_rust::IntoWire + golem_rust::FromWire + 'static,
 {
@@ -62,6 +61,7 @@ where
             // Dropping the reader makes the next write fail, which is how a
             // producer observes consumer cancellation.
             if writer.write_one(value).await.is_err() {
+                cancelled_producers.set(cancelled_producers.get() + 1);
                 break;
             }
         }
@@ -79,7 +79,12 @@ impl StreamingAgent for StreamingAgentImpl {
             .handle()
             .expect("secret capability access failed");
         Self {
-            auth: Arc::new(handle.take().expect("secret capability already transferred")),
+            auth: Arc::new(
+                handle
+                    .take()
+                    .expect("secret capability already transferred"),
+            ),
+            cancelled_producers: Rc::new(Cell::new(0)),
         }
     }
 
@@ -93,24 +98,22 @@ impl StreamingAgent for StreamingAgentImpl {
     }
 
     fn produce(&self) -> AgentStream<u32> {
-        stream(vec![1, 2, 3])
+        stream(vec![1, 2, 3], self.cancelled_producers.clone())
     }
 
     fn transform(&self, prefix: String, mut input: AgentStream<u32>) -> AgentStream<String> {
         let (mut writer, output) = AgentStream::new();
+        let cancelled_producers = self.cancelled_producers.clone();
         spawn_local(async move {
             while let Some(value) = input
                 .next()
                 .await
                 .expect("failed to read transform input stream")
             {
-                if writer
-                    .write_one(format!("{prefix}:{value}"))
-                    .await
-                    .is_err()
-                {
+                if writer.write_one(format!("{prefix}:{value}")).await.is_err() {
                     // The output consumer stopped early; dropping `input`
                     // propagates cancellation to its producer.
+                    cancelled_producers.set(cancelled_producers.get() + 1);
                     break;
                 }
             }
@@ -118,20 +121,32 @@ impl StreamingAgent for StreamingAgentImpl {
         output
     }
 
-    fn siblings(&self) -> Vec<AgentStream<u32>> {
-        vec![stream(vec![10, 20]), stream(vec![30, 40])]
+    fn nested(&self) -> AgentStream<AgentStream<u32>> {
+        stream(
+            vec![
+                stream(vec![10, 20], self.cancelled_producers.clone()),
+                stream(vec![30, 40], self.cancelled_producers.clone()),
+            ],
+            self.cancelled_producers.clone(),
+        )
     }
 
     fn recoverable(&self) -> AgentStream<Result<u32, String>> {
-        stream(vec![
-            Ok(1),
-            Err("this item could not be produced".to_string()),
-            Ok(2),
-        ])
+        stream(
+            vec![
+                Ok(1),
+                Err("this item could not be produced".to_string()),
+                Ok(2),
+            ],
+            self.cancelled_producers.clone(),
+        )
     }
 
     fn status(&self) -> String {
-        "ready".to_string()
+        format!(
+            "ready ({} cancelled producers)",
+            self.cancelled_producers.get()
+        )
     }
 
     fn durable_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
@@ -180,7 +195,11 @@ impl StreamingAgent for StreamingAgentImpl {
             },
         );
         let mut values = Vec::new();
-        while let Some(value) = stream.next().await.expect("failed to read external Durable Stream") {
+        while let Some(value) = stream
+            .next()
+            .await
+            .expect("failed to read external Durable Stream")
+        {
             values.push(value);
         }
         values

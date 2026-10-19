@@ -151,13 +151,15 @@ impl ReadRetry {
 /// What ends a retry loop that has nothing else to stop it.
 #[derive(Clone, Copy)]
 enum GiveUp<'a> {
-    /// Report [`ShardManagerError::ShutdownRequested`] once the token is cancelled.
+    /// Report [`ShardManagerError::ShutdownRequested`] once the token is cancelled, also in the
+    /// middle of an attempt, which is dropped.
     WhenCancelled(&'a CancellationToken),
     /// Report the last failure once the instant has passed.
     At(Instant),
 }
 
-/// Retries `op` while it fails retriably, giving up only when `shutdown` is cancelled.
+/// Retries `op` while it fails retriably, giving up only when `shutdown` is cancelled. An attempt
+/// still waiting at that moment is dropped, so `op` must be safe to stop at any await.
 pub async fn retry_retriable<T, F, Fut>(
     what: &str,
     op: F,
@@ -208,7 +210,18 @@ where
     let mut backoff = min_delay;
 
     loop {
-        let failure = match op().await {
+        let attempt = op();
+        let result = match give_up {
+            // A startup step can wait on etcd with no deadline of its own, such as a login that
+            // etcd never answers; a shutdown must not wait for it.
+            GiveUp::WhenCancelled(shutdown) => tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested),
+                result = attempt => result,
+            },
+            GiveUp::At(_) => attempt.await,
+        };
+        let failure = match result {
             Ok(value) => return Ok(value),
             Err(err) if is_retriable_read(&err) => err,
             Err(err) => return Err(err),
@@ -253,6 +266,36 @@ mod tests {
     const TEST_BUDGET: Duration = Duration::from_millis(500);
     const TEST_RETRY_MIN: Duration = Duration::from_millis(10);
     const TEST_RETRY_MAX: Duration = Duration::from_millis(20);
+
+    #[test]
+    // A startup step can wait on etcd with no deadline of its own - a login that etcd never
+    // answers - and a shutdown must not wait for it.
+    async fn a_shutdown_ends_an_attempt_that_is_still_waiting() {
+        let shutdown = CancellationToken::new();
+        let cancel = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel.cancel();
+        });
+
+        let result: Result<(), ShardManagerError> = timeout(
+            TEST_BUDGET,
+            retry_retriable(
+                "test",
+                std::future::pending,
+                &shutdown,
+                TEST_RETRY_MIN,
+                TEST_RETRY_MAX,
+            ),
+        )
+        .await
+        .expect("A shutdown must end an attempt that is still waiting");
+
+        assert!(
+            matches!(result, Err(ShardManagerError::ShutdownRequested)),
+            "{result:?}"
+        );
+    }
 
     #[test]
     async fn a_failure_that_is_not_retriable_is_reported_at_once() {

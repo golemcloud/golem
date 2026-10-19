@@ -63,6 +63,10 @@ fn unreachable_config() -> EtcdConfig {
         leader_lease_ttl: TEST_LEASE_TTL,
         compaction_retention_revisions: 0,
         test_version: None,
+        tls: None,
+        username: None,
+        password: None,
+        password_file: None,
     }
 }
 

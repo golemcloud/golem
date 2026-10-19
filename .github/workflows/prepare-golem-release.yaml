@@ -65,6 +65,9 @@ jobs:
           rust-targets: wasm32-wasip2
           install-cargo-binstall: 'true'
           cache-shared-key: builtin-artifacts
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
           node-version: '24'

@@ -1,0 +1,4 @@
+{
+  "type": "agent",
+  "description": "A workflow that waits for a human approval decision"
+}

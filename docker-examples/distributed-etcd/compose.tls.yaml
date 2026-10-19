@@ -1,0 +1,62 @@
+# etcd with TLS, client certificates and an etcd user, over compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.tls.yaml up
+#
+# It needs ./etcd-tls/{ca,server,server-key,client,client-key}.pem and ./etcd-password.txt, and the
+# etcd user created once before the shard manager starts; README.md shows how.
+services:
+  etcd:
+    # The whole command of compose.yaml again, with https client URLs and the TLS flags: an
+    # override replaces the list, it does not add to it.
+    command:
+      - /usr/local/bin/etcd
+      - --name=golem-etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=https://0.0.0.0:2379
+      - --advertise-client-urls=https://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=golem-etcd=http://etcd:2380
+      - --initial-cluster-token=golem-etcd
+      - --initial-cluster-state=new
+      - --log-level=info
+      - --cert-file=/etc/etcd-tls/server.pem
+      - --key-file=/etc/etcd-tls/server-key.pem
+      - --trusted-ca-file=/etc/etcd-tls/ca.pem
+      - --client-cert-auth
+    volumes:
+      - ./etcd-tls:/etc/etcd-tls:ro
+    healthcheck:
+      # Over TLS with the client certificate; etcd's server certificate names `etcd`.
+      test:
+        - CMD
+        - /usr/local/bin/etcdctl
+        - --endpoints=https://etcd:2379
+        - --cacert=/etc/etcd-tls/ca.pem
+        - --cert=/etc/etcd-tls/client.pem
+        - --key=/etc/etcd-tls/client-key.pem
+        - endpoint
+        - health
+
+  golem-shard-manager-1: &shard-manager-tls
+    environment:
+      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
+      GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
+      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
+      GOLEM__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
+    volumes:
+      - ./etcd-tls:/etc/etcd-tls:ro
+    secrets:
+      - etcd-password
+
+  golem-shard-manager-2:
+    <<: *shard-manager-tls
+
+  golem-shard-manager-3:
+    <<: *shard-manager-tls
+
+secrets:
+  etcd-password:
+    file: ./etcd-password.txt

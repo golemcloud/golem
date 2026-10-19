@@ -626,6 +626,7 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
         .as_object_mut()
         .unwrap()
         .remove("cloud");
+    manifest.as_object_mut().unwrap().remove("httpApi");
     manifest["environments"]["local"]["tools"]["compat-leaf"]["middleware"] =
         json!([{ "name": "structural-adapter", "filesystemAccess": "allowed" }]);
     manifest["agents"] = json!({
