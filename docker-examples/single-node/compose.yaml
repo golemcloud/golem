@@ -1,0 +1,54 @@
+# One all-in-one Golem server and Caddy for TLS on one host. Without GOLEM_POSTGRES_HOST in golem.env,
+# the state is in SQLite on the golem_data volume (single node mode); with it, in Postgres (managed
+# Postgres mode). The blobs are in an S3 bucket in both modes.
+# Guide: https://learn.golem.cloud/next/deploy/vm#all-in-one-image-with-docker-compose
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      GOLEM_MANAGEMENT_HOST: ${GOLEM_MANAGEMENT_HOST}
+      GOLEM_APP_DOMAINS: ${GOLEM_APP_DOMAINS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      golem:
+        # The server trusts the forwarded headers of this address only.
+        ipv4_address: 172.31.0.10
+
+  # Exactly one server: two servers on one database can run the same agent twice.
+  # `docker compose up` stops the old container before it starts the new one.
+  golem:
+    image: golemservices/golem:${GOLEM_IMAGE_VERSION}
+    restart: unless-stopped
+    env_file:
+      # Keep generated values literal, including dollar signs in database passwords.
+      - path: golem.env
+        format: raw
+    environment:
+      GOLEM__ROUTER__MANAGEMENT_HOST: ${GOLEM_MANAGEMENT_HOST}
+      GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES: '["172.31.0.10"]'
+      GOLEM_LITESTREAM: ${GOLEM_LITESTREAM:-false}
+      GOLEM_LITESTREAM_REPLICA_URL: ${GOLEM_LITESTREAM_REPLICA_URL:-}
+    volumes:
+      - golem_data:/var/lib/golem
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    networks: [golem]
+
+networks:
+  golem:
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+volumes:
+  caddy_data:
+  golem_data:

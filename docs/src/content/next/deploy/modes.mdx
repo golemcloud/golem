@@ -1,0 +1,68 @@
+import { Callout } from "nextra/components"
+
+# Deployment modes
+
+Golem runs in one of four shapes, from one process on one machine to a cluster on Kubernetes. Each mode trades simplicity for durability and scale differently. Pick the mode first, then the platform that supports it, then go through the [production checklist](/next/deploy/production-checklist).
+
+| Mode | What runs | State lives in | Availability | Scales |
+| --- | --- | --- | --- | --- |
+| 1. Single node | One [all-in-one server](/next/deploy/server) process | SQLite on a volume; blobs in S3 | Seconds of downtime for each deploy; restore onto a new machine after a failure | Vertically |
+| 2. Managed Postgres | The same all-in-one process, with no volume | Managed Postgres; blobs in S3 | Restart on failure; no stateful service to operate yourself | Vertically, exactly one instance |
+| 3. Fixed cluster | The [per-service images](/next/deploy/cluster), with N worker executors | Managed Postgres; blobs in S3 | An executor can be lost: its shards move to the other executors | Horizontally, by the number of executors |
+| 4. Kubernetes | The per-service images, with autoscaled executors and shard manager replicas | Postgres or Redis; shard state in etcd; blobs in S3 | Rolling deploys; executors and the shard manager fail over | Horizontally, autoscaled |
+
+## Single node
+
+One `golem server run` process runs every service. Each service keeps its state in a SQLite database in the data directory, so the data directory must be on a volume that outlives the process. The blobs go to S3 or an S3-compatible service.
+
+Mode 1 is only as durable as its volume. What lives only in SQLite is the registry, the shard state, agent status, promises, schedules and the newest oplog entries. Archived oplogs, large payloads and component binaries are in S3. On a platform whose volume is on one physical server, or whose volume backups run once a day, a lost volume can lose a day of the SQLite state. The [all-in-one image](/next/deploy/server#container-image) can run [Litestream](/next/deploy/server#litestream), which copies the SQLite changes to S3 within seconds and restores them onto a new volume. Use Litestream where the volume is ephemeral or belongs to one host; a reliable persistent volume does not need it. Litestream replicates asynchronously, about once a second, and only for one server: it is backup and restore, not failover, and it is weaker than Postgres. Use mode 2 for production durability. See [Litestream limits](/next/deploy/server#litestream-limits).
+
+Deploys stop the old process before they start the new one. See [One shard manager](#one-shard-manager).
+
+## Managed Postgres
+
+The same `golem server run` process keeps all its state in a managed Postgres database, so the process itself is stateless. The provider of the database does the backups and point-in-time recovery. Run **exactly one** instance, and deploy it stop-then-start. See [One shard manager](#one-shard-manager).
+
+## Fixed cluster
+
+The registry service, shard manager, worker service, component compilation service and worker executor run as separate services, from the images on [Docker Hub](https://hub.docker.com/u/golemservices). The number of worker executors is fixed by configuration. All services share one Postgres database and one bucket. The shard manager must see the real IP address of each executor, or each executor must advertise its address. See [Fixed cluster](/next/deploy/cluster).
+
+## Kubernetes
+
+Kubernetes runs the same images as the fixed cluster. It can autoscale the executors, and it can run two shard manager replicas in etcd mode, because a readiness probe sends traffic only to the elected leader. Golem does not provide an official Helm chart yet. See [Kubernetes](/next/deploy/kubernetes).
+
+## One shard manager
+
+The shard manager assigns every agent to one worker executor. In SQL mode (`Postgres` or `Sqlite` persistence) it has no leader election, and nothing stops a second instance on the same database: two instances each assign all shards, and **the same agent can run twice**. A deploy that starts the new instance before it stops the old one creates this situation. Modes 1, 2 and 3 run the shard manager in SQL mode, so:
+
+- Run exactly one instance of the all-in-one server, or one shard manager in a fixed cluster.
+- Deploy it stop-then-start. Platforms that overlap the old and the new instance by default (rolling and zero-downtime deploys, revision traffic splitting) must be configured not to.
+
+In etcd mode, any number of shard manager replicas can run, and one of them is elected leader. A standby does not open its gRPC port, so the platform must send traffic only to the replica whose gRPC port is open. Kubernetes readiness probes do that; see [Shard Manager](/next/deploy#shard-manager).
+
+## Platform fit
+
+| Platform | 1. Single node | 2. Managed Postgres | 3. Fixed cluster | Deciding constraint |
+| --- | --- | --- | --- | --- |
+| [VM](/next/deploy/vm) (Hetzner, DigitalOcean, EC2, on-premises) | Yes | Yes | Yes, with Docker Compose on one host | systemd or Docker, with Caddy for TLS |
+| [Railway](/next/deploy/railway) | Yes | Yes, with a volume | Needs verification | Only a service with a volume deploys stop-then-start; a volume blocks replicas; the edge ends HTTP streams after 15 minutes |
+| [Render](/next/deploy/render) | Yes | Yes, with a disk | Needs verification | Only a service with a disk deploys stop-then-start; a disk blocks scaling; no object storage, so bring S3 or R2 |
+| [Fly.io](/next/deploy/fly) | Yes | Yes | Not yet | One Machine with the `rolling` strategy; a volume belongs to one server; the private network is IPv6-only |
+| [AWS ECS on Fargate](/next/deploy/ecs) | No | Yes | Yes | Service EBS volumes are deleted when the task stops; task IP addresses are routable inside the VPC |
+| [Google Cloud Run](/next/deploy/cloud-run) | No | Not yet | No | Every deploy overlaps the old and the new instance; NFS volumes have no locks; instances are not individually addressable |
+
+On Railway and Render, the managed Postgres mode needs a volume or a disk too, although the server keeps no state on it: without one, those platforms start the new deployment before they stop the old one. Cloud Run cannot keep one instance at a time, so the managed Postgres mode waits for the shard manager to be fenced with a database lock.
+
+The fixed cluster column depends on one property of the network: the shard manager records the source IP address of each executor's registration, and the worker services dial that address. This holds on Docker networks, on Kubernetes and on ECS with `awsvpc` networking. Where the network translates source addresses, set `grpc.advertised_ip` on each executor; see [Network Addresses](/next/deploy#network-addresses). Railway and Render do not document how their private networks treat source addresses, so the fixed cluster on them needs verification.
+
+## Moving between modes
+
+| From | To | What changes |
+| --- | --- | --- |
+| 1. Single node | 2. Managed Postgres | The SQLite state must move to Postgres. Golem has no export tool for this yet, so start the Postgres deployment empty and deploy the applications again. The bucket can stay. |
+| 2. Managed Postgres | 3. Fixed cluster | The per-service images use the same Postgres schemas and the same bucket layout as the all-in-one server. Stop the all-in-one server, then start the services with the same database, bucket and secrets. |
+| 3. Fixed cluster | 4. Kubernetes | Run the same images on Kubernetes over the same database and bucket. |
+
+<Callout type="warning">
+  A shard manager that changes its store - from Postgres to etcd, or to an empty or restored database - starts its shard epochs over, and the executors refuse to write the oplogs of existing agents. Keep the shard manager on the same store when you move between modes, or clear the epochs as [Shard Manager](/next/deploy#shard-manager) describes before the executors start again.
+</Callout>

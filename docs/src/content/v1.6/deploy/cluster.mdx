@@ -1,0 +1,144 @@
+import { Callout } from "nextra/components"
+
+# Fixed cluster
+
+A fixed cluster runs each Golem service from its own image on [Docker Hub](https://hub.docker.com/u/golemservices), with a fixed number of worker executors. All services share one Postgres database and one S3 bucket. This page describes the configuration that every platform needs. For the steps on a platform, see [VM](/v1.6/deploy/vm#fixed-cluster-with-docker-compose) or [AWS ECS](/v1.6/deploy/ecs). The [`production-cluster` example](https://github.com/golemcloud/golem/tree/main/docker-examples/production-cluster) contains all settings of this page in a Docker Compose file.
+
+## Services
+
+| Service | Image | Replicas | Ports in the examples |
+| --- | --- | --- | --- |
+| Registry service | `golemservices/registry-service` | 1 or more | HTTP 8083 (management API), gRPC 9008 |
+| Shard manager | `golemservices/golem-shard-manager` | Exactly 1 | HTTP 8081, gRPC 9002 |
+| Worker service | `golemservices/golem-worker-service` | 1 or more | HTTP 9005 (management API), custom requests 9006, MCP 9007, gRPC 9094 |
+| Component compilation service | `golemservices/golem-component-compilation-service` | 1 or more | HTTP 8084, gRPC 9010 |
+| Worker executor | `golemservices/golem-worker-executor` | N | HTTP 8082, gRPC 9000 |
+
+Every service reads a TOML file in its image, and `GOLEM__<FIELD>` environment variables override it. For a nested field, join the names with `__`: `GOLEM__DB__CONFIG__HOST` sets `db.config.host`. A list is written in TOML syntax, for example `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["10.0.0.5"]'`. The [Deployment](/v1.6/deploy#golem-services) page links the configuration file and the environment variables of each service.
+
+## Storage
+
+### Postgres
+
+Each store has its own schema in the same database. These are the schema names that the all-in-one server uses, so a database can move between the two:
+
+| Service | Settings | Schema |
+| --- | --- | --- |
+| Registry service | `GOLEM__DB__TYPE=Postgres`, `GOLEM__DB__CONFIG__*` | `golem_registry_service` |
+| Shard manager | `GOLEM__PERSISTENCE__TYPE=Postgres`, `GOLEM__PERSISTENCE__CONFIG__*` | `golem_shard_manager` |
+| Worker executor | `GOLEM__KEY_VALUE_STORAGE__TYPE=Postgres`, `GOLEM__KEY_VALUE_STORAGE__CONFIG__*` | `golem_worker_executor` |
+| Worker executor | `GOLEM__INDEXED_STORAGE__TYPE=Postgres`, `GOLEM__INDEXED_STORAGE__CONFIG__*` | `golem_worker_executor_indexed` |
+| Worker executor | `GOLEM__SCHEDULER_STORAGE__TYPE=Postgres`, `GOLEM__SCHEDULER_STORAGE__CONFIG__*` | `golem_worker_executor_scheduler` |
+| Worker service | `GOLEM__GATEWAY_SESSION_STORAGE__TYPE=Postgres`, `GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__*` | `golem_worker_service_session_store` |
+
+Each `CONFIG` takes `HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD`, `MAX_CONNECTIONS` and `SCHEMA`. The session storage also needs `PENDING_LOGIN_EXPIRATION` (for example `1h`) and `CLEANUP_INTERVAL` (for example `5m`). With the sessions in Postgres, the cluster needs no Redis.
+
+### S3
+
+The registry service, the worker service, the component compilation service and the worker executor use the same blob storage. With one bucket:
+
+```shell
+GOLEM__BLOB_STORAGE__TYPE=S3
+GOLEM__BLOB_STORAGE__CONFIG__REGION=us-east-1
+GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX=""
+GOLEM__BLOB_STORAGE__CONFIG__NAMESPACE_PREFIXES=true
+GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET=golem
+GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET=golem
+GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET=golem
+GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS='["golem"]'
+GOLEM__BLOB_STORAGE__CONFIG__INITIAL_AGENT_FILES_BUCKET=golem
+GOLEM__BLOB_STORAGE__CONFIG__COMPONENTS_BUCKET=golem
+GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET=golem
+GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_ATTEMPTS=3
+GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MIN_DELAY=100ms
+GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_DELAY=1s
+GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MULTIPLIER=3.0
+GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_JITTER_FACTOR=0.15
+```
+
+For an S3-compatible service, add `GOLEM__BLOB_STORAGE__CONFIG__AWS_ENDPOINT_URL` and, if the service needs it, `GOLEM__BLOB_STORAGE__CONFIG__AWS_PATH_STYLE=true`. The S3 client reads its credentials from the standard AWS sources, such as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` or the role of the task. See [Blob storage on S3](/v1.6/operate/persistence#blob-storage-on-s3).
+
+## Secrets
+
+The images do not check their secrets, and their defaults are public. Set these on every replica of the service:
+
+| Service | Environment variable | Value |
+| --- | --- | --- |
+| Registry service | `GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN` | The admin token, for example from `openssl rand -hex 32` |
+| Registry service | `GOLEM__INITIAL_ACCOUNTS__MARKETING__TOKEN` | Another token |
+| Worker service | `GOLEM__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` | 32 random bytes, base64 |
+| Worker executor | `GOLEM__AGENT_WEBHOOKS_SERVICE__HMAC_KEY` | The same value as the worker service's webhook HMAC key |
+| Worker service | `GOLEM__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID` | A name for the key, for example `key-1` |
+| Worker service | `GOLEM__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY` | 32 random bytes, base64 |
+
+The registry service's default login is GitHub OAuth2 with placeholder credentials. Set `GOLEM__LOGIN__TYPE=Disabled` to allow only the tokens of the initial accounts, or configure `GOLEM__LOGIN__CONFIG__GITHUB__*`.
+
+## Plans
+
+The registry service creates the `default` plan from `initial_plans.default` at every start, and updates the plan when the values change. The defaults of the image limit applications, components, storage and uploads; set `GOLEM__INITIAL_PLANS__DEFAULT__<LIMIT>` to change them.
+
+<Callout type="warning">
+  With the default `Temporary` agent filesystem storage, an agent whose plan has a finite `max_disk_space_per_worker` does not start: the invocation fails with `failed to install limits without quota authority`. Set `GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER=1000000000000000000`, the unlimited value, unless the executors use [`ManagedXfs` storage](/v1.6/operate/filesystem_snapshots/xfs#prepare-storage-with-project-quotas). Executors cache the limits they have read, so restart them after you change the plan.
+</Callout>
+
+## Built-in plugins and tools
+
+At every start, the registry service provisions Golem's built-in plugins and tools from its cache, and downloads from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub each one that the cache does not have or that does not match its checksum. If a download fails, the registry service does not start. In the image, the cache is `/app/builtin-artifacts`, inside the container, so every new registry container downloads them again, which takes about a minute and needs outgoing HTTPS connections to GitHub. To keep the cache, mount a persistent volume at `/app/builtin-artifacts`. The volume must be writable by uid 65534, the user of the image; see [User and Permissions](/v1.6/deploy#user-and-permissions).
+
+## Shard manager
+
+Run **one** shard manager replica in SQL mode (`GOLEM__PERSISTENCE__TYPE=Postgres`), and configure the platform to stop the old replica before it starts the new one. Two shard managers on one database can run the same agent twice. See [One shard manager](/v1.6/deploy/modes#one-shard-manager).
+
+While the shard manager restarts, the executors keep their shards until their lease runs out (1 minute by default), but new executors cannot register. Raise `GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS` on the executors, so that an executor that starts during a shard manager restart retries its registration until the shard manager is back.
+
+etcd mode (`GOLEM__PERSISTENCE__TYPE=Etcd`) allows more than one replica, but only one of them, the leader, opens its gRPC port. Use it only where the platform sends traffic to the ready replica alone, such as Kubernetes with a readiness probe on the gRPC port. Platforms that replace a task that fails its health check, such as ECS, would replace every standby. etcd must run on volumes and on the private network, because the shard manager talks to it over plain HTTP. See [Shard Manager](/v1.6/deploy#shard-manager).
+
+<Callout type="warning">
+  Do not move the shard manager to another store, such as from Postgres to etcd, in a cluster that already runs agents. A new store starts the shard epochs over, and the executors refuse to write the oplogs of existing agents until the epochs are cleared as [Shard Manager](/v1.6/deploy#shard-manager) describes.
+</Callout>
+
+## Worker executors
+
+Set the number of executors with the replica count of the platform. Each executor registers with the shard manager when it starts and gets a share of the shards. A stopped executor deregisters and its shards move to the other executors. An executor that disappears without stopping loses its shards when its lease runs out.
+
+The shard manager records the source IP address of each executor's registration, and the worker service and the shard manager dial the executor's gRPC port at that address. On a network that translates source addresses, set `GOLEM__GRPC__ADVERTISED_IP` on each executor to its own reachable IP address. On an IPv6 network, set `GOLEM__BIND_ADDRESS=::` on every service. See [Network Addresses](/v1.6/deploy#network-addresses).
+
+The executor's agent files are in temporary directories by default, and nothing of an executor needs a volume. To keep agent files across executors, see [Filesystem snapshots](/v1.6/operate/filesystem_snapshots).
+
+## Ingress
+
+The management API is split between two services. A reverse proxy or load balancer sends the management host to them by path:
+
+| Path | Service and port |
+| --- | --- |
+| `/v1/agents/*` | Worker service, 9005 |
+| `/v1/components/<component>/workers` and everything below it | Worker service, 9005 |
+| Everything else | Registry service, 8083 |
+
+Two of the worker service paths are WebSocket connections: `/v1/agents/invoke-agent-session` and `/v1/components/<component>/workers/<agent>/connect`.
+
+Every other host goes to the worker service's custom request port, 9006, which serves the HTTP API and MCP deployments of that host. Reserve the management host with `GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS='["golem.example.com"]'` on the registry service, so that no environment can register it.
+
+To give the worker service the public scheme and host, set `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES` to the address of the proxy that connects to it. The proxy must replace the client's `X-Forwarded-Proto` and `X-Forwarded-Host` with one value each. A request from a trusted address without both headers fails. The address must be fixed: give the proxy a static IP address, or run it next to the worker service and trust `127.0.0.1`. See the [production checklist](/v1.6/deploy/production-checklist#4-put-a-reverse-proxy-in-front).
+
+## Moving from the all-in-one server
+
+A fixed cluster can take over the database and the bucket of an [all-in-one server on Postgres](/v1.6/deploy/server#managed-postgres):
+
+1. Stop the all-in-one server.
+2. Give the cluster the same database, schemas, bucket, `namespace_prefixes`, secrets and admin token.
+3. Give the registry service the IDs of the initial accounts and of the plan of the all-in-one server. The two configurations use different IDs, and the registry service does not start when an account with the same email address has another ID:
+
+   ```shell
+   GOLEM__INITIAL_PLANS__DEFAULT__PLAN_ID=e808bd76-a6ab-4090-ade4-8447b8e8550f
+   GOLEM__INITIAL_ACCOUNTS__ROOT__ID=51de7d7d-f286-49aa-b79a-96022f7e2df9
+   GOLEM__INITIAL_ACCOUNTS__ROOT__PLAN_ID=e808bd76-a6ab-4090-ade4-8447b8e8550f
+   GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ID=b0a654af-d67f-4d73-a824-cf75e122bfc0
+   GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__PLAN_ID=e808bd76-a6ab-4090-ade4-8447b8e8550f
+   GOLEM__INITIAL_ACCOUNTS__BUILTIN_TOOL_OWNER__PLAN_ID=e808bd76-a6ab-4090-ade4-8447b8e8550f
+   GOLEM__INITIAL_ACCOUNTS__MARKETING__PLAN_ID=e808bd76-a6ab-4090-ade4-8447b8e8550f
+   ```
+
+4. Start the cluster with the shard manager in Postgres mode on the `golem_shard_manager` schema, so that the shard epochs continue.
+
+The `default` plan then takes the limits of the cluster's configuration.

@@ -1,0 +1,213 @@
+import { Callout, Steps } from "nextra/components"
+
+# Deploy on a VM
+
+A Linux virtual machine or server (Hetzner, DigitalOcean, EC2, on-premises) runs every [deployment mode](/v1.6/deploy/modes) except Kubernetes:
+
+- [Single node and managed Postgres](#all-in-one-server-with-systemd-and-caddy): the `golem` binary as a systemd service, with Caddy for TLS.
+- [Single node and managed Postgres in Docker](#all-in-one-image-with-docker-compose): the `golemservices/golem` image in Docker Compose, with Caddy for TLS and optionally Litestream.
+- [Fixed cluster](#fixed-cluster-with-docker-compose): the per-service images in Docker Compose on one host, with Caddy for TLS.
+
+All setups need DNS names that point at the machine: one for the management API, such as `golem.example.com`, and one for each HTTP API or MCP deployment, such as `api.example.com`. Open ports 80 and 443 in the firewall, and keep every other port closed. Go through the [production checklist](/v1.6/deploy/production-checklist) too.
+
+## All-in-one server with systemd and Caddy
+
+This setup runs [modes 1 and 2](/v1.6/deploy/server). All Golem listeners stay on `127.0.0.1`, and Caddy, on the same machine, is the only public listener.
+
+<Steps>
+
+### Install the binary
+
+Download the `golem` binary of the release for the machine's architecture from [GitHub Releases](https://github.com/golemcloud/golem/releases), and create a system user whose home directory is the data directory:
+
+```shell filename="Terminal" copy
+curl -L -o golem https://github.com/golemcloud/golem/releases/download/<version>/golem-x86_64-unknown-linux-gnu
+sudo install -m 755 golem /usr/local/bin/golem
+sudo useradd --system --home-dir /var/lib/golem --create-home --shell /usr/sbin/nologin golem
+sudo install -d -m 755 /etc/golem
+```
+
+In mode 1, `/var/lib/golem` holds the SQLite databases, so put it on a disk that you back up.
+
+### Configure the server
+
+Write `/etc/golem/golem-server.toml` as [All-in-one server](/v1.6/deploy/server) describes: the S3 bucket for mode 1, and also the Postgres database for mode 2. Write the secrets and the S3 credentials to `/etc/golem/golem.env`, readable only by root:
+
+```shell filename="Terminal" copy
+sudo sh -c 'umask 077; HMAC_KEY=$(openssl rand -base64 32); cat > /etc/golem/golem.env <<EOF
+GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN=$(openssl rand -hex 32)
+GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY=$HMAC_KEY
+GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY=$HMAC_KEY
+GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID=key-1
+GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY=$(openssl rand -base64 32)
+AWS_ACCESS_KEY_ID=<access key>
+AWS_SECRET_ACCESS_KEY=<secret key>
+EOF'
+```
+
+The admin token is the value of `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`.
+
+### Create the systemd service
+
+```ini filename="/etc/systemd/system/golem.service" copy
+[Unit]
+Description=Golem server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=golem
+Group=golem
+EnvironmentFile=/etc/golem/golem.env
+ExecStart=/usr/local/bin/golem server run --config /etc/golem/golem-server.toml
+Restart=on-failure
+LimitNOFILE=1048576
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```shell filename="Terminal" copy
+sudo systemctl daemon-reload
+sudo systemctl enable --now golem
+journalctl -u golem -f
+```
+
+systemd stops the old process before it starts the new one, which is what the [one shard manager](/v1.6/deploy/modes#one-shard-manager) rule needs. Do not run a second copy of the service on another machine with the same database.
+
+### Put Caddy in front
+
+[Install Caddy](https://caddyserver.com/docs/install) and send the management host and the deployment domains to the main API port. With `router.management_host` set, the server routes them by host:
+
+```text filename="/etc/caddy/Caddyfile" copy
+# The management host and the domains of HTTP API and MCP deployments.
+golem.example.com, api.example.com, mcp.example.com {
+	reverse_proxy 127.0.0.1:9881
+}
+```
+
+```shell filename="Terminal" copy
+sudo systemctl reload caddy
+curl https://golem.example.com/healthcheck
+```
+
+Caddy gets the certificates, forwards WebSocket connections, streams server-sent events and sets `X-Forwarded-Proto` and `X-Forwarded-Host`, replacing the values that a client sends. The configuration on the [All-in-one server](/v1.6/deploy/server#single-node) page trusts these headers from `127.0.0.1`. Add each new deployment domain to the Caddyfile and reload Caddy.
+
+### Deploy an application
+
+Add an environment with `server.url: https://golem.example.com` and the admin token to the application manifest, and deploy. See [Connect the CLI](/v1.6/deploy/server#connect-the-cli).
+
+</Steps>
+
+### Upgrades and backups
+
+To upgrade, replace `/usr/local/bin/golem` with the new release and run `sudo systemctl restart golem`.
+
+In mode 2, the database provider backs up the state. In mode 1, the state is in the SQLite files under `/var/lib/golem`. A snapshot of the disk while the server runs is not guaranteed to be consistent; stop the service for the snapshot, or use mode 2 when you cannot accept the downtime.
+
+## All-in-one image with Docker Compose
+
+This setup runs [modes 1 and 2](/v1.6/deploy/server) from the [`golemservices/golem` image](/v1.6/deploy/server#container-image), with Caddy in front. The [`single-node` example](https://github.com/golemcloud/golem/tree/main/docker-examples/single-node) contains the Compose file, the Caddyfile and the script that writes the environment file.
+
+<Steps>
+
+### Download the example
+
+Install [Docker Engine](https://docs.docker.com/engine/install/) with Docker Compose 2.30 or newer, and download the example:
+
+```shell filename="Terminal" copy
+mkdir golem && cd golem
+for f in compose.yaml Caddyfile .env.example generate-env.sh; do
+  curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/single-node/$f
+done
+chmod +x generate-env.sh
+cp .env.example .env
+```
+
+### Write the configuration
+
+Set the image version and the host names in `.env`. The example uses `v1.6.0`, including the `v`. Then write the secrets, the bucket and, for mode 2, the database to `golem.env`, and add the credentials of the bucket:
+
+```shell filename="Terminal" copy
+umask 077
+GOLEM_S3_BUCKET=my-bucket GOLEM_S3_REGION=eu-central-1 ./generate-env.sh > golem.env
+echo "AWS_ACCESS_KEY_ID=<access key>" >> golem.env
+echo "AWS_SECRET_ACCESS_KEY=<secret key>" >> golem.env
+```
+
+For mode 2, also pass `GOLEM_POSTGRES_HOST` and `GOLEM_POSTGRES_PASSWORD` to the script. See [Environment file](/v1.6/deploy/server#environment-file).
+
+Compose reads `golem.env` in raw format, so it does not expand dollar signs in passwords. Write values in this file without surrounding quotes.
+
+In mode 1, you can set `GOLEM_LITESTREAM=true` and `GOLEM_LITESTREAM_REPLICA_URL` in `.env` to replicate the SQLite databases to the bucket. Litestream is off by default, and a VM whose disk is reliable and backed up does not need it: it is for disks that are ephemeral or belong to one host. Turn it on from the first start of a new volume. See [Litestream](/v1.6/deploy/server#litestream).
+
+<Callout type="warning">
+  Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the disk can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. It does not replicate the cache of the built-in plugins and tools either, so a restore onto a new disk downloads them again and needs HTTPS connections to GitHub. At startup, the image restores only the databases that are missing from the disk, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/v1.6/deploy/server#litestream-limits).
+</Callout>
+
+### Start the server
+
+```shell filename="Terminal" copy
+docker compose up -d
+docker compose logs -f golem
+curl https://golem.example.com/healthcheck
+```
+
+</Steps>
+
+The server runs as uid 65534. The `golem_data` named volume takes the owner of the data directory in the image; if you replace it with a bind mount, give the directory to that user with `sudo chown -R 65534:65534 <dir>`. See [Volume ownership](/v1.6/deploy/server#volume-ownership).
+
+Caddy has a fixed address on the Compose network, `172.31.0.10`, which the server trusts for `X-Forwarded-Proto` and `X-Forwarded-Host`. Only Caddy publishes ports. In mode 1, the SQLite databases are in the `golem_data` volume. To upgrade, change `GOLEM_IMAGE_VERSION` and run `docker compose up -d`: Compose stops the old container before it starts the new one.
+
+## Fixed cluster with Docker Compose
+
+This setup runs the [fixed cluster](/v1.6/deploy/cluster) on one host: the per-service images, several worker executors and Caddy, with Postgres and S3 outside the host. One host is one failure domain, so this setup scales the executors, but it does not survive the loss of the host. It is the same configuration as a cluster on several machines, so it can move to [AWS ECS](/v1.6/deploy/ecs) or Kubernetes over the same database and bucket.
+
+<Steps>
+
+### Prepare Postgres and S3
+
+Create a Postgres database whose user can create schemas, and an S3 bucket. The services create their schemas and tables at their first start.
+
+### Download the example
+
+Install [Docker Engine](https://docs.docker.com/engine/install/) with the Compose plugin, and download the [`production-cluster` example](https://github.com/golemcloud/golem/tree/main/docker-examples/production-cluster):
+
+```shell filename="Terminal" copy
+mkdir golem && cd golem
+for f in compose.yaml Caddyfile .env.example; do
+  curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/production-cluster/$f
+done
+cp .env.example .env
+```
+
+### Fill in `.env`
+
+Set the image version, the host names, the secrets, the database and the bucket in `.env`. Generate each token with `openssl rand -hex 32` and each key with `openssl rand -base64 32`. For an S3-compatible service other than AWS S3, also uncomment the endpoint lines in `compose.yaml`.
+
+### Start the cluster
+
+```shell filename="Terminal" copy
+docker compose up -d
+docker compose logs -f golem-shard-manager
+```
+
+The shard manager logs the address of each executor that registers: the address of its container on the Compose network.
+
+</Steps>
+
+### What the example sets
+
+- Caddy routes the management host by path to the registry service and the worker service, and the deployment domains to the worker service's custom request port. It has a fixed address on the Compose network, `172.30.0.10`, which the worker service trusts for `X-Forwarded-Proto` and `X-Forwarded-Host`.
+- All services share one bucket with `namespace_prefixes = true`, and keep their state in their own schemas of one database. The worker service keeps its sessions in Postgres, so there is no Redis.
+- The registry service keeps its built-in artifact cache in the `builtin_artifacts` volume at `/app/builtin-artifacts`.
+- The shard manager runs as one replica in Postgres mode. `docker compose up` stops its old container before it starts the new one.
+- `WORKER_EXECUTOR_REPLICAS` sets the number of executors. Change it and run `docker compose up -d` again to scale.
+- The `default` plan has no per-agent disk limit, because the executors keep agent files in temporary directories. See [Plans](/v1.6/deploy/cluster#plans).
+
+To upgrade, change `GOLEM_IMAGES_VERSION` and run `docker compose up -d`.
+
+<Callout type="info">
+  Only Caddy publishes ports. To reach a service directly for debugging, use `docker compose exec` or a temporary port mapping, not a public one: the internal ports do not authenticate their callers.
+</Callout>

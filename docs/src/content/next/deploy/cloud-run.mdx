@@ -1,0 +1,13 @@
+import { Callout } from "nextra/components"
+
+# Google Cloud Run
+
+Golem does not support Cloud Run yet. No [deployment mode](/next/deploy/modes) fits it:
+
+- **Single node.** Cloud Run has no persistent block volume. Its NFS volumes run without file locks, and Cloud Storage volumes have no locks either, so SQLite is not safe on them.
+- **Managed Postgres.** The all-in-one server must run as exactly one instance, and a deploy must stop the old instance before the new one starts. Cloud Run starts the instances of a new revision before it moves traffic to them, so a deploy always overlaps the old and the new server. Google also documents that a service can exceed its maximum number of instances for a short time, during deploys and a few times per week during normal operation. Two servers on one database can run the same agent twice; see [One shard manager](/next/deploy/modes#one-shard-manager).
+- **Fixed cluster.** Cloud Run instances cannot address each other, and the worker services must reach each executor at its own address.
+
+<Callout type="info">
+  The managed Postgres mode becomes possible on Cloud Run when the all-in-one server fences the shard manager with a database lock, so that an overlapping instance waits until the old one stops. Until then, run the same image on [AWS ECS](/next/deploy/ecs#managed-postgres-with-the-all-in-one-image), [Railway](/next/deploy/railway), [Render](/next/deploy/render), [Fly.io](/next/deploy/fly) or a [VM](/next/deploy/vm).
+</Callout>
