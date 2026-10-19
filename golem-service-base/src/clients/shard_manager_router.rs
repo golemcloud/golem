@@ -508,10 +508,12 @@ impl LeaderRouter {
             // The configured address has already spent its own retries. But a leader that failed
             // in this pass is a failover signal even when the address cannot be reached either: it
             // may be a service that still routes to the replica that went away.
-            None if failed_here.is_some() && leader_failed(&status) => Routed::LeaderUnreachable {
-                status,
-                failed: failed_here,
-            },
+            None if failed_here.is_some() && requires_reconnect(&status) => {
+                Routed::LeaderUnreachable {
+                    status,
+                    failed: failed_here,
+                }
+            }
             None => Routed::Done(Err(status)),
         }
     }

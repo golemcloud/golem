@@ -1142,6 +1142,43 @@ async fn a_cached_leader_that_failed_starts_the_wait_when_the_configured_address
 }
 
 #[test]
+// An authorization failure from the configured address is no sign of a failover, even after a
+// cached leader failed: the answer comes from a replica that works, so the pass that got it is
+// the last one and does not start a failover wait.
+async fn an_authorization_failure_from_the_configured_address_is_not_waited_out() {
+    let first = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(first.address()))).await;
+    let client = client_with_default_config("127.0.0.1", standby.addr.port());
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the first leader, which is now cached");
+    first.stop().await;
+    standby.set(Mode::Fails(tonic::Code::PermissionDenied));
+
+    let started = Instant::now();
+    let error = client
+        .get_routing_table()
+        .await
+        .expect_err("the configured address denies the call");
+    assert!(
+        error.to_string().contains("not a shard manager"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the denial was waited out for {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        standby.refusals(),
+        2,
+        "the discovery call and the denied call, with no second pass"
+    );
+    standby.stop().await;
+}
+
+#[test]
 // An advertised host that is no URI authority names nobody a client could call. The answer counts
 // as one that names no leader, and the call asks again; it must not take the process down, which
 // building a URI from the host would.
