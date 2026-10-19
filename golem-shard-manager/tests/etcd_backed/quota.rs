@@ -25,8 +25,10 @@
 //! repository from the same stores the routing-table persistence tests use. The etcd-only tests at
 //! the end cover what only distributed mode has: the leadership fence and paged reads.
 
+use crate::etcd_backed::DEAD_MEMBER;
 use crate::etcd_backed::persistence::{
     EtcdRoutingTablePersistenceFactory, GetRoutingTablePersistence, PersistenceStore,
+    request_client,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -52,7 +54,7 @@ use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -1057,6 +1059,57 @@ async fn a_mass_expiry_is_reclaimed_across_writes(
 }
 
 // -- etcd only ----------------------------------------------------------------------------------
+
+#[test]
+#[tracing::instrument]
+// One member of an etcd cluster is down routinely, and tonic keeps it in the balancer's rotation,
+// so a share of the writes fail at once with a connect error. Nothing was sent, so the write is
+// sent again; a write etcd refuses is still final.
+async fn quota_writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd>) {
+    let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
+        .new_etcd_store()
+        .await;
+    let (_, fence) = store.mint_leader_key().await;
+    let repo: Arc<dyn QuotaRepo> = Arc::new(EtcdQuotaRepo::new(
+        request_client(&[etcd.client_url(), DEAD_MEMBER.to_string()]).await,
+        fence,
+        store.read_retry(),
+    ));
+    let definition = definition();
+
+    let mut revision = NO_REVISION;
+    for write in 0..20 {
+        revision = repo
+            .save_resource(&resource(&definition, SLOTS - write), revision)
+            .await
+            .unwrap_or_else(|err| panic!("Write {write} through the endpoint list failed: {err}"));
+    }
+    repo.save_lease_release(
+        &resource(&definition, SLOTS),
+        revision,
+        Blob::new(pod(1).ip),
+        9000,
+    )
+    .await
+    .expect("A release through the endpoint list should succeed");
+
+    for _ in 0..10 {
+        let started = Instant::now();
+        assert!(
+            is_conflict(
+                &repo
+                    .save_resource(&resource(&definition, 1), NO_REVISION)
+                    .await
+            ),
+            "A write guarded by a revision etcd does not hold must be refused as a conflict"
+        );
+        assert!(
+            started.elapsed() < crate::etcd_backed::persistence::REFUSAL_BOUND,
+            "A refused write took {:?}: it was sent again after etcd had answered it",
+            started.elapsed()
+        );
+    }
+}
 
 #[test]
 #[tracing::instrument]

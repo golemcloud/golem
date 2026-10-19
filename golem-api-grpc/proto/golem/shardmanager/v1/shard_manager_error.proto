@@ -36,3 +36,11 @@ message ShardLeaseError {
     golem.common.ErrorBody internal = 3;
   }
 }
+
+// The detail of the UNAVAILABLE status that a shard manager answers with when it is not the
+// leader and knows a ready leader. The replica that answers has not run the call; the caller
+// connects to this address and sends the call there.
+message NotLeader {
+  string leader_host = 1;
+  uint32 leader_port = 2;
+}

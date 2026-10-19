@@ -64,6 +64,7 @@ Shard manager exposes the following Prometheus metrics:
 | `redis_serialized_size_bytes`       | histogram | `svc`, `entity`     | Size of serialized Redis entities                                               |
 | `redis_deserialized_size_bytes`     | histogram | `svc`, `entity`     | Size of deserialized Redis entities                                             |
 | `shard_manager_is_leader`           | gauge     |                     | 1 while this replica holds the etcd leadership lease, 0 while it stands by (distributed mode only) |
+| `shard_manager_is_serving`          | gauge     |                     | 1 while this replica serves calls: a leader whose startup has completed, or a shard manager in local mode; 0 otherwise. A replica that has just won the election holds the leadership but serves only after its startup |
 | `shard_manager_leader_since_epoch`  | gauge     |                     | Unix seconds at which this replica was elected, 0 while it stands by (distributed mode only) |
 | `shard_manager_campaign_attempt_failures_total` | counter |            | Attempts to reach etcd on the way to leadership that failed retriably and were retried (distributed mode only) |
 | `shard_manager_executor_lease_expired_total` | counter |              | Executor leases that lapsed without a renewal and had their shards released. Only the leader counts, so sum it over all replicas. This counter also sees an executor that no longer answers a scrape |

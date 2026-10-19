@@ -1750,6 +1750,106 @@ async fn the_initial_health_check_cannot_pin_startup() {
 }
 
 #[test]
+// The bound on the initial health check lets the executors that did not answer in time count as
+// healthy, because slow probes must not empty the routing table. An executor that has already
+// answered that it is unhealthy is not one of them: it is dropped at startup.
+async fn the_initial_health_check_keeps_the_refusals_it_has_when_the_bound_runs_out() {
+    let refusing_pod = pod(1, 9000);
+    let silent_pod = pod(2, 9001);
+    let shard_state = shard_state_with_executors(
+        4,
+        vec![
+            (executor(1), refusing_pod, "worker-executor-1", &[0, 1]),
+            (executor(2), silent_pod, "worker-executor-2", &[2, 3]),
+        ],
+    );
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let number_of_shards = shard_state.number_of_shards;
+    let persistence = TestPersistence::new(shard_state);
+    let health_check = Arc::new(TestHealthCheck::never_answering_at(silent_pod));
+    health_check
+        .healthy
+        .lock()
+        .await
+        .insert(refusing_pod, false);
+    let mut join_set = JoinSet::new();
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        ShardManagement::new_with_initial_health_check_timeout(
+            Arc::new(persistence.clone()),
+            worker_executors,
+            health_check,
+            0.0,
+            LEASE_TTL,
+            number_of_shards,
+            &mut join_set,
+            Duration::from_millis(500),
+        ),
+    )
+    .await
+    .expect("startup was pinned by the health check that never answers")
+    .expect("failed to create shard management");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while persistence.latest().await.has_executor(executor(1)) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the executor that refused its health check was kept"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        persistence.latest().await.has_executor(executor(2)),
+        "the executor that did not answer in time is kept"
+    );
+    join_set.abort_all();
+}
+
+#[test]
+// A new leader that takes over within the lease of every executor has nothing to learn from a
+// health check: every executor renews to it, and the periodic check finds the dead ones. Waiting
+// on a silent executor would only delay serving.
+async fn a_takeover_within_every_lease_does_not_wait_for_a_health_check() {
+    let silent_pod = pod(1, 9000);
+    let mut shard_state = ShardLeaseState::new(4);
+    shard_state.add_executor(
+        executor(1),
+        ExecutorAddr::from(silent_pod),
+        Some("worker-executor-1".to_string()),
+        Utc::now(),
+        LEASE_TTL,
+    );
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let persistence = TestPersistence::new(shard_state);
+    let health_check = Arc::new(TestHealthCheck::never_answering_at(silent_pod));
+    let mut join_set = JoinSet::new();
+
+    let started = tokio::time::timeout(
+        Duration::from_secs(2),
+        ShardManagement::new_with_initial_health_check_timeout(
+            Arc::new(persistence.clone()),
+            worker_executors,
+            health_check.clone(),
+            0.0,
+            LEASE_TTL,
+            4,
+            &mut join_set,
+            Duration::from_secs(30),
+        ),
+    )
+    .await
+    .expect("a takeover within every lease must not wait for the health check");
+    started.expect("failed to create shard management");
+    assert_eq!(health_check.probe_count(), 0);
+    assert!(
+        persistence.latest().await.has_executor(executor(1)),
+        "the executor is kept"
+    );
+    join_set.abort_all();
+}
+
+#[test]
 // A refused write is a demoted leader's only notice of demotion, so it has to stop it before any
 // command reaches an executor: the new leader is already planning from the state that write was
 // refused against, so shards handed out after it are ones it believes it has placed elsewhere.

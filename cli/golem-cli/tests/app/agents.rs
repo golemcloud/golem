@@ -6641,6 +6641,7 @@ fn write_update_await_agent(
                 fn new(id: String) -> Self;
                 fn ping(&self) -> String;
                 fn revision_marker(&self) -> u64;
+                fn wait(&self);
             }}
 
             struct UpdateAwaitAgentImpl {{
@@ -6659,6 +6660,10 @@ fn write_update_await_agent(
 
                 fn revision_marker(&self) -> u64 {{
                     REVISION_MARKER
+                }}
+
+                fn wait(&self) {{
+                    std::thread::sleep(std::time::Duration::from_secs(3600));
                 }}
 
                 async fn save_snapshot(&self) -> Result<Vec<u8>, String> {{
@@ -6753,6 +6758,7 @@ async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &s
             "json",
             "--max-count",
             "10",
+            "--precise",
         ])
         .await;
     assert!(outputs.success_or_dump());
@@ -6765,31 +6771,42 @@ async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &s
         .into_iter()
         .find(|listed| listed.agent_id == agent)
         .expect("queued agent must be listed");
-    assert!(listed_agent.updates.is_empty());
+    assert_eq!(listed_agent.updates.len(), 1);
+    let pending = &listed_agent.updates[0];
+    assert_eq!(pending.kind, "PendingUpdate");
+    assert_eq!(pending.mode, "manual");
+    assert_eq!(pending.target_revision, 1);
 
     let outputs = ctx
         .cli([cmd::AGENT, "oplog", agent, flag::FORMAT, "json"])
         .await;
     assert!(outputs.success_or_dump());
-    let has_queued_manual_update =
-        outputs
-            .stdout_json::<serde_json::Value>()
-            .into_iter()
-            .any(|entry| {
-                entry
-                    .pointer("/entry/type")
+    let entries = outputs.stdout_json::<serde_json::Value>();
+    let queued = entries
+        .iter()
+        .find(|entry| {
+            entry
+                .pointer("/entry/type")
+                .and_then(|value| value.as_str())
+                == Some("PendingAgentInvocation")
+                && entry
+                    .pointer("/entry/invocation/type")
                     .and_then(|value| value.as_str())
-                    == Some("PendingAgentInvocation")
-                    && entry
-                        .pointer("/entry/invocation/type")
-                        .and_then(|value| value.as_str())
-                        == Some("ManualUpdate")
-                    && entry
-                        .pointer("/entry/invocation/targetRevision")
-                        .and_then(|value| value.as_u64())
-                        == Some(1)
-            });
-    assert!(has_queued_manual_update);
+                    == Some("ManualUpdate")
+                && entry
+                    .pointer("/entry/invocation/targetRevision")
+                    .and_then(|value| value.as_u64())
+                    == Some(1)
+        })
+        .expect("the manual update must still be queued");
+    assert_eq!(pending.pending_update_index, queued["index"].as_u64());
+    // Metadata projects a queued manual invocation as pending before snapshot preparation writes
+    // a PendingUpdate entry. Check that distinction in the oplog, not the metadata projection.
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["entry"]["type"] == "PendingUpdate")
+    );
 }
 
 fn output_contains(outputs: &crate::app::Output, expected: &str) -> bool {
@@ -6837,6 +6854,30 @@ async fn test_agent_update_await_correlates_exact_admitted_attempts() {
     build_and_deploy_update_await_agent(&ctx, component_name, 1, "stable", false).await;
 
     let queued_agent = r#"UpdateAwaitAgent("queued")"#;
+    // Disable-wakeup only suppresses immediate activation; shard recovery can still start queued
+    // work. An interrupted agent stays stopped through recovery as well.
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, queued_agent, "wait", "--trigger"])
+        .await;
+    assert!(outputs.success_or_dump());
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let status = get_update_await_metadata(&ctx, queued_agent).await.status;
+            if status == "Running" || status == "Suspended" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the invocation must start before it can be interrupted");
+    let outputs = ctx.cli([cmd::AGENT, "interrupt", queued_agent]).await;
+    assert!(outputs.success_or_dump());
+    assert_eq!(
+        get_update_await_metadata(&ctx, queued_agent).await.status,
+        "Interrupted"
+    );
+
     ctx.server_process.take().unwrap().kill().await.unwrap();
     ctx.startup_ports = None;
     ctx.start_server().await;
@@ -7012,6 +7053,7 @@ struct UpdateAwaitListedAgent {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAwaitAgentMetadata {
+    status: String,
     updates: Vec<UpdateAwaitRecord>,
 }
 

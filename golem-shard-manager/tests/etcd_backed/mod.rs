@@ -29,6 +29,11 @@ use test_r::{inherit_test_dep, test_dep};
 
 inherit_test_dep!(Arc<DockerEtcd>);
 
+/// Refuses connections rather than black-holing them: tonic keeps a refusing member in the
+/// balancer's rotation and fails each request that lands on it at once, where a black hole would
+/// be waited out instead.
+pub(crate) const DEAD_MEMBER: &str = "http://127.0.0.1:1";
+
 // The persistence-backend fixtures live here rather than in one of the modules below, because
 // `define_matrix_dimension!` emits a module-local helper: a dimension can only be declared in the
 // module whose tests use it, and every such module inherits these deps from their common parent.

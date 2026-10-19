@@ -15,6 +15,7 @@
 pub mod config;
 pub mod error;
 mod grpc;
+mod leader_gate;
 mod metrics;
 pub mod quota;
 mod registry_event_subscriber;
@@ -24,6 +25,7 @@ use self::grpc::ShardManagerServiceImpl;
 #[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
+use crate::leader_gate::{GatedService, LeaderGate};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::error::{etcd_certificate_not_valid_now, is_certificate_failure};
@@ -33,24 +35,26 @@ use crate::sharding::etcd_connection::{
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
-#[cfg(feature = "kubernetes")]
 use anyhow::Context;
 use config::ShardManagerConfig;
 use etcd_client::Client;
-use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
+use golem_service_base::clients::shard_manager_leader::{LeaderAddress, valid_leader_address};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
+pub use sharding::election_watch::{
+    CampaignView, Campaigner, ElectionWatch, ElectionWatcher, LeaderView,
+};
 pub use sharding::error::{HealthCheckError, ShardManagerError};
-pub use sharding::etcd_retry::ReadRetry;
+pub use sharding::etcd_retry::{ReadRetry, never_reached_etcd};
 pub use sharding::healthcheck::HealthCheck;
 pub use sharding::leader_election::{
-    Elected, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeadershipHandle, LeaseKeepAlive,
-    LeaseLossReason, LeaseLost,
+    Elected, ElectionValue, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeaderLocator,
+    LeadershipHandle, LeaseBelief, LeaseKeepAlive, LeaseLossReason, LeaseLost, RetryDelays,
 };
 pub use sharding::persistence::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExternalRevision, NO_REVISION,
@@ -66,7 +70,6 @@ pub use sharding::{
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
-use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
@@ -282,12 +285,609 @@ mod lease_timing_tests {
     }
 }
 
+#[cfg(test)]
+mod accept_tests {
+    use super::accept_until;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    async fn a_connect_after_the_stop_is_refused_not_left_waiting() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = CancellationToken::new();
+        let _incoming = accept_until(listener, stop.clone());
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("the listener accepts before the stop");
+
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a connect after the stop is refused");
+    }
+}
+
+#[cfg(test)]
+mod lease_health_tests {
+    use super::{
+        ShardManagerGrpcService, ShardManagerServiceImpl, ShardManagerServiceServer,
+        report_lease_health,
+    };
+    use crate::leader_gate::LeaderGate;
+    use crate::sharding::leader_election::LeaseBelief;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::time::Instant;
+    use tonic_health::pb::HealthCheckRequest;
+    use tonic_health::pb::health_check_response::ServingStatus;
+    use tonic_health::pb::health_client::HealthClient;
+
+    const SERVICE: &str = "golem.shardmanager.v1.ShardManagerService";
+
+    async fn status(client: &mut HealthClient<tonic::transport::Channel>) -> i32 {
+        client
+            .check(HealthCheckRequest {
+                service: SERVICE.to_string(),
+            })
+            .await
+            .expect("the health service answers")
+            .into_inner()
+            .status
+    }
+
+    #[test]
+    async fn the_service_is_not_serving_once_the_lease_belief_lapses() {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = HealthClient::new(channel);
+
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_millis(600));
+        tokio::spawn(report_lease_health(
+            belief.clone(),
+            reporter,
+            LeaderGate::new(),
+            Duration::from_millis(100),
+        ));
+
+        assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(status(&mut client).await, ServingStatus::NotServing as i32);
+
+        // A late acknowledgement or a reconnect brings the belief back, and the gate serves again.
+        belief.rearm_for(Duration::from_secs(30));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
+    }
+
+    #[test]
+    async fn a_renewed_belief_keeps_the_service_serving() {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = HealthClient::new(channel);
+
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_secs(1));
+        tokio::spawn(report_lease_health(
+            belief.clone(),
+            reporter,
+            LeaderGate::new(),
+            Duration::from_millis(100),
+        ));
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            belief.rearm_for(Duration::from_secs(1));
+            assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
+        }
+    }
+
+    #[test]
+    async fn a_stopped_gate_stays_not_serving_when_the_belief_comes_back() {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = HealthClient::new(channel);
+
+        let gate: LeaderGate<ShardManagerGrpcService> = LeaderGate::new();
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_millis(300));
+        tokio::spawn(report_lease_health(
+            belief.clone(),
+            reporter.clone(),
+            gate.clone(),
+            Duration::from_millis(50),
+        ));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        // The replica stops: the entry says so, and the belief then comes back, as a late
+        // acknowledgement can bring it.
+        gate.stop();
+        reporter
+            .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        belief.rearm_for(Duration::from_secs(30));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(status(&mut client).await, ServingStatus::NotServing as i32);
+    }
+}
+
+#[cfg(test)]
+mod startup_supervision_tests {
+    use super::unless_a_task_fails;
+    use test_r::test;
+    use tokio::task::JoinSet;
+
+    /// A set holding a task that has already failed by the time the set is first polled.
+    async fn a_set_with_a_failed_task() -> JoinSet<anyhow::Result<()>> {
+        let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+        join_set.spawn(async { Err(anyhow::anyhow!("the lease was lost")) });
+        // Let the task run to its end, so that its result is waiting in the set.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        join_set
+    }
+
+    #[test]
+    // Without the bias `select!` picks a ready branch at random, so one round would pass by luck
+    // half of the time; sixty-four rounds make that negligible.
+    async fn a_task_that_already_failed_wins_over_a_step_that_is_ready() {
+        for round in 0..64 {
+            let mut join_set = a_set_with_a_failed_task().await;
+
+            let result =
+                unless_a_task_fails(&mut join_set, std::future::ready(anyhow::Ok(7))).await;
+
+            let err = result.expect_err("the failed task must end the step, not the step's value");
+            assert!(
+                format!("{err:#}").contains("the lease was lost"),
+                "round {round}: the step's value won over a failure that was already there: \
+                 {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    async fn a_step_completes_while_the_tasks_are_healthy() {
+        let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+        join_set.spawn(std::future::pending());
+
+        let result = unless_a_task_fails(&mut join_set, async {
+            tokio::task::yield_now().await;
+            anyhow::Ok(7)
+        })
+        .await;
+
+        assert_eq!(
+            result.expect("a healthy task set must not fail the step"),
+            7
+        );
+    }
+}
+
+#[cfg(test)]
+mod own_address_tests {
+    use super::{own_address_probe_name, reach_own_address};
+    use golem_service_base::clients::shard_manager_leader::LeaderAddress;
+    use test_r::test;
+    use tokio_util::sync::CancellationToken;
+
+    /// A gRPC server that serves the health service, with `probe` SERVING as well. Returns the
+    /// address it listens on.
+    async fn health_server(probe: &str, stop: &CancellationToken) -> LeaderAddress {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_service_status(probe, tonic_health::ServingStatus::Serving)
+            .await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            let _ = tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming_shutdown(
+                    super::accept_until(listener, stop.clone()),
+                    async move { stop.cancelled().await },
+                )
+                .await;
+        });
+        LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port,
+        }
+    }
+
+    #[test]
+    async fn a_replica_reaches_its_own_address() {
+        let stop = CancellationToken::new();
+        let probe = own_address_probe_name();
+        let address = health_server(&probe, &stop).await;
+        reach_own_address(&address, false, &probe)
+            .await
+            .expect("the process that serves the probe name is reached");
+        stop.cancel();
+    }
+
+    #[test]
+    async fn another_shard_manager_at_the_address_is_not_this_replica() {
+        let stop = CancellationToken::new();
+        let other = health_server(&own_address_probe_name(), &stop).await;
+        let own_probe = own_address_probe_name();
+        let error = reach_own_address(&other, false, &own_probe)
+            .await
+            .expect_err("a shard manager that serves another name is not this process");
+        let message = format!("{error:#}");
+        assert!(
+            !message.contains("  "),
+            "the message has a run of spaces from a joined line: {message}"
+        );
+        assert!(
+            message.contains("Another process, perhaps another replica"),
+            "the message should say that another process answers there: {message}"
+        );
+        stop.cancel();
+    }
+
+    #[test]
+    async fn a_closed_port_is_not_reached() {
+        let closed = {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            LeaderAddress {
+                host: "127.0.0.1".to_string(),
+                port: listener.local_addr().unwrap().port(),
+            }
+        };
+        assert!(
+            reach_own_address(&closed, false, &own_address_probe_name())
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    async fn under_server_tls_a_tcp_connect_is_all_that_is_asked() {
+        let stop = CancellationToken::new();
+        let other = health_server(&own_address_probe_name(), &stop).await;
+        reach_own_address(&other, true, &own_address_probe_name())
+            .await
+            .expect("the check stops at the TCP connect");
+        stop.cancel();
+    }
+}
+
+#[cfg(test)]
+mod advertised_host_tests {
+    use super::{advertised_address, validate_advertised_host};
+    use crate::config::{EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig};
+    use golem_service_base::clients::shard_manager_leader::LeaderAddress;
+    use test_r::test;
+
+    /// A replica that listens on both families, so that the host alone decides what is valid.
+    fn distributed(host: Option<&str>) -> ShardManagerConfig {
+        ShardManagerConfig {
+            bind_address: "::".parse().unwrap(),
+            persistence: PersistenceConfig::Etcd(EtcdConfig::default()),
+            grpc: GrpcApiConfig {
+                advertised_host: host.map(str::to_string),
+                ..GrpcApiConfig::default()
+            },
+            ..ShardManagerConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_missing_or_blank_host_is_refused() {
+        for host in [None, Some(""), Some("   ")] {
+            let error = validate_advertised_host(&distributed(host)).expect_err("must be refused");
+            assert!(
+                error.to_string().contains("grpc.advertised_host"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unspecified_address_is_refused() {
+        for host in ["0.0.0.0", "::", "[::]"] {
+            validate_advertised_host(&distributed(Some(host))).expect_err(host);
+        }
+    }
+
+    #[test]
+    fn a_host_that_is_no_uri_authority_is_refused() {
+        for host in [
+            "shard-manager-1 # r1",
+            "two words",
+            "fe80::1%eth0",
+            "a:b:c",
+            "host:9002",
+            "user@host",
+            "a/b",
+            "a?b",
+        ] {
+            let error = validate_advertised_host(&distributed(Some(host)))
+                .expect_err(&format!("`{host}` must be refused"));
+            assert!(
+                error.to_string().contains("grpc.advertised_host"),
+                "{error}"
+            );
+        }
+        for host in [
+            "10.0.3.7",
+            "shard-manager.golem.svc",
+            "fd00::7",
+            "[fd00::7]",
+        ] {
+            validate_advertised_host(&distributed(Some(host))).expect(host);
+        }
+    }
+
+    #[test]
+    fn an_ipv6_host_is_refused_when_the_replica_binds_ipv4_only() {
+        let mut config = distributed(Some("fd00::7"));
+        config.bind_address = "0.0.0.0".parse().unwrap();
+        let error = validate_advertised_host(&config).expect_err("must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("grpc.advertised_host") && message.contains("bind_address"),
+            "{message}"
+        );
+        config.grpc.advertised_host = Some("[fd00::7]".to_string());
+        validate_advertised_host(&config).expect_err("a bracketed literal is refused as well");
+
+        config.bind_address = "::".parse().unwrap();
+        validate_advertised_host(&config).expect("an IPv6 replica may advertise an IPv6 host");
+        config.bind_address = "0.0.0.0".parse().unwrap();
+        config.grpc.advertised_host = Some("10.0.3.7".to_string());
+        validate_advertised_host(&config).expect("an IPv4 host fits an IPv4 bind address");
+        config.grpc.advertised_host = Some("shard-manager.golem.svc".to_string());
+        validate_advertised_host(&config).expect("a name is not judged by its family");
+    }
+
+    #[test]
+    fn a_loopback_host_starts_with_a_warning() {
+        for host in ["127.0.0.1", "::1", "localhost", "LOCALHOST"] {
+            let named = validate_advertised_host(&distributed(Some(host)))
+                .expect(host)
+                .expect("a loopback host must warn");
+            assert_eq!(named, host.to_string());
+        }
+    }
+
+    #[test]
+    fn a_routable_host_is_accepted_silently() {
+        for host in [
+            "10.0.3.7",
+            "fd00::7",
+            "golem-shard-manager-1",
+            "sm-0.sm.golem.svc",
+        ] {
+            assert_eq!(
+                validate_advertised_host(&distributed(Some(host))).expect(host),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn an_ipv6_host_is_accepted_without_brackets() {
+        let address = advertised_address(&distributed(Some("[fd00::7]")), 9002).unwrap();
+        assert_eq!(address.host, "fd00::7");
+        assert_eq!(address.port, 9002);
+    }
+
+    #[test]
+    fn advertised_address_strips_brackets_and_uses_the_advertised_port() {
+        let mut config = distributed(Some("[::1]"));
+        config.grpc.advertised_port = Some(19092);
+        let address = advertised_address(&config, 9092).unwrap();
+        assert_eq!(
+            address,
+            LeaderAddress {
+                host: "::1".to_string(),
+                port: 19092
+            }
+        );
+    }
+
+    #[test]
+    fn advertised_address_defaults_to_the_bound_port() {
+        assert_eq!(
+            advertised_address(&distributed(Some("10.0.0.7")), 9092)
+                .unwrap()
+                .port,
+            9092
+        );
+    }
+
+    #[test]
+    fn an_advertised_port_of_zero_is_refused() {
+        let mut config = distributed(Some("10.0.0.7"));
+        config.grpc.advertised_port = Some(0);
+        assert!(validate_advertised_host(&config).is_err());
+    }
+
+    #[test]
+    fn local_mode_does_not_need_a_host() {
+        assert_eq!(
+            validate_advertised_host(&ShardManagerConfig::default()).unwrap(),
+            None
+        );
+    }
+}
+
 pub static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
     pub leadership: Option<LeadershipHandle>,
+    /// What the replica's stop acts on; see [`serve_until_stopped`]. `None` is a value built by
+    /// hand: a stop then refuses nothing and closes no server.
+    pub stop: Option<ServerStop>,
+}
+
+/// The connections that the listener accepts, as a stream for the server. The listener is dropped
+/// when `stop` fires, or when the stream is, so that a client which dials a stopping replica is
+/// refused at once and not left waiting in a queue that nobody serves.
+fn accept_until(
+    listener: tokio::net::TcpListener,
+    stop: CancellationToken,
+) -> tokio_stream::wrappers::ReceiverStream<std::io::Result<tokio::net::TcpStream>> {
+    let (accepted_tx, accepted_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                () = stop.cancelled() => break,
+                () = accepted_tx.closed() => break,
+                accepted = listener.accept() => {
+                    let connection = accepted.map(|(stream, _)| stream);
+                    if accepted_tx.send(connection).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    tokio_stream::wrappers::ReceiverStream::new(accepted_rx)
+}
+
+/// How long a stopping replica waits for the calls that are running to finish before its server
+/// is dropped. A shard manager call is short; this bounds a stuck one so that it cannot hold the
+/// stop, and with it the pod's termination, for the grace period of the orchestrator.
+const SERVER_DRAIN_LIMIT: Duration = Duration::from_secs(5);
+
+struct ServerInner {
+    /// Asks the server to stop accepting and to close its connections once their calls finish.
+    shutdown: CancellationToken,
+    closed: tokio::sync::watch::Receiver<bool>,
+    /// Set by a stop that closes the server itself, after the leadership is released.
+    closed_by_stop: std::sync::atomic::AtomicBool,
+}
+
+/// Asks the server to close when the task that holds this is dropped, unless a stop is in charge
+/// of that: whoever drops or aborts the task set of a replica ends its server too, as it did when
+/// the server ran in that set. A stop sets `closed_by_stop` first, because it aborts that task
+/// while the server must still answer for the gate. The server then closes within
+/// [`SERVER_DRAIN_LIMIT`].
+struct CloseServerOnDrop(Arc<ServerInner>);
+
+impl Drop for CloseServerOnDrop {
+    fn drop(&mut self) {
+        if !self
+            .0
+            .closed_by_stop
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.0.shutdown.cancel();
+        }
+    }
+}
+
+/// The parts of a replica that its stop acts on, in the order it acts on them: the gate stops
+/// answering, then the leadership is released, then the gRPC server closes its connections.
+pub struct ServerStop {
+    gate: LeaderGate<ShardManagerGrpcService>,
+    health_reporter: tonic_health::server::HealthReporter,
+    server: Arc<ServerInner>,
+}
+
+impl ServerStop {
+    /// The replica answers no call, reports not ready and not serving. Done first, so that no
+    /// replica serves from a connection it accepted earlier once another may be leading.
+    async fn refuse_calls(&self) {
+        self.gate.stop();
+        self.health_reporter
+            .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        metrics::record_not_serving();
+    }
+
+    fn close_after_release(&self) {
+        self.server
+            .closed_by_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Closes the server: it stops accepting, and its connections close once the calls running on
+    /// them are done. The server task bounds that wait itself by [`SERVER_DRAIN_LIMIT`].
+    async fn close(&self) {
+        self.server.shutdown.cancel();
+        let mut closed = self.server.closed.clone();
+        // An error means the server task is gone, which is as closed as it gets.
+        let _ = closed.wait_for(|closed| *closed).await;
+    }
+}
+
+/// Stops a replica in the order that keeps two replicas from serving: no more answers, the tasks
+/// finished, the leadership released, the server closed.
+///
+/// Every task is awaited before the lease is released, so no executor command can be in flight
+/// once another replica may be leading.
+async fn stop_replica(
+    stop: Option<&ServerStop>,
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+    leadership: Option<&LeadershipHandle>,
+) {
+    // If this future is dropped before the server is closed below, the server still closes.
+    let _close_on_drop = stop.map(|stop| stop.server.shutdown.clone().drop_guard());
+    if let Some(stop) = stop {
+        stop.refuse_calls().await;
+        stop.close_after_release();
+    }
+    join_set.shutdown().await;
+    release_leadership(leadership).await;
+    if let Some(stop) = stop {
+        stop.close().await;
+    }
 }
 
 /// Startup's persistence wiring; the leadership handle is present only in distributed mode.
@@ -295,7 +895,11 @@ type Persistence = (
     Arc<dyn RoutingTablePersistence>,
     Arc<dyn crate::quota::QuotaRepo>,
     Option<LeadershipHandle>,
+    Option<LeaseBelief>,
 );
+
+/// The shard manager service as the gate serves it once this replica leads.
+type ShardManagerGrpcService = ShardManagerServiceServer<ShardManagerServiceImpl>;
 
 /// Whether this process is a dedicated shard manager or is embedded in the single `golem` binary.
 #[derive(Clone, Debug)]
@@ -342,6 +946,36 @@ async fn campaign_watching_startup(
         election.revoke_pending_lease().await;
     }
     outcome
+}
+
+/// Runs one step of the startup, failing it as soon as an already-running task fails: a lost
+/// leadership lease, reported by the keepalive task, must end the startup at once rather than
+/// after the step completes.
+async fn unless_a_task_fails<T>(
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+    step: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    let mut step = std::pin::pin!(step);
+    loop {
+        // Biased towards the tasks: a failure that is already there must win over a step that
+        // completes in the same poll, or a lost lease could still be followed by a successful
+        // readiness publication.
+        tokio::select! {
+            biased;
+            joined = join_set.join_next(), if !join_set.is_empty() => match joined {
+                Some(Err(err)) => {
+                    return Err(anyhow::Error::new(err)
+                        .context("a task panicked during the shard manager's startup"));
+                }
+                Some(Ok(Err(err))) => {
+                    return Err(err.context("a task failed during the shard manager's startup"));
+                }
+                Some(Ok(Ok(()))) => warn!("A task finished during the shard manager's startup"),
+                None => {}
+            },
+            done = &mut step => return done,
+        }
+    }
 }
 
 pub(crate) fn ensure_shard_count_matches(
@@ -393,8 +1027,10 @@ async fn start_distributed_mode(
     etcd: &EtcdConfig,
     deployment: &Deployment,
     number_of_shards: usize,
+    gate: &LeaderGate<ShardManagerGrpcService>,
+    own: LeaderAddress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
-) -> anyhow::Result<(Client, LeaderFence, LeadershipHandle)> {
+) -> anyhow::Result<(Client, LeaderFence, LeadershipHandle, LeaseBelief)> {
     let shutdown = match deployment {
         Deployment::Standalone { shutdown } => shutdown.clone(),
         Deployment::Embedded => anyhow::bail!(
@@ -448,6 +1084,38 @@ async fn start_distributed_mode(
         "Configured the etcd client for shard lease state persistence"
     );
 
+    let election = retry_retriable(
+        "connecting the election client to etcd",
+        || async {
+            LeaderElection::connect_with(etcd, &settings, LEADER_ELECTION_NAME, own.clone())
+                .await
+                .map_err(stop_on_refused_certificate)
+                .inspect_err(count_retriable_failure)
+        },
+        &shutdown,
+        etcd.retry_min_delay,
+        etcd.retry_max_delay,
+    )
+    .await?
+    .with_shutdown(shutdown.clone());
+    if etcd.tls.is_some() {
+        join_set.spawn(
+            watch_refused_certificates(etcd.clone(), settings, kv.clone(), election.client())
+                .in_current_span(),
+        );
+    }
+    let election = match &etcd.test_version {
+        Some(version) => election.with_version(version.clone()),
+        None => election,
+    };
+    let (watch, watcher) = election.watch();
+    // The campaign reads the same view, to find a replica that advertises this one's address.
+    let election = election.with_watch(watch.clone());
+    join_set.spawn(watcher.run().in_current_span());
+    // From here a call to this replica is answered from the watched view of the election, which
+    // costs no etcd read per call.
+    gate.stand_by(Arc::new(watch.clone()), own.clone(), etcd.leader_lease_ttl);
+
     metrics::record_standing_by();
 
     let stored_count = retry_retriable(
@@ -467,26 +1135,21 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
-    let election = retry_retriable(
-        "connecting the election client to etcd",
-        || async {
-            LeaderElection::connect_with(etcd, &settings, LEADER_ELECTION_NAME)
-                .await
-                .map_err(stop_on_refused_certificate)
-                .inspect_err(count_retriable_failure)
-        },
-        &shutdown,
-        etcd.retry_min_delay,
-        etcd.retry_max_delay,
-    )
-    .await?
-    .with_shutdown(shutdown.clone());
-    if etcd.tls.is_some() {
-        join_set.spawn(
-            watch_refused_certificates(etcd.clone(), settings, kv.clone(), election.client())
-                .in_current_span(),
-        );
-    }
+    // A replica leads only if its advertised address reaches this very process: once it leads,
+    // every standby names that address to the clients. Until the check has passed, the replica
+    // watches the election and sends callers to the leader like any standby, but it is not
+    // queued, and `/readyz` says it is not ready.
+    unless_a_task_fails(join_set, async {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => {
+                Err(anyhow::Error::new(ShardManagerError::ShutdownRequested))
+            }
+            () = gate.wait_for_own_address() => Ok(()),
+        }
+    })
+    .await?;
+
     let elected = campaign_watching_startup(&election, join_set).await?;
 
     metrics::record_elected(
@@ -498,6 +1161,7 @@ async fn start_distributed_mode(
 
     // The keepalive can only end in an error, and that error ends the process: a lost lease must
     // stop this replica rather than leave it serving a table it can no longer write.
+    let belief = elected.keepalive.belief();
     let keepalive = elected.keepalive;
     let leadership = elected.leadership;
     let stepping_down = leadership.clone();
@@ -522,17 +1186,240 @@ async fn start_distributed_mode(
     // or roles to change: a JWT token from before such a change is refused. So the new leader logs
     // in again before its first read, which costs etcd one password check per election won.
     if etcd.username.is_some() {
-        retry_retriable(
-            "logging in to etcd again after the election",
-            || async { kv.refresh_token().await.map_err(ShardManagerError::from) },
-            &shutdown,
-            etcd.retry_min_delay,
-            etcd.retry_max_delay,
-        )
-        .await?;
+        let logged_in = unless_a_task_fails(join_set, async {
+            retry_retriable(
+                "logging in to etcd again after the election",
+                || async { kv.refresh_token().await.map_err(ShardManagerError::from) },
+                &shutdown,
+                etcd.retry_min_delay,
+                etcd.retry_max_delay,
+            )
+            .await
+            .map_err(anyhow::Error::from)
+        })
+        .await;
+        if let Err(err) = logged_in {
+            // The lease is this replica's from the win on, so a failure or a stop here releases
+            // it, as one later in the startup does, instead of leaving the standbys a full TTL to
+            // wait. Nothing has reached an executor yet, so no task needs to finish first.
+            release_leadership(Some(&leadership)).await;
+            return Err(err);
+        }
     }
 
-    Ok((kv, elected.fence, leadership))
+    Ok((kv, elected.fence, leadership, belief))
+}
+
+/// The advertised host as written, without the brackets an IPv6 literal may carry.
+fn advertised_host(config: &ShardManagerConfig) -> Option<&str> {
+    config
+        .grpc
+        .advertised_host
+        .as_deref()
+        .map(|host| host.trim().trim_start_matches('[').trim_end_matches(']'))
+        .filter(|host| !host.is_empty())
+}
+
+/// Checks the host a replica publishes for its gRPC port. Only distributed mode uses it: there
+/// clients connect to the leader at that host. Returns the host when it works only when every
+/// process runs on this machine, so that the caller can warn about it.
+fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Option<String>> {
+    if !matches!(config.persistence, PersistenceConfig::Etcd(_)) {
+        return Ok(None);
+    }
+    let host = advertised_host(config).context(
+        "grpc.advertised_host must be set in distributed mode: it is the address clients connect \
+         to when this replica leads. On Kubernetes, set GOLEM__GRPC__ADVERTISED_HOST from the pod \
+         IP (fieldRef status.podIP).",
+    )?;
+    let ip = host.parse::<std::net::IpAddr>().ok();
+    anyhow::ensure!(
+        !ip.is_some_and(|ip| ip.is_unspecified()),
+        "grpc.advertised_host is {host}, which names no single host. Set it to the address other \
+         processes reach this replica at, such as its pod IP."
+    );
+    if let Some(ip) = ip.map(|ip| ip.to_canonical()) {
+        let bind_address = config.bind_address.to_canonical();
+        anyhow::ensure!(
+            !(ip.is_ipv6() && bind_address.is_ipv4()),
+            "grpc.advertised_host {ip} is an IPv6 address, but bind_address {bind_address} \
+             accepts IPv4 only, so nothing could be reached at it; set bind_address to \"::\""
+        );
+    }
+    anyhow::ensure!(
+        valid_leader_address(
+            host,
+            config.grpc.advertised_port.unwrap_or(config.grpc.port)
+        ),
+        "grpc.advertised_host is {host:?}, which does not form a valid address with the \
+         advertised port: clients build their connection address from it. Set it to a host \
+         name or an IP address, with no spaces, port, user part, path or zone."
+    );
+    anyhow::ensure!(
+        config.grpc.advertised_port != Some(0),
+        "grpc.advertised_port is 0, which no client can connect to. Leave it unset to advertise \
+         the bound port."
+    );
+    let local_only = match ip {
+        Some(ip) => ip.is_loopback(),
+        None => host.eq_ignore_ascii_case("localhost"),
+    };
+    Ok(local_only.then(|| host.to_string()))
+}
+
+/// Where this replica serves gRPC to other processes: the advertised host, and the advertised port
+/// or else the bound one.
+fn advertised_address(
+    config: &ShardManagerConfig,
+    grpc_port: u16,
+) -> anyhow::Result<LeaderAddress> {
+    let host =
+        advertised_host(config).context("grpc.advertised_host must be set in distributed mode")?;
+    Ok(LeaderAddress {
+        host: host.to_string(),
+        port: config.grpc.advertised_port.unwrap_or(grpc_port),
+    })
+}
+
+/// How long one attempt to reach one address of the replica's own advertised host may take.
+const OWN_ADDRESS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
+/// The pause between two attempts to reach the replica's own advertised address.
+const OWN_ADDRESS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+/// The least time between two warnings that the advertised address does not reach the replica.
+const OWN_ADDRESS_WARNING_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The name of the health entry that only this process serves, as SERVING. The overall health
+/// entry (the empty name) is SERVING on every shard manager, so asking for it proves that some
+/// shard manager answers at an address, not that this one does. A name with a random part is
+/// served by no other process, whichever replica or earlier run is at the address.
+fn own_address_probe_name() -> String {
+    format!(
+        "golem.shardmanager.v1.Process/{}",
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+/// One attempt to reach the replica's own advertised address from the inside, the way a client
+/// that was sent there would.
+///
+/// Without server TLS the attempt asks the gRPC health service for `probe`, the entry that only
+/// this process serves, which confirms that this process, and not just some shard manager,
+/// answers at the address. With server TLS it stops at the TCP connect: a TLS client would need
+/// the CA certificate that clients are given, which this process does not hold.
+async fn reach_own_address(own: &LeaderAddress, tls: bool, probe: &str) -> anyhow::Result<()> {
+    // A name may resolve to several addresses, some of which this replica cannot reach; each one
+    // gets its own short attempt, and one that works is enough.
+    let mut last_error = anyhow::anyhow!("{own} resolves to no address");
+    let addresses = tokio::time::timeout(
+        OWN_ADDRESS_ATTEMPT_TIMEOUT,
+        tokio::net::lookup_host((own.host.as_str(), own.port)),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("no answer to the lookup of {own}"))??;
+    for address in addresses {
+        let reached = tokio::time::timeout(
+            OWN_ADDRESS_ATTEMPT_TIMEOUT,
+            reach_resolved_address(address, tls, probe),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(anyhow::anyhow!(
+                "no answer from {address} within {OWN_ADDRESS_ATTEMPT_TIMEOUT:?}"
+            ))
+        });
+        match reached {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+/// [`reach_own_address`] for one of the addresses that the advertised host resolves to.
+async fn reach_resolved_address(
+    address: std::net::SocketAddr,
+    tls: bool,
+    probe: &str,
+) -> anyhow::Result<()> {
+    // Under server TLS the attempt stops at the TCP connect, so a Service name or another shard
+    // manager's address still passes there: the health call needs the clients' CA certificate.
+    if tls {
+        tokio::net::TcpStream::connect(address).await?;
+        return Ok(());
+    }
+    // The channel is made for the resolved address, so that the attempt tests that address and not
+    // whichever one a second lookup would give first.
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))?
+        .connect()
+        .await?;
+    let answer = tonic_health::pb::health_client::HealthClient::new(channel)
+        .check(tonic_health::pb::HealthCheckRequest {
+            service: probe.to_string(),
+        })
+        .await
+        .map_err(|status| {
+            if status.code() == tonic::Code::NotFound {
+                anyhow::anyhow!(
+                    "a gRPC server answers at the address, but it is not this process: it does \
+                     not know this process's health entry. Another process, perhaps another \
+                     replica, answers at this address"
+                )
+            } else {
+                anyhow::Error::new(status)
+            }
+        })?
+        .into_inner();
+    anyhow::ensure!(
+        answer.status == tonic_health::pb::health_check_response::ServingStatus::Serving as i32,
+        "the gRPC server at the address does not report that it is serving"
+    );
+    Ok(())
+}
+
+/// Retries [`reach_own_address`] until it works and then lets the gate say that the replica is
+/// ready. A wrong `grpc.advertised_host` or `grpc.advertised_port` passes every other check, and
+/// the clients that are sent to such an address find nothing.
+///
+/// A replica whose network does not route a pod's own traffic to its externally advertised address
+/// stays unready as well.
+///
+/// Reaching the address once is the whole check, and it accepts the first resolved address that is
+/// this process. It catches a typo or an address that reaches another replica, and nothing more: a
+/// name that resolves to several replicas including this one (a headless Service, a Compose alias)
+/// passes, and a ClusterIP name passes after a few attempts. A name that several replicas advertise
+/// is caught by the rule against duplicate advertised addresses, not here.
+async fn confirm_own_address(
+    own: LeaderAddress,
+    tls: bool,
+    probe: String,
+    gate: LeaderGate<ShardManagerGrpcService>,
+) -> anyhow::Result<()> {
+    let mut last_warning: Option<tokio::time::Instant> = None;
+    loop {
+        let attempt = reach_own_address(&own, tls, &probe).await;
+        match attempt {
+            Ok(()) => break,
+            Err(error) => {
+                if last_warning.is_none_or(|at| at.elapsed() >= OWN_ADDRESS_WARNING_INTERVAL) {
+                    last_warning = Some(tokio::time::Instant::now());
+                    warn!(
+                        advertised_address = %own,
+                        error = format!("{error:#}"),
+                        "This replica cannot reach its own advertised address, so it stays not \
+                         ready and does not join the leader election: if every replica fails \
+                         this check, no replica leads. Check grpc.advertised_host and \
+                         grpc.advertised_port"
+                    );
+                }
+            }
+        }
+        tokio::time::sleep(OWN_ADDRESS_RETRY_INTERVAL).await;
+    }
+    gate.own_address_reached();
+    info!(advertised_address = %own, "This replica reaches its own advertised address");
+    // A task that finishes during the startup is reported as a finished task; this one has
+    // nothing left to do, and ends with the others.
+    std::future::pending().await
 }
 
 /// Checks the configured startup, persistence, retry, and lease timings, returning warnings worth
@@ -649,22 +1536,40 @@ pub async fn run(
     debug!("Initializing shard manager");
 
     for warning in validate_timing_config(shard_manager_config)? {
-        warn!("{warning}");
+        warn!(
+            warning,
+            "The shard manager timing configuration is inconsistent"
+        );
+    }
+    if let Some(host) = validate_advertised_host(shard_manager_config)? {
+        warn!(
+            advertised_host = host,
+            "grpc.advertised_host is a loopback name: clients can reach this replica only if \
+             they run on the same host"
+        );
     }
 
+    let gate: LeaderGate<ShardManagerGrpcService> = LeaderGate::new();
+
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    // NOT_SERVING until this replica serves: a standby accepts calls only to send them on. The
+    // overall status ("") stays SERVING, because the process is healthy.
     health_reporter
-        .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+        .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
         .await;
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let http_port = golem_service_base::observability::start_health_and_metrics_server(
+    let http_port = golem_service_base::observability::start_health_metrics_and_readiness_server(
         shard_manager_config.http_addr(),
         registry,
         "shard manager is running",
+        {
+            let gate = gate.clone();
+            move || gate.is_ready()
+        },
         join_set,
     )
     .await?;
@@ -693,7 +1598,78 @@ pub async fn run(
         ),
     };
 
-    let (persistence_service, quota_repo, leadership): Persistence = {
+    // Opened before the persistence below, which in distributed mode blocks in the campaign.
+    // Every replica serves this port from the start, so that an orchestrator sees each one as
+    // ready; until this replica leads, the gate answers for the service.
+    let listener = golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
+    let grpc_port = listener.local_addr()?.port();
+
+    let server_shutdown = CancellationToken::new();
+    let server_gate = gate.clone();
+    let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+    let mut server = Server::builder();
+    if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
+        server = server.tls_config(tls.to_tonic())?;
+    }
+    // Its own task, outside the task set: the set is stopped before the leadership is released,
+    // and the server must still be answering for the gate then. It closes when the stop says so,
+    // or when the task that watches it below is dropped.
+    let task_shutdown = server_shutdown.clone();
+    let server_task = tokio::spawn(
+        async move {
+            let serving = server
+                .layer(
+                    middleware::server::OtelGrpcLayer::default()
+                        .filter(filters::reject_healthcheck),
+                )
+                .add_service(reflection_service)
+                .add_service(GatedService::new(server_gate))
+                .add_service(health_service)
+                .serve_with_incoming_shutdown(accept_until(listener, task_shutdown.clone()), {
+                    let shutdown = task_shutdown.clone();
+                    async move { shutdown.cancelled().await }
+                });
+            let mut serving = std::pin::pin!(serving);
+            // Once the stop has begun, the connections get `SERVER_DRAIN_LIMIT` to finish their
+            // calls and close; then the server is dropped, with whatever is left.
+            let drain_limit = async {
+                task_shutdown.cancelled().await;
+                tokio::time::sleep(SERVER_DRAIN_LIMIT).await;
+            };
+            let served = tokio::select! {
+                served = &mut serving => served,
+                () = drain_limit => {
+                    warn!(
+                        limit = ?SERVER_DRAIN_LIMIT,
+                        "Connections of the shard manager's server did not close in time; dropping it"
+                    );
+                    Ok(())
+                }
+            };
+            let _ = closed_tx.send(true);
+            served.map_err(anyhow::Error::from)
+        }
+        .in_current_span(),
+    );
+    let server_inner = Arc::new(ServerInner {
+        shutdown: server_shutdown,
+        closed: closed_rx,
+        closed_by_stop: std::sync::atomic::AtomicBool::new(false),
+    });
+    let stop = ServerStop {
+        gate: gate.clone(),
+        health_reporter: health_reporter.clone(),
+        server: server_inner.clone(),
+    };
+    join_set.spawn({
+        let close_on_drop = CloseServerOnDrop(server_inner.clone());
+        async move {
+            let _close_on_drop = close_on_drop;
+            server_task.await?
+        }
+    });
+
+    let (persistence_service, quota_repo, leadership, lease_belief): Persistence = {
         use golem_service_base::db;
         use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 
@@ -715,6 +1691,7 @@ pub async fn run(
                     )),
                     Arc::new(DbQuotaRepo::logged(pool)),
                     None,
+                    None,
                 )
             }
             PersistenceConfig::Sqlite(sqlite) => {
@@ -728,15 +1705,39 @@ pub async fn run(
                     )),
                     Arc::new(DbQuotaRepo::logged(pool)),
                     None,
+                    None,
                 )
             }
             PersistenceConfig::Etcd(etcd) => {
-                let (kv, fence, leadership) = start_distributed_mode(
+                let own = advertised_address(&shard_manager_config, grpc_port)?;
+                gate.require_own_address_check();
+                let probe = own_address_probe_name();
+                health_reporter
+                    .set_service_status(&probe, tonic_health::ServingStatus::Serving)
+                    .await;
+                join_set.spawn(
+                    confirm_own_address(
+                        own.clone(),
+                        matches!(
+                            shard_manager_config.grpc.tls,
+                            GrpcServerTlsConfig::Enabled(_)
+                        ),
+                        probe,
+                        gate.clone(),
+                    )
+                    .in_current_span(),
+                );
+                // Boxed, so that the campaign's future, tens of KB, is not part of this one: a
+                // caller that awaits `run` inline holds it on its own stack, and in a debug build
+                // the copies of it overflowed a 2 MiB worker stack.
+                let (kv, fence, leadership, belief) = Box::pin(start_distributed_mode(
                     etcd,
                     &deployment,
                     shard_manager_config.number_of_shards,
+                    &gate,
+                    own,
                     join_set,
-                )
+                ))
                 .await?;
 
                 // Distributed mode: the shard lease state and the quota state both live in etcd,
@@ -755,6 +1756,7 @@ pub async fn run(
                         ReadRetry::from_config(etcd),
                     )),
                     Some(leadership),
+                    Some(belief),
                 )
             }
         }
@@ -776,7 +1778,11 @@ pub async fn run(
             fetcher.clone(),
             quota_repo,
         );
-        quota_service.restore_state().await?;
+        unless_a_task_fails(join_set, async {
+            quota_service.restore_state().await?;
+            anyhow::Ok(())
+        })
+        .await?;
 
         join_set.spawn({
             let quota_service = quota_service.clone();
@@ -791,8 +1797,10 @@ pub async fn run(
             }
         });
 
-        let shard_management = Arc::new(
-            ShardManagement::new_with_timeouts(
+        // Awaited under supervision; only the spawn of the worker, which cannot be interrupted
+        // half done, takes the task set.
+        let prepared = unless_a_task_fails(join_set, async {
+            Ok(ShardManagement::prepare(
                 persistence_service.clone(),
                 worker_executors.clone(),
                 health_check.clone(),
@@ -802,10 +1810,11 @@ pub async fn run(
                 shard_manager_config.state_write_timeout,
                 shard_manager_config.initial_health_check_timeout,
                 shard_manager_config.number_of_shards,
-                join_set,
             )
-            .await?,
-        );
+            .await?)
+        })
+        .await?;
+        let shard_management = Arc::new(prepared.start(join_set));
 
         self::sharding::healthcheck_loop::start_health_check_loop(
             shard_management.clone(),
@@ -814,40 +1823,48 @@ pub async fn run(
             join_set,
         );
 
-        let shard_manager = ShardManagerServiceImpl::new(shard_management, quota_service);
-
-        let service = ShardManagerServiceServer::new(shard_manager);
-
-        let listener =
-            golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
-
-        let grpc_port = listener.local_addr()?.port();
-
-        join_set.spawn({
-            let mut server = Server::builder();
-
-            if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
-                server = server.tls_config(tls.to_tonic())?;
-            }
-
-            server
-                .layer(
-                    middleware::server::OtelGrpcLayer::default()
-                        .filter(filters::reject_healthcheck),
+        gate.serve(
+            ShardManagerServiceServer::new(ShardManagerServiceImpl::new(
+                shard_management,
+                quota_service,
+            ))
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip),
+            lease_belief.clone(),
+        );
+        unless_a_task_fails(join_set, async {
+            health_reporter
+                .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+                .await;
+            anyhow::Ok(())
+        })
+        .await?;
+        if let (Some(belief), PersistenceConfig::Etcd(etcd)) =
+            (lease_belief.clone(), &shard_manager_config.persistence)
+        {
+            join_set.spawn(
+                report_lease_health(
+                    belief,
+                    health_reporter.clone(),
+                    gate.clone(),
+                    LeaseKeepAlive::renewal_interval(etcd.leader_lease_ttl),
                 )
-                .add_service(reflection_service)
-                .add_service(
-                    service
-                        .accept_compressed(CompressionEncoding::Gzip)
-                        .send_compressed(CompressionEncoding::Gzip),
-                )
-                .add_service(health_service)
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .map_err(anyhow::Error::from)
-                .in_current_span()
-        });
+                .in_current_span(),
+            );
+        }
 
-        anyhow::Ok(grpc_port)
+        // After `serve`: a standby names this leader from the moment its value is ready, and the
+        // leader must already serve by then.
+        if let Some(leadership) = &leadership {
+            unless_a_task_fails(join_set, async {
+                leadership.publish_ready(lease_belief.as_ref()).await?;
+                anyhow::Ok(())
+            })
+            .await?;
+        }
+        metrics::record_serving();
+
+        anyhow::Ok(())
     };
 
     let started = match &deployment {
@@ -859,24 +1876,62 @@ pub async fn run(
         Deployment::Embedded => startup.await,
     };
 
-    let grpc_port = match started {
-        Ok(grpc_port) => grpc_port,
-        Err(err) => {
-            // Awaited, not just requested: a task still running could reach an executor after a
-            // standby has taken over.
-            join_set.shutdown().await;
-            release_leadership(leadership.as_ref()).await;
-            return Err(err);
-        }
-    };
+    if let Err(err) = started {
+        // Awaited, not just requested: a task still running could reach an executor after a
+        // standby has taken over.
+        stop_replica(Some(&stop), join_set, leadership.as_ref()).await;
+        return Err(err);
+    }
 
-    info!("Started shard manager on ports: grpc: {grpc_port}");
+    info!(grpc_port, "Started shard manager");
 
     Ok(RunDetails {
         http_port,
         grpc_port,
         leadership,
+        stop: Some(stop),
     })
+}
+
+/// Keeps the health entry of the shard manager service in step with the gate: NOT_SERVING while
+/// the lease belief has lapsed, which is when the gate refuses calls, and SERVING again if the
+/// belief comes back, as a late acknowledgement or a reconnect can bring it. Without it a health
+/// probe would keep reporting a leader that serves nothing until the lost lease stops the
+/// process. While the belief holds, it sleeps until the deadline, but never longer than `poll`,
+/// because every renewal moves the deadline and a suspended machine wakes past it; while it has
+/// lapsed it looks again every `poll`. It never returns, so that the task set does not take it for
+/// a stopped task. The entry is SERVING when it starts, and NOT_SERVING for good once the gate
+/// has stopped.
+async fn report_lease_health(
+    belief: LeaseBelief,
+    health_reporter: tonic_health::server::HealthReporter,
+    gate: LeaderGate<ShardManagerGrpcService>,
+    poll: Duration,
+) -> anyhow::Result<()> {
+    let mut serving = true;
+    loop {
+        // A stopped replica serves nothing, whatever its belief says: a belief that comes back
+        // after the stop began must not turn the entry to SERVING again.
+        let held = !belief.remaining().is_zero() && !gate.is_stopped();
+        if held != serving {
+            serving = held;
+            if held {
+                health_reporter
+                    .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+                    .await;
+            } else {
+                health_reporter
+                    .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+                    .await;
+            }
+        }
+        tokio::time::sleep(if held {
+            belief.remaining().min(poll)
+        } else {
+            poll
+        })
+        .await;
+    }
 }
 
 /// A failed revoke is never propagated: the lease expires on its own, so failing the shutdown
@@ -893,38 +1948,36 @@ async fn release_leadership(leadership: Option<&LeadershipHandle>) {
 }
 
 /// Runs the shard manager until a task fails, until every task has finished, or until `shutdown`
-/// fires, releasing the leadership on the way out of all three.
-///
-/// Every path stops the tasks and *waits* for them before the lease is released, so no executor
-/// command can be in flight once another replica may be leading.
+/// fires, and stops the replica on the way out of all three, in the order of [`stop_replica`]:
+/// the gate refuses calls first, the tasks are stopped and awaited, the leadership is released,
+/// and the server closes its connections.
 pub async fn serve_until_stopped(
     details: RunDetails,
     mut join_set: JoinSet<anyhow::Result<()>>,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
+    let stop = details.stop.as_ref();
+    let leadership = details.leadership.as_ref();
     loop {
         tokio::select! {
             joined = join_set.join_next() => match joined {
                 Some(Ok(Ok(()))) => warn!("A shard manager task finished"),
                 Some(Ok(Err(err))) => {
-                    join_set.shutdown().await;
-                    release_leadership(details.leadership.as_ref()).await;
+                    stop_replica(stop, &mut join_set, leadership).await;
                     return Err(err.context("a shard manager task failed"));
                 }
                 Some(Err(panicked)) => {
-                    join_set.shutdown().await;
-                    release_leadership(details.leadership.as_ref()).await;
+                    stop_replica(stop, &mut join_set, leadership).await;
                     return Err(anyhow::Error::new(panicked)
                         .context("a shard manager task panicked"));
                 }
                 None => {
-                    release_leadership(details.leadership.as_ref()).await;
+                    stop_replica(stop, &mut join_set, leadership).await;
                     return Ok(());
                 }
             },
             _ = shutdown.cancelled() => {
-                join_set.shutdown().await;
-                release_leadership(details.leadership.as_ref()).await;
+                stop_replica(stop, &mut join_set, leadership).await;
                 return Ok(());
             }
         }

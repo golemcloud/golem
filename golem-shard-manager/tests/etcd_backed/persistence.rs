@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DEAD_MEMBER;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
@@ -25,12 +26,13 @@ use golem_shard_manager::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId,
     ExternalRevision, LeaderFence, NO_REVISION, ReadRetry, RoutingTablePersistence, STATE_KEY,
     ShardAssignmentEntry, ShardEpoch, ShardLeaseRevision, ShardLeaseState, ShardManagerError,
+    never_reached_etcd,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use url::Url;
@@ -1314,4 +1316,241 @@ fn replacement_shard_state(number_of_shards: usize) -> ShardLeaseState {
         number_of_shards,
         &[(executor(3), addr(3, 9012), None, &[5, 6, 7])],
     )
+}
+
+/// A member whose name does not resolve, as when a Compose service or a pod is gone.
+const UNRESOLVABLE_MEMBER: &str = "http://golem-no-such-member.invalid:2379";
+
+/// A member in a TEST-NET range that is not routed: the connect either times out or fails at once
+/// with an unreachable error, and both are failures to connect.
+const BLACK_HOLED_MEMBER: &str = "http://192.0.2.1:2379";
+
+/// How many requests to send through an endpoint list with a dead member. The balancer sends
+/// about a quarter of them to the dead member, so the chance that none of 80 does is
+/// 0.75^80, about 1e-10, and a run this long meets the dead member many times over.
+const REQUESTS_THROUGH_DEAD_MEMBER: usize = 80;
+
+/// A client built the way `connect_for_requests` builds one, over `endpoints`: with a connect
+/// timeout and a request timeout, both short so that a member that never answers is given up on
+/// within a test.
+pub(crate) async fn request_client(endpoints: &[String]) -> etcd_client::Client {
+    etcd_client::Client::connect(
+        endpoints,
+        Some(
+            etcd_client::ConnectOptions::new()
+                .with_connect_timeout(Duration::from_millis(200))
+                .with_timeout(Duration::from_millis(500)),
+        ),
+    )
+    .await
+    .expect("Cannot connect a client to the endpoint list")
+}
+
+fn a_read_only_txn() -> etcd_client::Txn {
+    etcd_client::Txn::new().and_then([etcd_client::TxnOp::get("/golem/test/classifier", None)])
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// The retry of a write is safe only for a request that was never sent. Anything that may have
+// been sent has to stay a fail-stop, or an attempt that landed would be sent again and come back
+// as a conflict with itself.
+async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<DockerEtcd>) {
+    let through_dead_member = request_client(&[etcd.client_url(), DEAD_MEMBER.to_string()]).await;
+    let mut connect_failures = 0;
+    for _ in 0..REQUESTS_THROUGH_DEAD_MEMBER {
+        if let Err(err) = through_dead_member.kv_client().txn(a_read_only_txn()).await {
+            assert!(
+                never_reached_etcd(&err),
+                "A request that failed to connect to a dead member was not recognized as unsent: \
+                 {err:?}"
+            );
+            connect_failures += 1;
+        }
+    }
+    assert!(
+        connect_failures > 0,
+        "No request in {REQUESTS_THROUGH_DEAD_MEMBER} met the dead member, so the classifier was \
+         never shown a connect failure"
+    );
+
+    // A member whose name no longer resolves, and one whose address swallows the connection
+    // attempt until the connect timeout: nothing was sent in either case. The documentation
+    // range of RFC 5737 is not routed, so the connect either times out or fails at once with an
+    // unreachable error; both are failures to connect.
+    for (what, endpoint) in [
+        ("a name that does not resolve", UNRESOLVABLE_MEMBER),
+        ("an address that never answers", BLACK_HOLED_MEMBER),
+    ] {
+        let err = request_client(&[endpoint.to_string()])
+            .await
+            .kv_client()
+            .txn(a_read_only_txn())
+            .await
+            .expect_err("A request to an unreachable member must fail");
+        assert!(
+            never_reached_etcd(&err),
+            "A request that failed to connect to {what} was not recognized as unsent: {err:?}"
+        );
+    }
+
+    // etcd answered, and said no: the request was received.
+    let live = request_client(&[etcd.client_url()]).await;
+    let err = live
+        .kv_client()
+        .get(Vec::<u8>::new(), None)
+        .await
+        .expect_err("etcd must refuse a get without a key");
+    assert!(
+        !never_reached_etcd(&err),
+        "A status etcd answered with was taken for an unsent request: {err:?}"
+    );
+
+    // An established connection that goes away, and a request that outran its timeout: either
+    // may have been received.
+    let proxy = super::proxy::BreakableProxy::start(&etcd.client_url()).await;
+    let through_proxy = request_client(&[proxy.url()]).await;
+    through_proxy
+        .kv_client()
+        .txn(a_read_only_txn())
+        .await
+        .expect("A request through an unbroken proxy should succeed");
+
+    proxy.black_hole();
+    let timed_out = through_proxy
+        .kv_client()
+        .txn(a_read_only_txn())
+        .await
+        .expect_err("A request into a black hole must time out");
+    assert!(
+        !never_reached_etcd(&timed_out),
+        "A request that timed out was taken for an unsent one: {timed_out:?}"
+    );
+    proxy.restore();
+
+    // The established connection is closed under a request that is waiting for its answer, as an
+    // etcd member going away does. The black hole keeps the answer from arriving first, so the
+    // request must fail, and etcd may have received it.
+    proxy.black_hole();
+    let in_flight = tokio::spawn({
+        let through_proxy = through_proxy.clone();
+        async move { through_proxy.kv_client().txn(a_read_only_txn()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    proxy.drop_all_connections().await;
+    let reset = in_flight
+        .await
+        .expect("The request task should not panic")
+        .expect_err("A request whose connection was closed while it waited must fail");
+    assert!(
+        !never_reached_etcd(&reset),
+        "A request on a connection that was closed was taken for an unsent one: {reset:?}"
+    );
+    proxy.restore();
+}
+
+/// An etcd store, the sentinel leader key it is fenced on, and a persistence over `endpoints`
+/// that keeps `compaction_retention_revisions` revisions of history.
+async fn fenced_persistence_over(
+    etcd: &Arc<DockerEtcd>,
+    endpoints: &[String],
+    compaction_retention_revisions: u64,
+) -> EtcdRoutingTablePersistence {
+    let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
+        .new_etcd_store()
+        .await;
+    let (_, fence) = store.mint_leader_key().await;
+    EtcdRoutingTablePersistence::with_client(
+        request_client(endpoints).await,
+        NUMBER_OF_SHARDS,
+        fence,
+        compaction_retention_revisions,
+        store.read_retry(),
+    )
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// One member of an etcd cluster is down routinely, and tonic keeps it in the balancer's rotation,
+// so a share of the writes fail at once with a connect error. Nothing was sent, so sending the
+// write again is safe, and giving up on it would stop the leader.
+async fn writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd>) {
+    let persistence =
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()], 0).await;
+
+    let mut revision = NO_REVISION;
+    for write in 0..REQUESTS_THROUGH_DEAD_MEMBER {
+        revision = persistence
+            .write(&sample_shard_state(NUMBER_OF_SHARDS), revision)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Write {write} of {REQUESTS_THROUGH_DEAD_MEMBER} through the endpoint list \
+                     failed: {err}. The leader's worker stops on a failed write, so this is an \
+                     etcd member being restarted taking the leader down."
+                )
+            });
+    }
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// Compaction is sent again under the same rule as a write. A retention of zero turns compaction
+// off, and a compaction whose target has not moved sends nothing, so this keeps history and moves
+// the target forward with every round, to have each one reach the balancer.
+async fn compaction_survives_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd>) {
+    let persistence =
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()], 2).await;
+
+    let mut revision = NO_REVISION;
+    for round in 0..REQUESTS_THROUGH_DEAD_MEMBER {
+        revision = persistence
+            .write(&sample_shard_state(NUMBER_OF_SHARDS), revision)
+            .await
+            .unwrap_or_else(|err| panic!("Write {round} failed: {err}"));
+        persistence.compact(revision).await.unwrap_or_else(|err| {
+            panic!(
+                "Compaction {round} of {REQUESTS_THROUGH_DEAD_MEMBER} through the endpoint list \
+                 failed: {err}. The leader's worker stops on a failed compaction, so this is an \
+                 etcd member being restarted taking the leader down."
+            )
+        });
+    }
+}
+
+/// Far more than the sends again that a dead member in the endpoint list costs a write, and far
+/// less than the ten seconds that the retry deadline of a write that was refused again would take.
+pub(crate) const REFUSAL_BOUND: Duration = Duration::from_secs(3);
+
+#[test]
+#[tracing::instrument(skip_all)]
+// Sending a write again must not turn a refusal into something that is tried repeatedly: etcd
+// answering "the revision is not what you expected" is an answer, and it is final.
+async fn a_refused_write_is_not_sent_again_through_a_dead_member(etcd: &Arc<DockerEtcd>) {
+    let persistence =
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()], 0).await;
+    let revision = persistence
+        .write(&sample_shard_state(NUMBER_OF_SHARDS), NO_REVISION)
+        .await
+        .expect("The first write should succeed");
+
+    for _ in 0..10 {
+        let started = Instant::now();
+        let result = persistence
+            .write(&replacement_shard_state(NUMBER_OF_SHARDS), revision + 1000)
+            .await;
+        // A write that never reached etcd because of the dead member is sent again after the
+        // retry delay, which is fine; a refusal that is sent again too would be asked for until
+        // the read retry deadline of ten seconds.
+        assert!(
+            started.elapsed() < REFUSAL_BOUND,
+            "A refused write took {:?}: it was sent again after etcd had answered it",
+            started.elapsed()
+        );
+        assert!(
+            matches!(result, Err(ShardManagerError::ConcurrentModification)),
+            "A write with a revision etcd does not hold must be refused as a conflict, once. \
+             Got {result:?}"
+        );
+    }
 }

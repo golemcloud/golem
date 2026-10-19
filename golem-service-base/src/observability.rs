@@ -24,19 +24,20 @@ use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
-pub async fn start_health_and_metrics_server(
-    addr: SocketAddr,
-    registry: Registry,
-    body_message: &'static str,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<u16, anyhow::Error> {
-    let app = Router::new()
+fn health_and_metrics_routes(registry: Registry, body_message: &'static str) -> Router {
+    Router::new()
         .route("/healthcheck", get(move || async move { body_message }))
         .route(
             "/metrics",
             get(move || async move { prometheus_metrics(registry.clone()) }),
-        );
+        )
+}
 
+async fn serve_routes(
+    addr: SocketAddr,
+    app: Router,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<u16, anyhow::Error> {
     let listener = crate::net::bind_tcp_listener(addr)?;
     let local_addr = listener.local_addr()?;
 
@@ -51,6 +52,45 @@ pub async fn start_health_and_metrics_server(
     info!("Health and metrics server started on ports: http: {local_addr}");
 
     Ok(local_addr.port())
+}
+
+pub async fn start_health_and_metrics_server(
+    addr: SocketAddr,
+    registry: Registry,
+    body_message: &'static str,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<u16, anyhow::Error> {
+    serve_routes(
+        addr,
+        health_and_metrics_routes(registry, body_message),
+        join_set,
+    )
+    .await
+}
+
+/// [`start_health_and_metrics_server`] with a readiness route: `/readyz` answers 200 while `ready`
+/// returns true and 503 otherwise. `/healthcheck` stays the liveness check.
+pub async fn start_health_metrics_and_readiness_server(
+    addr: SocketAddr,
+    registry: Registry,
+    body_message: &'static str,
+    ready: impl Fn() -> bool + Clone + Send + Sync + 'static,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<u16, anyhow::Error> {
+    let app = health_and_metrics_routes(registry, body_message).route(
+        "/readyz",
+        get(move || {
+            let ready = ready.clone();
+            async move {
+                if ready() {
+                    (http::StatusCode::OK, "ready")
+                } else {
+                    (http::StatusCode::SERVICE_UNAVAILABLE, "not ready")
+                }
+            }
+        }),
+    );
+    serve_routes(addr, app, join_set).await
 }
 
 pub fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
