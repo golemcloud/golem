@@ -2069,70 +2069,63 @@ async fn a_leader_value_that_is_not_json_is_seen_but_names_no_address(etcd: &Arc
 
 #[test]
 #[tracing::instrument(skip_all)]
-// A leader whose lease lapses during its startup must never send clients to itself: another
-// replica may already lead.
+// A leader whose lease belief lapses during its startup must never send clients to itself: another
+// replica may already lead. The window that matters is the one where the belief is over but the
+// key is still in etcd and etcd is reachable, so etcd itself would accept the write.
 async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_ready(
     etcd: &Arc<DockerEtcd>,
 ) {
-    let proxy = BreakableProxy::start(&etcd.client_url()).await;
     let election_name = unique_election_name();
-    let mut config = election_config(etcd);
-    config.endpoints = vec![proxy.url()];
-    let election = LeaderElection::connect(&config, election_name.clone(), address(4201))
-        .await
-        .expect("Connecting the election client to etcd should succeed");
+    let election =
+        LeaderElection::connect(&election_config(etcd), election_name.clone(), address(4201))
+            .await
+            .expect("Connecting the election client to etcd should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
         .expect("An uncontested campaign should finish")
         .expect("An uncontested campaign should be won");
-    let belief = elected.keepalive.belief();
-    let granted_ttl = elected.granted_ttl;
+    // The keepalive keeps the lease alive in etcd while the belief that the gate acts on is over.
     let keepalive = tokio::spawn(elected.keepalive.run());
+    let lapsed = LeaseBelief::until(Instant::now());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!lapsed.held());
 
-    proxy.black_hole();
-    timeout(granted_ttl * 2, keepalive)
-        .await
-        .expect("the keepalive reports the loss within one lease TTL")
-        .expect("the keepalive task does not panic");
-    assert!(
-        !belief.held(),
-        "the gate must stop serving once the lease is lost"
-    );
-    // The watchdog gives the lease up before etcd does. Reading through the direct connection, not
-    // the proxy, until the lapsed leader's key is gone is what makes the lease lapse in etcd too,
-    // however late its expiry scan runs.
     let locator = LeaderLocator::new(
         inspection_client(etcd).await,
         election_name.clone(),
         TEST_REQUEST_TIMEOUT,
     );
-    timeout(CAMPAIGN_TIMEOUT, async {
-        while locator
-            .leader()
-            .await
-            .expect("the inspection read succeeds")
-            .is_some()
-        {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("etcd should expire the lease once renewals stop");
-    proxy.restore();
-
-    elected
-        .leadership
-        .publish_ready(None)
-        .await
-        .expect_err("a leader whose lease lapsed must not mark itself ready");
     assert!(
         locator
             .leader()
             .await
             .expect("the inspection read succeeds")
-            .is_none_or(|value| !value.ready),
+            .is_some(),
+        "the leader's key is still in etcd"
+    );
+
+    elected
+        .leadership
+        .publish_ready(Some(&lapsed))
+        .await
+        .expect_err("a leader whose lease belief lapsed must not mark itself ready");
+    assert!(
+        locator
+            .leader()
+            .await
+            .expect("the inspection read succeeds")
+            .is_some_and(|value| !value.ready),
         "no value of the lapsed leader may read ready"
     );
+
+    // The same write goes through when the belief is not consulted, so it was the belief that
+    // refused it and not etcd.
+    elected
+        .leadership
+        .publish_ready(None)
+        .await
+        .expect("etcd accepts the write of a leader whose key is still there");
+    keepalive.abort();
 }
 
 #[test]
