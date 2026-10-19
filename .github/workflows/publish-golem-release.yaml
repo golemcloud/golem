@@ -1,0 +1,97 @@
+name: Publish Golem release
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: golem-release-refs/tags/${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  promote:
+    if: github.repository == 'golemcloud/golem' && startsWith(github.event.release.tag_name, 'v')
+    runs-on: blacksmith
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_EVENT_ID: ${{ github.event.release.id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Set built-in artifact version
+        run: echo "BUILTIN_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+      - name: Verify published release readiness
+        run: python scripts/golem-release.py readiness --tag "$RELEASE_TAG" --directory target/release-ready --published
+      - name: Restore verified Docker payloads
+        run: python scripts/golem-release.py docker-payloads --directory target/release-ready
+      - uses: ./.github/actions/docker-publish-setup
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          artifact-pattern: ''
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem
+          dockerfile: ./cli/golem/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-router
+          dockerfile: ./golem-router/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-worker-executor
+          dockerfile: ./golem-worker-executor/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-shard-manager
+          dockerfile: ./golem-shard-manager/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-xfs-quotad
+          dockerfile: ./golem-xfs-quotad/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/registry-service
+          dockerfile: ./golem-registry-service/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-worker-service
+          dockerfile: ./golem-worker-service/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-component-compilation-service
+          dockerfile: ./golem-component-compilation-service/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+
+  notify:
+    needs: promote
+    if: always() && github.repository == 'golemcloud/golem' && startsWith(github.event.release.tag_name, 'v')
+    runs-on: blacksmith
+    steps:
+      - name: Publish Slack notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_COLOR: ${{ needs.promote.result }}
+          SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
+          SLACK_TITLE: Release Notification
+          SLACK_MESSAGE: 'Docker promotion for ${{ github.event.release.tag_name }}: ${{ needs.promote.result }}'
+          SLACK_USERNAME: CI
+          SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}

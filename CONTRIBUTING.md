@@ -166,13 +166,13 @@ and fix any possible errors and warnings reported by it.
 
 The six SDKs release on tag pushes (Go uses module tags). Shared crates release
 when you publish their GitHub release. Golem preparation runs manually on its
-exact tag; final binary and Docker publication starts only when a human publishes
-the prepared GitHub draft release.
+exact tag. Preparation uploads the native binaries to the draft. Docker promotion
+starts only when a human publishes the prepared GitHub draft release.
 
 | Tag pattern                | What gets released                                                    | Workflow                                |
 |----------------------------|-----------------------------------------------------------------------|-----------------------------------------|
 | `golem-shared-v<x.y.z>`   | `golem-schema-derive`, `golem-schema`, `golem-tool-metadata` on crates.io | `.github/workflows/publish-golem-shared.yaml` |
-| `v<major>.<minor>.<patch>` | Docker images and signed Golem and CLI binaries on GitHub             | `.github/workflows/ci.yaml`             |
+| `v<major>.<minor>.<patch>` | Prepared native binaries and Docker promotion | `.github/workflows/prepare-golem-release.yaml`, `.github/workflows/publish-golem-release.yaml` |
 | `golem-rust-v<x.y.z>`      | The Rust SDK (`golem-rust`, `golem-rust-macro`) on crates.io          | `.github/workflows/publish-golem-rust.yaml`    |
 | `golem-ts-v<x.y.z>`        | The TypeScript SDK packages on npmjs                                  | `.github/workflows/publish-golem-ts.yaml`      |
 | `golem-effect-v<x.y.z>`    | The Effect SDK (`@golemcloud/effect-golem`) on npmjs                  | `.github/workflows/publish-golem-effect.yaml`  |
@@ -227,6 +227,14 @@ to `main`.
 4. **Prepare Golem.** Push the immutable Golem tag after all pins and exported
    built-in tool versions are committed. First use a reviewed PR and obtain
    explicit approval to squash merge the preparation branch into `main`.
+   Before creating tags, run the fast read-only prerequisite check:
+
+   ```shell
+   BUILTIN_VERSION=1.6.0 python3 scripts/golem-release.py check-start
+   ```
+
+   It checks prerequisites, environment settings, and secret names. It does not
+   validate the actual private key or guarantee registry readiness.
    Record the PR's exact head before merging. Tag that preparation-branch commit,
    not the squash commit on `main`, to preserve the frozen release source and
    its first-parent shared snapshot. Run
@@ -240,14 +248,34 @@ to `main`.
    `.github/workflows/prepare-golem-release.yaml` validates the exact public tag,
    clean source, and the merged preparation PR. The PR must have the tagged commit
    as its exact head, target `golemcloud/golem`'s `main`, and have a merge commit
-   reachable from public `main`. It runs the full reusable CI preflight with
-   published SDK and shared-crate checks. Its protected `golem-release` job
-   creates or resumes the draft, builds and publishes all eight built-in inventory
-   entries, and uploads the verified manifest. It never publishes the Golem draft.
-5. **Review and publish Golem.** Review the draft and manifest, then explicitly
-   publish the draft. This starts the existing final binary and Docker CI.
-   Release CI repeats the prerequisite checks before it publishes binaries or
-   Docker images. It does not publish the shared crates again.
+   reachable from public `main`. It runs one full exact-tag CI preparation with
+   published SDK and shared-crate checks. An arbitrary earlier green PR run does
+   not replace this run. Pushes to `release/*` do not start automatic CI; PRs still do.
+   Read-only jobs package and validate all eight built-ins, including Python
+   sources, before any publication. They preserve the complete Actions bundle
+   and the small runtime manifest. They use the local manifest to compile ten
+   native binaries and four Docker payload tars. Apple signing and notarization
+   must finish with `Accepted` before bundle upload.
+   The protected App-token job only collects and verifies exact artifact IDs and
+   digests. It compares all existing destinations before its first write, then
+   publishes only missing built-in packages and uploads the ten native binaries
+   and runtime manifest to the draft. It does not build, package, or execute
+   downloaded code after it obtains the write token. It uploads an attempt-qualified
+   Actions readiness receipt bound to source, full ref, run, attempt, release ID,
+   and the exact artifacts and hashes. It never publishes the Golem draft.
+5. **Review and publish Golem.** Review the draft, built-in assets, native binaries,
+   manifest, and readiness evidence. Run the read-only check:
+
+   ```shell
+   BUILTIN_VERSION=1.6.0 python3 scripts/golem-release.py readiness --tag v1.6.0 --directory target/release-review
+   ```
+
+   A human then publishes the draft. `publish-golem-release.yaml` validates that
+   successful tagged preparation completed before publication and promotes only
+   the saved Docker payloads. It runs no full CI or native compilation.
+   Actions artifacts remain available for 30 days. Review and publish within that
+   retention period or stop. Missing, expired, or ambiguous evidence fails closed;
+   it never triggers an automatic rebuild.
 
 After shared crate publication, do not change the three crate directories, the
 root `Cargo.toml`, `Cargo.lock`, `.cargo`, or `LICENSE` before releasing the SDK
@@ -277,8 +305,10 @@ publication job mints the scoped token. Normal CI has no built-in write token.
 The CI publication guard accepts only `workflow_dispatch` from
 `prepare-golem-release.yaml` on the matching Golem tag in `golemcloud/golem`.
 Local explicit publication and dry runs remain available for recovery with the
-same immutability safeguards. Partial reruns verify and reuse identical assets,
-including an existing manifest; they never replace them.
+same immutability safeguards. For a normal partial consumer failure, rerun failed
+jobs, not all jobs. Reuse saved producer artifact IDs and exact bytes. Partial
+reruns verify and reuse identical assets, including an existing manifest; they
+never replace them or rebuild over a completed bundle.
 
 See the [release runbook](.agents/skills/releasing-golem/SKILL.md) for commands,
 authorization gates, and recovery, and [Built-in artifacts](BUILTIN_ARTIFACTS.md)

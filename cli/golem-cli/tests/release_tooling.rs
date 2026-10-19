@@ -164,3 +164,17 @@ exit 1
     git(&repo, &["checkout", "--detach", &merged]);
     validate(json!([pull]), false);
 }
+
+#[test]
+fn release_packages_and_readiness_preserve_immutable_outputs() {
+    let output = Command::new("python3")
+        .arg(crate::workspace_path().join("cli/golem-cli/tests/release_flow.py"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -1,0 +1,129 @@
+name: Build release binaries
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        type: string
+        required: true
+      target:
+        type: string
+        required: true
+      cross:
+        type: boolean
+        default: false
+      manifest-artifact-id:
+        type: string
+        required: true
+    secrets:
+      APPLE_CERTIFICATE_BASE64:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APPLE_APP_PASSWORD:
+        required: false
+    outputs:
+      artifact-id:
+        description: Artifact containing both native binaries and their sealed metadata
+        value: ${{ jobs.build.outputs.artifact-id }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: 10
+      GOLEM_BUILTIN_RELEASE: '1'
+      RELEASE_TARGET: ${{ inputs.target }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Validate manifest artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_ARTIFACT_ID: ${{ inputs.manifest-artifact-id }}
+        run: python scripts/golem-release.py check-artifact --id "$MANIFEST_ARTIFACT_ID"
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ inputs.manifest-artifact-id }}
+          path: .
+          merge-multiple: true
+      - name: Validate release manifest
+        run: python scripts/golem-release.py check-manifest
+      - uses: ./.github/actions/setup-rust
+        with:
+          fetch-tag: 'true'
+          rust-targets: ${{ inputs.target }}
+          cache-shared-key: release-${{ inputs.target }}
+          cache-save-if: 'true'
+          install-protoc: 'true'
+      - id: get_version
+        uses: battila7/get-version-action@v2
+      - name: Set version for all packages
+        env:
+          VERSION: ${{ steps.get_version.outputs.version-without-v }}
+        run: cargo make --profile ci set-version
+      - name: Install cross
+        if: inputs.cross
+        run: cargo install cross
+      - uses: ilammy/setup-nasm@v1
+      - name: Build both projects separately
+        env:
+          USE_CROSS: ${{ inputs.cross }}
+        run: |
+          builder=cargo
+          if [[ "$USE_CROSS" == true ]]; then
+            builder=cross
+          fi
+          "$builder" build -p golem-cli --release --target "$RELEASE_TARGET"
+          "$builder" build -p golem --release --target "$RELEASE_TARGET"
+      - name: Stage native binaries
+        run: |
+          mkdir release-native
+          suffix=''
+          if [[ "$RELEASE_TARGET" == *-windows-* ]]; then
+            suffix=.exe
+          fi
+          for project in golem-cli golem; do
+            cp "${CARGO_TARGET_DIR:-target}/$RELEASE_TARGET/release/$project$suffix" \
+              "release-native/$project-$RELEASE_TARGET$suffix"
+          done
+      - name: Sign and notarize both Apple binaries
+        if: contains(inputs.target, 'apple-darwin')
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash scripts/sign-release-binaries.sh
+      - name: Seal native output
+        run: python scripts/golem-release.py seal-output --directory release-native --kind native --target "$RELEASE_TARGET"
+      - id: upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-native/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

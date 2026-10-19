@@ -2549,16 +2549,15 @@ if not equals ${draft} true
 end
 '''
 
-[tasks.publish-builtin-artifacts]
-description = "Publishes every built-in and uploads the immutable tagged release manifest"
-dependencies = ["validate-builtin-release"]
+[tasks.package-builtin-artifacts]
+description = "Builds and packages the complete built-in inventory without release writes"
+dependencies = ["validate-golem-release-source"]
 script_runner = "@duckscript"
 script = '''
-if is_path_exists builtin-artifacts.release.json
-    trigger_error "The release manifest already exists; do not replace immutable release assets"
+bundle = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/bundle"
+if is_path_exists ${bundle}
+    trigger_error "Preserve the existing package bundle; inspect incomplete packaging before retrying"
 end
-version = get_env BUILTIN_VERSION
-dry_run = get_env BUILTIN_DRY_RUN
 inventory = readfile builtin-artifacts.json
 artifacts = json_parse --collection ${inventory}
 ids = map_keys ${artifacts}
@@ -2573,69 +2572,26 @@ end
 unset_env GOLEM_BUILTIN_ARTIFACTS_PREBUILT
 unset_env GOLEM_BUILTIN_RELEASE
 cm_run_task ensure-builtin-artifacts
-cm_run_task validate-builtin-release
-set_env BUILTIN_SKIP_BUILD 1
-manifest_entries = set ""
-separator = set ""
-for id in ${ids}
-    entry = map_get ${artifacts} ${id}
-    component = map_get ${entry} component
-    output = map_get ${entry} path
-    set_env BUILTIN_COMPONENT ${component}
-    cm_run_task publish-builtin-artifact
-    sha = sha256sum ${output}
-    if not equals ${dry_run} 1
-        url = set "https://github.com/golemcloud/golem-builtins/releases/download/${component}-v${version}/${component}.wasm"
-        verified = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/verify.wasm"
-        mkdir "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release"
-        exec --fail-on-error curl --fail --location --max-time 120 --output ${verified} ${url}
-        public_sha = sha256sum ${verified}
-        exec --fail-on-error curl --fail --location --max-time 120 --output "${verified}.sha256" "${url}.sha256"
-        checksum = readfile "${verified}.sha256"
-        rm ${verified}
-        rm "${verified}.sha256"
-        if not equals ${sha} ${public_sha}
-            trigger_error "Public bytes differ for ${component}; never overwrite an immutable release"
-        end
-        if not starts_with ${checksum} ${sha}
-            trigger_error "Public checksum differs for ${component}"
-        end
-    end
-    manifest_entries = concat ${manifest_entries} ${separator} "\n    \"${id}\": {\"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha}\"}"
-    separator = set ","
+cm_run_task validate-golem-release-source
+exec --fail-on-error python3 scripts/golem-release.py package-builtins --directory "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/bundle" --target ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
+'''
+
+[tasks.publish-builtin-artifacts]
+description = "Publishes the complete packaged built-in inventory without replacing assets"
+dependencies = ["check-builtin-publication-context"]
+script_runner = "@duckscript"
+script = '''
+bundle = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/bundle"
+if not is_path_exists "${bundle}/bundle.json"
+    cm_run_task package-builtin-artifacts
 end
+cm_run_task validate-builtin-release
+dry_run = get_env BUILTIN_DRY_RUN
 if equals ${dry_run} 1
-    echo "Dry run complete; no manifest or releases created"
+    echo "Dry run complete; the local bundle and manifest are preserved, no releases created"
     exit 0
 end
-manifest = set "{\n  \"schemaVersion\": 1,\n  \"repository\": \"golemcloud/golem-builtins\",\n  \"artifacts\": {${manifest_entries}\n  }\n}\n"
-writefile builtin-artifacts.release.json ${manifest}
-release = exec --fail-on-error gh release view "v${version}" --repo golemcloud/golem --json assets
-release = json_parse --collection ${release.stdout}
-assets = map_get ${release} assets
-found = set false
-for asset in ${assets}
-    name = map_get ${asset} name
-    if equals ${name} builtin-artifacts.release.json
-        found = set true
-    end
-end
-if ${found}
-    staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/manifest"
-    mkdir ${staging}
-    remote_manifest = set "${staging}/builtin-artifacts.release.json"
-    if is_path_exists ${remote_manifest}
-        rm ${remote_manifest}
-    end
-    exec --fail-on-error gh release download "v${version}" --repo golemcloud/golem --pattern builtin-artifacts.release.json --dir ${staging}
-    expected = sha256sum builtin-artifacts.release.json
-    actual = sha256sum "${staging}/builtin-artifacts.release.json"
-    if not equals ${expected} ${actual}
-        trigger_error "Conflicting immutable release manifest; no assets were replaced"
-    end
-else
-    exec --fail-on-error gh release upload "v${version}" builtin-artifacts.release.json --repo golemcloud/golem
-end
+exec --fail-on-error python3 scripts/golem-release.py publish-builtins --directory ${bundle}
 '''
 
 [tasks.publish-builtin-artifact]
@@ -2771,6 +2727,14 @@ echo "asset:    ${staged_wasm} (${size} bytes)"
 echo "sha256:   ${sha256}"
 echo "manifest: \"${artifact_id}\": { \"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha256}\" }"
 
+notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
+if equals ${component} python
+    notes = concat ${notes} "\nThe Python component statically links the LGPL-3.0-only Malachite libraries. The attached python-source.tar.gz contains their corresponding source, the application source and locked dependencies, and offline rebuild/relinking instructions in builtin-tools/python/SOURCE.md. Each source retains its own license; the Golem license does not replace the library licenses.\n"
+end
+notes_path = set "${staging}/release-notes.md"
+writefile ${notes_path} ${notes}
+exec --fail-on-error python3 scripts/golem-release.py seal-component --directory ${staging}
+
 dry_run = get_env BUILTIN_DRY_RUN
 if equals ${dry_run} 1
     echo "dry run: release was not published"
@@ -2780,12 +2744,6 @@ if not is_empty ${source_status}
     trigger_error "refusing to publish from a dirty source tree; commit the exact source first"
 end
 existing = exec gh release view ${tag} --repo ${repository}
-notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
-if equals ${component} python
-    notes = concat ${notes} "\nThe Python component statically links the LGPL-3.0-only Malachite libraries. The attached python-source.tar.gz contains their corresponding source, the application source and locked dependencies, and offline rebuild/relinking instructions in builtin-tools/python/SOURCE.md. Each source retains its own license; the Golem license does not replace the library licenses.\n"
-end
-notes_path = set "${staging}/release-notes.md"
-writefile ${notes_path} ${notes}
 assets = array ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
 if equals ${component} python
     array_push ${assets} "${staging}/python-source.tar.gz"
