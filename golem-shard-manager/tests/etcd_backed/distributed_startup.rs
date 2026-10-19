@@ -2293,14 +2293,23 @@ async fn a_replica_whose_advertised_address_does_not_reach_it_stays_unready_and_
     let before = campaigner_keys(etcd).await;
     let (standby, _) = spawn_replica(standby_config.clone(), CancellationToken::new());
 
-    // Several attempts of the replica's own check fit in this window.
+    // Several attempts of the replica's own check fit in this window, and a campaigner key is
+    // looked for during the whole of it, from right after the spawn: a replica that joins and
+    // leaves would otherwise be missed.
     let window = Duration::from_secs(4);
-    let became_ready = timeout(window, async {
-        while !readyz(standby_config.http_port).await {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
+    let (became_ready, ()) = tokio::join!(
+        timeout(window, async {
+            while !readyz(standby_config.http_port).await {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }),
+        assert_no_campaigner_within(
+            etcd,
+            &before,
+            window,
+            "a replica that cannot reach its advertised address must not join the election",
+        )
+    );
     assert!(
         became_ready.is_err(),
         "a replica that cannot reach its advertised address must not become ready"
@@ -2310,13 +2319,6 @@ async fn a_replica_whose_advertised_address_does_not_reach_it_stays_unready_and_
         http_ok(standby_config.http_port, "/healthcheck").await,
         "the replica itself is healthy"
     );
-    assert_no_campaigner_within(
-        etcd,
-        &before,
-        Duration::from_secs(2),
-        "a replica that cannot reach its advertised address must not join the election",
-    )
-    .await;
     assert!(
         readyz(leader_config.http_port).await,
         "the replica with a working address is ready"
@@ -2361,6 +2363,10 @@ async fn a_shutdown_while_waiting_for_the_own_address_ends_the_startup(etcd: &Ar
             Some(ShardManagerError::ShutdownRequested)
         ),
         "{err:#}"
+    );
+    assert!(
+        campaigner_keys(etcd).await.is_empty(),
+        "nothing is left queued in the election after the stop"
     );
 }
 
