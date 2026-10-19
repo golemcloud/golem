@@ -115,10 +115,10 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
 
 <script>
   const KEY = "golem-code-lang";
-  const figures = document.querySelectorAll<HTMLElement>("[data-code-switcher]");
+  const figures = [...document.querySelectorAll<HTMLElement>("[data-code-switcher]")];
 
-  function select(lang: string) {
-    for (const fig of figures) {
+  function select(lang: string, from = 0) {
+    for (const fig of figures.slice(from)) {
       for (const tab of fig.querySelectorAll<HTMLElement>("[role=tab]")) {
         const on = tab.dataset.lang === lang;
         tab.setAttribute("aria-selected", String(on));
@@ -130,11 +130,11 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
     }
   }
 
-  function choose(tab: HTMLElement) {
+  // Only the chosen figure and those below it change, so nothing above the
+  // reader's position resizes.
+  function choose(fig: HTMLElement, tab: HTMLElement) {
     const lang = tab.dataset.lang!;
-    const before = tab.getBoundingClientRect().top;
-    select(lang);
-    window.scrollBy(0, tab.getBoundingClientRect().top - before);
+    select(lang, figures.indexOf(fig));
     try {
       localStorage.setItem(KEY, lang);
     } catch {}
@@ -149,13 +149,13 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
   for (const fig of figures) {
     const tabs = [...fig.querySelectorAll<HTMLElement>("[role=tab]")];
     tabs.forEach((tab, i) => {
-      tab.addEventListener("click", () => choose(tab));
+      tab.addEventListener("click", () => choose(fig, tab));
       tab.addEventListener("keydown", (e) => {
         const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
         if (!step) return;
         e.preventDefault();
         const next = tabs[(i + step + tabs.length) % tabs.length];
-        choose(next);
+        choose(fig, next);
         next.focus();
       });
     });
