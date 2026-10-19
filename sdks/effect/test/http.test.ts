@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "@effect/vitest"
 import { Cause, Effect, Option, Schema } from "effect"
 import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
+import { PrincipalSchema } from "../src/Principal.js"
 import { guest } from "../src/internal/guest.js"
 import {
   agentType,
@@ -1139,6 +1140,68 @@ describe("Http pipeable combinators — endpoints", () => {
     })
     expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
   })
+
+  it.effect("registers authenticated GET and HEAD with injected principal inputs", () =>
+    Effect.gen(function* () {
+      const AdminData = Schema.Struct({ secret: Schema.String })
+      defineAgent({
+        name: "AuthenticatedAdmin",
+        id: {},
+        http: mount("/api"),
+        methods: {
+          admin: method({
+            input: { principal: PrincipalSchema },
+            success: AdminData,
+            http: [get("/admin", { auth: true }), head("/admin", { auth: true })],
+          }),
+          mixed: method({
+            input: {
+              principal: PrincipalSchema,
+              id: Schema.String,
+              q: Schema.String,
+              token: Schema.String,
+            },
+            success: AdminData,
+            http: [
+              get("/admin/{id}?q={q}", { auth: true }).pipe(withHeader("X-Token", "token")),
+              head("/admin/{id}?q={q}", { auth: true }).pipe(withHeader("X-Token", "token")),
+            ],
+          }),
+        },
+      }).implement({
+        init: () => Effect.void,
+        methods: () => ({
+          admin: ({ principal }) => Effect.succeed({ secret: principal.tag }),
+          mixed: ({ principal, id, q, token }) =>
+            Effect.succeed({ secret: `${principal.tag}:${id}:${q}:${token}` }),
+        }),
+      })
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
+      const agent = types.find((t) => t.typeName === "AuthenticatedAdmin")!
+      expect(agent).toBeDefined()
+      for (const method of agent.methods) {
+        expect(method.inputSchema.tag).toBe("parameters")
+        if (method.inputSchema.tag !== "parameters") throw new Error("expected parameters")
+        expect(method.inputSchema.val.map((field) => [field.name, field.source.tag])).toEqual(
+          method.name === "admin"
+            ? [["principal", "auto-injected"]]
+            : [
+                ["principal", "auto-injected"],
+                ["id", "user-supplied"],
+                ["q", "user-supplied"],
+                ["token", "user-supplied"],
+              ],
+        )
+        expect(method.httpEndpoint).toHaveLength(2)
+        for (const endpoint of method.httpEndpoint) {
+          expect(endpoint.authDetails).toEqual({ required: true })
+          expect(endpoint.headerVars).toEqual(
+            method.name === "admin" ? [] : [{ headerName: "X-Token", variableName: "token" }],
+          )
+        }
+      }
+    }),
+  )
 
   it.effect("piped endpoints work end-to-end inside defineAgent.methods[].http", () =>
     Effect.gen(function* () {

@@ -520,6 +520,415 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
 }
 
 #[test]
+async fn app_new_with_failing_template_plan_leaves_single_component_app_unchanged(
+    _tracing: &Tracing,
+) {
+    let app_name = "test-app-failing-plan";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // An edited skill file cannot be merged with the template's, so the template plan for a
+    // second component fails after the layout upgrade is planned.
+    let skill = ctx.cwd_path_join(".agents/skills/golem-new-project/SKILL.md");
+    let edited = format!("{}\nedited\n", fs::read_to_string(&skill).unwrap());
+    fs::write_str(&skill, edited).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Already existing non-mergeable files"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_with_overlapping_layout_upgrades_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-two-flat";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Two components in the flat layout: promoting both would move the same root files.
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: JsonValue =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["components"][format!("{app_name}:ts-other")] =
+        serde_json::json!({ "dir": "", "templates": "ts" });
+    fs::write_str(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-third"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Overlapping move paths in plan"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_with_missing_layout_upgrade_source_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-missing-source";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The layout upgrade moves `src` first and `tsconfig.json` after it, so a missing
+    // `tsconfig.json` must fail the validation before `src` moves.
+    std::fs::remove_file(ctx.cwd_path_join("tsconfig.json")).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Source path does not exist"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_adds_template_to_component_without_dir_in_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-no-dir";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains("    dir: \"\"\n"));
+    fs::write_str(&manifest_path, manifest.replace("    dir: \"\"\n", "")).unwrap();
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    assert!(ctx.cwd_path_join("src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join(",").exists());
+}
+
+#[test]
+async fn app_new_adds_template_to_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`.
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    std::fs::rename(
+        ctx.cwd_path_join("tsconfig.json"),
+        ctx.cwd_path_join("sub/tsconfig.json"),
+    )
+    .unwrap();
+    let component_entry = format!("  {app_name}:ts-main:\n    templates: ts\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:ts-main:\n    dir: \"\"\n    templates: ts\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(ctx.cwd_path_join("sub/src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+}
+
+#[test]
+async fn app_new_adds_template_to_scala_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-scala-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`. The
+    // component sbt file stays at the application root, points to `sub` and has a custom
+    // dependency.
+    let component_sbt_name = "test_app_scala_included_scala_main.sbt";
+    let component_sbt = ctx.cwd_path_join(component_sbt_name);
+    let custom_dependency =
+        "libraryDependencies += \"org.example\" % \"custom-library\" % \"1.0\",";
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(".in(file(\"\"))"), "{sbt}");
+    fs::write_str(
+        &component_sbt,
+        sbt.replace(".in(file(\"\"))", ".in(file(\"sub\"))")
+            .replace(
+                "    name := ",
+                &format!("    {custom_dependency}\n    name := "),
+            ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    let component_entry = format!("  {app_name}:scala-main:\n    templates: scala\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:scala-main:\n    dir: \"\"\n    templates: scala\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(!ctx.cwd_path_join("sub").join(component_sbt_name).exists());
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(custom_dependency), "{sbt}");
+    assert!(sbt.contains(".in(file(\"sub\"))"), "{sbt}");
+    assert!(ctx.cwd_path_join("sub/src/main/scala").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+}
+
+#[test]
+async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_tracing: &Tracing) {
+    let app_name = "test-app-scala-merge";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let component_sbt = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension().is_some_and(|ext| ext == "sbt")
+                && path.file_name().is_some_and(|name| name != "build.sbt")
+        })
+        .expect("component sbt file");
+
+    let append = |path: &Path, line: &str| {
+        let contents = format!("{}{line}\n", fs::read_to_string(path).unwrap());
+        fs::write_str(path, contents).unwrap();
+    };
+    append(&component_sbt, "// customized component");
+    let build_sbt = ctx.cwd_path_join("build.sbt");
+    let multiline_scala_version = fs::read_to_string(&build_sbt).unwrap().replace(
+        "ThisBuild / scalaVersion := ",
+        "ThisBuild / scalaVersion :=\n  ",
+    );
+    fs::write_str(&build_sbt, multiline_scala_version).unwrap();
+    append(&build_sbt, "ThisBuild / organization := \"customized\"");
+    append(
+        &ctx.cwd_path_join("project/plugins.sbt"),
+        "addSbtPlugin(\"org.scalameta\" % \"sbt-scalafmt\" % \"2.5.2\")",
+    );
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let component_sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(component_sbt.contains("// customized component"));
+    assert!(component_sbt.contains(".in(file(\"scala-main\"))"));
+    let build_sbt = fs::read_to_string(&build_sbt).unwrap();
+    assert!(build_sbt.contains("ThisBuild / organization := \"customized\""));
+    assert_eq!(build_sbt.matches("scalaVersion").count(), 1, "{build_sbt}");
+    assert!(
+        build_sbt.starts_with("ThisBuild / scalaVersion := \""),
+        "{build_sbt}"
+    );
+    assert_eq!(build_sbt.lines().count(), 2, "{build_sbt}");
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("project/plugins.sbt"))
+            .unwrap()
+            .contains("sbt-scalafmt")
+    );
+    assert!(ctx.cwd_path_join("scala-main/src").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
+}
+
+#[test]
+async fn app_new_with_unrecognized_scala_setting_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-scala-unrecognized";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The merge cannot replace a template-owned setting in a form that it does not recognize.
+    fs::write_str(
+        ctx.cwd_path_join("build.sbt"),
+        "inThisBuild(Seq(scalaVersion := \"3.3.0\"))\n",
+    )
+    .unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("cannot merge `scalaVersion`"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+fn snapshot_dir(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != "golem-temp")
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let rel_path = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let contents = entry
+                .file_type()
+                .is_file()
+                .then(|| std::fs::read(entry.path()).unwrap());
+            (rel_path, contents)
+        })
+        .collect()
+}
+
+#[test]
 async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let producer_wasm = placeholder_component_wasm(&ctx);
@@ -8409,7 +8818,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
-                    complex:\s*.*
+                    complex\?:\s*.*
                 \)
                 .*
                 CounterAgent\.get\(name:\s*string\)
@@ -8420,7 +8829,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
-                    complex:\s*.*
+                    complex\?:\s*.*
                 \)
             )
             .*"#

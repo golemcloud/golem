@@ -1,4 +1,4 @@
-import { Callout, Cards, Tabs } from "nextra/components"
+import { Cards, Tabs } from "nextra/components"
 import { ArtifactLink } from "@/components/releaselink"
 import { NEXT_RELEASE_VERSION } from "@/lib/releases"
 import { ThemedImage } from "@/components/themed-image"
@@ -72,8 +72,6 @@ golem new --template ts --yes agent-examples
 ```shell copy
 golem new --template effect --yes agent-examples
 ```
-
-The Effect template names its agent type `Counter`, not `CounterAgent`.
   </Tabs.Tab>
   <Tabs.Tab>
 ```shell copy
@@ -127,8 +125,8 @@ export const CounterAgentImpl = CounterAgent.implement({
   <Tabs.Tab>
 ```typescript
 // src/counter-agent.ts (excerpt)
-export const Counter = defineAgent({
-  name: "Counter",
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
   mode: "durable",
   id: { name: Schema.String },
   methods: {
@@ -139,7 +137,14 @@ export const Counter = defineAgent({
     }),
   },
 }).implement<Ref.Ref<{ count: number }>>({
-  init: () => Ref.make({ count: 0 }),
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make({ count: 0 });
+      yield* Effect.logInfo("Counter constructed").pipe(
+        Effect.annotateLogs({ name }),
+      );
+      return state;
+    }),
   methods: (state) => ({
     increment: () =>
       Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
@@ -275,10 +280,6 @@ golem agent invoke 'CounterAgent("my-counter")' increment
 golem agent invoke 'CounterAgent("my-counter")' increment
 ```
 
-<Callout type="info">
-  **Effect:** write `'Counter("my-counter")'` wherever this page writes `'CounterAgent("my-counter")'`.
-</Callout>
-
 Each command ends with the method's result. The first call prints `1` and the second prints `2`. Excerpt of the second call's output (the label names the component's language):
 
 ```text
@@ -336,7 +337,11 @@ golem agent oplog 'CounterAgent("my-counter")'
 
 The counter's state survived between calls. This second example shows Golem recovering a method that is still running. A `WorkflowAgent` starts a workflow, asks a `HumanAgent` for approval, and then waits inside its `start` method until the human decides. You restart the server while it waits, approve the workflow afterwards, and the method continues from the line where it stopped.
 
-The example uses the `human-in-the-loop` template. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
+The example uses the `human-in-the-loop` template. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The constructor parameter `report-q3` names the workflow agent. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
+
+`--trigger` returns before the workflow finishes registering its request. If the pending list is
+empty, repeat the list command. Restart only after the list contains the workflow ID and
+`golem agent get` reports `Suspended`. Always restart without `--clean`.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
@@ -372,7 +377,7 @@ golem agent get 'WorkflowAgent("report-q3")'
 
 ```text
 Invocation result in TypeScript syntax:
-["<workflow-id>"]
+["report-q3"]
 ...
   Status:                   Suspended
 ```
@@ -380,25 +385,61 @@ Invocation result in TypeScript syntax:
 In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
 
 ```shell copy
-golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
 ```text
 Invocation result in TypeScript syntax:
-"Workflow <workflow-id> was approved"
+"Workflow report-q3 was approved"
 ```
   </Tabs.Tab>
   <Tabs.Tab>
-The Effect SDK has no `human-in-the-loop` template yet. The TypeScript tab runs the same example, with the same commands.
+```typescript
+// src/workflow-agent.ts (excerpt)
+start: ({ approver }) =>
+  Effect.gen(function* () {
+    const promiseId = yield* Agents.Promises.create;
+    const human = yield* HumanAgent.client.get({ username: approver });
+    const requestId = yield* Schema.decodeEffect(Ids.PromiseId)(promiseId);
+    yield* human.requestApproval({ workflowId, promiseId: requestId });
+    const bytes = yield* Agents.Promises.await(promiseId);
+    const decision = new TextDecoder().decode(bytes);
+    return decision === "approved"
+      ? `Workflow ${workflowId} was approved`
+      : `Workflow ${workflowId} was rejected`;
+  }).pipe(Effect.orDie, Effect.scoped),
+```
+
+```shell copy
+cd ..
+golem new --template effect/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' listPendingApprovals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+Wait for `listPendingApprovals` to contain `report-q3` and for the workflow status to be
+`Suspended`. In **Terminal 1**, stop the server with `Ctrl+C` and restart it with
+`golem server run` (without `--clean`). In **Terminal 2**:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+The original invocation returns `"Workflow report-q3 was approved"`.
   </Tabs.Tab>
   <Tabs.Tab>
 ```rust
 // src/workflow_agent.rs (excerpt)
-async fn start(&mut self) -> String {
+async fn start(&mut self, approver: String) -> String {
     let approval_promise_id = create_promise();
 
-    let mut approver = HumanAgentClient::get("bob".to_string());
+    let mut approver = HumanAgentClient::get(approver);
     approver
         .request_approval(self.id.clone(), approval_promise_id.clone())
         .await;
@@ -416,22 +457,20 @@ async fn start(&mut self) -> String {
 }
 ```
 
-In the Rust template, `WorkflowAgent` is a phantom agent without constructor parameters, and `start` always asks the human agent `"bob"`. Give the workflow an ID of your own choice in square brackets, as below, so every command reaches the same agent.
-
 ```shell copy
 cd ..
 golem new --template rust/human-in-the-loop --yes approvals
 cd approvals
 golem build
 golem deploy --yes
-golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
-golem agent invoke 'HumanAgent("bob")' list_pending_approvals
-golem agent get 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]'
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' list_pending_approvals
+golem agent get 'WorkflowAgent("report-q3")'
 ```
 
 ```text
 Invocation result in Rust syntax:
-["<workflow-id>"]
+["report-q3"]
 ...
   Status:                   Suspended
 ```
@@ -439,20 +478,68 @@ Invocation result in Rust syntax:
 In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
 
 ```shell copy
-golem agent invoke 'HumanAgent("bob")' decide_approval '"<workflow-id>"' 'Approved'
-golem agent invoke --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
+golem agent invoke 'HumanAgent("alice")' decide_approval '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
 ```text
 Invocation result in Rust syntax:
-"Workflow <workflow-id> was approved ✅"
+"Workflow report-q3 was approved ✅"
 ```
   </Tabs.Tab>
   <Tabs.Tab>
-The Scala `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+The Scala template's `start(approver)` creates a host promise, calls
+`HumanAgentClient.get(approver).requestApproval(...)`, then waits with
+`HostApi.awaitPromise(promiseId)` inside the same method.
+
+```shell copy
+cd ..
+golem new --template scala/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' listPendingApprovals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+Wait for the pending list to contain `report-q3` and the workflow status to be `Suspended`.
+In **Terminal 1**, stop the server with `Ctrl+C` and restart it with `golem server run`
+(without `--clean`). In **Terminal 2**, complete the promise and retrieve the original result:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+The original invocation returns `"Workflow report-q3 was approved ✅"`.
   </Tabs.Tab>
   <Tabs.Tab>
-The MoonBit `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+The MoonBit template's async `WorkflowAgent::start` creates a host promise, sends its full
+identity to the human agent, and waits with `@api.await_promise(promise_id)`. Its public
+method names use snake case.
+
+```shell copy
+cd ..
+golem new --template moonbit/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' list_pending_approvals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+Wait for the pending list to contain `report-q3` and the workflow status to be `Suspended`.
+In **Terminal 1**, stop the server with `Ctrl+C` and restart it with `golem server run`
+(without `--clean`). In **Terminal 2**:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decide_approval '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+The original invocation returns `"Workflow report-q3 was approved ✅"`.
   </Tabs.Tab>
   <Tabs.Tab>
 ```go
@@ -462,8 +549,8 @@ agent.Handle(workflow.Start, func(ctx *golem.Context[state], in workflow.StartIn
 
 	approver := human.Agent.Get(human.ID{Username: in.Approver})
 	human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
-		WorkflowId: ctx.State.workflowID,
-		PromiseId:  approval.ID(),
+		WorkflowID: ctx.State.workflowID,
+		PromiseID:  approval.ID(),
 	})
 
 	// The agent is suspended here until the promise is completed.
@@ -489,7 +576,7 @@ golem agent get 'WorkflowAgent("report-q3")'
 
 ```text
 Invocation result in Go syntax:
-["<workflow-id>"]
+["report-q3"]
 ...
   Status:                   Suspended
 ```
@@ -497,13 +584,13 @@ Invocation result in Go syntax:
 In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
 
 ```shell copy
-golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
 ```text
 Invocation result in Go syntax:
-"Workflow <workflow-id> was approved"
+"Workflow report-q3 was approved"
 ```
   </Tabs.Tab>
 </Tabs>

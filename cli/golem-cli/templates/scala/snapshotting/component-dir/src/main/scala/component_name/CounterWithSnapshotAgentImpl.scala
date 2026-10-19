@@ -9,21 +9,23 @@ import scala.concurrent.Future
 final class CounterWithSnapshotAgentImpl(@unused private val name: String)
     extends CounterWithSnapshotAgent {
 
-  private var value: Int = 0
+  private var count: Int = 0
 
   override def increment(): Future[Int] =
     Future.successful {
-      value += 1
-      value
+      count += 1
+      count
     }
+
+  override def value(): Future[Int] = Future.successful(count)
 
   def saveSnapshot(): Future[Array[Byte]] =
     Future.successful {
       Array(
-        ((value >>> 24) & 0xff).toByte,
-        ((value >>> 16) & 0xff).toByte,
-        ((value >>> 8) & 0xff).toByte,
-        (value & 0xff).toByte
+        ((count >>> 24) & 0xff).toByte,
+        ((count >>> 16) & 0xff).toByte,
+        ((count >>> 8) & 0xff).toByte,
+        (count & 0xff).toByte
       )
     }
 }
@@ -34,7 +36,7 @@ object CounterWithSnapshotAgentImpl {
     context: golem.runtime.SnapshotRestoreContext
   ): Future[CounterWithSnapshotAgentImpl] = Future.successful {
     val instance = new CounterWithSnapshotAgentImpl(context.identity[String](0))
-    instance.value =
+    instance.count =
       ((bytes(0) & 0xff) << 24) |
         ((bytes(1) & 0xff) << 16) |
         ((bytes(2) & 0xff) << 8) |

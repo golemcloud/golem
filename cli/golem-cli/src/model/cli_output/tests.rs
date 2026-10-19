@@ -838,10 +838,152 @@ fn component_get_and_list_structured_outputs_mask_secret_payloads() {
                 "component-plugin-secret",
                 "tool-env-secret",
                 "tool-config-secret",
+                "middleware-env-secret",
+                "middleware-config-secret",
+                "middleware-plugin-secret",
             ],
         );
         assert!(value.to_string().contains("***"));
     }
+}
+
+#[test]
+fn component_metadata_displays_tools_middlewares_and_files() {
+    use crate::model::component::{ComponentGetView, ComponentView};
+    use crate::model::text_format::MessageWithFields;
+    use golem_common::model::component_metadata::ComponentMetadata;
+
+    let sample = sample_component_view();
+    let component = ComponentView::new(golem_common::model::component::ComponentDto {
+        id: sample.component_id,
+        revision: golem_common::model::component::ComponentRevision::new(sample.component_revision)
+            .unwrap(),
+        environment_id: sample.environment_id,
+        component_name: sample.component_name.clone(),
+        hash: Default::default(),
+        wasm_hash: Default::default(),
+        application_id: golem_common::model::application::ApplicationId(uuid::Uuid::nil()),
+        account_id: golem_common::model::account::AccountId(uuid::Uuid::nil()),
+        component_size: sample.component_size,
+        created_at: sample.created_at,
+        metadata: ComponentMetadata::from_parts_with_tools_and_middlewares(
+            Default::default(),
+            vec![],
+            None,
+            None,
+            vec![],
+            BTreeMap::new(),
+            sample.tools.clone(),
+            sample.tool_middlewares.clone(),
+        )
+        .with_component_config(
+            Default::default(),
+            golem_common::model::component_metadata::ComponentProvisionConfig {
+                files: sample.files.clone(),
+                ..Default::default()
+            },
+        ),
+    });
+    assert_eq!(component.tools, sample.tools);
+    assert_eq!(component.tool_middlewares, sample.tool_middlewares);
+    assert_eq!(component.files, sample.files);
+    let fields = ComponentGetView(component.clone())
+        .fields_masked(MaskingConfig {
+            show_secrets: false,
+        })
+        .unwrap()
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(fields["Tools"], "grep 1.0.0");
+    assert_eq!(fields["Tool middlewares"], "audit 2.3.0");
+    assert!(fields["Initial file system"].contains("290 MiB"));
+    let tool_files = &fields["[tool grep] Initial file system"];
+    assert!(tool_files.contains("ro "));
+    assert!(tool_files.contains("/.vpod/rust.snap"));
+    assert!(tool_files.contains("290 MiB"));
+    let middleware_files = &fields["[tool middleware audit] Initial file system"];
+    assert!(middleware_files.contains("rw "));
+    assert!(middleware_files.contains("/.vpod/rust.snap"));
+    assert!(middleware_files.contains("0 B"));
+    let text = format!("{fields:?}");
+    assert!(!text.contains("middleware-config-secret"));
+    assert!(!text.contains("middleware-env-secret"));
+    assert!(!text.contains("middleware-plugin-secret"));
+
+    let validator = jsonschema::options()
+        .build(&load_command_output_schema())
+        .unwrap();
+    for show_secrets in [false, true] {
+        let get = to_structured_output_value_masked(
+            ComponentGetView(component.clone()),
+            MaskingConfig { show_secrets },
+        )
+        .unwrap();
+        let list = to_structured_output_value_masked(
+            crate::model::component::ComponentListView {
+                components: vec![component.clone()],
+            },
+            MaskingConfig { show_secrets },
+        )
+        .unwrap();
+        assert!(validator.is_valid(&get));
+        assert!(validator.is_valid(&list));
+        for value in [&get, &list["components"][0]] {
+            assert_eq!(value["files"], serde_json::to_value(&sample.files).unwrap());
+            assert_eq!(
+                value["tools"]["grep"]["provision"]["files"][0]["size"],
+                json!(304087040)
+            );
+            assert_eq!(
+                value["toolMiddlewares"]["audit"]["provision"]["files"][0],
+                json!({
+                    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000", "path": "/.vpod/rust.snap", "permissions": "read-write", "size": 0
+                })
+            );
+            assert_eq!(
+                value["toolMiddlewares"]["audit"]["provision"]["config"]["nested"]["token"],
+                json!(if show_secrets {
+                    "middleware-config-secret"
+                } else {
+                    "***"
+                })
+            );
+            assert_eq!(
+                value["toolMiddlewares"]["audit"]["provision"]["env"]["API_TOKEN"],
+                json!(if show_secrets {
+                    "middleware-env-secret"
+                } else {
+                    "***"
+                })
+            );
+            assert_eq!(
+                value["toolMiddlewares"]["audit"]["provision"]["plugins"][0]["parameters"]["apiKey"],
+                json!(if show_secrets {
+                    "middleware-plugin-secret"
+                } else {
+                    "***"
+                })
+            );
+        }
+    }
+
+    let mut empty = component;
+    empty.tools.values_mut().next().unwrap().provision = Default::default();
+    let fields = ComponentGetView(empty.clone()).fields();
+    assert!(fields.iter().any(|(name, _)| name == "Tools"));
+    assert!(
+        !fields
+            .iter()
+            .any(|(name, _)| name.starts_with("[tool grep]"))
+    );
+    empty.tools.clear();
+    empty.tool_middlewares.clear();
+    let fields = ComponentGetView(empty).fields();
+    assert!(
+        !fields
+            .iter()
+            .any(|(name, _)| name == "Tools" || name == "Tool middlewares")
+    );
 }
 
 #[test]
@@ -936,7 +1078,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
 fn sample_component_view() -> crate::model::component::ComponentView {
     let agent_type_name = golem_common::model::agent::AgentTypeName("agent".to_string());
     let tool_name = golem_common::model::tool::ToolName::try_from("grep").unwrap();
-    crate::model::component::ComponentView {
+    let mut component = crate::model::component::ComponentView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
         component_version: Some("1.0.0".to_string()),
@@ -1043,7 +1185,54 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                 agent_bindings: BTreeMap::new(),
             },
         )]),
-    }
+        tool_middlewares: BTreeMap::new(),
+        files: vec![],
+    };
+    let tool = component.tools.values_mut().next().unwrap();
+    tool.provision.files = vec![golem_common::model::component::InitialAgentFile {
+        content_hash: golem_common::model::agent::AgentFileContentHash(
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap(),
+        ),
+        path: golem_common::model::component::AgentFilePath::from_abs_str("/.vpod/rust.snap")
+            .unwrap(),
+        permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
+        size: 304087040,
+    }];
+    component.files = tool.provision.files.clone();
+    let mut provision = tool.provision.clone();
+    provision.config = golem_common::model::json::NormalizedJsonValue::new(json!({
+        "nested": { "token": "middleware-config-secret" }
+    }));
+    provision.env = BTreeMap::from([("API_TOKEN".into(), "middleware-env-secret".into())]);
+    provision.plugins = component
+        .agent_type_provision_configs
+        .values()
+        .next()
+        .unwrap()
+        .plugins
+        .clone();
+    provision.plugins[0].parameters =
+        BTreeMap::from([("apiKey".into(), "middleware-plugin-secret".into())]);
+    provision.files[0].permissions =
+        golem_common::model::component::AgentFilePermissions::ReadWrite;
+    provision.files[0].size = 0;
+    component.tool_middlewares.insert(
+        golem_common::model::tool_middleware::ToolMiddlewareName::try_from("audit").unwrap(),
+        golem_common::model::tool_middleware::ToolMiddlewareDeploymentMetadata {
+            definition: golem_common::schema::tool::ToolMiddleware {
+                name: "audit".into(),
+                version: "2.3.0".into(),
+                aliases: vec![],
+                doc: Default::default(),
+                scope: golem_common::schema::tool::ToolMiddlewareScope::Universal,
+                parameter_schema: golem_common::schema::SchemaGraph::empty(),
+            },
+            provision,
+        },
+    );
+    component
 }
 
 fn sample_agent_type_schema(
@@ -1375,6 +1564,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
             request: Some(request),
             durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
             span_started: None,
+            denial: None,
         })
         .into(),
     })
@@ -1464,19 +1654,24 @@ fn cli_output_schema_rejects_invalid_tool_definition() {
     let validator = jsonschema::options()
         .build(&schema)
         .expect("command output schema must be a valid JSON schema");
-    let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
+    let output = to_structured_output_value(crate::model::component::ComponentGetView(
         sample_component_view(),
     ))
     .expect("component.get should serialize");
 
-    *output
-        .pointer_mut("/tools/grep/definition")
-        .expect("component.get should contain the sample tool definition") = json!({});
-
-    assert!(
-        !validator.is_valid(&output),
-        "schema must reject an untyped tool definition"
-    );
+    for path in [
+        "/tools/grep/definition",
+        "/toolMiddlewares/audit/definition",
+    ] {
+        let mut invalid = output.clone();
+        *invalid
+            .pointer_mut(path)
+            .expect("component.get should contain the sample definition") = json!({});
+        assert!(
+            !validator.is_valid(&invalid),
+            "schema must reject an untyped definition at {path}"
+        );
+    }
 }
 
 // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
@@ -2280,6 +2475,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 attributes: vec![span_attribute("span.start", "recorded")],
                 kind: PublicSpanKind::Client,
             }),
+            denial: Some("access denied".to_string()),
         }),
         PublicOplogEntry::End(EndParams {
             timestamp: timestamp(),
@@ -5342,6 +5538,7 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
             arb_agent_type_provision_config(),
             0..3,
         ),
+        0u8..3,
     )
         .prop_map(
             |(
@@ -5355,7 +5552,24 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
                 exports,
                 agent_types,
                 agent_type_provision_configs,
+                middleware_scope,
             )| {
+                let sample = sample_component_view();
+                let mut tool_middlewares = sample.tool_middlewares;
+                if middleware_scope != 0 {
+                    tool_middlewares
+                        .values_mut()
+                        .next()
+                        .unwrap()
+                        .definition
+                        .scope = golem_common::schema::tool::ToolMiddlewareScope::Monomorphic(
+                        Box::new(golem_common::schema::tool::MonomorphicToolMiddlewareScope {
+                            presented: sample.tools.values().next().unwrap().definition.clone(),
+                            expected: (middleware_scope == 2)
+                                .then(|| sample.tools.values().next().unwrap().definition.clone()),
+                        }),
+                    );
+                }
                 crate::model::component::ComponentView {
                     component_name: golem_common::model::component::ComponentName(component_name),
                     component_id: golem_common::model::component::ComponentId(component_id),
@@ -5367,7 +5581,9 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
                     exports,
                     agent_types,
                     agent_type_provision_configs,
-                    tools: BTreeMap::new(),
+                    tools: sample.tools,
+                    tool_middlewares,
+                    files: sample.files,
                 }
             },
         )

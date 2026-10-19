@@ -37,8 +37,10 @@ const total = yield* collector.getTotal({});
 ```
 
 Client construction and remote calls have typed RPC/configuration errors. Handle or map them when
-they are domain-relevant. If infrastructure failure should fail and retry the current invocation,
-apply `Effect.orDie` to the composed RPC Effect rather than declaring an unrelated domain error.
+they are domain-relevant. Use `Effect.orDie` to turn an unexpected failure into a defect rather
+than declaring an unrelated domain error. An unhandled defect fails the invocation without retry.
+Host retry policies govern retryable RPC failures. Use an SDK saga for business-level
+compensation and explicit guest-code attempts.
 
 ## Stateful Multi-Instance Example
 

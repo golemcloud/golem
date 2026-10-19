@@ -160,12 +160,15 @@ type ValidateEndpointStructure<E, B, H, P> = B extends EndpointBound
       : E
     : E
   : E
-type ValidateEndpointsTuple<E extends ReadonlyArray<EndpointDef<string>>, P> = {
+type ValidateEndpointsTuple<
+  E extends ReadonlyArray<EndpointDef<string>>,
+  P extends MethodParams,
+> = {
   readonly [K in keyof E]: E[K] extends EndpointDef<infer V, infer Kind, infer B, infer H>
     ? Kind extends "bodyless"
-      ? [Exclude<keyof P & string, V>] extends [never]
+      ? [Exclude<keyof CallerInput<P> & string, V>] extends [never]
         ? ValidateEndpointStructure<E[K], B, H, P>
-        : Invalid<`GET/HEAD endpoint cannot have unbound param '${Exclude<keyof P & string, V> & string}' (only path / query / header bindings are allowed because there is no request body)`>
+        : Invalid<`GET/HEAD endpoint cannot have unbound param '${Exclude<keyof CallerInput<P> & string, V> & string}' (only path / query / header bindings are allowed because there is no request body)`>
       : ValidateEndpointStructure<E[K], B, H, P>
     : E[K]
 }

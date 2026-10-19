@@ -17,12 +17,14 @@ function collect(directory, relative = '') {
 const npmRoot = path.join(root, 'node_modules/npm');
 const typescriptRoot = path.join(root, 'node_modules/typescript');
 
-// Rollup contains npm's complete executable module graph. Only user-facing manual pages remain as
-// data files; no npm dependency/package tree is carried into the tool component.
-const npmFiles = collect(path.join(npmRoot, 'man')).map(([name, contents]) => [
-  `man/${name}`,
-  contents,
-]);
+// Rollup contains npm's complete executable module graph. Only user-facing manual pages and the
+// `npm init` template, which promzard reads as text and evaluates with bundled dependencies, remain
+// as data files; no npm dependency/package tree is carried into the tool component.
+const npmInitTemplate = 'node_modules/init-package-json/lib/default-input.js';
+const npmFiles = [
+  ...collect(path.join(npmRoot, 'man')).map(([name, contents]) => [`man/${name}`, contents]),
+  [npmInitTemplate, readFileSync(path.join(npmRoot, npmInitTemplate), 'utf8')],
+];
 
 // Rollup contains tsc's executable module graph. The compiler still reads its standard libraries
 // and optional localized diagnostics as data, so keep just those non-executable assets.

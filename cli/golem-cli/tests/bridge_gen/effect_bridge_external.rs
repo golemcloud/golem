@@ -100,7 +100,9 @@ function compileChecks(client: GuestStreamingAgent) {
     client.nested(Stream.make(Stream.make({ itemStream: "root", children: [] })))
   const status: Effect.Effect<StreamItem, unknown> = client.status()
   const configured = GuestStreamingAgent.getWithConfig("id", 10n)
+  const unconfigured = GuestStreamingAgent.getWithConfig("id")
   void produced
+  void unconfigured
   void nested
   void status
   void configured

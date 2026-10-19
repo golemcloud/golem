@@ -1,4 +1,5 @@
 import type { Dirent, Stats } from 'node:fs';
+import { join } from 'node:path';
 import { validatedCwd } from '../../shared/cli-runtime.js';
 
 export const NPM_VERSION = '10.9.9';
@@ -29,9 +30,9 @@ export function normalizedRegistry(value: string): string {
 
 export function npmInvocation(cwdValue: string, registryValue: string) {
   const cwd = validatedCwd(cwdValue);
-  const home = `${cwd}/.golem-home`;
-  const cache = `${cwd}/.golem-npm-cache`;
-  const prefix = `${cwd}/.golem-npm-prefix`;
+  const home = join(cwd, '.golem-home');
+  const cache = join(cwd, '.golem-npm-cache');
+  const prefix = join(cwd, '.golem-npm-prefix');
   return {
     environment: {
       HOME: home,
@@ -43,7 +44,7 @@ export function npmInvocation(cwdValue: string, registryValue: string) {
       NPM_CONFIG_PREFIX: prefix,
       NPM_CONFIG_REGISTRY: normalizedRegistry(registryValue),
       NPM_CONFIG_UPDATE_NOTIFIER: 'false',
-      PATH: `${cwd}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
+      PATH: `${join(cwd, 'node_modules/.bin')}:/usr/local/bin:/usr/bin:/bin`,
     },
     directories: [home, cache, prefix],
   };
@@ -110,5 +111,30 @@ export function installNpmRecursiveRmPatch(
     if (restored) return;
     promises.rm = originalRm;
     restored = true;
+  };
+}
+
+const AGENT_TRANSPORT_WARNING = 'WASM_RQUICKJS_HTTP_AGENT_TRANSPORT';
+
+function warningCode(warning: string | Error, rest: unknown[]): unknown {
+  if (warning instanceof Error) return (warning as NodeJS.ErrnoException).code;
+  const [typeOrOptions, code] = rest;
+  if (typeOrOptions && typeof typeOrOptions === 'object') {
+    return (typeOrOptions as { code?: unknown }).code;
+  }
+  return code;
+}
+
+// npm's registry agent defines a createConnection hook that the runtime cannot use, because
+// requests always go through wasi:http. The runtime reports this once per runtime instance, on the
+// first such request, which only adds noise to npm's output.
+export function installNpmTransportWarningFilter(target: Pick<NodeJS.Process, 'emitWarning'>) {
+  const original = target.emitWarning;
+  target.emitWarning = function (this: unknown, warning: string | Error, ...rest: unknown[]) {
+    if (warningCode(warning, rest) === AGENT_TRANSPORT_WARNING) return;
+    return (original as (...args: unknown[]) => void).call(this, warning, ...rest);
+  } as typeof original;
+  return () => {
+    target.emitWarning = original;
   };
 }

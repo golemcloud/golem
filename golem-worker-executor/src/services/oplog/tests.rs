@@ -24,7 +24,8 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace,
 };
 use assert2::check;
 use bytes::Bytes;
@@ -6148,6 +6149,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             request: Some(request),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         }
         .rounded();
         oplog.add(entry.clone()).await.unwrap();
@@ -7515,31 +7517,33 @@ async fn a_listed_blob_chunk_that_does_not_decode_is_corruption(_tracing: &Traci
         .await
         .unwrap()
         .unwrap();
-    storage
-        .put_raw(
-            "blob_oplog",
-            "test",
-            namespace,
-            &objects[0],
-            &bytes[..bytes.len() / 2],
-        )
-        .await
-        .unwrap();
+    for corrupt in [&bytes[..bytes.len() / 2], &[][..], &[255][..]] {
+        storage
+            .put_raw(
+                "blob_oplog",
+                "test",
+                namespace.clone(),
+                &objects[0],
+                corrupt,
+            )
+            .await
+            .unwrap();
 
-    let error = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
-        .await
-        .unwrap()
-        .read_source(OplogIndex::INITIAL, 2)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(&error, OplogReadError::Corruption { source, detail }
-            if *source == OplogReadSource::Archive(1)
-                && detail.contains("failed to decode the compressed oplog chunk")),
-        "{error:?}"
-    );
-    assert!(!error.is_transient());
+        let error = service
+            .open(&owned_agent_id, AgentMode::Durable, None)
+            .await
+            .unwrap()
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, OplogReadError::Corruption { source, detail }
+                if *source == OplogReadSource::Archive(1)
+                    && detail.contains("failed to decode the compressed oplog chunk")),
+            "{error:?}"
+        );
+        assert!(!error.is_transient());
+    }
 }
 
 #[test]
@@ -8619,6 +8623,123 @@ async fn corrupt_compressed_chunk_fails_the_read_without_a_panic(_tracing: &Trac
             .unwrap_err(),
         error
     );
+}
+
+/// Both indexed containers and the serialized entries inside a valid zstd frame must fail as
+/// corruption, including when their serialization version is missing or unknown.
+#[test]
+async fn invalid_archive_serialization_versions_are_corruption(_tracing: &Tracing) {
+    for bytes in [vec![], vec![255], vec![1], vec![2], vec![3]] {
+        for inner in [false, true] {
+            let storage: Arc<dyn IndexedStorage + Send + Sync> =
+                Arc::new(InMemoryIndexedStorage::new());
+            let owned_agent_id = OwnedAgentId::new(
+                EnvironmentId::new(),
+                &AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "invalid-archive-version".to_string(),
+                },
+            );
+            let raw = if inner {
+                serialize(&CompressedOplogChunk {
+                    count: 2,
+                    compressed_data: zstd::encode_all(bytes.as_slice(), 0).unwrap(),
+                })
+                .unwrap()
+            } else {
+                bytes.clone()
+            };
+            storage
+                .with_entity("test", "append", "compressed_entry")
+                .append_raw(
+                    IndexedStorageNamespace::CompressedOpLog {
+                        agent_id: owned_agent_id.agent_id(),
+                        agent_mode: AgentMode::Durable,
+                        level: 1,
+                    },
+                    &owned_agent_id.agent_id().to_redis_key(),
+                    2,
+                    raw,
+                    None,
+                )
+                .await
+                .unwrap();
+            let service = CompressedOplogArchiveService::new(storage, 1, RetryConfig::default());
+            let error = service
+                .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 2)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    OplogReadError::Corruption {
+                        source: OplogReadSource::Archive(1),
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+            assert!(matches!(
+                WorkerExecutorError::from(UnreadableOplog::new(&owned_agent_id.agent_id, error)),
+                WorkerExecutorError::OplogFailed { agent_id, .. } if agent_id == owned_agent_id.agent_id()
+            ));
+        }
+    }
+}
+
+/// A damaged manifest is not an absent chunk, and a failed range decode must not trim it.
+#[test]
+async fn invalid_blob_manifest_versions_are_corruption(_tracing: &Tracing) {
+    for bytes in [vec![], vec![255], vec![3]] {
+        let storage: Arc<dyn IndexedStorage + Send + Sync> =
+            Arc::new(InMemoryIndexedStorage::new());
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "invalid-manifest-version".to_string(),
+            },
+        );
+        let namespace = IndexedStorageNamespace::BlobOplogManifest {
+            agent_id: owned_agent_id.agent_id(),
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        };
+        let key = owned_agent_id.agent_id().to_redis_key();
+        storage
+            .with_entity("test", "append", "manifest_entry")
+            .append_raw(namespace.clone(), &key, 2, bytes.clone(), None)
+            .await
+            .unwrap();
+        let service = blob_archive(storage.clone(), Arc::new(InMemoryBlobStorage::new()), 1);
+        let archive = service
+            .open(&owned_agent_id, AgentMode::Durable, None)
+            .await
+            .unwrap();
+        let error = archive
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                OplogReadError::Corruption {
+                    source: OplogReadSource::Archive(1),
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(archive.drop_prefix(OplogIndex::from_u64(2)).await.is_err());
+        assert_eq!(
+            storage
+                .with_entity("test", "read", "manifest_entry")
+                .read_raw(namespace, &key, 1, 2)
+                .await
+                .unwrap(),
+            vec![(2, bytes)]
+        );
+    }
 }
 
 /// A layered service of the primary and one compressed archive level on `storage`.
@@ -12013,6 +12134,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -12102,6 +12224,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -12155,6 +12278,7 @@ fn reserved_start_entry_builder(
         request: Some(request_payload),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
+        denial: None,
     }
 }
 

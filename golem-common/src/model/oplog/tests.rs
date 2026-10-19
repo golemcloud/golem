@@ -122,6 +122,7 @@ fn durable_function_type_contract() {
             request: None,
             durable_function_type: function_type,
             span_started: None,
+            denial: None,
         };
         let bytes = crate::serialization::serialize(&entry).unwrap();
         assert_eq!(
@@ -184,6 +185,7 @@ fn start_desert_roundtrip() {
             )])),
             kind: SpanKind::Client,
         })),
+        denial: None,
     };
 
     let bytes = crate::serialization::serialize(&entry).unwrap();
@@ -470,6 +472,25 @@ fn observational_start_public_protobuf_roundtrip() {
         request: None,
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
+        denial: None,
+    });
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+}
+
+#[test]
+fn denied_start_public_protobuf_roundtrip() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "keyvalue::eventual::set".to_string(),
+        invocation_id: None,
+        observational_owner: None,
+        request: None,
+        durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+        span_started: None,
+        denial: Some("access denied".to_string()),
     });
 
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
@@ -708,6 +729,7 @@ fn start_serialization_poem_serde_equivalence() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -743,6 +765,7 @@ fn start_with_span_serialization_poem_serde_equivalence() {
             }],
             kind: PublicSpanKind::Client,
         }),
+        denial: None,
     });
 
     let poem_json = entry.to_json_string();
@@ -800,6 +823,7 @@ fn start_with_handle_serialization_poem_serde_equivalence() {
         )),
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -881,6 +905,7 @@ fn start_with_complex_values_serialization_poem_serde_equivalence() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -904,6 +929,7 @@ fn matcher_matches_payload_less_variant_case_name() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
 
     assert!(entry.matches(&Query::parse("none").unwrap()));
@@ -927,6 +953,7 @@ fn matcher_matches_variant_payload_under_case_path() {
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
 
     assert!(entry.matches(&Query::parse("some").unwrap()));
@@ -952,6 +979,7 @@ fn matcher_matches_secret_reveal_request_payload() {
         request: Some(request),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
+        denial: None,
     });
 
     assert!(entry.matches(&Query::parse("reveal").unwrap()));
@@ -989,6 +1017,7 @@ fn matcher_matches_span_started_trace_context() {
             attributes: vec![],
             kind: PublicSpanKind::Client,
         }),
+        denial: None,
     });
 
     for query in [
@@ -2463,6 +2492,7 @@ mod scope_projection {
             request: None,
             durable_function_type,
             span_started: None,
+            denial: None,
         }
     }
 

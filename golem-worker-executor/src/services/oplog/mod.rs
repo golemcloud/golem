@@ -85,8 +85,10 @@ pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
 
 pub use reader::{OplogReadError, UnreadableOplog};
 
+pub(crate) use reader::OplogReadSource;
+
 #[cfg(test)]
-pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source};
+pub(crate) use reader::{checked_range_end, exact_from_source};
 
 #[cfg(test)]
 pub mod tests;
@@ -1463,11 +1465,7 @@ async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
 ) -> Result<T, anyhow::Error> {
     join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
-        golem_common::serialization::try_deserialize(&bytes)
-            .map_err(anyhow::Error::msg)?
-            .ok_or_else(|| {
-                anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
-            })
+        golem_common::serialization::decode(&bytes).map_err(anyhow::Error::new)
     }))
     .await
     .map_err(anyhow::Error::new)?
@@ -1517,6 +1515,12 @@ impl std::error::Error for OplogPayloadDownloadError {
         match self {
             Self::Backend(error) | Self::Corrupt(error) => Some(error.as_ref()),
         }
+    }
+}
+
+impl From<OplogPayloadDownloadError> for String {
+    fn from(error: OplogPayloadDownloadError) -> Self {
+        error.to_string()
     }
 }
 
@@ -1721,6 +1725,7 @@ pub trait OplogOps: Oplog {
             request: Some(request_payload),
             durable_function_type: function_type,
             span_started: None,
+            denial: None,
         };
         let (start_idx, end_idx) = self
             .add_pair(
@@ -1892,7 +1897,7 @@ pub trait OplogServiceOps: OplogService {
         Ok(payload)
     }
 
-    /// Downloads a big oplog payload by its reference
+    /// Downloads a payload without losing the distinction between storage failure and corruption.
     async fn download_payload<
         T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
     >(
@@ -1900,29 +1905,46 @@ pub trait OplogServiceOps: OplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         payload: OplogPayload<T>,
-    ) -> Result<T, String> {
+    ) -> Result<T, OplogPayloadDownloadError> {
         match payload {
             OplogPayload::Inline(value) => Ok(*value),
             OplogPayload::SerializedInline {
-                cached: Some(v), ..
-            } => Ok((*v).clone()),
+                cached: Some(value),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(value),
+                ..
+            } => Ok((*value).clone()),
             OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
                 .await
-                .map_err(|error| error.to_string()),
-            OplogPayload::External {
-                cached: Some(v), ..
-            } => Ok((*v).clone()),
+                .map_err(OplogPayloadDownloadError::Corrupt),
             OplogPayload::External {
                 payload_id,
                 md5_hash,
                 ..
             } => {
                 let bytes = self
-                    .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
-                    .await?;
+                    .download_raw_payload_classified(
+                        owned_agent_id,
+                        agent_mode,
+                        payload_id,
+                        md5_hash,
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        RawOplogPayloadDownloadError::Backend(error) => {
+                            OplogPayloadDownloadError::Backend(error)
+                        }
+                        RawOplogPayloadDownloadError::Missing(payload_id) => {
+                            OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(
+                                "referenced oplog payload {payload_id} is missing"
+                            ))
+                        }
+                    })?;
                 deserialize_oplog_payload(bytes)
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(OplogPayloadDownloadError::Corrupt)
             }
         }
     }

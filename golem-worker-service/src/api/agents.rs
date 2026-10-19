@@ -24,7 +24,7 @@ use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalSchemaValue, ExternalTypedSchemaValue};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket, WebSocketConfig};
+use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::{Request, RequestBody};
 use poem_openapi::param::Header;
 use poem_openapi::payload::Json;
@@ -38,8 +38,6 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, ApiEndpointError>;
-
-const INVOCATION_SESSION_MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 
 struct RequiredWebSocketSubprotocol(Option<String>);
 
@@ -81,6 +79,7 @@ pub struct AgentsApi {
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
     invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+    invocation_session_config: crate::config::InvocationSessionConfig,
 }
 
 #[OpenApi(prefix_path = "/v1/agents", tag = ApiTags::Agent)]
@@ -89,11 +88,13 @@ impl AgentsApi {
         worker_service: Arc<WorkerService>,
         auth_service: Arc<dyn AuthService>,
         invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+        invocation_session_config: crate::config::InvocationSessionConfig,
     ) -> Self {
         Self {
             worker_service,
             auth_service,
             invocation_session_token_keyring,
+            invocation_session_config,
         }
     }
 
@@ -221,14 +222,16 @@ impl AgentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let worker_service = self.worker_service.clone();
         let keyring = self.invocation_session_token_keyring.clone();
+        let config = self.invocation_session_config.clone();
 
         Ok(websocket
             .protocols([INVOCATION_SESSION_SUBPROTOCOL])
-            .config(invocation_session_websocket_config())
+            .config(self.invocation_session_config.websocket.websocket_config())
             .on_upgrade(Box::new(move |socket| {
                 Box::pin(async move {
                     let _active = ActiveHttpApiStream::open(HttpApiStreamKind::InvocationSession);
-                    serve_public_invocation_session(socket, worker_service, keyring, auth).await
+                    serve_public_invocation_session(socket, worker_service, keyring, auth, config)
+                        .await
                 })
             })))
     }
@@ -257,13 +260,6 @@ impl AgentsApi {
 
         record.result(response).map(Json)
     }
-}
-
-fn invocation_session_websocket_config() -> WebSocketConfig {
-    WebSocketConfig::default()
-        .max_message_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
-        .max_frame_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
-        .max_write_buffer_size(2 * INVOCATION_SESSION_MAX_MESSAGE_SIZE)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]
@@ -409,11 +405,11 @@ pub struct CreateAgentResponse {
 }
 
 #[cfg(test)]
+mod websocket_limit_tests;
+
+#[cfg(test)]
 mod tests {
-    use super::{
-        AgentInvocationRequest, CreateAgentRequest, INVOCATION_SESSION_MAX_MESSAGE_SIZE,
-        invocation_session_websocket_config,
-    };
+    use super::{AgentInvocationRequest, CreateAgentRequest};
     use chrono::{TimeZone, Utc};
     use golem_common::schema::{SchemaValue, SecretValuePayload};
     use poem_openapi::types::{ParseFromJSON, ToJSON};
@@ -529,23 +525,5 @@ mod tests {
             "mode": "await",
         });
         assert!(AgentInvocationRequest::parse_from_json(Some(invoke)).is_err());
-    }
-
-    #[test]
-    fn invocation_session_websocket_config_bounds_frames_messages_and_writes() {
-        let config = invocation_session_websocket_config();
-
-        assert_eq!(
-            config.max_message_size,
-            Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE)
-        );
-        assert_eq!(
-            config.max_frame_size,
-            Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE)
-        );
-        assert_eq!(
-            config.max_write_buffer_size,
-            2 * INVOCATION_SESSION_MAX_MESSAGE_SIZE
-        );
     }
 }

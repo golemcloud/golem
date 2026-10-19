@@ -41,13 +41,14 @@
 These crates are already in the project's `Cargo.toml` — do NOT add them again:
 
 - `golem-rust` — Golem agent framework, durability, transactions
-- `wstd` — WASI standard library (HTTP client, async I/O)
 - `log` — logging
 - `serde` / `serde_json` — serialization
 
 ## HTTP and networking
 
-Prefer `wstd::http` for outgoing HTTP requests. Compile support for an API does not guarantee that
+Use `golem_rust::http` for outgoing WASI HTTP p3 requests; no separate HTTP client crate is needed.
+For streaming and low-level access, use `golem_rust::wasip3::http` and its `http_compat` sibling.
+Compile support for an API does not guarantee that
 the runtime grants the required network capability, so test the actual operation in Golem.
 
 ## AI / LLM features

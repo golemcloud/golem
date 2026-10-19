@@ -14,7 +14,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineAgent, method, Method } from "../src/index.js"
+import { defineAgent, method, Method, Principal } from "../src/index.js"
 import * as Http from "../src/Http.js"
 import type {
   BindableKeys,
@@ -902,8 +902,48 @@ void method({
 // request body.
 // ---------------------------------------------------------------------------
 
-// Positive — `Http.get` / `Http.head` with no method parameters: nothing
-// to bind, so the bodyless check is trivially satisfied.
+// Injected principals do not require client bindings on bodyless endpoints.
+void method({
+  input: { principal: Principal.PrincipalSchema },
+  success: Schema.Struct({ secret: Schema.String }),
+  http: [Http.get("/admin", { auth: true }), Http.head("/admin", { auth: true })],
+})
+
+void method({
+  input: {
+    principal: Principal.PrincipalSchema,
+    id: Schema.String,
+    q: Schema.String,
+    token: Schema.String,
+  },
+  success: Schema.String,
+  http: [
+    Http.get("/admin/{id}?q={q}", { auth: true }).pipe(Http.withHeader("X-Token", "token")),
+    Http.head("/admin/{id}?q={q}", { auth: true }).pipe(Http.withHeader("X-Token", "token")),
+  ],
+})
+
+void method({
+  input: { principal: Principal.PrincipalSchema, payload: Schema.String },
+  success: Schema.String,
+  // @ts-expect-error injected principal does not exempt unbound client input on GET
+  http: [Http.get("/admin", { auth: true })],
+})
+
+void method({
+  input: { principal: Principal.PrincipalSchema, payload: Schema.String },
+  success: Schema.String,
+  // @ts-expect-error injected principal does not exempt unbound client input on HEAD
+  http: [Http.head("/admin", { auth: true })],
+})
+
+void method({
+  input: { principal: Schema.String },
+  success: Schema.String,
+  // @ts-expect-error a client input named principal is not injected
+  http: [Http.get("/admin")],
+})
+
 void method({
   input: {},
   success: Schema.Number,

@@ -10,12 +10,13 @@ import { npmBundleSource, npmPrivateFiles } from '../../generated/npm-assets.js'
 import {
   DEFAULT_REGISTRY,
   installNpmRecursiveRmPatch,
+  installNpmTransportWarningFilter,
   NPM_VERSION,
   npmInvocation,
 } from './npm-runtime.js';
 import { rewriteNpxArguments } from './npx-args.js';
 
-const DEFAULT_CWD = '/workspace';
+const DEFAULT_CWD = '/';
 const NPM_ROOT = '/toolchain/npm/node_modules/npm';
 const NPM_BUNDLED = '/toolchain/private/npm-cli.cjs';
 
@@ -26,14 +27,15 @@ type NpmBundle = {
 };
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
-  .version('0.1.9')
+  .version('0.1.10')
   .doc("Run a JavaScript file or inline expression with Golem's Node-compatible runtime.")
   .annotations({ openWorld: false })
   .body((body) =>
     body
       .option('cwd', z.string(), {
         default: DEFAULT_CWD,
-        doc: 'Directory used to resolve files and relative paths.',
+        env: 'PWD',
+        doc: 'Directory used to resolve files and relative paths. A shell supplies its current directory.',
       })
       .tail('args', z.string(), {
         separator: '--',
@@ -61,7 +63,8 @@ const npmTool = toolDefinition('npm', { requiresFilesystem: true })
     body
       .option('cwd', z.string(), {
         default: DEFAULT_CWD,
-        doc: 'Project directory in which npm runs.',
+        env: 'PWD',
+        doc: 'Project directory in which npm runs. A shell supplies its current directory.',
       })
       .option('registry', z.string(), {
         default: DEFAULT_REGISTRY,
@@ -87,7 +90,8 @@ const npxTool = toolDefinition('npx', { requiresFilesystem: true })
     body
       .option('cwd', z.string(), {
         default: DEFAULT_CWD,
-        doc: 'Project directory in which the package command runs.',
+        env: 'PWD',
+        doc: 'Project directory in which the package command runs. A shell supplies its current directory.',
       })
       .option('registry', z.string(), {
         default: DEFAULT_REGISTRY,
@@ -127,6 +131,7 @@ async function runNpm(
       : '/toolchain/npm/node_modules/npm/bin/npm-cli.js',
     ...input.args,
   ];
+  const invocation = npmInvocation(input.cwd, input.registry);
   const restore = installNpmRecursiveRmPatch(
     NPM_VERSION,
     NPM_VERSION,
@@ -134,8 +139,8 @@ async function runNpm(
     { lstatSync, readdirSync, rmdirSync, unlinkSync },
     join,
   );
+  const restoreWarnings = installNpmTransportWarningFilter(process);
   const restorePrivateFiles = installPrivateReadOnlyFiles(NPM_ROOT, npmPrivateFiles);
-  const invocation = npmInvocation(input.cwd, input.registry);
   try {
     return await runCli(
       { argv, cwd: input.cwd, ...invocation, npmExit: true },
@@ -159,6 +164,7 @@ async function runNpm(
     );
   } finally {
     restorePrivateFiles();
+    restoreWarnings();
     restore();
   }
 }
@@ -192,7 +198,7 @@ async function runNode(
     parseError = error;
   }
   const cwd = validatedCwd(input.cwd);
-  const home = `${cwd}/.golem-home`;
+  const home = join(cwd, '.golem-home');
   const globalScope = globalThis as typeof globalThis & { require: NodeJS.Require };
   const originalRequire = globalScope.require;
   if (parsed?.source !== undefined) globalScope.require = createRequire(join(cwd, '[eval]'));
@@ -202,7 +208,7 @@ async function runNode(
       cwd,
       environment: {
         HOME: home,
-        PATH: `${cwd}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
+        PATH: `${join(cwd, 'node_modules/.bin')}:/usr/local/bin:/usr/bin:/bin`,
       },
       directories: [home],
       stopOnExit: true,

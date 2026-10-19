@@ -24,7 +24,9 @@ use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use golem_service_base::http_server::HttpServerConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
+use poem::web::websocket::WebSocketConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -57,21 +59,49 @@ pub struct WorkerServiceConfig {
     pub auth_service: AuthServiceConfig,
     pub webhook_callback_handler: WebhookCallbackHandlerConfig,
     pub invocation_session_tokens: InvocationSessionTokenConfig,
+    pub invocation_session: InvocationSessionConfig,
+    pub mcp: McpConfig,
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
     #[serde(default)]
     pub http_session: HttpSessionLimits,
     #[serde(default)]
     pub durable_streams: DurableStreamsConfig,
+    /// HTTP/2 settings of the API, custom request and MCP ports.
+    #[serde(default)]
+    pub http_server: HttpServerConfig,
+    #[serde(default)]
+    pub body_limits: RequestBodyLimits,
+    /// WebSocket limits of the agent event stream
+    /// (`/v1/components/:component_id/workers/:agent_name/connect`).
+    #[serde(default)]
+    pub connect_websocket: WebSocketTransportLimits,
 }
 
 impl WorkerServiceConfig {
+    pub fn validate_http_limits(&self) -> Result<(), String> {
+        self.http_server.validate()?;
+        self.invocation_session
+            .websocket
+            .validate("invocation_session.websocket")?;
+        self.connect_websocket.validate("connect_websocket")
+    }
+
     pub fn socket_addr(&self, port: u16) -> SocketAddr {
         SocketAddr::new(self.bind_address, port)
     }
 
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
+    }
+
+    pub fn validate_keep_alive(&self) -> Result<(), String> {
+        if self.invocation_session.keep_alive_interval.is_zero()
+            || self.mcp.sse_keep_alive_interval.is_zero()
+        {
+            return Err("Invocation session and MCP keep-alive intervals must be non-zero".into());
+        }
+        Ok(())
     }
 }
 
@@ -176,6 +206,12 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.agent_resolution_cache.to_safe_string_indented()
         );
+        let _ = writeln!(
+            &mut result,
+            "invocation session: {:?}",
+            self.invocation_session
+        );
+        let _ = writeln!(&mut result, "MCP: {:?}", self.mcp);
 
         let _ = writeln!(&mut result, "HTTP session:");
         let _ = writeln!(
@@ -189,6 +225,19 @@ impl SafeDisplay for WorkerServiceConfig {
             &mut result,
             "{}",
             self.durable_streams.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "HTTP server:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.http_server.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "request body limits: {:?}", self.body_limits);
+        let _ = writeln!(
+            &mut result,
+            "connect WebSocket limits: {:?}",
+            self.connect_websocket
         );
 
         result
@@ -219,9 +268,14 @@ impl Default for WorkerServiceConfig {
             auth_service: AuthServiceConfig::default(),
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
             invocation_session_tokens: InvocationSessionTokenConfig::default(),
+            invocation_session: InvocationSessionConfig::default(),
+            mcp: McpConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
             http_session: HttpSessionLimits::default(),
             durable_streams: DurableStreamsConfig::default(),
+            http_server: HttpServerConfig::default(),
+            body_limits: RequestBodyLimits::default(),
+            connect_websocket: WebSocketTransportLimits::default(),
         }
     }
 }
@@ -229,6 +283,105 @@ impl Default for WorkerServiceConfig {
 impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
     fn examples() -> Vec<ConfigExample<WorkerServiceConfig>> {
         vec![]
+    }
+}
+
+/// The payload limit of every path into an agent: the gRPC message to the worker executor, the
+/// invocation session message, and the REST and MCP request body.
+const AGENT_PAYLOAD_LIMIT: usize = 32 * 1024 * 1024;
+
+/// Largest request bodies, in bytes. A larger body gets `413 Payload Too Large`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RequestBodyLimits {
+    /// The REST API on the API port.
+    pub api: usize,
+    /// MCP deployments, on the MCP port and the custom request port.
+    pub mcp: usize,
+}
+
+impl Default for RequestBodyLimits {
+    fn default() -> Self {
+        Self {
+            api: AGENT_PAYLOAD_LIMIT,
+            mcp: AGENT_PAYLOAD_LIMIT,
+        }
+    }
+}
+
+/// Limits, in bytes, of a WebSocket connection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebSocketTransportLimits {
+    pub max_message_size: usize,
+    pub max_frame_size: usize,
+    /// Outbound bytes that may wait for the client before a send fails.
+    pub max_write_buffer_size: usize,
+}
+
+impl WebSocketTransportLimits {
+    pub fn websocket_config(&self) -> WebSocketConfig {
+        WebSocketConfig::default()
+            .max_message_size(Some(self.max_message_size))
+            .max_frame_size(Some(self.max_frame_size))
+            .max_write_buffer_size(self.max_write_buffer_size)
+    }
+
+    fn validate(&self, name: &str) -> Result<(), String> {
+        let write_buffer_size = WebSocketConfig::default().write_buffer_size;
+        if self.max_write_buffer_size <= write_buffer_size {
+            return Err(format!(
+                "{name}.max_write_buffer_size must be above the write buffer size of {write_buffer_size} bytes"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for WebSocketTransportLimits {
+    fn default() -> Self {
+        Self {
+            max_message_size: AGENT_PAYLOAD_LIMIT,
+            max_frame_size: AGENT_PAYLOAD_LIMIT,
+            max_write_buffer_size: 2 * AGENT_PAYLOAD_LIMIT,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionConfig {
+    #[serde(with = "humantime_serde")]
+    pub keep_alive_interval: Duration,
+    /// Zero disables the Pong deadline without disabling periodic Pings.
+    /// A positive deadline can disconnect a live peer when either endpoint is backpressured.
+    #[serde(with = "humantime_serde")]
+    pub max_pong_timeout: Duration,
+    /// The session answers a message or frame above the limit with close code 1009.
+    #[serde(default)]
+    pub websocket: WebSocketTransportLimits,
+}
+
+impl Default for InvocationSessionConfig {
+    fn default() -> Self {
+        Self {
+            keep_alive_interval: Duration::from_secs(30),
+            max_pong_timeout: Duration::ZERO,
+            websocket: WebSocketTransportLimits::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpConfig {
+    #[serde(with = "humantime_serde")]
+    pub sse_keep_alive_interval: Duration,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            sse_keep_alive_interval: Duration::from_secs(15),
+        }
     }
 }
 
@@ -945,6 +1098,55 @@ mod tests {
     }
 
     #[test]
+    fn keep_alive_defaults_and_overrides() {
+        let defaults = WorkerServiceConfig::default();
+        assert!(defaults.validate_keep_alive().is_ok());
+        assert_eq!(
+            defaults.invocation_session.keep_alive_interval,
+            Duration::from_secs(30)
+        );
+        assert_eq!(defaults.invocation_session.max_pong_timeout, Duration::ZERO);
+        assert_eq!(
+            defaults.mcp.sse_keep_alive_interval,
+            Duration::from_secs(15)
+        );
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [invocation_session]
+                keep_alive_interval = "1s"
+                max_pong_timeout = "2s"
+                [mcp]
+                sse_keep_alive_interval = "3s"
+            "#,
+            ))
+            .extract()
+            .unwrap();
+        assert_eq!(
+            config.invocation_session.keep_alive_interval,
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            config.invocation_session.max_pong_timeout,
+            Duration::from_secs(2)
+        );
+        assert_eq!(config.mcp.sse_keep_alive_interval, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn keep_alive_rejects_zero_intervals() {
+        for setting in 0..2 {
+            let mut config = WorkerServiceConfig::default();
+            match setting {
+                0 => config.invocation_session.keep_alive_interval = Duration::ZERO,
+                _ => config.mcp.sse_keep_alive_interval = Duration::ZERO,
+            }
+            assert!(config.validate_keep_alive().is_err());
+        }
+    }
+
+    #[test]
     fn postgres_session_store_overrides_the_default_redis_session_store() {
         let config: WorkerServiceConfig = make_worker_service_config_loader()
             .figment()
@@ -1130,5 +1332,104 @@ mod tests {
         for limits in invalid {
             assert!(limits.validate().is_err());
         }
+    }
+
+    #[test]
+    fn http_limits_default_to_the_agent_payload_limit() {
+        let config = WorkerServiceConfig::default();
+        config.validate_http_limits().unwrap();
+
+        assert_eq!(config.body_limits.api, 32 * 1024 * 1024);
+        assert_eq!(config.body_limits.mcp, 32 * 1024 * 1024);
+        assert_eq!(config.http_server.http2_max_header_list_size, 64 * 1024);
+        assert_eq!(
+            config.http_server.http2_initial_stream_window_size,
+            1024 * 1024
+        );
+        assert_eq!(
+            config.http_server.http2_initial_connection_window_size,
+            1024 * 1024
+        );
+        assert!(!config.http_server.http2_adaptive_window);
+        // hyper's defaults: a deployment behind a proxy sets its own.
+        assert_eq!(
+            config.http_server.http2_max_pending_accept_reset_streams,
+            20
+        );
+        assert_eq!(config.http_server.http2_max_local_error_reset_streams, 1024);
+        for limits in [
+            &config.invocation_session.websocket,
+            &config.connect_websocket,
+        ] {
+            assert_eq!(limits.max_message_size, 32 * 1024 * 1024);
+            assert_eq!(limits.max_frame_size, 32 * 1024 * 1024);
+            assert_eq!(limits.max_write_buffer_size, 64 * 1024 * 1024);
+            let websocket = limits.websocket_config();
+            assert_eq!(websocket.max_message_size, Some(limits.max_message_size));
+            assert_eq!(websocket.max_frame_size, Some(limits.max_frame_size));
+            assert_eq!(
+                websocket.max_write_buffer_size,
+                limits.max_write_buffer_size
+            );
+        }
+    }
+
+    #[test]
+    fn http_limits_are_configurable() {
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [http_server]
+                http2_max_header_list_size = 1000
+                http2_adaptive_window = true
+                http2_max_pending_accept_reset_streams = 6000
+                http2_max_local_error_reset_streams = 7000
+
+                [body_limits]
+                api = 2000
+                mcp = 3000
+
+                [invocation_session.websocket]
+                max_frame_size = 5000
+
+                [connect_websocket]
+                max_message_size = 4000
+            "#,
+            ))
+            .extract()
+            .unwrap();
+
+        assert_eq!(config.http_server.http2_max_header_list_size, 1000);
+        assert!(config.http_server.http2_adaptive_window);
+        assert_eq!(
+            config.http_server.http2_max_pending_accept_reset_streams,
+            6000
+        );
+        assert_eq!(config.http_server.http2_max_local_error_reset_streams, 7000);
+        assert_eq!(
+            config.http_server.http2_initial_stream_window_size,
+            1024 * 1024
+        );
+        assert_eq!(config.body_limits.api, 2000);
+        assert_eq!(config.body_limits.mcp, 3000);
+        assert_eq!(config.invocation_session.websocket.max_frame_size, 5000);
+        assert_eq!(
+            config.invocation_session.keep_alive_interval,
+            Duration::from_secs(30)
+        );
+        assert_eq!(config.connect_websocket.max_message_size, 4000);
+        assert_eq!(config.connect_websocket.max_frame_size, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn websocket_write_buffer_limit_must_exceed_the_write_buffer() {
+        let mut config = WorkerServiceConfig::default();
+        config.connect_websocket.max_write_buffer_size = 128 * 1024;
+        assert!(config.validate_http_limits().is_err());
+
+        let mut config = WorkerServiceConfig::default();
+        config.invocation_session.websocket.max_write_buffer_size = 128 * 1024;
+        assert!(config.validate_http_limits().is_err());
     }
 }

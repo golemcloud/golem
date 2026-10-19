@@ -1,0 +1,116 @@
+name: Prepare Golem release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
+concurrency:
+  group: prepare-golem-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'golemcloud/golem' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+      - name: Validate the public release tag and source
+        shell: bash
+        run: BUILTIN_VERSION="${GITHUB_REF_NAME#v}" cargo make --profile ci validate-golem-release-source
+
+  preflight:
+    needs: validate
+    # GitHub checks permissions even for the called workflow's skipped publication jobs.
+    permissions:
+      contents: write
+      checks: write
+      pull-requests: write
+      actions: read
+    uses: ./.github/workflows/ci.yaml
+    secrets: inherit
+
+  publish-builtins:
+    needs: [validate, preflight]
+    environment: golem-release
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: 20
+      WASI_SDK_PATH: /opt/wasi-sdk
+      WASM_RQUICKJS_VERSION: '0.4.13'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: wasm32-wasip2
+          install-cargo-binstall: 'true'
+          cache-shared-key: builtin-artifacts
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          node-version: '24'
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+      - name: Install wasm-tools
+        run: cargo binstall --force --locked wasm-tools@1.248.0
+      - name: Validate and warm the component builds before minting a write token
+        shell: bash
+        run: |
+          BUILTIN_VERSION="${GITHUB_REF_NAME#v}" cargo make --profile ci validate-golem-release-source
+          cargo make --profile ci ensure-builtin-artifacts
+      - name: Mint the protected publication token
+        id: release-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: golemcloud
+          repositories: |
+            golem
+            golem-builtins
+          permission-contents: write
+      - name: Create or resume the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" --repo golemcloud/golem; then
+            prerelease=false
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+              prerelease=true
+            fi
+            gh release create "$GITHUB_REF_NAME" --repo golemcloud/golem \
+              --verify-tag --draft --prerelease="$prerelease" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+      - name: Publish built-ins and attach the verified manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: BUILTIN_VERSION="${GITHUB_REF_NAME#v}" cargo make --profile ci publish-builtin-artifacts
+      - name: Report the draft for human review
+        shell: bash
+        run: |
+          printf 'Prepared [%s](https://github.com/golemcloud/golem/releases/tag/%s). Review the draft and publish it to start the final binary and Docker release.\n' \
+            "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"

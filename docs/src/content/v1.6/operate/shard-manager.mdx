@@ -1,0 +1,171 @@
+import { Callout } from "nextra/components"
+
+# Shard Manager
+
+The shard manager assigns shards to worker executors, publishes the routing table, and rebalances assignments when executors join or leave. It also manages the resource leases used by [quotas](/v1.6/develop/quotas). This page covers operating the service; see [Architecture](/v1.6/operate/architecture#shards-and-ownership) for its place in a Golem deployment.
+
+## Choose a persistence mode
+
+| Mode | `persistence.type` | State storage | Instances |
+| --- | --- | --- | --- |
+| Local | `Sqlite` or `Postgres` | Shard and quota state in SQL | Exactly one; no leader election |
+| Distributed | `Etcd` | Shard and quota state in etcd | Multiple replicas, with one elected leader |
+
+All replicas of a distributed shard manager must use the same etcd cluster and shard count. The default `number_of_shards` is `1024`. A shard manager refuses to start if its configured count differs from the stored state.
+
+Keep the persistence store across restarts. Changing from SQL to etcd does not transfer quota state: executors acquire new quota leases, and capacity budgets start from their full limit.
+
+## Configure distributed mode
+
+Set the following in the shard manager's configuration. Replace the endpoint with a private load-balanced address for your etcd cluster, such as a Kubernetes Service:
+
+```toml
+[persistence]
+type = "Etcd"
+
+[persistence.config]
+endpoints = ["http://etcd.internal:2379"]
+connect_timeout = "10s"
+request_timeout = "5s"
+leader_lease_ttl = "10s"
+compaction_retention_revisions = 0
+```
+
+Use one load-balanced endpoint rather than a list of etcd members. An unavailable member in the client's rotation can delay writes and leader election.
+
+<Callout type="warning">
+  Without `persistence.config.tls` and an etcd user, the connection to etcd is plaintext and unauthenticated. Keep it on a trusted private network, or [secure it](#secure-the-etcd-connection). Do not expose an unauthenticated etcd endpoint publicly.
+</Callout>
+
+Check these settings before starting replicas:
+
+| Setting | Requirement |
+| --- | --- |
+| `leader_lease_ttl` | A whole number of seconds, at least `2s`; default `10s` |
+| `request_timeout` | At most half of `leader_lease_ttl`; default `5s` |
+| `compaction_retention_revisions` | Default `1000`. Set to `0` on a shared etcd cluster and manage compaction separately, as in the example above |
+| etcd `--max-txn-ops` | At least `122` for quota lease updates; etcd's default `128` is sufficient |
+
+Compaction removes old revisions across the **entire etcd cluster**, not just Golem's keys. Disabling Golem's compaction does not remove the need to compact: configure etcd's automatic compaction or another operator-managed policy.
+
+For all settings and their environment variable equivalents, see the [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml) and [sample environment file](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env).
+
+## Secure the etcd connection
+
+Distributed mode can talk to etcd over **TLS**, with a client certificate (mTLS), and as an etcd **user**. With `persistence.config.tls` set, every entry in `persistence.config.endpoints` must start with `https://`; without it, every entry must start with `http://`, and a replica configured otherwise refuses to start. Each TLS item comes from a PEM file or from an inline value (the PEM in standard Base64 with padding, on one line, as `base64 -w0` writes it), not both: `tls.ca_cert_file` or `tls.ca_cert` is the CA that signed etcd's server certificate; `tls.client_cert_file` or `tls.client_cert`, and `tls.client_key_file` or `tls.client_key`, are the shard manager's client certificate and its unencrypted key (PKCS#8, PKCS#1 or SEC1; set both or neither); `tls.server_name` is the name to check etcd's certificate against when the endpoint host is an IP address or an alias that the certificate does not name. The `ca.crt` in a Secret that cert-manager makes for the client certificate is the CA of that certificate's issuer, so it works only when the same issuer signed etcd's server certificate; otherwise mount a trust bundle that holds etcd's CA.
+
+At startup a replica reads every TLS item once and logs each certificate's subject, end of validity and SHA-256 fingerprint. It refuses to start when an item cannot be read or holds no certificate or key, when the key is encrypted or does not belong to the client certificate, when the client certificate has expired or is not valid yet, when every certificate of the CA item has expired, when etcd refuses the TLS handshake (a certificate that etcd rejects, or a server certificate that the CA did not sign or that does not name the endpoint), and when the user's role may not write `/golem/`. Each refusal names the setting or the reason. An etcd server certificate that has expired, or is not valid yet, is for etcd to renew: the replica then waits, as for an etcd that is down, and logs the certificate's end of validity on every attempt.
+
+### Renew certificates
+
+**A renewed certificate takes effect on a restart.** A connection that is open keeps working after a renewal; a new connection presents the certificate read at startup. While a replica runs, a TLS handshake that etcd refuses, or that refuses etcd's certificate, is retried like a network fault, because the cause can be on etcd's side. Every `persistence.config.retry_max_delay` the replica checks, through both of its etcd connections, whether etcd refuses its certificates. When it does and the TLS files have changed since startup, the replica tries the files on disk on a new connection; when etcd accepts them, the replica stops, so that its restart reads them. When etcd refuses the new files too - as when etcd's own certificate has expired - a restart would not help, and the replica keeps retrying. A controller that rolls the pods when the Secret changes saves the wait for that first refusal. **Mount the Secret as a directory, not with `subPath`**: with `subPath` the files in the pod never change, and a replica keeps retrying with the old certificate. An inline value changes only with a rollout.
+
+```yaml
+# In the shard manager's pod template
+containers:
+  - name: golem-shard-manager
+    env:
+      - name: GOLEM__PERSISTENCE__CONFIG__ENDPOINTS
+        value: '["https://etcd-client.etcd.svc:2379"]'
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE
+        value: /etc/etcd-tls/ca.crt
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE
+        value: /etc/etcd-tls/tls.crt
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE
+        value: /etc/etcd-tls/tls.key
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME
+        value: etcd-client.etcd.svc
+    volumeMounts:
+      - name: etcd-tls
+        mountPath: /etc/etcd-tls   # the whole Secret as a directory, never subPath
+        readOnly: true
+volumes:
+  - name: etcd-tls
+    secret:
+      secretName: golem-shard-manager-etcd-client   # the cert-manager Certificate's Secret
+```
+
+### Authenticate as an etcd user
+
+With etcd authentication enabled, set `persistence.config.username` and the password, either as `persistence.config.password_file` - a file that holds it, such as a key of a Secret mounted as files; only one trailing line ending is removed - or as `persistence.config.password`, usually from a Secret through `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Neither the logs, the configuration display nor a refused configuration shows the password. The configuration loader reads an environment value made only of digits, or `true` or `false`, as a number or a boolean, and a replica refuses it without printing it; the loader also removes spaces around a value and double quotes around a whole value, without a warning. Use `password_file` for any password with such characters (or, in an environment variable that you write yourself, put double quotes around the value). A user needs TLS as well: a replica refuses a user name and password over `http://`, because the password, and then the auth token on every request, would cross the network in plain text, so switch TLS and the user on together. The user's role needs `readwrite` permission on the key prefix `/golem/`. With client certificates, etcd can also take the user from the certificate's common name (CN) instead of a password: leave `username` and the password unset. etcd drops an auth token that goes unused for its `--auth-token-ttl` (300s by default), a JWT token at the end of its lifetime, and its simple tokens when a member restarts. When etcd answers that a token is not valid, the shard manager logs in again and sends the request once more, so no token setting is needed. With JWT tokens (`--auth-token=jwt`), etcd also refuses every token that was issued before a change to its users or roles, such as a new user or a changed password: the campaign and the step-down then log in again, a new leader logs in again before its first read, and a leader whose state write is refused stops, so that its restart logs in.
+
+## Executor leases
+
+Each executor registers with the shard manager and holds a renewable lease on its shard assignment. Registration is persisted before it is acknowledged. Assignment updates are persisted before they are sent to executors.
+
+| Setting or event | Behavior |
+| --- | --- |
+| `shard_lease_duration` | Default `1m`; minimum `30s`. Values below `1m` leave less room for renewal retries and produce a startup warning |
+| Renewal | Scheduled after one third of the executor's remaining lease time, normally about `20s` |
+| Lost assignment update | The next successful renewal also returns the current assignment |
+| Executor lease expires | The executor stops admitting new work. Already-running invocations are not interrupted solely by lease expiry |
+| Executor becomes unreachable | Health checks or lease expiry cause its shards to be reassigned |
+| Executor stops gracefully | It deregisters, so reassignment need not wait for lease expiry |
+
+The shard manager checks for expired leases periodically, normally every third of `shard_lease_duration`. Persistence delays, health checks, and rebalance work can extend recovery time; this cadence is not a failover deadline.
+
+Keep executor clocks synchronized before starting them. Lease exchange does not compare absolute clocks, but clock-rate differences still affect expiry timing. An assignment push does not renew a lease.
+
+## Restarts and leader failover
+
+In distributed mode, only the elected leader serves gRPC requests. A new leader restores shard and quota state before opening that port. Existing quota leases survive a leader change because their state is in etcd.
+
+| Event | What to expect |
+| --- | --- |
+| Graceful leader shutdown | The leader attempts to release its election lease so a standby can take over promptly. If release fails, the lease must expire |
+| Leader crash or network partition | A standby can take over after the old leadership lease expires and etcd permits election |
+| New leader starts | It restores state and checks existing executors before serving requests. `initial_health_check_timeout` defaults to `15s` |
+| Temporary etcd connection loss | The leader attempts to reconnect; a disconnected keepalive stream does not by itself force immediate failover |
+
+Executors that fail the initial health check are removed. If the whole check times out, the shard manager retains the executors and leaves removal to subsequent checks. An executor whose own lease expired during the outage resumes admission after a successful renewal.
+
+There can be a period with no available shard-manager gRPC endpoint. A worker service that must refresh its routing table waits for a leader to become available. An executor starting during the outage can exhaust its registration retries and exit. Increase `shard_manager.retries.max_attempts` in the **worker executor** configuration if its startup must tolerate a longer outage.
+
+The leadership lease, etcd availability, startup checks, and retry policies all affect recovery time. Do not treat the default `10s` leadership lease as an upper bound on service interruption.
+
+## Health probes and monitoring
+
+Configure the replicas' probes separately:
+
+| Probe | Target | Reason |
+| --- | --- | --- |
+| Liveness | HTTP listener, `http_port` (`8081` by default) | Runs on leaders and standbys |
+| Readiness | gRPC listener, `grpc.port` (`9092` by default) | Opens only after the replica becomes leader and restores state |
+
+Do not use HTTP liveness as readiness. That would send clients to standbys whose gRPC port is closed.
+
+Monitor these metrics across all replicas:
+
+| Metric | Interpretation |
+| --- | --- |
+| `shard_manager_is_leader` | `1` on the elected leader and `0` on standbys. Expect one leader in steady state, not necessarily throughout a failover |
+| `shard_manager_leader_since_epoch` | Election time in Unix seconds; `0` while standing by |
+| `shard_manager_campaign_attempt_failures_total` | Rising values indicate failed, retried attempts to reach etcd during election |
+
+A flat campaign-failure counter does not prove a standby is healthy. Check liveness, logs, and etcd connectivity as well. See [Metrics](/v1.6/operate/metrics) for metrics collection.
+
+## Oplog fencing and storage
+
+Every shard has an **epoch**, an ownership generation that advances when the shard moves. Indexed storage records the epoch allowed to write an agent's oplog. Once the new owner raises that record, writes from an older owner are rejected atomically. The same protection applies to oplog deletion and archive metadata.
+
+This protection has limits:
+
+- **It needs an epoch record.** A new or recreated oplog is claimed by the first opener. Leases remain necessary to prevent stale executors from admitting work.
+- **It protects the oplog, not every agent write.** Do not infer the same guarantee for key-value data, status blobs, or arbitrary blob payloads.
+- **It cannot undo external effects.** A call that reached an external service before its oplog entry was recorded can run again after recovery, as it can after a crash.
+
+Executors that share shards need shared indexed storage, such as PostgreSQL or Redis. A local SQLite file serves one executor. Redis failover that loses recent writes can also lose fencing records; Redis Cluster is not supported. See [Persistence](/v1.6/operate/persistence) for storage configuration.
+
+## Restore shard-manager state carefully
+
+Shard epochs and indexed-storage fencing records must agree. Replacing, wiping, or restoring the shard-manager store can produce epochs lower than those already recorded in oplogs. The affected agents then cannot write.
+
+Treat this as coordinated storage recovery, not a routine restart:
+
+1. Stop every worker executor before changing fencing records, and prevent the orchestrator from restarting them.
+2. Back up the shard-manager store and indexed storage. Determine which state must be restored together before changing either store.
+3. If epoch records must be reset, account for every indexed-storage layer. SQL uses `indexed_key_epoch`; Redis uses the `oplog-epoch` keys. MultiSqlite also retains epoch snapshots in `epochs.db`, separate from the live oplog databases. Clearing only the live databases is incomplete: the saved epochs can be restored when a database reopens.
+
+<Callout type="warning">
+  Never clear fencing records while an executor is running. Without a record, an oplog accepts the epoch of its first opener, including an executor that no longer owns the shard. Do not delete oplog entries or archive data to work around an epoch mismatch.
+</Callout>

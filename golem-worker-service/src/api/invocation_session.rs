@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::InvocationSessionConfig;
 use crate::invocation_session_token::{
     CursorTokenPayload, InvocationSessionTokenBindings, InvocationSessionTokenKeyring,
     InvocationSessionTokenKind, InvocationSessionTokenPayload, SessionAgentIdentity,
@@ -19,6 +20,8 @@ use crate::invocation_session_token::{
     decode_session_agent_identity, encode_session_agent_identity,
 };
 use crate::service::auth::AuthServiceError;
+use crate::service::worker::connect_proxy::is_websocket_capacity_error;
+use crate::service::worker::connect_proxy::keep_alive::{KeepAliveError, WebSocketKeepAlive};
 use crate::service::worker::{
     PublicAgentSessionResume, PublicAgentSessionStart, PublicAgentSessionStartError,
     PublicToolSessionStart, StartedPublicAgentSession, WorkerService, WorkerServiceError,
@@ -77,13 +80,54 @@ const WRITE_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 const CLIENT_GONE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const SESSION_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const OUTPUT_BYTE_BUDGET: usize = 32 * 1024 * 1024;
+const INPUT_BYTE_BUDGET: usize = SESSION_BYTE_BUDGET - OUTPUT_BYTE_BUDGET;
+const CONTROL_BYTE_BUDGET: usize = 64 * 1024;
 const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_ITEM_BUDGET: usize = 256;
 
+#[cfg(test)]
+mod admission_tests;
+#[cfg(test)]
+mod backpressure_tests;
+#[cfg(test)]
+mod keep_alive_tests;
+#[cfg(test)]
+mod oversize_tests;
+
 struct AdmittedRequest {
     request: InvocationRequest,
+    _admission: InboundAdmission,
+}
+
+struct AdmittedMessage {
+    message: Message,
+    admission: InboundAdmission,
+}
+
+struct InboundAdmission {
+    _input: OwnedSemaphorePermit,
     _session: OwnedSemaphorePermit,
+}
+
+#[derive(Clone, Copy)]
+enum WebSocketShutdown {
+    Close,
+    MessageTooLarge,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invocation session application message exceeds 32 MiB")]
+struct WebSocketMessageTooLarge;
+
+fn is_message_too_large(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.is::<WebSocketMessageTooLarge>())
+}
+
+fn message_too_large_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, WebSocketMessageTooLarge)
 }
 
 struct PendingInputAdmission {
@@ -97,10 +141,19 @@ struct QueuedMessage {
     message: Message,
     stream_channel: Option<u32>,
     drop_if_output_cancelled: bool,
-    _session: OwnedSemaphorePermit,
-    _output: OwnedSemaphorePermit,
+    _admission: OutboundAdmission,
     _stream_bytes: Option<OwnedSemaphorePermit>,
     _stream_item: Option<OwnedSemaphorePermit>,
+}
+
+enum OutboundAdmission {
+    Data {
+        _session: OwnedSemaphorePermit,
+        _output: OwnedSemaphorePermit,
+    },
+    Control {
+        _bytes: OwnedSemaphorePermit,
+    },
 }
 
 impl QueuedMessage {
@@ -118,7 +171,9 @@ impl QueuedMessage {
 #[derive(Clone)]
 struct SessionBudgets {
     session: Arc<Semaphore>,
+    input: Arc<Semaphore>,
     output: Arc<Semaphore>,
+    control: Arc<Semaphore>,
     unacknowledged_input: Arc<Semaphore>,
     stream_bytes: Arc<Mutex<HashMap<u32, Arc<Semaphore>>>>,
     stream_items: Arc<Mutex<HashMap<u32, Arc<Semaphore>>>>,
@@ -129,12 +184,27 @@ impl SessionBudgets {
     fn new() -> Self {
         Self {
             session: Arc::new(Semaphore::new(SESSION_BYTE_BUDGET)),
+            input: Arc::new(Semaphore::new(INPUT_BYTE_BUDGET)),
             output: Arc::new(Semaphore::new(OUTPUT_BYTE_BUDGET)),
+            control: Arc::new(Semaphore::new(CONTROL_BYTE_BUDGET)),
             unacknowledged_input: Arc::new(Semaphore::new(INPUT_UNACKNOWLEDGED_BYTE_BUDGET)),
             stream_bytes: Arc::new(Mutex::new(HashMap::new())),
             stream_items: Arc::new(Mutex::new(HashMap::new())),
             cancelled_outputs: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    async fn admit_inbound_frame(&self, bytes: usize) -> Result<InboundAdmission, ()> {
+        if bytes > INPUT_BYTE_BUDGET {
+            return Err(());
+        }
+        // Retain the input limit through private request delivery, leaving output headroom.
+        let input = acquire_bytes(&self.input, bytes).await?;
+        let session = acquire_bytes(&self.session, bytes).await?;
+        Ok(InboundAdmission {
+            _input: input,
+            _session: session,
+        })
     }
 
     async fn stream_budget(
@@ -159,7 +229,33 @@ struct Outbound {
 
 impl Outbound {
     async fn send(&self, message: Message, stream: Option<(u32, usize)>) -> Result<(), ()> {
+        if matches!(
+            message,
+            Message::Close(_) | Message::Ping(_) | Message::Pong(_)
+        ) {
+            return self.send_control(message).await;
+        }
         self.send_with_policy(message, stream, true).await
+    }
+
+    async fn send_control(&self, message: Message) -> Result<(), ()> {
+        let bytes = message_size(&message).max(1);
+        if bytes > CONTROL_BYTE_BUDGET {
+            return Err(());
+        }
+        // Prefetched input and queued output must not consume protocol rejection credit.
+        let credit = acquire_bytes(&self.budgets.control, bytes).await?;
+        self.sender
+            .send(QueuedMessage {
+                message,
+                stream_channel: None,
+                drop_if_output_cancelled: false,
+                _admission: OutboundAdmission::Control { _bytes: credit },
+                _stream_bytes: None,
+                _stream_item: None,
+            })
+            .await
+            .map_err(|_| ())
     }
 
     async fn send_stream_terminal(
@@ -218,8 +314,10 @@ impl Outbound {
                 message,
                 stream_channel,
                 drop_if_output_cancelled,
-                _session: session,
-                _output: output,
+                _admission: OutboundAdmission::Data {
+                    _session: session,
+                    _output: output,
+                },
                 _stream_bytes: stream_bytes,
                 _stream_item: stream_item,
             })
@@ -302,19 +400,19 @@ enum InitialMessage {
     Start {
         start: PublicAgentSessionStart,
         attempt_id: Uuid,
-        _admission: OwnedSemaphorePermit,
+        _admission: InboundAdmission,
     },
     ToolStart {
         start: PublicToolSessionStart,
         attempt_id: Uuid,
-        _admission: OwnedSemaphorePermit,
+        _admission: InboundAdmission,
     },
     Resume {
         resume: PublicAgentSessionResume,
         attempt_id: Uuid,
         token_bindings: InvocationSessionTokenBindings,
         token_key_id: String,
-        _admission: OwnedSemaphorePermit,
+        _admission: InboundAdmission,
     },
 }
 
@@ -816,58 +914,159 @@ pub async fn serve_public_invocation_session(
     worker_service: Arc<WorkerService>,
     keyring: Arc<InvocationSessionTokenKeyring>,
     auth: AuthCtx,
+    config: InvocationSessionConfig,
 ) {
-    let (mut websocket_sink, mut websocket_stream) = socket.split();
+    serve_invocation_session_connection(
+        invocation_session_websocket(socket, config),
+        move |incoming, outbound, budgets, setup_complete| {
+            serve_session_messages(
+                incoming,
+                worker_service,
+                keyring,
+                auth,
+                outbound,
+                budgets,
+                setup_complete,
+            )
+        },
+    )
+    .await;
+}
+
+async fn serve_invocation_session_connection<F>(
+    websocket: impl futures::Sink<Message, Error = std::io::Error>
+    + futures::Stream<Item = std::io::Result<Message>>
+    + Unpin
+    + Send
+    + 'static,
+    handler: impl FnOnce(
+        tokio_stream::wrappers::ReceiverStream<std::io::Result<AdmittedMessage>>,
+        Outbound,
+        SessionBudgets,
+        tokio::sync::oneshot::Sender<()>,
+    ) -> F,
+) where
+    F: std::future::Future<Output = ()>,
+{
+    let (mut websocket_sink, websocket_stream) = websocket.split();
     let budgets = SessionBudgets::new();
+    let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (shutdown, mut requested_shutdown) = mpsc::channel(1);
+    let reader_shutdown = shutdown.clone();
+    let reader_budgets = budgets.clone();
+    let input_open = incoming_tx.clone();
+    // Keep reading control frames while session setup waits for the executor.
+    let mut reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        let result = read_websocket(websocket_stream, incoming_tx, reader_budgets).await;
+        if result.as_ref().is_err_and(is_message_too_large) {
+            let _ = reader_shutdown
+                .send(WebSocketShutdown::MessageTooLarge)
+                .await;
+        }
+        // Publish a fatal close reason before the application can observe input EOF.
+        drop(input_open);
+        result
+    }));
+    let websocket_stream = tokio_stream::wrappers::ReceiverStream::new(incoming_rx);
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<QueuedMessage>(CHANNEL_CAPACITY);
     let outbound = Outbound {
         sender: outbound_tx,
         budgets: budgets.clone(),
     };
     let writer_budgets = budgets.clone();
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         // A queued close frame is held back and sent as the final frame once the session ends,
         // so the client cannot observe the close handshake before the private session has been
         // drained. Everything queued after a close frame is dropped.
         let mut pending_close = None;
-        let mut sink_open = true;
-        while let Some(message) = outbound_rx.recv().await {
-            if !sink_open || pending_close.is_some() || message.should_drop(&writer_budgets).await {
+        'messages: loop {
+            let message = tokio::select! {
+                biased;
+                requested = requested_shutdown.recv() => match requested {
+                    Some(WebSocketShutdown::MessageTooLarge) => {
+                        pending_close = Some(message_too_large_close());
+                        continue;
+                    }
+                    Some(WebSocketShutdown::Close) | None => break,
+                },
+                message = outbound_rx.recv() => match message {
+                    Some(message) => message,
+                    None => break,
+                },
+            };
+            if pending_close.is_some() || message.should_drop(&writer_budgets).await {
                 continue;
             }
             if message.message.is_close() {
                 pending_close = Some(message.message);
                 continue;
             }
-            if !matches!(
-                tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(message.message))
-                    .await,
-                Ok(Ok(()))
-            ) {
-                sink_open = false;
+            let write =
+                tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(message.message));
+            tokio::pin!(write);
+            loop {
+                tokio::select! {
+                    biased;
+                    requested = requested_shutdown.recv() => match requested {
+                        Some(WebSocketShutdown::MessageTooLarge) => pending_close = Some(message_too_large_close()),
+                        Some(WebSocketShutdown::Close) | None => break 'messages,
+                    },
+                    sent = &mut write => {
+                        if !matches!(sent, Ok(Ok(()))) {
+                            return;
+                        }
+                        break;
+                    },
+                }
             }
         }
-        if let Some(close) = pending_close
-            && sink_open
-        {
+        if let Some(close) = pending_close {
             let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(close)).await;
         }
         let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.close()).await;
     });
+    let (setup_complete, mut setup_completed) = tokio::sync::oneshot::channel();
+    let close_now = {
+        let session = handler(websocket_stream, outbound, budgets, setup_complete);
+        tokio::pin!(session);
+        tokio::select! {
+            biased;
+            _ = &mut session => false,
+            _ = &mut writer => return,
+            _ = &mut reader => {
+                if setup_completed.try_recv().is_ok() {
+                    tokio::select! {
+                        biased;
+                        drained = tokio::time::timeout(CLIENT_GONE_DRAIN_TIMEOUT, &mut session) => drained.is_err(),
+                        _ = &mut writer => return,
+                    }
+                } else {
+                    true
+                }
+            }
+        }
+    };
+    if close_now {
+        let _ = shutdown.send(WebSocketShutdown::Close).await;
+    }
+    let _ = writer.await;
+}
+
+async fn serve_session_messages(
+    mut websocket_stream: tokio_stream::wrappers::ReceiverStream<std::io::Result<AdmittedMessage>>,
+    worker_service: Arc<WorkerService>,
+    keyring: Arc<InvocationSessionTokenKeyring>,
+    auth: AuthCtx,
+    outbound: Outbound,
+    budgets: SessionBudgets,
+    setup_complete: tokio::sync::oneshot::Sender<()>,
+) {
     let bindings = token_bindings(&auth);
-    let initial = match receive_initial(
-        &mut websocket_stream,
-        &outbound,
-        &keyring,
-        &bindings,
-        &budgets,
-    )
-    .await
+    let initial = match receive_initial(&mut websocket_stream, &outbound, &keyring, &bindings).await
     {
         Ok(Some(initial)) => initial,
         Ok(None) | Err(()) => {
             drop(outbound);
-            let _ = writer.await;
             return;
         }
     };
@@ -976,7 +1175,6 @@ pub async fn serve_public_invocation_session(
                 )
                 .await;
             drop(outbound);
-            let _ = writer.await;
             return;
         }
     };
@@ -996,9 +1194,9 @@ pub async fn serve_public_invocation_session(
         .await;
         close_error(&outbound, &message).await;
         drop(outbound);
-        let _ = writer.await;
         return;
     }
+    let _ = setup_complete.send(());
     let state = Arc::new(Mutex::new(initial_state));
     let responses = started.responses;
     {
@@ -1028,7 +1226,78 @@ pub async fn serve_public_invocation_session(
         }
     }
     drop(outbound);
-    let _ = writer.await;
+}
+
+fn invocation_session_websocket(
+    socket: WebSocketStream,
+    config: InvocationSessionConfig,
+) -> impl futures::Stream<Item = std::io::Result<Message>>
++ futures::Sink<Message, Error = std::io::Error>
++ Unpin {
+    let (sink, stream) = socket.split();
+    WebSocketKeepAlive::from_sink_and_stream(
+        stream,
+        sink,
+        config.keep_alive_interval,
+        config.max_pong_timeout,
+    )
+    .map(|result| result.map_err(invocation_session_websocket_error))
+}
+
+fn invocation_session_websocket_error(
+    error: KeepAliveError<std::io::Error, std::io::Error>,
+) -> std::io::Error {
+    match error {
+        KeepAliveError::Sink(error) | KeepAliveError::Stream(error) => {
+            // Wire-level tests cover this adapter.
+            if is_websocket_capacity_error(&error) {
+                message_too_large_error()
+            } else {
+                error
+            }
+        }
+        KeepAliveError::Timeout => std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "invocation session Ping confirmation timed out",
+        ),
+    }
+}
+
+async fn read_websocket(
+    mut websocket: impl futures::Stream<Item = std::io::Result<Message>> + Unpin,
+    incoming: mpsc::Sender<std::io::Result<AdmittedMessage>>,
+    budgets: SessionBudgets,
+) -> std::io::Result<()> {
+    loop {
+        let message = tokio::select! {
+            _ = incoming.closed() => return Ok(()),
+            message = websocket.next() => message,
+        };
+        match message {
+            // Tungstenite queues the Pong and flushes it on the next read.
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            Some(Ok(Message::Close(_))) | None => return Ok(()),
+            Some(Err(error)) => return Err(error),
+            Some(Ok(message)) => {
+                if message_size(&message) > MAX_WEBSOCKET_MESSAGE_SIZE {
+                    return Err(message_too_large_error());
+                }
+                let Ok(admission) = budgets
+                    .admit_inbound_frame(message_size(&message).max(1))
+                    .await
+                else {
+                    return Ok(());
+                };
+                if incoming
+                    .send(Ok(AdmittedMessage { message, admission }))
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 async fn receive_initial<S>(
@@ -1036,16 +1305,15 @@ async fn receive_initial<S>(
     outbound: &Outbound,
     keyring: &InvocationSessionTokenKeyring,
     bindings: &InvocationSessionTokenBindings,
-    budgets: &SessionBudgets,
 ) -> Result<Option<InitialMessage>, ()>
 where
-    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+    S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
 {
     loop {
         let Some(message) = websocket.next().await else {
             return Ok(None);
         };
-        let message = match message {
+        let AdmittedMessage { message, admission } = match message {
             Ok(message) => message,
             Err(_) => return Ok(None),
         };
@@ -1070,8 +1338,6 @@ where
                     close_too_large(outbound).await;
                     return Err(());
                 }
-                let admission =
-                    acquire_bytes(&budgets.session, message_size(&message).max(1)).await?;
                 let Message::Text(text) = message else {
                     unreachable!()
                 };
@@ -1266,10 +1532,10 @@ async fn handle_client_messages<S>(
     budgets: SessionBudgets,
     attempt_id: Uuid,
 ) where
-    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+    S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
 {
     while let Some(message) = websocket.next().await {
-        let message = match message {
+        let AdmittedMessage { message, admission } = match message {
             Ok(message) => message,
             Err(_) => return,
         };
@@ -1287,23 +1553,6 @@ async fn handle_client_messages<S>(
                     close_too_large(&outbound).await;
                     return;
                 }
-                let session = match acquire_bytes(&budgets.session, message_size(&message).max(1))
-                    .await
-                {
-                    Ok(permit) => permit,
-                    Err(()) => {
-                        let message = safe_rejection_message(PublicErrorCode::ResourceExhausted);
-                        send_rejection(
-                            &outbound,
-                            Some(attempt_id),
-                            PublicErrorCode::ResourceExhausted,
-                            message.clone(),
-                        )
-                        .await;
-                        close_protocol(&outbound, &message).await;
-                        return;
-                    }
-                };
                 let Message::Text(text) = message else {
                     unreachable!()
                 };
@@ -1311,30 +1560,13 @@ async fn handle_client_messages<S>(
                     Ok(message) => translate_client_text(message, &state).await,
                     Err(error) => Err(AdapterError::from(error)),
                 }
-                .map(|request| (request, session, text.len().max(1)))
+                .map(|request| (request, admission, text.len().max(1)))
             }
             message @ Message::Binary(_) => {
                 if message_size(&message) > MAX_WEBSOCKET_MESSAGE_SIZE {
                     close_too_large(&outbound).await;
                     return;
                 }
-                let session = match acquire_bytes(&budgets.session, message_size(&message).max(1))
-                    .await
-                {
-                    Ok(permit) => permit,
-                    Err(()) => {
-                        let message = safe_rejection_message(PublicErrorCode::ResourceExhausted);
-                        send_rejection(
-                            &outbound,
-                            Some(attempt_id),
-                            PublicErrorCode::ResourceExhausted,
-                            message.clone(),
-                        )
-                        .await;
-                        close_protocol(&outbound, &message).await;
-                        return;
-                    }
-                };
                 let Message::Binary(bytes) = message else {
                     unreachable!()
                 };
@@ -1343,10 +1575,10 @@ async fn handle_client_messages<S>(
                     Ok(message) => translate_client_binary(message, &state).await,
                     Err(error) => Err(AdapterError::from(error)),
                 }
-                .map(|request| (request, session, size))
+                .map(|request| (request, admission, size))
             }
         };
-        let (request, session, _frame_size) = match request {
+        let (request, admission, _frame_size) = match request {
             Ok(request) => request,
             Err(error) => {
                 let safe_message = safe_rejection_message(error.code);
@@ -1407,7 +1639,7 @@ async fn handle_client_messages<S>(
         if requests
             .send(AdmittedRequest {
                 request,
-                _session: session,
+                _admission: admission,
             })
             .await
             .is_err()
@@ -2971,8 +3203,29 @@ async fn acquire_input_admission(
 }
 
 async fn send_text(sender: &Outbound, message: &PublicServerMessage) -> Result<(), ()> {
-    let message = text_message(message).map_err(|_| ())?;
-    sender.send(message, None).await
+    let mut frame = text_message(message).map_err(|_| ())?;
+    if let PublicServerMessage::InvocationRejected {
+        attempt_id,
+        code,
+        retryable,
+        version,
+        ..
+    } = message
+    {
+        if message_size(&frame) > CONTROL_BYTE_BUDGET {
+            frame = text_message(&PublicServerMessage::InvocationRejected {
+                attempt_id: *attempt_id,
+                code: *code,
+                message: safe_rejection_message(*code),
+                retryable: *retryable,
+                version: *version,
+            })
+            .map_err(|_| ())?;
+        }
+        sender.send_control(frame).await
+    } else {
+        sender.send(frame, None).await
+    }
 }
 
 async fn send_rejection(
@@ -3013,12 +3266,11 @@ async fn close_error(sender: &Outbound, reason: &str) {
 }
 
 async fn close_too_large(sender: &Outbound) {
-    let _ = sender
-        .send(
-            Message::close_with(CloseCode::Size, "application message exceeds 32 MiB"),
-            None,
-        )
-        .await;
+    let _ = sender.send(message_too_large_close(), None).await;
+}
+
+fn message_too_large_close() -> Message {
+    Message::close_with(CloseCode::Size, "application message exceeds 32 MiB")
 }
 
 fn bounded_close_reason(reason: &str) -> String {
@@ -3129,18 +3381,47 @@ mod tests {
     }
 
     fn active_input_state_with_schema(schema: SchemaType) -> Arc<Mutex<AdapterState>> {
+        active_input_state_with_stream_count(schema, 1)
+    }
+
+    fn active_input_state_with_stream_count(
+        schema: SchemaType,
+        count: usize,
+    ) -> Arc<Mutex<AdapterState>> {
+        let stream_types = (0..count)
+            .map(|_| SchemaType::stream(Some(schema.clone())))
+            .collect::<Vec<_>>();
         let graph = SchemaGraph {
             defs: Vec::new(),
-            root: SchemaType::stream(Some(schema.clone())),
+            root: if count == 1 {
+                stream_types.into_iter().next().unwrap()
+            } else {
+                SchemaType::tuple(stream_types)
+            },
         };
         let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
-        let mapping = private_mapping(7, StreamMappingRole::Input, fingerprint);
+        let mappings = (0..count)
+            .map(|index| private_mapping(7 + index as u64, StreamMappingRole::Input, fingerprint))
+            .collect::<Vec<_>>();
+        let mut streams = (0..count)
+            .map(|index| {
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(7 + index as u64))
+            })
+            .collect::<Vec<_>>();
+        let input = if count == 1 {
+            streams.pop().unwrap()
+        } else {
+            SchemaValue::Tuple { elements: streams }
+        };
+        let input =
+            schema_value_to_proto_with_streams(input, |stream| stream.take_host_endpoint::<u64>())
+                .unwrap();
         let mut protocol_state = InvocationSessionState::default();
         protocol_state
             .validate_trusted_request(&request(invocation_request::Request::Start(
                 InvocationStart {
                     method_name: Some("run".to_string()),
-                    input: Some(stream_value(7)),
+                    input: Some(input),
                     idempotency_key: idempotency_key(),
                     ..Default::default()
                 },
@@ -3156,7 +3437,7 @@ mod tests {
                         attachment_id: Some(proto_uuid(1)),
                         attempt_id: Some(proto_uuid(2)),
                         epoch: 1,
-                        stream_mappings: vec![mapping.clone()],
+                        stream_mappings: mappings.clone(),
                         environment_id: Some(EnvironmentId {
                             value: Some(proto_uuid(3)),
                         }),
@@ -3167,28 +3448,35 @@ mod tests {
                 )),
             })
             .unwrap();
-        let private = PrivateMapping {
-            mapping,
-            durable_stream_id: Uuid::from_u128(107),
-            schema_fingerprint: fingerprint,
-            direction: PublicStreamDirection::Input,
-        };
         let mut channels = HashMap::new();
-        channels.insert(
-            1,
-            ChannelState {
-                transport_id: 7,
+        for (index, mapping) in mappings.into_iter().enumerate() {
+            let transport_id = mapping.transport_stream_id;
+            let private = PrivateMapping {
+                mapping,
+                durable_stream_id: Uuid::from_u128(100 + transport_id as u128),
+                schema_fingerprint: fingerprint,
                 direction: PublicStreamDirection::Input,
-                schema,
-                provisional_ref: None,
-                durable: Some(private),
-                stream_token: Some("stream-token".to_string()),
-                next_input_sequence: 0,
-                pending_input: VecDeque::new(),
-                exposed: true,
-                terminal: false,
-            },
-        );
+            };
+            channels.insert(
+                index as u32 + 1,
+                ChannelState {
+                    transport_id,
+                    direction: PublicStreamDirection::Input,
+                    schema: schema.clone(),
+                    provisional_ref: None,
+                    durable: Some(private),
+                    stream_token: Some("stream-token".to_string()),
+                    next_input_sequence: 0,
+                    pending_input: VecDeque::new(),
+                    exposed: true,
+                    terminal: false,
+                },
+            );
+        }
+        let channel_by_transport = channels
+            .iter()
+            .map(|(channel, state)| (state.transport_id, *channel))
+            .collect();
         Arc::new(Mutex::new(AdapterState {
             protocol_state,
             graph: Some(graph),
@@ -3196,10 +3484,10 @@ mod tests {
             identity: None,
             application: Some("app".to_string()),
             environment: Some("env".to_string()),
-            next_channel: 2,
-            next_transport_id: 8,
+            next_channel: count as u32 + 1,
+            next_transport_id: 7 + count as u64,
             channels,
-            channel_by_transport: HashMap::from([(7, 1)]),
+            channel_by_transport,
             provisional_refs: HashMap::new(),
             private_mappings: HashMap::new(),
             byte_roles: HashMap::new(),
@@ -3251,6 +3539,118 @@ mod tests {
             .unwrap()
             .pending_input
             .push_back(admission);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn input_ack_progresses_past_a_burst_from_independently_buffered_streams() {
+        let state = active_input_state_with_stream_count(
+            SchemaType::binary(BinaryRestrictions::default()),
+            11,
+        );
+        let budgets = SessionBudgets::new();
+        let (wire, received) = mpsc::channel(CHANNEL_CAPACITY);
+        for channel in 1..=11 {
+            let mut binary = BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel,
+                    cursor_token: None,
+                    item_count: DecimalU64(1),
+                    kind: BinaryMessageKind::InputBinary,
+                    mime_type: None,
+                    sequence: DecimalU64(0),
+                    version: 1,
+                },
+                payload: vec![0],
+            };
+            let envelope_bytes = 8 * 1024 * 1024;
+            let overhead = encode_binary_message(&binary).unwrap().len() - 1;
+            binary.payload = vec![0; envelope_bytes - overhead];
+            let encoded = encode_binary_message(&binary).unwrap();
+            assert_eq!(encoded.len(), envelope_bytes);
+            wire.send(Ok(Message::Binary(encoded))).await.unwrap();
+        }
+        let (incoming, messages) = mpsc::channel(CHANNEL_CAPACITY);
+        let reader = read_websocket(
+            tokio_stream::wrappers::ReceiverStream::new(received),
+            incoming,
+            budgets.clone(),
+        );
+        let (requests, mut executor) = mpsc::channel(CHANNEL_CAPACITY);
+        let (sender, mut outgoing) = mpsc::channel(CHANNEL_CAPACITY);
+        let outbound = Outbound {
+            sender,
+            budgets: budgets.clone(),
+        };
+        let attempt = Uuid::new_v4();
+        let client = handle_client_messages(
+            tokio_stream::wrappers::ReceiverStream::new(messages),
+            requests,
+            outbound.clone(),
+            state.clone(),
+            budgets.clone(),
+            attempt,
+        );
+        futures::pin_mut!(reader, client);
+        assert!(futures::poll!(&mut reader).is_pending());
+        assert!(futures::poll!(&mut client).is_pending());
+        assert!(futures::poll!(&mut reader).is_pending());
+        assert_eq!(executor.len(), 2);
+        let before_private_delivery = budgets.session.available_permits();
+        // The private consumer accepts two input items, then waits for ACK delivery.
+        for _ in 0..2 {
+            tokio::select! {
+                request = executor.recv() => drop(request.unwrap()),
+                _ = &mut reader => panic!("reader stopped while input was queued"),
+                _ = &mut client => panic!("input handler stopped before the ACK"),
+            }
+        }
+        assert!(futures::poll!(&mut reader).is_pending());
+        assert!(futures::poll!(&mut client).is_pending());
+        assert!(executor.try_recv().is_err());
+        let remaining = budgets.session.available_permits();
+        let (responses, received_responses) = mpsc::channel(1);
+        responses
+            .send(Ok(input_ack(0, durable_offset(5))))
+            .await
+            .unwrap();
+        let keyring = Arc::new(keyring());
+        let server = handle_private_responses(
+            tokio_stream::wrappers::ReceiverStream::new(received_responses),
+            outbound,
+            state,
+            keyring.clone(),
+            token_bindings(&AuthCtx::system()),
+            keyring.active_key_id().to_string(),
+            attempt,
+        );
+        futures::pin_mut!(server);
+        let ack = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::select! {
+                message = outgoing.recv() => message.unwrap(),
+                _ = &mut reader => panic!("reader stopped before ACK delivery"),
+                _ = &mut client => panic!("input handler stopped before ACK delivery"),
+                _ = &mut server => panic!("private response handler stopped before ACK delivery"),
+            }
+        })
+        .await
+        .expect("prefetched input must leave data credit available for ACKs");
+        let Message::Text(text) = &ack.message else {
+            panic!("expected ACK text");
+        };
+        assert!(matches!(
+            golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                .unwrap(),
+            PublicServerMessage::InputStreamAck { channel: 1, .. }
+        ));
+        assert!(
+            remaining >= OUTPUT_BYTE_BUDGET,
+            "input admission must preserve the entire outbound allowance"
+        );
+        assert!(
+            before_private_delivery >= OUTPUT_BYTE_BUDGET,
+            "the input limit must also cover requests queued for the private consumer"
+        );
     }
 
     /// A routing miss is an `Internal` rejection whose carried error names a shard or a fence.
@@ -4364,16 +4764,20 @@ mod tests {
             session_token,
             version: 1,
         };
-        let websocket =
-            futures::stream::iter(vec![Ok(Message::text(encode_text(&message).unwrap()))]);
-        futures::pin_mut!(websocket);
         let budgets = SessionBudgets::new();
+        let message = Message::text(encode_text(&message).unwrap());
+        let admission = budgets
+            .admit_inbound_frame(message_size(&message))
+            .await
+            .unwrap();
+        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, admission })]);
+        futures::pin_mut!(websocket);
         let (sender, _receiver) = mpsc::channel(1);
         let outbound = Outbound {
             sender,
             budgets: budgets.clone(),
         };
-        let initial = receive_initial(&mut websocket, &outbound, &keyring, &bindings, &budgets)
+        let initial = receive_initial(&mut websocket, &outbound, &keyring, &bindings)
             .await
             .unwrap()
             .unwrap();
@@ -4446,16 +4850,20 @@ mod tests {
             session_token,
             version: 1,
         };
-        let websocket =
-            futures::stream::iter(vec![Ok(Message::text(encode_text(&message).unwrap()))]);
-        futures::pin_mut!(websocket);
         let budgets = SessionBudgets::new();
+        let message = Message::text(encode_text(&message).unwrap());
+        let admission = budgets
+            .admit_inbound_frame(message_size(&message))
+            .await
+            .unwrap();
+        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, admission })]);
+        futures::pin_mut!(websocket);
         let (sender, mut receiver) = mpsc::channel(1);
         let outbound = Outbound {
             sender,
             budgets: budgets.clone(),
         };
-        match receive_initial(&mut websocket, &outbound, &keyring, &bindings, &budgets).await {
+        match receive_initial(&mut websocket, &outbound, &keyring, &bindings).await {
             Ok(Some(InitialMessage::Resume { resume, .. })) => Ok(resume),
             Ok(_) => panic!("resume message was not decoded as a resume"),
             Err(()) => {

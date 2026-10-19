@@ -43,7 +43,8 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
-    DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, StreamSession,
+    DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, DurableToolStdinProducer,
+    StreamSession,
 };
 use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::entity::{
@@ -267,6 +268,33 @@ impl ToolStdinEntry {
             input: input::NativeAttachmentInput::new(self.consumer, ctx)?,
             tasks,
         })
+    }
+}
+
+/// The stdin that a tool call starts with.
+enum ToolCallStdin {
+    /// Bytes that arrive through an attachment: a guest's stream or a guest's writer.
+    Attachment(Resource<ToolStdinEntry>),
+    /// The durable stdin of a call that a client started. See [`ToolBodyStdin::Durable`].
+    Durable(Box<DurableInputEndpoint>),
+}
+
+/// The stdin that the body of a tool call reads.
+enum ToolBodyStdin {
+    Attachment(ToolStdinEntry),
+    /// The durable stdin of a call that a client started, read by a component body itself.
+    /// What the body's guest takes is its own recorded observation, so a replay hands it over
+    /// at the same place among the body's other recorded calls. There is no attachment for it:
+    /// nothing buffers it ahead of the body, and no host task reads it for the body.
+    Durable(Box<DurableInputEndpoint>),
+}
+
+impl ToolBodyStdin {
+    fn controller(&self) -> Option<AttachmentController> {
+        match self {
+            Self::Attachment(stdin) => Some(stdin.controller()),
+            Self::Durable(_) => None,
+        }
     }
 }
 
@@ -1257,7 +1285,7 @@ fn caller_tool_owner(
 }
 
 struct PreparedToolCall {
-    stdin: Option<Resource<ToolStdinEntry>>,
+    stdin: Option<ToolCallStdin>,
     permit: LiveAuthorizationPermit,
     operation: operation::ProvisionalOwnerToolOperation,
     plan: EntityInvocationPlanReference,
@@ -1267,7 +1295,7 @@ enum ToolCallPreparation {
     Ready(PreparedToolCall),
     Rejected {
         request: Box<HostRequestGolemToolInvocationRejected>,
-        stdin: Option<Resource<ToolStdinEntry>>,
+        stdin: Option<ToolCallStdin>,
     },
 }
 
@@ -1280,7 +1308,7 @@ enum ToolAttachmentCounterparty {
 struct AcceptedToolCall {
     durability: EntityInvocationDurability,
     operation: operation::OwnerToolOperation,
-    stdin: Option<Resource<ToolStdinEntry>>,
+    stdin: Option<ToolCallStdin>,
     deferred_admission_inserted: bool,
     incapable_lane_ticket: Option<crate::worker::owner_lane::OwnerInvocationTicket>,
     attachment_counterparty: ToolAttachmentCounterparty,
@@ -1289,7 +1317,7 @@ struct AcceptedToolCall {
 enum ToolCallDispatch {
     Rejected {
         response: Box<ToolInvokeResponse>,
-        stdin: Option<Resource<ToolStdinEntry>>,
+        stdin: Option<ToolCallStdin>,
     },
     Accepted(Box<AcceptedToolCall>),
 }
@@ -1479,7 +1507,7 @@ fn rejected_tool_call(
     has_stderr: bool,
     call_mode: EntityCallMode,
     error: SerializableToolRpcError,
-    stdin: Option<Resource<ToolStdinEntry>>,
+    stdin: Option<ToolCallStdin>,
 ) -> ToolCallPreparation {
     ToolCallPreparation::Rejected {
         request: Box::new(HostRequestGolemToolInvocationRejected {
@@ -1588,7 +1616,7 @@ async fn prepare_tool_call<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     attempt: ToolInvocationAttempt,
     command_path: Vec<String>,
-    stdin: Option<Resource<ToolStdinEntry>>,
+    stdin: Option<ToolCallStdin>,
     stdout_requested: bool,
     stderr_requested: bool,
     call_mode: EntityCallMode,
@@ -2154,7 +2182,7 @@ struct ToolSidecarInvocation {
     position: crate::durable_host::entity::ResolvedEntityInvocationPosition,
     command_path: Vec<String>,
     input: ModelTypedSchemaValue,
-    stdin: Option<ToolStdinEntry>,
+    stdin: Option<ToolBodyStdin>,
     stdout: Option<ToolOutputWriterEntry>,
     stderr: Option<ToolOutputWriterEntry>,
     principal: Principal,
@@ -2350,18 +2378,29 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     prepare_guest_call(&mut store, &display_name).await;
     let stdin = stdin
         .map(|stdin| -> anyhow::Result<_> {
-            if stdin.controller().observer().identity().is_some() {
-                let input = input::AttachmentInputProducer::new(
-                    stdin.consumer,
-                    |ctx: &mut Ctx| ctx.durable_ctx_mut(),
-                    store.data().durable_ctx(),
-                )?;
-                Ok(StreamReader::new(store.as_context_mut(), input)?)
-            } else {
-                Ok(StreamReader::new(
+            match stdin {
+                ToolBodyStdin::Attachment(stdin)
+                    if stdin.controller().observer().identity().is_some() =>
+                {
+                    let input = input::AttachmentInputProducer::new(
+                        stdin.consumer,
+                        |ctx: &mut Ctx| ctx.durable_ctx_mut(),
+                        store.data().durable_ctx(),
+                    )?;
+                    Ok(StreamReader::new(store.as_context_mut(), input)?)
+                }
+                ToolBodyStdin::Attachment(stdin) => Ok(StreamReader::new(
                     store.as_context_mut(),
                     stdin.into_stream_producer(),
-                )?)
+                )?),
+                ToolBodyStdin::Durable(endpoint) => {
+                    let runtime_teardown =
+                        store.data().durable_ctx().stream_runtime_teardown_probe();
+                    Ok(StreamReader::new(
+                        store.as_context_mut(),
+                        DurableToolStdinProducer::new(*endpoint, runtime_teardown),
+                    )?)
+                }
             }
         })
         .transpose()
@@ -2709,11 +2748,14 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
     );
     let stdin = match invocation
         .stdin
-        .map(|stdin| {
-            retained
+        .map(|stdin| match stdin {
+            ToolBodyStdin::Attachment(stdin) => retained
                 .context_mut()
                 .shared
-                .with_ctx(|ctx| stdin.into_native(ctx, spawner.clone()))
+                .with_ctx(|ctx| stdin.into_native(ctx, spawner.clone())),
+            ToolBodyStdin::Durable(_) => Err(anyhow::anyhow!(
+                "native tool body was given a durable stdin without its attachment"
+            )),
         })
         .transpose()
     {
@@ -3220,7 +3262,7 @@ async fn execute_recorded_skipped_tool_call<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     durability: EntityInvocationDurability,
     operation: operation::OwnerToolOperation,
-    stdin: Option<Resource<ToolStdinEntry>>,
+    stdin: Option<ToolCallStdin>,
     stdout: Option<Resource<ToolOutputEntry>>,
     stderr: Option<Resource<ToolOutputEntry>>,
     recorded: RecordedEntityTerminal,
@@ -3246,7 +3288,10 @@ where
     let failure = skipped_attachment_failure(&terminal);
     let endpoints = accessor.with(|mut access| -> anyhow::Result<_> {
         let ctx = access.get();
-        let stdin = stdin.map(|stdin| ctx.table().delete(stdin)).transpose()?;
+        let stdin = match stdin {
+            Some(ToolCallStdin::Attachment(stdin)) => Some(ctx.table().delete(stdin)?),
+            Some(ToolCallStdin::Durable(_)) | None => None,
+        };
         let stdout = stdout
             .map(|stdout| ctx.table().delete(stdout).map(ToolOutputEntry::into_writer))
             .transpose()?;
@@ -3790,7 +3835,16 @@ where
         deferred_admission,
     ) = accessor.with(|mut access| -> anyhow::Result<_> {
         let ctx = access.get();
-        let stdin = stdin.map(|stdin| ctx.table().delete(stdin)).transpose()?;
+        let stdin = stdin
+            .map(|stdin| -> anyhow::Result<_> {
+                Ok(match stdin {
+                    ToolCallStdin::Attachment(stdin) => {
+                        ToolBodyStdin::Attachment(ctx.table().delete(stdin)?)
+                    }
+                    ToolCallStdin::Durable(endpoint) => ToolBodyStdin::Durable(endpoint),
+                })
+            })
+            .transpose()?;
         let stdout = stdout
             .map(|stdout| ctx.table().delete(stdout))
             .transpose()?;
@@ -3822,7 +3876,7 @@ where
             ctx.owner_execution.deferred_tool_admission(),
         ))
     })?;
-    let stdin_controller = stdin.as_ref().map(ToolStdinEntry::controller);
+    let stdin_controller = stdin.as_ref().and_then(ToolBodyStdin::controller);
     let stdout_controller = stdout.as_ref().map(ToolOutputWriterEntry::controller);
     let stderr_controller = stderr.as_ref().map(ToolOutputWriterEntry::controller);
     let stdout_completion_only = stdout
@@ -4628,7 +4682,7 @@ async fn dispatch_tool_attempt<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     attempt: ToolInvocationAttempt,
     command_path: Vec<String>,
-    stdin: Option<Resource<ToolStdinEntry>>,
+    stdin: Option<ToolCallStdin>,
     has_stdout: bool,
     has_stderr: bool,
     call_mode: EntityCallMode,
@@ -4769,7 +4823,7 @@ where
         accessor,
         attempt,
         command_path,
-        stdin,
+        stdin.map(ToolCallStdin::Attachment),
         has_stdout,
         has_stderr,
         call_mode,
@@ -5153,32 +5207,18 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                 "native tool byte streams disagree with its accepted session",
             ));
         }
-        let stdin = if let Some(stdin) = input.stdin {
-            let endpoint = stdin
-                .take_host_endpoint::<DurableInputEndpoint>()
-                .map_err(wasmtime::Error::msg)?;
-            let source_cancel = Arc::new(OnceLock::new());
-            let reader = accessor.with(|mut access| {
-                let ctx = access.get();
-                let producer = DurableByteInputProducer(
-                    DurableInputProducer::new(endpoint)
-                        .with_drop_cleanup(
-                            ctx.state
-                                .dropped_call_event_sender()
-                                .expect("dropped-call event sender is always available"),
-                            ctx.stream_runtime_teardown_probe(),
-                        )
-                        .with_producer_cancel_observer(source_cancel.clone()),
-                );
-                StreamReader::new(&mut access, producer)
-            })?;
-            Some(
-                create_native_underlying_stdin(accessor, reader, source_cancel)
-                    .map_err(wasmtime::Error::from_anyhow)?,
-            )
-        } else {
-            None
-        };
+        // The durable stdin goes to the body as it is. A component body reads it itself, so
+        // its reads are the body's recorded observations. A native body gets an attachment fed
+        // from it once the call is accepted and its activation is known.
+        let stdin = input
+            .stdin
+            .map(|stdin| {
+                stdin
+                    .take_host_endpoint::<DurableInputEndpoint>()
+                    .map(|endpoint| ToolCallStdin::Durable(Box::new(endpoint)))
+                    .map_err(wasmtime::Error::msg)
+            })
+            .transpose()?;
         let create_output = |handle: Option<DurableStreamHandle>| -> wasmtime::Result<_> {
             let Some((_, streams)) = &session else {
                 return Ok((None, None));
@@ -5228,7 +5268,6 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                 Ok::<_, anyhow::Error>((target, parent, attempt_ordinal, key_context))
             })
             .map_err(wasmtime::Error::from_anyhow)?;
-        let stdin_rep = stdin.as_ref().map(Resource::rep);
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
         let execute = async {
@@ -5253,7 +5292,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             )
             .await
             .map_err(|error| {
-                cleanup_failed_tool_dispatch(accessor, stdin_rep, stdout_rep, stderr_rep, error)
+                cleanup_failed_tool_dispatch(accessor, None, stdout_rep, stderr_rep, error)
             })?;
             let response = match dispatch {
                 ToolCallDispatch::Rejected { response, stdin } => {
@@ -5263,6 +5302,25 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     *response
                 }
                 ToolCallDispatch::Accepted(mut accepted) => {
+                    // A native body reads an attachment, not a durable input: the host pumps
+                    // the durable stdin into one for it. A component body reads the durable
+                    // stdin itself.
+                    let native_body = matches!(
+                        accepted.durability.scope().activation().source(),
+                        golem_common::model::entity::EntityActivationSource::Host { .. }
+                    );
+                    accepted.stdin = match accepted.stdin.take() {
+                        Some(ToolCallStdin::Durable(endpoint)) if native_body => {
+                            let attachment = create_native_underlying_stdin(accessor, *endpoint)
+                                .map_err(|error| {
+                                    cleanup_failed_tool_dispatch(
+                                        accessor, None, stdout_rep, stderr_rep, error,
+                                    )
+                                })?;
+                            Some(ToolCallStdin::Attachment(attachment))
+                        }
+                        stdin => stdin,
+                    };
                     register_tool_admission(accessor, &mut accepted)?;
                     execute_accepted_tool_call(accessor, *accepted, stdout, stderr, None, None)
                         .await?
@@ -5391,6 +5449,7 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
 
     let execution = store.data().durable_ctx().owner_execution.clone();
     let operations = execution.tool_operations();
+    let entity_cancellation = store.data().durable_ctx().entity_cancellation();
     let primary = store
         .data()
         .durable_ctx()
@@ -5419,6 +5478,12 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
             // A secondary task error must not strand a registered failure continuation,
             // even while election still waits for another terminal selection to settle.
             Err(_) if operations.has_owner_failure() => {}
+            // Cancelling an entity interrupts its guest; its accepted children still have to
+            // resolve their own cancellation inside this Store before the parent settles.
+            Err(_)
+                if entity_cancellation
+                    .as_ref()
+                    .is_some_and(|cancellation| cancellation.is_cancelled()) => {}
             Err(error) => return Err(WorkerExecutorError::runtime(error.to_string())),
         }
     }
@@ -5524,14 +5589,18 @@ where
 
 fn close_stdin<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    stdin: Option<Resource<ToolStdinEntry>>,
+    stdin: Option<ToolCallStdin>,
 ) -> anyhow::Result<()>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    if let Some(stdin) = stdin {
-        accessor.with(|mut access| access.get().table().delete(stdin).map(|_| ()))?;
+    match stdin {
+        Some(ToolCallStdin::Attachment(stdin)) => {
+            accessor.with(|mut access| access.get().table().delete(stdin).map(|_| ()))?;
+        }
+        // The end of the call's session cancels the durable stdin that nobody read.
+        Some(ToolCallStdin::Durable(_)) | None => {}
     }
     Ok(())
 }
@@ -5598,7 +5667,12 @@ where
 {
     cleanup_tool_endpoints(
         error,
-        || close_stdin(accessor, stdin.map(Resource::new_own)),
+        || {
+            close_stdin(
+                accessor,
+                stdin.map(|rep| ToolCallStdin::Attachment(Resource::new_own(rep))),
+            )
+        },
         || reject_output(accessor, stdout.map(Resource::new_own)),
         || reject_output(accessor, stderr.map(Resource::new_own)),
     )
@@ -5644,16 +5718,29 @@ where
     })
 }
 
-fn create_native_underlying_stdin<U, Ctx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    source: StreamReader<u8>,
-    source_cancel: Arc<OnceLock<StreamCancelReason>>,
+/// Feeds the durable stdin of a call that a client started into an attachment for a native
+/// body. The host reads the durable input; dropping the reader cancels it for the client.
+fn create_native_underlying_stdin<Ctx>(
+    accessor: &Accessor<Ctx, HasSelf<DurableWorkerCtx<Ctx>>>,
+    endpoint: DurableInputEndpoint,
 ) -> anyhow::Result<Resource<ToolStdinEntry>>
 where
-    U: Send + 'static,
     Ctx: WorkerCtx,
 {
     accessor.with(|mut access| {
+        let source_cancel = Arc::new(OnceLock::new());
+        let ctx = access.get();
+        let producer = DurableByteInputProducer(
+            DurableInputProducer::new(endpoint)
+                .with_drop_cleanup(
+                    ctx.state
+                        .dropped_call_event_sender()
+                        .expect("dropped-call event sender is always available"),
+                    ctx.stream_runtime_teardown_probe(),
+                )
+                .with_producer_cancel_observer(source_cancel.clone()),
+        );
+        let source = StreamReader::new(&mut access, producer)?;
         let ctx = access.get();
         let memory = AttachmentMemory::for_store(
             ctx.public_state.worker().active_agents(),
@@ -6766,7 +6853,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             accessor,
             attempt,
             command_path,
-            stdin,
+            stdin.map(ToolCallStdin::Attachment),
             stdout_requested,
             stderr_requested,
             EntityCallMode::Asynchronous,

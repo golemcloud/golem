@@ -23,6 +23,11 @@ use opentelemetry_sdk::trace::SdkTracer;
 use prometheus::Registry;
 use tracing::info;
 
+// As in worker-executor: worker-service allocates and frees small objects for every
+// request on many threads, where mimalloc is faster than the system allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         tokio::runtime::Builder::new_multi_thread()

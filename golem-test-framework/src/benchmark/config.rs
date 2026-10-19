@@ -189,6 +189,60 @@ pub enum BenchmarkConfig {
         #[command(subcommand)]
         mode: TestMode,
     },
+    /// Cloud chaos scenarios. One scenario per invocation, driven by the
+    /// workflow.
+    ///
+    /// The driver deliberately knows nothing about Kubernetes or Chaos Mesh: the
+    /// workflow injects the fault and tells the driver about it by dropping JSON
+    /// files into `--signal-dir` (see `integration_tests::chaos::signal`).
+    Chaos {
+        /// Action to perform: `prep` (one-time setup) or `scenario` (run one
+        /// scenario end to end).
+        #[arg(long, value_enum)]
+        action: ChaosAction,
+
+        /// Scenario code to run (required for `--action scenario`).
+        #[arg(long, value_enum)]
+        scenario: Option<ChaosScenarioArg>,
+
+        /// Run a scenario the suite YAML marks `enabled: false`.
+        ///
+        /// `enabled` means "part of the default suite", and the workflow is what
+        /// enforces it. This flag exists so a prototype scenario can be off for
+        /// every ordinary run and still runnable on demand, without the two
+        /// gates disagreeing — the workflow passes it exactly when an operator
+        /// named a disabled scenario explicitly.
+        #[arg(long, default_value_t = false)]
+        allow_disabled: bool,
+
+        /// Path to the chaos suite YAML holding the scenario's configuration.
+        /// Required for `--action scenario`; the entry whose `code` matches
+        /// `--scenario` supplies the fault, phase and workload settings.
+        #[arg(long)]
+        suite: Option<PathBuf>,
+
+        /// Path to the prep manifest. Written by `--action prep`, read by
+        /// `--action scenario`.
+        #[arg(long)]
+        prep_manifest: PathBuf,
+
+        /// Directory the driver and the workflow exchange fault signals through.
+        /// Required for `--action scenario`.
+        #[arg(long)]
+        signal_dir: Option<PathBuf>,
+
+        /// Save the scenario result to a JSON file. Also written on abort, with
+        /// whatever the run got through.
+        #[arg(long)]
+        save_to_json: Option<PathBuf>,
+
+        /// Save the operation history to a JSON file.
+        #[arg(long)]
+        save_history_to_json: Option<PathBuf>,
+
+        #[command(subcommand)]
+        mode: TestMode,
+    },
 }
 
 /// Density subcommand action.
@@ -272,19 +326,103 @@ pub enum DensityPromiseRuntimeArg {
     Ts,
 }
 
+/// Chaos subcommand action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ChaosAction {
+    Prep,
+    Scenario,
+}
+
+/// Chaos scenario selector for the CLI. Codes match the scenario catalog in the
+/// Cloud Chaos Tests v1 project and the `code` fields in the suite YAML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ChaosScenarioArg {
+    /// Shard-manager to executor network partition.
+    S1,
+    /// Executor pod kill with pinned HTTP invocations in flight.
+    S8,
+    /// Executor pod kill during an automatic component update.
+    S5,
+    /// Shard-manager pod restart under mixed workload.
+    S12,
+    /// Rolling executor restarts under load.
+    S13,
+    /// Executor pod kill while scheduled actions are between claim and fire.
+    S10,
+    /// Executor pod kill while agents are suspended on promises being completed.
+    S11,
+    /// Executor cut off from worker-service while it keeps its shards.
+    S3,
+    /// Two executors cut off from each other while agents on one invoke agents
+    /// on the other. The control: the link carries no traffic.
+    S2,
+    /// One executor unable to resolve the shard manager's name, while its
+    /// connection to it stays up. The second control: that connection is built
+    /// once with an infinite idle TTL, so DNS is never consulted again.
+    S4,
+    /// The same DNS failure, held across a shard-manager restart so the
+    /// executor has to rebuild the connection and resolve a name that no longer
+    /// resolves. S4's companion.
+    Mf2,
+    /// Executor pod kill while agents are having their state reverted.
+    S7,
+    /// Executor pod kill while agents are being deleted.
+    S6,
+    /// Executor pod kill while a component rollback is in flight.
+    S9,
+    /// Executors cut off from the key-value PostgreSQL cluster for about as
+    /// long as an AWS storage failover takes.
+    S16,
+    /// The same cut, held for longer than the key-value retry budget.
+    S22,
+    /// Executors cut off from the indexed-oplog PostgreSQL cluster for the
+    /// length of a writer failover.
+    S14,
+    /// Executors cut off from the Redis cache in front of the key-value layer,
+    /// for longer than a caller is willing to wait.
+    S18,
+    /// The same Redis cache slowed rather than removed.
+    S17,
+    /// The key-value PostgreSQL cluster slowed rather than removed. S17's
+    /// mirror on the other half of the split key-value layer.
+    S15,
+    /// S15 driving `ephemeral` alone: the control for the elimination series.
+    S15A,
+    /// S15A plus `durable`.
+    S15B,
+    /// S15B plus `promise`.
+    S15C,
+    /// The indexed-oplog PostgreSQL cluster slowed rather than removed. S14's
+    /// mirror, and the one delay with no control stream: every agent commits
+    /// its oplog to that cluster.
+    S23,
+    /// The first composed fault: a worker-executor killed while the key-value
+    /// PostgreSQL cluster is unreachable.
+    Mf1,
+    /// Worker-service CPU saturation while agents drive cross-pod RPC. S2's
+    /// populations with the fault moved off the link and onto the relay.
+    S21,
+    /// One executor's wall clock moved half a minute behind the cluster, where
+    /// the quota lease is the only contract two clocks are compared across.
+    S19,
+}
+
 impl BenchmarkConfig {
     pub fn mode(&self) -> &TestMode {
         match self {
             BenchmarkConfig::Benchmark { mode, .. }
             | BenchmarkConfig::Suite { mode, .. }
-            | BenchmarkConfig::Density { mode, .. } => mode,
+            | BenchmarkConfig::Density { mode, .. }
+            | BenchmarkConfig::Chaos { mode, .. } => mode,
         }
     }
 
     pub fn iterations(&self) -> usize {
         match self {
             BenchmarkConfig::Benchmark { iterations, .. } => *iterations,
-            BenchmarkConfig::Suite { .. } | BenchmarkConfig::Density { .. } => 0,
+            BenchmarkConfig::Suite { .. }
+            | BenchmarkConfig::Density { .. }
+            | BenchmarkConfig::Chaos { .. } => 0,
         }
     }
 }

@@ -249,6 +249,7 @@ fn start_now() -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -290,6 +291,7 @@ fn rejected_tool_reconstruction_start(parent_start_index: OplogIndex) -> OplogEn
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::WriteLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -373,6 +375,7 @@ fn custom_start_with_request(
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -1012,6 +1015,7 @@ fn fork_start() -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -2921,6 +2925,7 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         }
     }
 
@@ -3130,6 +3135,7 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -3576,6 +3582,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             )))),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         },
         OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -3588,6 +3595,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             )))),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         },
         OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -3867,15 +3875,28 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
 }
 
 fn consumer_observation(reader_slot: u32, guest: bool, terminal: bool) -> OplogEntry {
+    consumer_observation_with_parent(reader_slot, guest, terminal, None)
+}
+
+/// A guest consumer observation whose read was performed by the scope rooted at `parent`,
+/// such as a tool body reading its durable stdin.
+fn guest_consumer_observation_of(reader_slot: u32, parent: u64) -> OplogEntry {
+    consumer_observation_with_parent(reader_slot, true, false, Some(OplogIndex::from_u64(parent)))
+}
+
+fn consumer_observation_with_parent(
+    reader_slot: u32,
+    guest: bool,
+    terminal: bool,
+    parent_start_index: Option<OplogIndex>,
+) -> OplogEntry {
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
         StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
         StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
     };
     let observation = if guest {
-        StreamConsumerObservation::Guest {
-            parent_start_index: None,
-        }
+        StreamConsumerObservation::Guest { parent_start_index }
     } else {
         StreamConsumerObservation::Host
     };
@@ -8036,6 +8057,38 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
             .unwrap(),
         "a nested Start proves the historical entity body began execution"
     );
+
+    let owned_session_read = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        guest_consumer_observation_of(0, 2),
+    ])
+    .await;
+    assert!(
+        owned_session_read
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
+        "a guest session-input read attributed to the body proves it began execution"
+    );
+
+    let unowned_session_read = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        consumer_observation(0, true, false),
+    ])
+    .await;
+    assert!(
+        !unowned_session_read
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
+        "a guest session-input read of the invocation itself is not entity-body work"
+    );
 }
 
 fn log_entry() -> OplogEntry {
@@ -8258,6 +8311,7 @@ fn transaction_scope_start(parent: Option<u64>) -> OplogEntry {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -8453,6 +8507,7 @@ async fn rdbms_incomplete_stream_repair_reconstructs_typed_loss_at_original_star
             )))),
             durable_function_type: function_type.clone(),
             span_started: None,
+            denial: None,
         },
     ])
     .await;
@@ -9356,6 +9411,7 @@ fn batched_scope_start() -> OplogEntry {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -9403,6 +9459,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -9637,6 +9694,130 @@ async fn wallet_replay_fixture(
 }
 
 #[test]
+#[test_r::timeout("60s")]
+async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() {
+    for count in [512, 2048] {
+        for delayed_entity in [false, true] {
+            let parent = OplogIndex::INITIAL;
+            let start = OplogIndex::from_u64(3);
+            let mut entries = vec![remove_retry_policy(), remove_retry_policy()];
+            if delayed_entity {
+                entries.push(rejected_tool_reconstruction_start(parent));
+            }
+            for generation in 1..=count {
+                entries.push(OplogEntry::card_installed(
+                    delayed_entity.then_some(start),
+                    None,
+                    Box::new(stored_test_card(CardId::new())),
+                    generation as u64,
+                ));
+                entries.push(OplogEntry::CardDerived {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: delayed_entity.then_some(start),
+                    card: Box::new(stored_test_card(CardId::new())),
+                    wallet_generation: generation as u64,
+                });
+            }
+            if delayed_entity {
+                entries.push(end_for(3, 1));
+            }
+            entries.push(remove_retry_policy());
+            let target = entries.len() as u64;
+            let (rs, wallet, oplog, _interest) =
+                wallet_replay_fixture(entries, target, Arc::new(tokio::sync::Mutex::new(()))).await;
+            assert_eq!(
+                rs.get_oplog_entry(None).await.unwrap().0,
+                OplogIndex::from_u64(2)
+            );
+            if delayed_entity {
+                let mut tx = rs.cursor.tx().await.unwrap();
+                tx.try_get_oplog_entry(|_| false).await.unwrap();
+                rs.cursor.finish_tx(tx);
+            }
+
+            // Observe the actual pending/deferred batch without releasing its receipts. All
+            // projection tasks may finish while a Store has yet to receive any of these events.
+            let events = if delayed_entity {
+                rs.cursor.state.lock().await.retained_starts[&start]
+                    .deferred_events
+                    .iter()
+                    .map(|(_, event)| event.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                rs.cursor.pending_replay_events.lock().unwrap().clone()
+            };
+            let reads = oplog.reads.lock().unwrap().clone();
+            let mut projections = Vec::new();
+            for event in &events {
+                if let ReplayEvent::Projected { receipt, .. } = event {
+                    projections.push(receipt.result.clone().await.unwrap());
+                }
+            }
+            assert_eq!(projections.len(), count * 2);
+            let mut payloads = HashSet::new();
+            let mut entries = HashSet::new();
+            for (i, pair) in projections.as_chunks::<2>().0.iter().enumerate() {
+                assert_eq!(pair[0].wallet.cards.len(), i + 2);
+                assert_eq!(pair[0].wallet.generation, (i + 1) as u64);
+                assert!(
+                    pair[0].wallet.cards.ptr_eq(&pair[1].wallet.cards),
+                    "an unchanged-membership audit copied its predecessor"
+                );
+                for projection in pair {
+                    for card in projection.wallet.cards.values() {
+                        payloads.insert(Arc::as_ptr(card) as usize);
+                        entries.insert(std::ptr::from_ref(card) as usize);
+                    }
+                }
+            }
+            assert_eq!(
+                payloads.len(),
+                count + 1,
+                "unchanged card payloads were copied"
+            );
+            assert!(
+                entries.len() < count * 128,
+                "retained membership entries {} approach independently copied prefixes for {count} installs",
+                entries.len()
+            );
+            eprintln!(
+                "wallet batch: installs={count}, delayed={delayed_entity}, payloads={}, membership entries={}",
+                payloads.len(),
+                entries.len()
+            );
+            assert_eq!(*oplog.reads.lock().unwrap(), reads);
+
+            let weak = projections.iter().map(Arc::downgrade).collect::<Vec<_>>();
+            drop(projections);
+            drop(events);
+            // Audits retain their prefix independently of Store delivery, then retire with
+            // their invocation/body. Only the latest projection should survive settlement.
+            if delayed_entity {
+                let mut handle = claim_rejected_tool_reconstruction(&rs, parent).await;
+                let mut reconstruction = handle.take_historical_reconstruction().unwrap();
+                let entity = wallet.entity_replay_wallet(start).unwrap();
+                assert_eq!(entity.receipt().result.await.unwrap().wallet.generation, 0);
+                rs.await_resolution(handle).await.unwrap();
+                reconstruction.body_settled();
+                drop(reconstruction);
+                drop(entity);
+                assert!(wallet.entity_replay_wallet(start).is_err());
+            } else {
+                wallet.finish_replayed_invocation();
+            }
+            drop(rs.take_new_replay_events());
+            assert!(
+                weak[..weak.len() - 1]
+                    .iter()
+                    .all(|weak| weak.upgrade().is_none())
+            );
+            assert!(weak.last().unwrap().upgrade().is_some());
+            assert_eq!(*oplog.reads.lock().unwrap(), reads);
+        }
+    }
+}
+
+#[test]
 #[test_r::timeout("10s")]
 async fn entity_wallet_prefix_is_bound_to_consumption_not_store_construction() {
     for (claim_early, body_before_start) in [(true, false), (false, false), (true, true)] {
@@ -9809,10 +9990,10 @@ async fn benign_card_suffix_reconstructs_before_wallet_boundary() {
     ));
     let reads = oplog.reads.lock().unwrap().clone();
     let receipt = wallet.latest_replay_receipt().result.await.unwrap();
-    assert_eq!(receipt.wallet.cards[&card.card_id()], card);
+    assert_eq!(receipt.wallet.cards[&card.card_id()].as_ref(), &card);
     assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
     drop(wallet.lock_boundary().await.unwrap());
-    assert_eq!(wallet.snapshot().cards[&card.card_id()], card);
+    assert_eq!(wallet.snapshot().cards[&card.card_id()].as_ref(), &card);
     assert_eq!(wallet.snapshot().generation, 1);
     assert_eq!(*oplog.reads.lock().unwrap(), reads);
 }
@@ -9854,7 +10035,10 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
             .is_none()
     );
     let acquired = acquisition.await.unwrap();
-    assert_eq!(wallet.snapshot().cards[&historical.card_id()], historical);
+    assert_eq!(
+        wallet.snapshot().cards[&historical.card_id()].as_ref(),
+        &historical
+    );
     let reads = oplog.reads.lock().unwrap().clone();
     let commit = WalletCommit::prepare(
         acquired,
@@ -9868,8 +10052,8 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
     commit.publish().unwrap();
     drop(commit);
     let published = wallet.snapshot();
-    assert_eq!(published.cards[&live.card_id()], live);
-    assert_eq!(published.cards[&historical.card_id()], historical);
+    assert_eq!(published.cards[&live.card_id()].as_ref(), &live);
+    assert_eq!(published.cards[&historical.card_id()].as_ref(), &historical);
     assert_eq!(published.generation, 2);
     assert_eq!(*oplog.reads.lock().unwrap(), reads);
     assert!(rs.set_replay_target(index).await.is_err());
@@ -9959,6 +10143,7 @@ async fn custom_claim_rejects_invocation_id_collision() {
         request: None,
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     };
     let rs = replay_state_over(vec![remove_retry_policy(), conflicting_start]).await;
 
@@ -9992,6 +10177,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -10035,6 +10221,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
 
     assert!(
@@ -10059,6 +10246,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     };
     assert!(
         StartClaim::unowned(
@@ -11581,6 +11769,7 @@ fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u64>) -> OplogEn
         ))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -11947,6 +12136,7 @@ fn scope_claim_requires_the_recorded_invocation_id() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
     let claim = |invocation_id: Option<u64>| {
         StartClaim::scope(&scope_name, &DurableFunctionType::WriteRemote, None)
@@ -12177,7 +12367,10 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
         [ComponentRevision::new(2).unwrap()]
     );
     assert_eq!(earlier_prefix.wallet.generation, 1);
-    assert_eq!(earlier_prefix.wallet.cards[&installed.card_id()], installed);
+    assert_eq!(
+        earlier_prefix.wallet.cards[&installed.card_id()].as_ref(),
+        &installed
+    );
     assert_eq!(
         earlier_prefix.wallet.metadata.revision,
         ComponentRevision::INITIAL
@@ -12286,7 +12479,10 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
     let projection = wallet.latest_replay_receipt().result.await.unwrap();
     assert_eq!(projection.wallet.generation, 7);
     assert_eq!(projection.wallet.cards.len(), 1);
-    assert_eq!(projection.wallet.cards[&selected.card_id()], selected);
+    assert_eq!(
+        projection.wallet.cards[&selected.card_id()].as_ref(),
+        &selected
+    );
     assert!(!projection.wallet.cards.contains_key(&before.card_id()));
     replay.take_new_replay_events();
     let reads = oplog.reads.lock().unwrap().clone();
@@ -12614,7 +12810,10 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
         assert!(replay.is_live());
         drop(replacement.lock_boundary().await.unwrap());
         replacement.validate_current().unwrap();
-        assert_eq!(replacement.snapshot().cards[&card.card_id()], card);
+        assert_eq!(
+            replacement.snapshot().cards[&card.card_id()].as_ref(),
+            &card
+        );
         assert_eq!(replacement.snapshot().generation, 1);
         assert_eq!(oplog.current_oplog_index().await, index);
         assert!(owner.publish(&preserved, preserved.clone()).is_err());

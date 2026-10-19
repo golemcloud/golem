@@ -20,6 +20,7 @@ import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
 import { golemTool010Guest, guest, tool } from '../src';
+import { s } from '../src/schema/markers';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
@@ -101,6 +102,63 @@ describe('agent metadata (Phase 3)', () => {
     expect(methods['write'].description).toBe('');
     expect(methods['write'].promptHint).toBeUndefined();
     expect(methods['write'].readOnly).toBeUndefined();
+  });
+
+  it('infers per-principal caching only from direct method inputs', () => {
+    defineAgent({
+      name: 'PrincipalReadOnlyMetadata',
+      id: { creator: s.principal() },
+      methods: {
+        direct: method({ input: { caller: s.principal() }, returns: z.string(), readOnly: true }),
+        ttl: method({
+          input: { caller: s.principal() },
+          returns: z.string(),
+          readOnly: { cache: { ttlNanos: 123n } },
+        }),
+        uncached: method({
+          input: { caller: s.principal() },
+          returns: z.string(),
+          readOnly: { cache: 'no-cache' },
+        }),
+        nested: method({
+          input: { data: z.object({ caller: s.principal() }) },
+          returns: z.string(),
+          readOnly: {},
+        }),
+        returned: method({ input: {}, returns: s.principal(), readOnly: true }),
+        ordinary: method({ input: {}, returns: z.string(), readOnly: true }),
+        mutable: method({ input: { caller: s.principal() }, returns: z.string() }),
+        disabled: method({
+          input: { caller: s.principal() },
+          returns: z.string(),
+          readOnly: false,
+        }),
+      },
+    });
+
+    const methods = Object.fromEntries(
+      get('PrincipalReadOnlyMetadata')!.methods.map((m) => [m.name, m]),
+    );
+    expect(methods.direct.readOnly).toEqual({
+      cachePolicy: { tag: 'until-write' },
+      usesPrincipal: true,
+    });
+    expect(methods.ttl.readOnly).toEqual({
+      cachePolicy: { tag: 'ttl', val: 123n },
+      usesPrincipal: true,
+    });
+    expect(methods.uncached.readOnly).toEqual({
+      cachePolicy: { tag: 'no-cache' },
+      usesPrincipal: true,
+    });
+    for (const name of ['nested', 'returned', 'ordinary']) {
+      expect(methods[name].readOnly).toEqual({
+        cachePolicy: { tag: 'until-write' },
+        usesPrincipal: false,
+      });
+    }
+    expect(methods.mutable.readOnly).toBeUndefined();
+    expect(methods.disabled.readOnly).toBeUndefined();
   });
 
   it('maps snapshotting variants correctly', () => {

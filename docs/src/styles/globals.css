@@ -10,3 +10,62 @@
 [role="tablist"] > [role="tab"] {
   flex-shrink: 0;
 }
+
+/* Keep metric names and labels from squeezing the descriptions into a column. */
+.metrics-reference table,
+.metrics-reference tbody {
+  display: block;
+  width: 100%;
+}
+
+.metrics-reference thead {
+  @apply sr-only;
+}
+
+.metrics-reference tbody tr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem 1rem;
+  padding: 1rem 0;
+  border-width: 0 0 1px;
+  background: transparent;
+}
+
+.metrics-reference td {
+  padding: 0;
+  border: 0;
+}
+
+.metrics-reference td:first-child {
+  font-weight: 600;
+}
+
+.metrics-reference td:nth-child(2) {
+  font-size: 0.875rem;
+}
+
+.metrics-reference td:nth-child(3) {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  font-size: 0.875rem;
+}
+
+.metrics-reference td:nth-child(3):empty {
+  display: none;
+}
+
+.metrics-reference td:nth-child(3):not(:empty)::before {
+  content: "Labels: ";
+  font-weight: 600;
+}
+
+.metrics-reference td:nth-child(4) {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.metrics-reference td code.nextra-code {
+  box-decoration-break: clone;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

@@ -45,6 +45,8 @@ var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 			markScopeCardInvalid(c)
 		case WalletCard:
 			markNotSendable(c, errWalletCardNotSendable)
+		case PersistentCard:
+			markNotSendable(c, "golem.PersistentCard cannot be sent: send the PermissionCard from Concrete or the PolymorphicPermissionCard from Template")
 		// Card identifiers, holders and lifespans are host-side request
 		// values with unexported fields: as a record they would travel as
 		// record {} and arrive as a zero value.

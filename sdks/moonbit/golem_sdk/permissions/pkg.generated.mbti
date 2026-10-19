@@ -10,7 +10,7 @@ import {
 }
 
 // Values
-pub fn derive_from_wallet(Bounds, lifespan? : Lifespan) -> PermissionCard raise PermissionError
+pub fn derive_from_wallet(Bounds, lifespan? : Lifespan) -> PersistentCard raise PermissionError
 
 pub fn derive_scope(Array[PermissionCard], Bounds, template_parents? : Array[PolymorphicPermissionCard], scope_parents? : Array[ScopeCard]) -> ScopeCard raise PermissionError
 
@@ -97,7 +97,7 @@ pub(all) struct PatternGrant {
 pub struct PermissionCard {
   // private fields
 }
-pub fn PermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> Self raise PermissionError
+pub fn PermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PersistentCard raise PermissionError
 pub fn PermissionCard::drop(Self) -> Unit
 pub fn PermissionCard::expires_at(Self) -> Timestamp?
 pub fn PermissionCard::id(Self) -> CardId
@@ -112,10 +112,24 @@ pub impl @schema.IntoSchema for PermissionCard
 pub impl @schema.IntoWire for PermissionCard
 pub impl @schema.WireSchema for PermissionCard
 
+pub enum PersistentCard {
+  Concrete(PermissionCard)
+  Template(PolymorphicPermissionCard)
+}
+pub fn PersistentCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> Self raise PermissionError
+pub fn PersistentCard::drop(Self) -> Unit
+pub fn PersistentCard::expires_at(Self) -> Timestamp?
+pub fn PersistentCard::id(Self) -> CardId
+pub fn PersistentCard::inspect(Self) -> CardView raise PermissionError
+pub fn PersistentCard::install(Self, Holder) -> Unit raise PermissionError
+pub fn PersistentCard::is_moved(Self) -> Bool
+pub fn PersistentCard::parents(Self) -> Array[CardId]
+pub fn PersistentCard::revoke(Self) -> UInt raise PermissionError
+
 pub struct PolymorphicPermissionCard {
   // private fields
 }
-pub fn PolymorphicPermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PermissionCard raise PermissionError
+pub fn PolymorphicPermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PersistentCard raise PermissionError
 pub fn PolymorphicPermissionCard::drop(Self) -> Unit
 pub fn PolymorphicPermissionCard::expires_at(Self) -> Timestamp?
 pub fn PolymorphicPermissionCard::id(Self) -> CardId

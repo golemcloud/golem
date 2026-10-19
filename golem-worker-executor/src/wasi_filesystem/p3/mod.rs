@@ -22,14 +22,14 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use crate::durable_host::authorization::targets::CanonicalGuestPath;
+use crate::durable_host::concurrent::{AccessClaimOptions, Cancellable, DropPolicy};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_p3_view, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, reserve_invocation_id_before_await, run_read_access,
+    observe_function_call_store, reserve_invocation_id_before_await,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{
     CallReplayOutcome, DurableCallSession, LiveAuthorizationPermit, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
 };
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AttributeChanges, Attributes as AgentAttributes,
@@ -46,8 +46,7 @@ use crate::wasi_filesystem::{
 };
 use crate::workerctx::WorkerCtx;
 use bytes::{Bytes, BytesMut};
-use golem_common::SafeDisplay;
-use golem_common::model::card::FilesystemVerb;
+use golem_common::model::card::{FilesystemVerb, PermissionTarget};
 use golem_common::model::entity::FilesystemCapability;
 use golem_common::model::oplog::host_functions::{
     FilesystemPermissionCheck, P3FilesystemTypesDescriptorAppendViaStream,
@@ -56,11 +55,10 @@ use golem_common::model::oplog::host_functions::{
 };
 use golem_common::model::oplog::types::{SerializableFileTimes, SerializableP3FileSystemError};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestFileSystemPath, HostRequestNoInput,
+    DeniablePair, DurableFunctionType, HostRequestFileSystemPath, HostRequestNoInput,
     HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
     HostResponsePermissionCheck,
 };
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureReader, Linker, Resource, Source,
     StreamConsumer, StreamProducer, StreamReader, StreamResult,
@@ -148,17 +146,11 @@ async fn authorize_paths<Ctx: WorkerCtx, U: Send + 'static>(
 ) -> FilesystemResult<Option<LiveAuthorizationPermit>> {
     reserve_invocation_id_before_await(accessor, durable_worker_ctx::<Ctx, U>)
         .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
-    let mut permit = None;
-    let response = run_read_access::<_, _, Ctx, FilesystemPermissionCheck, _>(
+    let (response, permit) = run_permission_checked_access::<Ctx, U, FilesystemPermissionCheck>(
         accessor,
         permission_check_request(requests),
-        DurableFunctionType::ReadLocal,
-        async || -> wasmtime::Result<_> {
-            let result = p3_live_permission_decision(accessor, requests)
-                .await?
-                .map(|decision| permit = decision);
-            Ok(HostResponsePermissionCheck { result })
-        },
+        requests,
+        async || -> wasmtime::Result<_> { Ok(HostResponsePermissionCheck { result: Ok(()) }) },
     )
     .await
     .map_err(FilesystemError::trap)?;
@@ -168,29 +160,100 @@ async fn authorize_paths<Ctx: WorkerCtx, U: Send + 'static>(
     }
 }
 
-/// The decision of a filesystem permission check that runs as the live action of a durable call.
-/// `Err` holds the reason of a denial. The repair of an incomplete check during replay cannot
-/// authorize, so it completes as allowed.
-async fn p3_live_permission_decision<Ctx: WorkerCtx, U: 'static>(
+/// Constructs the targets of a filesystem permission check without making a live decision.
+fn p3_permission_targets<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
-) -> Result<Result<Option<LiveAuthorizationPermit>, String>, WorkerExecutorError> {
-    let targets = accessor.with(|mut access| {
+) -> Result<Vec<PermissionTarget>, String> {
+    Ok(accessor.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.is_live()
-            .then(|| filesystem_permission_targets(ctx, requests))
-    });
-    let Some(targets) = targets else {
-        return Ok(Ok(None));
-    };
-    Ok(authorize_live_permissions_at_serialized_access(
+        filesystem_permission_targets(ctx, requests)
+    }))
+}
+
+/// Runs a `ReadLocal` durable call that the filesystem permissions of `requests` can deny, and
+/// returns its response with the permit of an allowed live decision.
+async fn run_permission_checked_access<Ctx, U, Pair>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    request: Pair::Req,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+    live: impl AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
+) -> wasmtime::Result<(Pair::Resp, Option<LiveAuthorizationPermit>)>
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+    Pair: DeniablePair,
+    Pair::Req: Clone,
+{
+    run_deniable_filesystem_access::<Ctx, U, Pair, Cancellable>(
+        accessor,
+        request,
+        p3_permission_targets(accessor, requests),
+        live,
+    )
+    .await
+}
+
+/// Runs a `ReadLocal` durable call checked against `targets`, and returns its response with the
+/// permit of an allowed new decision.
+///
+/// A live call decides before it writes its `Start`. A denied call records the denial in the
+/// `Start` and completes with [`DeniablePair::denied`] without running `live`, so the recovery of
+/// an incomplete denied `Start` gives the same response. A replayed call uses the recorded
+/// decision: an incomplete `Start` without a denial was allowed, so its repair runs `live` without
+/// a new decision. A new call decides after its claim resolves and before it writes its `Start`.
+async fn run_deniable_filesystem_access<Ctx, U, Pair, P>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    request: Pair::Req,
+    targets: Result<Vec<PermissionTarget>, String>,
+    live: impl AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
+) -> wasmtime::Result<(Pair::Resp, Option<LiveAuthorizationPermit>)>
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+    Pair: DeniablePair,
+    Pair::Req: Clone,
+    P: DropPolicy,
+{
+    let (call, decision) = DurableCallSession::<Pair, P>::start_authorized_access(
         accessor,
         durable_worker_ctx::<Ctx, U>,
-        &targets,
+        DurableFunctionType::ReadLocal,
+        AccessClaimOptions::default(),
+        request.clone(),
+        targets,
     )
-    .await?
-    .map(Some)
-    .map_err(|error| error.to_safe_string()))
+    .await?;
+    let (mut permit, denied) = match decision {
+        Some(Ok(permit)) => (Some(permit), None),
+        Some(Err(denial)) => (None, Some(Pair::denied(&request, &denial))),
+        None => (None, None),
+    };
+    let response = if call.is_live() {
+        match denied {
+            Some(denied) => call
+                .complete_access(accessor, durable_worker_ctx::<Ctx, U>, denied)
+                .await
+                .map_err(|error| wasmtime::Error::from_anyhow(error.into_marked_anyhow()))?,
+            None => {
+                call.run_live_action_access(accessor, durable_worker_ctx::<Ctx, U>, live)
+                    .await?
+            }
+        }
+    } else {
+        permit = None;
+        match call
+            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
+            .await?
+        {
+            CallReplayOutcome::Replayed(response) => response,
+            CallReplayOutcome::Incomplete(call) => {
+                call.run_live_action_access(accessor, durable_worker_ctx::<Ctx, U>, live)
+                    .await?
+            }
+        }
+    };
+    Ok((response, permit))
 }
 
 fn p3_agent_storage_error(error: FilesystemStorageError) -> FilesystemError {
@@ -1215,10 +1278,6 @@ fn deserialize_stat_error(error: SerializableP3FileSystemError) -> FilesystemErr
     }
 }
 
-fn serialize_write_admission_error(error: types::ErrorCode) -> SerializableP3FileSystemError {
-    SerializableP3FileSystemError::from_result(Ok(error))
-}
-
 fn deserialize_write_admission(
     result: Result<(), SerializableP3FileSystemError>,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>> {
@@ -1236,96 +1295,37 @@ async fn admit_stream_write<Pair, Ctx, U>(
     fd: &Resource<Descriptor>,
 ) -> wasmtime::Result<Result<Option<LiveAuthorizationPermit>, types::ErrorCode>>
 where
-    Pair: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseP3FileSystemWriteAdmission>,
+    Pair: DeniablePair<Req = HostRequestNoInput, Resp = HostResponseP3FileSystemWriteAdmission>,
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    let authorization_result = Arc::new(Mutex::new(None));
-    let authorization_for_start = Arc::clone(&authorization_result);
+    reserve_invocation_id_before_await(accessor, durable_worker_ctx::<Ctx, U>)
+        .map_err(wasmtime::Error::from)?;
     let fd_rep = fd.rep();
-    let mut handle = DurableCallSession::<Pair, NotCancellable>::start_access_with(
-        accessor,
-        durable_worker_ctx::<Ctx, U>,
-        DurableFunctionType::ReadLocal,
-        move |start, accessor| {
-            Box::pin(async move {
-                if start.is_live {
-                    let permit = check_stream_write::<Ctx, U>(accessor, fd_rep).await?;
-                    *authorization_for_start.lock().unwrap() = Some(permit);
-                }
-                Ok(HostRequestNoInput {})
-            })
-        },
-    )
-    .await
-    .map_err(wasmtime::Error::from)?;
-
-    let mut authorization_permit = None;
-    let response = if handle.is_live() {
-        let permit = authorization_result.lock().unwrap().take().flatten();
-        let response = match permit {
-            Some(permit) => {
-                authorization_permit = Some(permit);
-                HostResponseP3FileSystemWriteAdmission { result: Ok(()) }
-            }
-            None => HostResponseP3FileSystemWriteAdmission {
-                result: Err(serialize_write_admission_error(
-                    types::ErrorCode::NotPermitted,
-                )),
+    let (response, authorization_permit) =
+        run_deniable_filesystem_access::<Ctx, U, Pair, NotCancellable>(
+            accessor,
+            HostRequestNoInput {},
+            check_stream_write::<Ctx, U>(accessor, fd_rep),
+            async || -> wasmtime::Result<_> {
+                Ok(HostResponseP3FileSystemWriteAdmission { result: Ok(()) })
             },
-        };
-        handle
-            .complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
-            .await
-            .map_err(wasmtime::Error::from)?
-    } else {
-        match handle
-            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-            .await
-            .map_err(wasmtime::Error::from)?
-        {
-            CallReplayOutcome::Replayed(response) => response,
-            CallReplayOutcome::Incomplete(live) => {
-                handle = live;
-                handle
-                    .complete_access(
-                        accessor,
-                        durable_worker_ctx::<Ctx, U>,
-                        HostResponseP3FileSystemWriteAdmission { result: Ok(()) },
-                    )
-                    .await
-                    .map_err(wasmtime::Error::from)?
-            }
-        }
-    };
+        )
+        .await?;
 
     Ok(deserialize_write_admission(response.result)?.map(|()| authorization_permit))
 }
 
-/// Checks the write permission of a stream write while live. `None` denies the write. An
-/// executor error fails the admission before it records its `Start`.
-async fn check_stream_write<Ctx: WorkerCtx, U: 'static>(
+/// Constructs the targets of a stream write; a descriptor without a guest path denies the write.
+fn check_stream_write<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     fd_rep: u32,
-) -> Result<Option<LiveAuthorizationPermit>, WorkerExecutorError> {
-    let Ok(path) =
-        descriptor_guest_path_from_accessor::<Ctx, U>(accessor, &Resource::new_borrow(fd_rep), "")
-    else {
-        return Ok(None);
-    };
-    let targets = accessor.with(|mut access| {
-        filesystem_permission_targets(
-            durable_worker_ctx::<Ctx, U>(access.data_mut()),
-            &[(FilesystemVerb::Write, path)],
-        )
-    });
-    Ok(authorize_live_permissions_at_serialized_access(
-        accessor,
-        durable_worker_ctx::<Ctx, U>,
-        &targets,
-    )
-    .await?
-    .ok())
+) -> Result<Vec<PermissionTarget>, String> {
+    match descriptor_guest_path_from_accessor::<Ctx, U>(accessor, &Resource::new_borrow(fd_rep), "")
+    {
+        Ok(path) => p3_permission_targets(accessor, &[(FilesystemVerb::Write, path)]),
+        Err(_) => Err("the descriptor has no guest path".to_string()),
+    }
 }
 
 fn serialize_stat_result(
@@ -1429,15 +1429,6 @@ fn metadata_hash_from_stat(
 
     let (lower, upper) = calculate_metadata_hash_parts(modified, stat.size);
     Ok(types::MetadataHashValue { lower, upper })
-}
-
-/// The recorded response of a `stat` or `stat-at` that the live permission check denies.
-fn p3_stat_denied() -> HostResponseP3FileSystemStat {
-    HostResponseP3FileSystemStat {
-        result: Err(SerializableP3FileSystemError::from_result(Ok(
-            types::ErrorCode::NotPermitted,
-        ))),
-    }
 }
 
 async fn apply_stat_response(
@@ -2062,28 +2053,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
 
-        let response = run_read_access::<_, _, Ctx, P3FilesystemTypesDescriptorStat, _>(
-            store,
-            HostRequestFileSystemPath {
-                path: path.to_string_lossy().to_string(),
-            },
-            DurableFunctionType::ReadLocal,
-            || async {
-                if p3_live_permission_decision(store, &permissions)
-                    .await?
-                    .is_err()
-                {
-                    return Ok(p3_stat_denied());
-                }
-                let stat = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep)).await;
-                *live_stat_for_call.lock().unwrap() = Some(stat.clone());
-                Ok(HostResponseP3FileSystemStat {
-                    result: serialize_stat_result(&stat),
-                })
-            },
-        )
-        .await
-        .map_err(FilesystemError::trap)?;
+        let (response, _authorization_permit) =
+            run_permission_checked_access::<Ctx, U, P3FilesystemTypesDescriptorStat>(
+                store,
+                HostRequestFileSystemPath {
+                    path: path.to_string_lossy().to_string(),
+                },
+                &permissions,
+                async || {
+                    let stat = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep)).await;
+                    *live_stat_for_call.lock().unwrap() = Some(stat.clone());
+                    Ok(HostResponseP3FileSystemStat {
+                        result: serialize_stat_result(&stat),
+                    })
+                },
+            )
+            .await
+            .map_err(FilesystemError::trap)?;
         let live_stat = live_stat.lock().unwrap().take();
         let stat = match (live_stat, &response.result) {
             (Some(stat), _) => stat,
@@ -2142,34 +2128,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
         let live_path = path.clone();
-        let response = run_read_access::<_, _, Ctx, P3FilesystemTypesDescriptorStatAt, _>(
-            store,
-            HostRequestFileSystemPath {
-                path: full_path.to_string_lossy().to_string(),
-            },
-            DurableFunctionType::ReadLocal,
-            || async {
-                if p3_live_permission_decision(store, &permissions)
-                    .await?
-                    .is_err()
-                {
-                    return Ok(p3_stat_denied());
-                }
-                let stat = run_local_stat_at::<Ctx, U>(
-                    store,
-                    Resource::new_borrow(fd_rep),
-                    path_flags,
-                    live_path,
-                )
-                .await;
-                *live_stat_for_call.lock().unwrap() = Some(stat.clone());
-                Ok(HostResponseP3FileSystemStat {
-                    result: serialize_stat_result(&stat),
-                })
-            },
-        )
-        .await
-        .map_err(FilesystemError::trap)?;
+        let (response, _authorization_permit) =
+            run_permission_checked_access::<Ctx, U, P3FilesystemTypesDescriptorStatAt>(
+                store,
+                HostRequestFileSystemPath {
+                    path: full_path.to_string_lossy().to_string(),
+                },
+                &permissions,
+                async || {
+                    let stat = run_local_stat_at::<Ctx, U>(
+                        store,
+                        Resource::new_borrow(fd_rep),
+                        path_flags,
+                        live_path,
+                    )
+                    .await;
+                    *live_stat_for_call.lock().unwrap() = Some(stat.clone());
+                    Ok(HostResponseP3FileSystemStat {
+                        result: serialize_stat_result(&stat),
+                    })
+                },
+            )
+            .await
+            .map_err(FilesystemError::trap)?;
         let live_stat = live_stat.lock().unwrap().take();
         let stat = match (live_stat, &response.result) {
             (Some(stat), _) => stat,

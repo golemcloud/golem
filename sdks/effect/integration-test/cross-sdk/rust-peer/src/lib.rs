@@ -331,8 +331,12 @@ impl RustPeer for RustPeerImpl {
         )
     }
     async fn permission_card_through_effect(&self, tenant: String) -> String {
-        let card = permissions::derive_from_wallet(&Default::default(), None)
-            .expect("derive permission card");
+        let permissions::PersistentCard::Concrete(card) =
+            permissions::derive_from_wallet(&Default::default(), None)
+                .expect("derive permission card")
+        else {
+            panic!("expected a concrete card");
+        };
         let expected = card.id();
         let alias = GuestPermissionCardHandle::from_value(&card.to_value())
             .expect("permission card lowers to a card handle");

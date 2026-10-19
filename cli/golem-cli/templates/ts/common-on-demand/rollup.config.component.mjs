@@ -174,6 +174,26 @@ function validateSdkImports(parsedTsConfig) {
     }
 }
 
+// Annotation and circular dependency warnings that only involve dependency
+// modules (for example the ones zod >= 4.5 produces) are not actionable in the
+// application, so they are dropped. The same warnings about application
+// sources are still reported.
+const dependencyOnlyLogCodes = new Set(["INVALID_ANNOTATION", "CIRCULAR_DEPENDENCY"]);
+
+function isDependencyModule(id) {
+    return id.replaceAll("\\", "/").includes("/node_modules/");
+}
+
+function onLog(level, log, handler) {
+    if (level === "warn" && dependencyOnlyLogCodes.has(log.code)) {
+        const ids = log.ids ?? (log.id ? [log.id] : []);
+        if (ids.length > 0 && ids.every(isDependencyModule)) {
+            return;
+        }
+    }
+    handler(level, log);
+}
+
 function componentRollupConfig() {
     const componentName = process.env.GOLEM_COMPONENT_NAME;
     if (!componentName) {
@@ -237,6 +257,7 @@ function componentRollupConfig() {
         },
         external: externalPackages,
         plugins,
+        onLog,
     };
 }
 

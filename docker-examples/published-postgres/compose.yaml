@@ -1,3 +1,6 @@
+# Development only: known example credentials, disabled login, and plain HTTP.
+# Keep published ports on loopback. Replace credentials and add TLS and network restrictions
+# before any remote exposure; see docs/src/content/next/deploy/docker.mdx.
 x-aliases:
   blob-storage-env-vars: &blob-storage-env-vars
     GOLEM__BLOB_STORAGE__TYPE: "LocalFileSystem"
@@ -6,17 +9,17 @@ x-aliases:
 services:
   # Requests for GOLEM_ROUTER_MANAGEMENT_HOST reach the management API; requests for every
   # other host reach the HTTP API and MCP deployments on the worker service's custom request port.
-  # Releases up to v1.5.0 have no golem-router image. For such a GOLEM_IMAGES_VERSION, build it
-  # from the repository root first:
-  #   docker build -f golem-router/docker/Dockerfile -t golemservices/golem-router:<version> .
+  # Build all Golem images from the same checkout; Dockerfiles package prebuilt Linux binaries.
   router:
     image: golemservices/golem-router:${GOLEM_IMAGES_VERSION}
-    pull_policy: missing
+    build:
+      context: ../..
+      dockerfile: golem-router/docker/Dockerfile
+    pull_policy: never
     ports:
-      - "${GOLEM_ROUTER_PORT}:80"
+      - "127.0.0.1:${GOLEM_ROUTER_PORT}:8080"
     environment:
       GOLEM_ROUTER_MANAGEMENT_HOST: ${GOLEM_ROUTER_MANAGEMENT_HOST}
-      GOLEM_ROUTER_CLIENT_MAX_BODY_SIZE: ${GOLEM_ROUTER_COMPONENT_MAX_SIZE_ALLOWED}
       GOLEM_ROUTER_REGISTRY_SERVICE_HOST: golem-registry-service
       GOLEM_ROUTER_REGISTRY_SERVICE_PORT: ${REGISTRY_SERVICE_HTTP_PORT}
       GOLEM_ROUTER_WORKER_SERVICE_HOST: golem-worker-service
@@ -44,7 +47,10 @@ services:
 
   golem-registry-service:
     image: golemservices/registry-service:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    build:
+      context: ../..
+      dockerfile: golem-registry-service/docker/Dockerfile
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -80,7 +86,10 @@ services:
 
   golem-shard-manager:
     image: golemservices/golem-shard-manager:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    build:
+      context: ../..
+      dockerfile: golem-shard-manager/docker/Dockerfile
+    pull_policy: never
     restart: on-failure
     environment:
       RUST_BACKTRACE: 1
@@ -109,7 +118,10 @@ services:
 
   golem-worker-service:
     image: golemservices/golem-worker-service:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    build:
+      context: ../..
+      dockerfile: golem-worker-service/docker/Dockerfile
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -134,8 +146,8 @@ services:
     volumes:
       - blob_storage:/data/blob_storage
     ports:
-      - "${WORKER_SERVICE_CUSTOM_REQUEST_PORT}:${WORKER_SERVICE_CUSTOM_REQUEST_PORT}"
-      - "${WORKER_SERVICE_MCP_PORT}:${WORKER_SERVICE_MCP_PORT}"
+      - "127.0.0.1:${WORKER_SERVICE_CUSTOM_REQUEST_PORT}:${WORKER_SERVICE_CUSTOM_REQUEST_PORT}"
+      - "127.0.0.1:${WORKER_SERVICE_MCP_PORT}:${WORKER_SERVICE_MCP_PORT}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -150,7 +162,10 @@ services:
 
   golem-component-compilation-service:
     image: golemservices/golem-component-compilation-service:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    build:
+      context: ../..
+      dockerfile: golem-component-compilation-service/docker/Dockerfile
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -170,7 +185,10 @@ services:
 
   golem-worker-executor:
     image: golemservices/golem-worker-executor:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    build:
+      context: ../..
+      dockerfile: golem-worker-executor/docker/Dockerfile
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]

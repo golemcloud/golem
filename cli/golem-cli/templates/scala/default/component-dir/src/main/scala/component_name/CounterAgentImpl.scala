@@ -14,4 +14,17 @@ final class CounterAgentImpl(@unused private val name: String) extends CounterAg
       count += 1
       count
     }
+
+  override def value(): Future[Int] = Future.successful(count)
+
+  override def add(by: Int): Future[Int] =
+    Future.successful {
+      count += by
+      count
+    }
+
+  override def reset(): Future[Unit] =
+    Future.successful {
+      count = 0
+    }
 }

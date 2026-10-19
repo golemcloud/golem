@@ -1,6 +1,6 @@
 ///|
 /// Counter agent with custom snapshotting in MoonBit
-#derive.agent(snapshotting="every_n(1)")
+#derive.agent(snapshotting="every_n(5)")
 #derive.mount("/snapshot-counters/{name}")
 struct CounterWithSnapshotAgent {
   name : String
@@ -10,7 +10,7 @@ struct CounterWithSnapshotAgent {
 ///|
 /// Creates a new counter with the given name
 fn CounterWithSnapshotAgent::new(name : String) -> CounterWithSnapshotAgent {
-  { name, value: 0 }
+  { name, value: 0, }
 }
 
 ///|
@@ -23,8 +23,16 @@ pub fn CounterWithSnapshotAgent::increment(self : Self) -> UInt64 {
 }
 
 ///|
+#derive.endpoint(get="/value")
+pub fn CounterWithSnapshotAgent::value(self : Self) -> UInt64 {
+  self.value
+}
+
+///|
 /// Custom snapshot: serialize value as 8 big-endian bytes
-pub impl @agents.Snapshottable for CounterWithSnapshotAgent with save_snapshot(self) {
+pub impl @agents.Snapshottable for CounterWithSnapshotAgent with fn save_snapshot(
+  self,
+) {
   let v = self.value
   let arr : Array[Byte] = []
   for i = 7; i >= 0; i = i - 1 {
@@ -47,9 +55,9 @@ pub fn CounterWithSnapshotAgent::load_snapshot(
     v = v | (bytes[i].to_uint64() << ((7 - i) * 8))
   }
   let name : String = context.identity(0) catch {
-    error => return Err(error.to_string())
+    error => return Err("\{Repr(error)}")
   }
-  Ok({ name, value: v })
+  Ok({ name, value: v, })
 }
 
 ///|

@@ -111,21 +111,16 @@ fn canonical_guest_path_from_descriptor_path(
     CanonicalGuestPath::new(&absolute)?.resolve(relative)
 }
 
-/// The decision of a filesystem permission check that runs as the live action of a durable call.
-/// `Err` holds the reason of a denial. The repair of an incomplete check during replay cannot
-/// authorize, so it completes as allowed.
+/// The live decision of a filesystem permission check, made before the durable call that records
+/// it writes its `Start`. `Err` holds the reason of a denial, which the `Start` records.
 pub(crate) async fn live_permission_decision<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
-) -> Result<Result<Option<LiveAuthorizationPermit>, String>, WorkerExecutorError> {
-    if !ctx.is_live() {
-        return Ok(Ok(None));
-    }
+) -> Result<Result<LiveAuthorizationPermit, String>, WorkerExecutorError> {
     let targets = filesystem_permission_targets(ctx, requests);
     Ok(ctx
         .authorize_live_permissions(&targets)
         .await?
-        .map(Some)
         .map_err(|error| error.to_safe_string()))
 }
 

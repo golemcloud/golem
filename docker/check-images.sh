@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Builds the linux/amd64 images of the Golem services, of the golem executable and of xfs-quotad
-# without pushing them, and checks the contract of each image:
+# Builds the linux/amd64 images of the Golem services, of the golem executable, of xfs-quotad and of
+# the router without pushing them, and checks the contract of each image:
 #
 # - The image runs as uid and gid 65534, and that user can write the directories of the image
 #   where the default configuration keeps data.
 # - No file in the image has a setuid or setgid bit.
 # - The golem image starts with GOLEM_LITESTREAM=true on a new volume.
+# - Envoy accepts the configuration that the router image writes, and the router sends each request
+#   to its service.
 # - The binary of xfs-quotad has the file capability cap_sys_admin+ep.
 # - xfs-quotad starts only when the container adds SYS_ADMIN and allows privilege escalation.
 #
@@ -40,11 +42,12 @@ services=(
     "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage"
     "cli/golem golem /home/golem /var/lib/golem"
     "golem-xfs-quotad golem-xfs-quotad /run/golem-quota"
+    "golem-router - /home/golem"
 )
 
 for service in "${services[@]}"; do
     read -r directory binary _ <<<"$service"
-    if [ ! -e "$release/$binary" ]; then
+    if [ "$binary" != - ] && [ ! -e "$release/$binary" ]; then
         printf '#!/bin/sh\nexit 0\n' >"$release/$binary"
         chmod +x "$release/$binary"
     fi
@@ -83,6 +86,163 @@ databases=$(grep -c '^  - path:' cli/golem/docker/litestream.yml)
 restores=$(grep -c "no matching backups found" <<<"$output" || true)
 [ "$restores" = "$databases" ] ||
     fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
+
+# The entrypoint writes the Envoy configuration from the variables, and Envoy validates it.
+router="$tag_prefix/golem-router"
+validate_router() {
+    "$engine" run --rm --cap-drop ALL --security-opt no-new-privileges \
+        -e GOLEM_ROUTER_MANAGEMENT_HOST=golem.example -e GOLEM_ROUTER_REGISTRY_SERVICE_HOST=registry \
+        -e GOLEM_ROUTER_WORKER_SERVICE_HOST=worker "$@" "$router" --mode validate 2>&1
+}
+echo "== $router: configuration"
+output=$(validate_router) || fail "$router: $output"
+output=$(validate_router -e GOLEM_ROUTER_STATS_PORT=19001 -e GOLEM_ROUTER_CONCURRENCY=4) ||
+    fail "$router with GOLEM_ROUTER_STATS_PORT and GOLEM_ROUTER_CONCURRENCY: $output"
+if output=$(validate_router -e GOLEM_ROUTER_CONCURRENCY=0); then
+    fail "$router accepted GOLEM_ROUTER_CONCURRENCY=0: $output"
+fi
+grep -q "golem-router: GOLEM_ROUTER_CONCURRENCY has the value '0'" <<<"$output" ||
+    fail "$router with GOLEM_ROUTER_CONCURRENCY=0: $output"
+
+# The router sends each host to its service and forwards the original authority. A management host
+# with a trailing dot or a port is still the management host; every other host reaches the custom
+# request port. The services are Envoy listeners that answer with their name, and with the
+# authority, the protocol and the X-Forwarded-Proto of the request. They accept WebSocket upgrades
+# and answer them with their name in a header, because Envoy sends no body after an upgrade.
+echo "== $router: routing by host"
+network=$("$engine" network create "$tag_prefix-router")
+cleanup_router() {
+    "$engine" rm -f "$tag_prefix-router" "$tag_prefix-router-trusted" "$tag_prefix-services" >/dev/null 2>&1 || true
+    "$engine" network rm "$network" >/dev/null 2>&1 || true
+}
+trap cleanup_router EXIT
+listener() {
+    cat <<EOF
+  - address: {socket_address: {address: 0.0.0.0, port_value: $1}}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: s
+          codec_type: AUTO
+          upgrade_configs:
+          - upgrade_type: websocket
+          route_config:
+            virtual_hosts:
+            - name: s
+              domains: ["*"]
+              response_headers_to_add:
+              - header: {key: x-authority, value: "%REQ(:AUTHORITY)%"}
+              - header: {key: x-protocol, value: "%PROTOCOL%"}
+              - header: {key: x-received-proto, value: "%REQ(X-FORWARDED-PROTO)%"}
+              - header: {key: x-service, value: $2}
+              routes:
+              - match: {prefix: /}
+                direct_response: {status: 200, body: {inline_string: $2}}
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
+EOF
+}
+stand_ins=$(printf 'static_resources:\n  listeners:\n%s\n%s\n%s\n' "$(listener 8081 registry)" \
+    "$(listener 9005 worker)" "$(listener 9006 custom)")
+"$engine" run -d --name "$tag_prefix-services" --network "$network" --network-alias registry \
+    --network-alias worker --entrypoint envoy "$router" --disable-hot-restart --config-yaml "$stand_ins" >/dev/null
+# The first router has the metrics port; the second trusts one proxy in front of it and has none.
+start_router() {
+    name=$1
+    shift
+    "$engine" run -d --name "$name" --network "$network" -p 127.0.0.1::8080 -p 127.0.0.1::19001 \
+        -e GOLEM_ROUTER_MANAGEMENT_HOST=management.test -e GOLEM_ROUTER_REGISTRY_SERVICE_HOST=registry \
+        -e GOLEM_ROUTER_WORKER_SERVICE_HOST=worker -e GOLEM_ROUTER_DNS_REFRESH_RATE=1s "$@" "$router" >/dev/null
+}
+start_router "$tag_prefix-router" -e GOLEM_ROUTER_STATS_PORT=19001
+start_router "$tag_prefix-router-trusted" -e GOLEM_ROUTER_TRUSTED_HOPS=1
+address=$("$engine" port "$tag_prefix-router" 8080/tcp | head -n 1)
+stats_address=$("$engine" port "$tag_prefix-router" 19001/tcp | head -n 1)
+trusted_address=$("$engine" port "$tag_prefix-router-trusted" 8080/tcp | head -n 1)
+trusted_stats_address=$("$engine" port "$tag_prefix-router-trusted" 19001/tcp | head -n 1)
+# Prints the authority that the service received and the name of the service.
+served_by() {
+    curl -s -D - --http1.1 -H "Host: $1" "http://$address$2" |
+        tr -d '\r' | sed -n -e 's/^x-authority: //p' -e '$p'
+}
+for _ in $(seq 1 30); do
+    [ "$(served_by app.test / | tail -n 1)" = custom ] &&
+        [ "$(curl -s --http1.1 -H 'Host: app.test' "http://$trusted_address/")" = custom ] && break
+    sleep 1
+done
+# <host> <path> <service>
+cases=(
+    "management.test /v1/agents/test worker"
+    "management.test:443 /v1/agents/test worker"
+    "management.test. /v1/agents/test worker"
+    "management.test.:443 /v1/agents/test worker"
+    "Management.Test. /v1/agents/test worker"
+    "management.test. /v1/components registry"
+    "app.test /v1/agents/test custom"
+    "app.test.:443 /v1/agents/test custom"
+    "management.test.example /v1/agents/test custom"
+)
+for case in "${cases[@]}"; do
+    read -r host path expected <<<"$case"
+    result=$(served_by "$host" "$path" | paste -sd ' ')
+    [ "$result" = "$host $expected" ] ||
+        fail "$router sent $path for host $host to '$result', not to '$host $expected'"
+done
+
+# Prints the status, the protocol that the service received and the name of the service, for a
+# WebSocket upgrade request.
+upgrade_served_by() {
+    curl -s -D - -o /dev/null --http1.1 -H "Host: $1" -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+        -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+        "http://$address$2" | tr -d '\r' |
+        sed -n -e 's/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p' -e 's/^x-protocol: //p' -e 's/^x-service: //p'
+}
+# The WebSockets of the management API reach the worker service over HTTP/1.1. HTTP API
+# deployments serve no WebSockets, so the router refuses an upgrade for them.
+# <host> <path> <result>
+cases=(
+    "management.test /v1/agents/invoke-agent-session 200 HTTP/1.1 worker"
+    "management.test /v1/components/c/workers/w/connect 200 HTTP/1.1 worker"
+    "app.test /ws 403"
+)
+for case in "${cases[@]}"; do
+    read -r host path expected <<<"$case"
+    result=$(upgrade_served_by "$host" "$path" | paste -sd ' ')
+    [ "$result" = "$expected" ] ||
+        fail "$router answered the upgrade of $path for host $host with '$result', not '$expected'"
+done
+
+# The metrics of the services stay inside the deployment, also with an encoded path.
+for path in /metrics /%6detrics; do
+    status=$(curl -s -o /dev/null -w '%{http_code}' --http1.1 -H 'Host: management.test' "http://$address$path")
+    [ "$status" = 404 ] || fail "$router answered $path on the management host with $status, not 404"
+done
+
+# Without trusted proxies, the router replaces the X-Forwarded-Proto of the client by its own
+# scheme. With one trusted proxy, it keeps it.
+received_proto() {
+    curl -s -D - -o /dev/null --http1.1 -H 'Host: app.test' -H 'X-Forwarded-Proto: https' "http://$1/" |
+        tr -d '\r' | sed -n 's/^x-received-proto: //p'
+}
+proto=$(received_proto "$address")
+[ "$proto" = http ] || fail "$router without trusted hops sent X-Forwarded-Proto '$proto', not 'http'"
+proto=$(received_proto "$trusted_address")
+[ "$proto" = https ] || fail "$router with GOLEM_ROUTER_TRUSTED_HOPS=1 sent X-Forwarded-Proto '$proto', not 'https'"
+
+# The metrics port serves only the Prometheus metrics of Envoy, and only when it is set.
+metrics=$(curl -s "http://$stats_address/stats/prometheus")
+grep -q '^envoy_' <<<"$metrics" || fail "$router answered /stats/prometheus without Envoy metrics"
+for path in /stats /config_dump /quitquitquit /; do
+    status=$(curl -s -o /dev/null -w '%{http_code}' "http://$stats_address$path")
+    [ "$status" = 404 ] || fail "$router answered $path on the metrics port with $status, not 404"
+done
+status=$(curl -s -o /dev/null -w '%{http_code}' "http://$trusted_stats_address/stats/prometheus" || true)
+[ "$status" = 000 ] || fail "$router without GOLEM_ROUTER_STATS_PORT answered on port 19001 with $status"
+cleanup_router
+trap - EXIT
 
 quotad="$tag_prefix/golem-xfs-quotad"
 echo "== $quotad: file capability"

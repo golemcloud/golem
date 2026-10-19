@@ -22,7 +22,8 @@
 # - `cargo make check-docs-skills`: regenerates the docs/src/content/next/how-to-guides/ MDX in place and fails if the checked-in version is stale (for CI)
 # - `cargo make check-diff-model-fingerprint`: verifies golem-common diff model fingerprint against goldenfile
 # - `cargo make update-diff-model-fingerprint`: updates golem-common diff model fingerprint goldenfile
-# - `cargo make publish`: publishes packages to crates.io
+# - `cargo make publish-shared-crates`: publishes the shared Rust crates from their exact release tag
+# - `cargo make verify-shared-crates`: checks the shared crate publication and source snapshot
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
 # - `cargo make run-with-login-enabled`: runs all services locally with login enabled, requires redis, lnav and nginx. Also requires oauth2 configuration to be provided.
 # - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
@@ -1421,55 +1422,258 @@ private = false
 env = { "REFLECTION_CONFORMANCE_CHECK" = "true" }
 
 ## ** PUBLISH **
-[tasks.publish]
-description = "Publishes packages to crates.io"
-dependencies = [
-    "set-version",
-    "publish-golem-schema-derive",
-    "publish-golem-schema",
-    "publish-golem-tool-metadata",
-]
+[tasks.publish-shared-crates]
+description = "Publishes shared Rust crates from their exact release tag"
+extend = "shared-crates"
+private = false
+env = { "SHARED_CRATES_PUBLISH" = "true" }
 
-[tasks.publish-golem-schema-derive]
-description = "Publishes golem-schema-derive package to crates.io"
-command = "cargo"
-args = ["publish", "-p", "golem-schema-derive", "--allow-dirty"]
+[tasks.verify-shared-crates]
+description = "Verifies shared Rust crate publication and source provenance"
+extend = "shared-crates"
+private = false
+env = { "SHARED_CRATES_PUBLISH" = "false" }
 
-[tasks.publish-golem-schema]
-description = "Publishes golem-schema package to crates.io"
-command = "cargo"
-args = ["publish", "-p", "golem-schema", "--allow-dirty"]
+[tasks.resolve-shared-crates-version]
+private = true
+script_runner = "@duckscript"
+script = '''
+selected = exec --fail-on-error git describe --first-parent --tags --match "golem-shared-v*" --abbrev=0 HEAD
+tag_name = trim ${selected.stdout}
+if is_empty ${tag_name}
+    trigger_error "No shared release tag found on the first-parent history; publish a golem-shared-v<version> release first"
+end
+selected_commit = exec --fail-on-error git rev-parse "refs/tags/${tag_name}^{commit}"
+selected_commit = trim ${selected_commit.stdout}
+tags = exec --fail-on-error git tag --points-at ${selected_commit} --list "golem-shared-v*"
+tags = trim ${tags.stdout}
+unique = equals ${tags} ${tag_name}
+if not ${unique}
+    trigger_error "Multiple shared release tags identify the selected commit"
+end
+version = substring ${tag_name} 14
+parsed = semver_parse ${version}
+if is_empty ${parsed.major}
+    trigger_error "Invalid shared release version: ${tag_name}"
+end
+set_env GOLEM_SHARED_CRATES_TAG ${tag_name}
+set_env GOLEM_SHARED_CRATES_VERSION ${version}
+'''
 
-[tasks.publish-golem-tool-metadata]
-description = "Publishes golem-tool-metadata package to crates.io"
-command = "cargo"
-args = ["publish", "-p", "golem-tool-metadata", "--allow-dirty"]
+[tasks.shared-crates]
+private = true
+script_runner = "@duckscript"
+script = '''
+cm_run_task resolve-shared-crates-version
+version = get_env GOLEM_SHARED_CRATES_VERSION
+tag_name = get_env GOLEM_SHARED_CRATES_TAG
+tag = exec --fail-on-error git rev-parse --verify "refs/tags/${tag_name}^{commit}"
+tag = trim ${tag.stdout}
+exec --fail-on-error git diff --exit-code ${tag} -- golem-schema-derive golem-schema golem-tool-metadata Cargo.toml Cargo.lock .cargo LICENSE
+untracked = exec --fail-on-error git ls-files --others --exclude-standard -- golem-schema-derive golem-schema golem-tool-metadata Cargo.toml Cargo.lock .cargo LICENSE
+untracked = trim ${untracked.stdout}
+if not is_empty ${untracked}
+    trigger_error "Shared source contains untracked files"
+end
+publish = get_env SHARED_CRATES_PUBLISH
+if equals ${publish} true
+    head = exec --fail-on-error git rev-parse HEAD
+    head = trim ${head.stdout}
+    if not equals ${head} ${tag}
+        trigger_error "Publication requires an exact ${tag_name} checkout"
+    end
+    status = exec --fail-on-error git status --porcelain --untracked-files=all
+    status = trim ${status.stdout}
+    if not is_empty ${status}
+        trigger_error "Publication requires a clean checkout"
+    end
+    event_tag = get_env GITHUB_REF_NAME
+    if not equals ${event_tag} ${tag_name}
+        trigger_error "Publication requires the ${tag_name} tag event"
+    end
+    cm_run_task set-shared-crates-version
+end
+staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/shared-crates-release"
+mkdir ${staging}
+crates = array golem-schema-derive golem-schema golem-tool-metadata
+attempts = array before-publication after-publication
+http_code_format = concat "%" "{http_code}"
+for crate in ${crates}
+    metadata_path = set "${staging}/${crate}.json"
+    url = set "https://crates.io/api/v1/crates/${crate}/${version}"
+    found = set false
+    for attempt in ${attempts}
+        if not ${found}
+            response = exec --fail-on-error curl --silent --show-error --location --retry 3 --retry-max-time 180 --connect-timeout 15 --max-time 60 --output ${metadata_path} --write-out ${http_code_format} --user-agent golem-release ${url}
+            status = trim ${response.stdout}
+            if equals ${status} 200
+                found = set true
+            else
+                if not equals ${status} 404
+                    trigger_error "Registry request failed for ${crate} ${version}: HTTP ${status}"
+                end
+                if not equals ${publish} true
+                    trigger_error "${crate} ${version} is not published; release ${tag_name} first"
+                end
+                if equals ${attempt} after-publication
+                    trigger_error "${crate} ${version} is not visible after publication; rerun from the same tag"
+                end
+                exec --fail-on-error cargo publish -p ${crate} --allow-dirty
+            end
+        end
+    end
+    metadata = readfile ${metadata_path}
+    metadata = json_parse --collection ${metadata}
+    metadata = map_get ${metadata} version
+    expected = map_get ${metadata} checksum
+    package = set "${staging}/${crate}-${version}.crate"
+    exec --fail-on-error curl --fail --silent --show-error --location --retry 3 --retry-max-time 180 --connect-timeout 15 --max-time 60 --output ${package} --user-agent golem-release "${url}/download"
+    actual = sha256sum ${package}
+    if not equals ${actual} ${expected}
+        trigger_error "Checksum mismatch for ${crate} ${version}"
+    end
+    vcs = exec --fail-on-error tar -xOf ${package} "${crate}-${version}/.cargo_vcs_info.json"
+    vcs = json_parse --collection ${vcs.stdout}
+    path = map_get ${vcs} path_in_vcs
+    vcs_git = map_get ${vcs} git
+    commit = map_get ${vcs_git} sha1
+    # Version stamping makes Cargo mark the package dirty; the commit must still match the tag.
+    if not equals ${commit} ${tag}
+        trigger_error "${crate} ${version} was not packaged from ${tag_name}"
+    end
+    if not equals ${path} ${crate}
+        trigger_error "${crate} ${version} was packaged from the wrong source path"
+    end
+    echo "Verified ${crate} ${version} from ${tag_name}"
+end
+'''
+
+[tasks.set-shared-crates-version]
+description = "Sets shared Rust crate versions independently of the Golem version"
+script_runner = "@duckscript"
+script = '''
+cm_run_task resolve-shared-crates-version
+version = get_env GOLEM_SHARED_CRATES_VERSION
+crates = array golem-schema-derive golem-schema golem-tool-metadata
+for crate in ${crates}
+    path = set "${crate}/Cargo.toml"
+    text = readfile ${path}
+    text = replace ${text} "version = \"0.0.0\"" "version = \"${version}\""
+    written = writefile ${path} ${text}
+    if not ${written}
+        trigger_error "Failed to set the shared version in ${path}"
+    end
+end
+manifests = array Cargo.toml sdks/rust/golem-rust/Cargo.toml
+for path in ${manifests}
+    text = readfile ${path}
+    lines = split ${text} "\n"
+    text = set ""
+    separator = set ""
+    for line in ${lines}
+        for crate in ${crates}
+            shared_dependency = starts_with ${line} "${crate} ="
+            if ${shared_dependency}
+                line = replace ${line} 0.0.0 ${version}
+            end
+        end
+        text = concat "${text}" "${separator}" "${line}"
+        separator = set "\n"
+    end
+    written = writefile ${path} ${text}
+    if not ${written}
+        trigger_error "Failed to set shared dependencies in ${path}"
+    end
+end
+'''
+
+[tasks.check-shared-crates-versioning]
+description = "Checks shared crate version stamping and SDK version boundaries"
+script_runner = "@duckscript"
+script = '''
+fixture = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/shared-crates-version-test"
+if is_path_exists ${fixture}
+    rm -r ${fixture}
+end
+mkdir "${fixture}/sdks/rust/golem-rust"
+cp Makefile.toml "${fixture}/Makefile.toml"
+crates = array golem-schema-derive golem-schema golem-tool-metadata
+workspace = set "[workspace]\nmembers = []\n[workspace.dependencies]\ngolem-common = { version = \"=0.0.0\" }\n"
+expected_workspace = set "${workspace}"
+sdk = set "[package]\nversion = \"0.0.0\"\n[dependencies]\ngolem-rust-macro = { version = \"0.0.0\" }\n"
+expected_sdk = set "${sdk}"
+for crate in ${crates}
+    mkdir "${fixture}/${crate}"
+    writefile "${fixture}/${crate}/Cargo.toml" "[package]\nversion = \"0.0.0\"\n"
+    workspace = concat "${workspace}" "${crate} = { version = \"=0.0.0\" }\n"
+    expected_workspace = concat "${expected_workspace}" "${crate} = { version = \"=9.8.7-rc.2\" }\n"
+    sdk = concat "${sdk}" "${crate} = { version = \"0.0.0\" }\n"
+    expected_sdk = concat "${expected_sdk}" "${crate} = { version = \"9.8.7-rc.2\" }\n"
+end
+writefile "${fixture}/Cargo.toml" ${workspace}
+writefile "${fixture}/sdks/rust/golem-rust/Cargo.toml" ${sdk}
+exec --fail-on-error git -C ${fixture} init
+exec --fail-on-error git -C ${fixture} add .
+exec --fail-on-error git -C ${fixture} -c user.name=release-test -c user.email=release-test@example.invalid commit -m fixture
+exec --fail-on-error git -C ${fixture} tag golem-shared-v9.8.7-rc.2
+exec --fail-on-error git -C ${fixture} checkout -b other-release
+exec --fail-on-error git -C ${fixture} -c user.name=release-test -c user.email=release-test@example.invalid commit --allow-empty -m other-release
+exec --fail-on-error git -C ${fixture} tag golem-shared-v99.0.0
+exec --fail-on-error git -C ${fixture} checkout -b selected-release golem-shared-v9.8.7-rc.2
+exec --fail-on-error git -C ${fixture} -c user.name=release-test -c user.email=release-test@example.invalid commit --allow-empty -m selected-release
+exec --fail-on-error git -C ${fixture} -c user.name=release-test -c user.email=release-test@example.invalid merge --no-ff other-release -m merge
+exec --fail-on-error cargo make --disable-check-for-updates --no-workspace --cwd ${fixture} set-shared-crates-version
+exec --fail-on-error cargo make --disable-check-for-updates --no-workspace --cwd ${fixture} set-shared-crates-version
+actual_workspace = readfile "${fixture}/Cargo.toml"
+actual_sdk = readfile "${fixture}/sdks/rust/golem-rust/Cargo.toml"
+correct_workspace = equals ${actual_workspace} ${expected_workspace}
+if not ${correct_workspace}
+    trigger_error "Shared version stamping changed the wrong workspace dependencies"
+end
+correct_sdk = equals ${actual_sdk} ${expected_sdk}
+if not ${correct_sdk}
+    trigger_error "Shared version stamping changed the Rust SDK or macro version"
+end
+for crate in ${crates}
+    actual = readfile "${fixture}/${crate}/Cargo.toml"
+    correct = equals ${actual} "[package]\nversion = \"9.8.7-rc.2\"\n"
+    if not ${correct}
+        trigger_error "Shared package version was not set for ${crate}"
+    end
+end
+exec --fail-on-error git -C ${fixture} tag golem-shared-v9.8.8 golem-shared-v9.8.7-rc.2
+ambiguous = exec cargo make --disable-check-for-updates --no-workspace --cwd ${fixture} set-shared-crates-version
+if equals ${ambiguous.code} 0
+    trigger_error "Multiple shared tags on the selected commit must fail"
+end
+exec --fail-on-error git -C ${fixture} tag -d golem-shared-v9.8.7-rc.2 golem-shared-v9.8.8
+missing = exec cargo make --disable-check-for-updates --no-workspace --cwd ${fixture} set-shared-crates-version
+if equals ${missing.code} 0
+    trigger_error "A shared tag on a merged side branch must not replace a missing first-parent tag"
+end
+rm -r ${fixture}
+echo "Shared version stamping is idempotent, preserves version boundaries, and selects unambiguous first-parent tags"
+'''
 
 [tasks.set-version]
 description = "Sets the version in all Cargo.toml files to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
+script_runner = "@duckscript"
 script = '''
-grep -rl --include 'Cargo.toml' '0\.0\.0' | xargs sed -i "s/0\.0\.0/${VERSION}/g"
-'''
-
-[tasks.set-version.mac]
-condition = { env_set = ["VERSION"] }
-script = '''
-grep -rl --include '.*Cargo\.toml' '0\.0\.0' | xargs sed -i "" "s/0\.0\.0/${VERSION}/g"
-'''
-
-[tasks.set-version.windows]
-script_runner = "powershell"
-script_extension = "ps1"
-condition = { env_set = ["VERSION"] }
-script = '''
-$cargoFiles = Get-ChildItem . Cargo.toml -rec
-foreach ($file in $cargoFiles)
-{
-    (Get-Content $file.PSPath) |
-    Foreach-Object { $_ -replace "0.0.0", $Env:VERSION } |
-    Set-Content $file.PSPath
-}
+cm_run_task set-shared-crates-version
+version = get_env VERSION
+tracked = exec --fail-on-error git ls-files -- "*Cargo.toml"
+paths = split ${tracked.stdout} "\n"
+for path in ${paths}
+    if not is_empty ${path}
+        text = readfile ${path}
+        text = replace ${text} 0.0.0 ${version}
+        written = writefile ${path} ${text}
+        if not ${written}
+            trigger_error "Failed to set the Golem version in ${path}"
+        end
+    end
+end
 '''
 
 ## ** PACKAGE RELEASE **
@@ -2058,7 +2262,7 @@ script_runner = "@duckscript"
 script = '''
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 cd sdks/ts
-exec --fail-on-error npx pnpm install --frozen-lockfile
+exec --fail-on-error npx pnpm install --frozen-lockfile --config.confirmModulesPurge=false
 exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
 exec --fail-on-error npx pnpm run build-agent-template
 cd ../..
@@ -2099,10 +2303,18 @@ cd ../..
 [tasks.build-bash-tool]
 extend = "builtin-artifact-build"
 private = false
-description = "Builds the built-in Bash tool component reproducibly in a pinned container (builtin-tools/bash/build-bash-wasm.sh); needs Docker"
+description = "Builds the built-in Bash tool component"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
+cd builtin-tools/bash
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
+cd ../..
 '''
 
 [tasks.build-python-tool]
@@ -2163,7 +2375,7 @@ script_runner = "@duckscript"
 script = '''
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 cd sdks/ts
-exec --fail-on-error npx pnpm install --frozen-lockfile
+exec --fail-on-error npx pnpm install --frozen-lockfile --config.confirmModulesPurge=false
 exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
 exec --fail-on-error npx pnpm run build-agent-template
 cd ../..
@@ -2242,14 +2454,37 @@ end
 condition = { env_not_set = ["CI", "GOLEM_BUILTIN_RELEASE"] }
 run_task = "ensure-builtin-artifacts"
 
-[tasks.validate-builtin-release]
-description = "Checks the clean tagged source before manual built-in release preparation"
+[tasks.check-builtin-publication-context]
+private = true
 script_runner = "@duckscript"
 script = '''
 ci = get_env CI
 if not is_empty ${ci}
-    trigger_error "Built-in publication is manual, never from CI"
+    version = get_env BUILTIN_VERSION
+    event = get_env GITHUB_EVENT_NAME
+    repository = get_env GITHUB_REPOSITORY
+    ref = get_env GITHUB_REF
+    workflow = get_env GITHUB_WORKFLOW_REF
+    if not equals ${event} workflow_dispatch
+        trigger_error "CI built-in publication requires the release preparation dispatch"
+    end
+    if not equals ${repository} golemcloud/golem
+        trigger_error "CI built-in publication requires golemcloud/golem"
+    end
+    if not equals ${ref} "refs/tags/v${version}"
+        trigger_error "CI built-in publication requires the matching Golem tag"
+    end
+    if not equals ${workflow} "golemcloud/golem/.github/workflows/prepare-golem-release.yaml@refs/tags/v${version}"
+        trigger_error "CI built-in publication is restricted to prepare-golem-release.yaml"
+    end
 end
+'''
+
+[tasks.validate-golem-release-source]
+description = "Checks the clean public Golem tag and its merged preparation PR"
+dependencies = ["check-builtin-publication-context"]
+script_runner = "@duckscript"
+script = '''
 version = get_env BUILTIN_VERSION
 if is_empty ${version}
     trigger_error "BUILTIN_VERSION is required, without a leading v"
@@ -2276,12 +2511,46 @@ if not equals ${head} ${public_tag}
     trigger_error "The public release tag must equal HEAD"
 end
 exec --fail-on-error git fetch https://github.com/golemcloud/golem.git main
-exec --fail-on-error git merge-base --is-ancestor ${head} FETCH_HEAD
-exec --fail-on-error gh release view "v${version}" --repo golemcloud/golem
+publication_token = get_env GH_TOKEN
+workflow_token = get_env GITHUB_TOKEN
+if not is_empty ${workflow_token}
+    set_env GH_TOKEN ${workflow_token}
+end
+pulls = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/commits/${head}/pulls?per_page=100" --jq ".[] | select(.merged_at != null and .head.sha == \"${head}\" and .base.ref == \"main\" and .base.repo.full_name == \"golemcloud/golem\") | .merge_commit_sha"
+if not is_empty ${workflow_token}
+    set_env GH_TOKEN ${publication_token}
+end
+commits = split ${pulls.stdout} "\n"
+merged = set false
+for commit in ${commits}
+    if not is_empty ${commit}
+        reachable = exec git merge-base --is-ancestor ${commit} FETCH_HEAD
+        if equals ${reachable.code} 0
+            merged = set true
+        end
+    end
+end
+if not ${merged}
+    trigger_error "The release tag must identify the exact head of a PR merged into public main"
+end
+'''
+
+[tasks.validate-builtin-release]
+description = "Checks the clean tagged source and draft before built-in release preparation"
+dependencies = ["validate-golem-release-source"]
+script_runner = "@duckscript"
+script = '''
+version = get_env BUILTIN_VERSION
+draft = exec --fail-on-error gh release view "v${version}" --repo golemcloud/golem --json isDraft
+draft = json_parse --collection ${draft.stdout}
+draft = map_get ${draft} isDraft
+if not equals ${draft} true
+    trigger_error "Built-in publication requires a draft Golem release"
+end
 '''
 
 [tasks.publish-builtin-artifacts]
-description = "Manually publishes every built-in and uploads the tagged release manifest"
+description = "Publishes every built-in and uploads the immutable tagged release manifest"
 dependencies = ["validate-builtin-release"]
 script_runner = "@duckscript"
 script = '''
@@ -2341,20 +2610,42 @@ if equals ${dry_run} 1
 end
 manifest = set "{\n  \"schemaVersion\": 1,\n  \"repository\": \"golemcloud/golem-builtins\",\n  \"artifacts\": {${manifest_entries}\n  }\n}\n"
 writefile builtin-artifacts.release.json ${manifest}
-exec --fail-on-error gh release upload "v${version}" builtin-artifacts.release.json --repo golemcloud/golem
+release = exec --fail-on-error gh release view "v${version}" --repo golemcloud/golem --json assets
+release = json_parse --collection ${release.stdout}
+assets = map_get ${release} assets
+found = set false
+for asset in ${assets}
+    name = map_get ${asset} name
+    if equals ${name} builtin-artifacts.release.json
+        found = set true
+    end
+end
+if ${found}
+    staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/manifest"
+    mkdir ${staging}
+    remote_manifest = set "${staging}/builtin-artifacts.release.json"
+    if is_path_exists ${remote_manifest}
+        rm ${remote_manifest}
+    end
+    exec --fail-on-error gh release download "v${version}" --repo golemcloud/golem --pattern builtin-artifacts.release.json --dir ${staging}
+    expected = sha256sum builtin-artifacts.release.json
+    actual = sha256sum "${staging}/builtin-artifacts.release.json"
+    if not equals ${expected} ${actual}
+        trigger_error "Conflicting immutable release manifest; no assets were replaced"
+    end
+else
+    exec --fail-on-error gh release upload "v${version}" builtin-artifacts.release.json --repo golemcloud/golem
+end
 '''
 
 [tasks.publish-builtin-artifact]
-description = "Locally builds and manually publishes one immutable built-in component release"
+description = "Builds and publishes one immutable built-in component release"
+dependencies = ["check-builtin-publication-context"]
 script_runner = "@duckscript"
 script = '''
 repository = set "golemcloud/golem-builtins"
 component = get_env BUILTIN_COMPONENT
 version = get_env BUILTIN_VERSION
-ci = get_env CI
-if not is_empty ${ci}
-    trigger_error "built-in artifacts must be published manually from a local checkout, never from CI"
-end
 if is_empty ${component}
     trigger_error "BUILTIN_COMPONENT is required"
 end

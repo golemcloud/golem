@@ -37,11 +37,14 @@ use std::future::Future;
 use std::marker::PhantomData;
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::concurrent::{CallReplayOutcome, Cancellable, DurableCallSession};
+use crate::durable_host::concurrent::{
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession,
+};
 use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryProperties;
-use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
+use golem_common::model::card::PermissionTarget;
+use golem_common::model::oplog::{DeniablePair, DurableFunctionType, HostPayloadPair};
 use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{HasData, Linker};
 
@@ -150,7 +153,35 @@ where
     .await
 }
 
-/// Like [`run_read_access`], but classifies a guest-visible error *value* carried in the live
+/// [`run_read_access`] for a call that the host can deny before it runs; see
+/// [`DurableCallSession::invoke_deniable_access`].
+pub(crate) async fn run_deniable_access<T, D, Ctx, Pair, F>(
+    store: &wasmtime::component::Accessor<T, D>,
+    request: Pair::Req,
+    function_type: DurableFunctionType,
+    targets: Result<Vec<PermissionTarget>, String>,
+    live: F,
+) -> wasmtime::Result<Pair::Resp>
+where
+    T: 'static,
+    D: HasData + ?Sized + 'static,
+    Ctx: WorkerCtx,
+    Pair: DeniablePair,
+    Pair::Req: Clone,
+    F: AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
+{
+    DurableCallSession::<Pair, Cancellable>::invoke_deniable_access(
+        store,
+        durable_worker_ctx::<Ctx, T>,
+        request,
+        function_type,
+        targets,
+        live,
+    )
+    .await
+}
+
+/// Like [`run_deniable_access`], but classifies a guest-visible error *value* carried in the live
 /// response payload before it is persisted, routing transient failures through the worker-level
 /// retry machinery ([`DurableCallSession::try_trigger_retry_access`]) instead of returning them to the
 /// guest.
@@ -162,31 +193,49 @@ where
 /// so the guest never observes the error. Permanent failures, and transient ones whose retry
 /// budget is exhausted, are persisted and returned to the guest as before. Recorded failures
 /// replay deterministically to the guest without re-classification (`classify` only runs on the
-/// live path, including incomplete-replay re-execution).
-async fn run_read_access_classified<T, D, Ctx, Pair, F, Fut>(
+/// live path, including incomplete-replay re-execution). A live denied call completes with
+/// [`DeniablePair::denied`] and runs neither `live` nor `classify`.
+pub(crate) async fn run_deniable_access_classified<T, D, Ctx, Pair, F, Fut>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
+    targets: Result<Vec<PermissionTarget>, String>,
     classify: impl Fn(&Pair::Resp) -> Option<ClassifiedHostError>,
     retry_properties: RetryProperties,
     live: F,
 ) -> wasmtime::Result<Pair::Resp>
 where
     T: 'static,
-    D: HasData + ?Sized,
+    D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
-    Pair: HostPayloadPair,
+    Pair: DeniablePair,
+    Pair::Req: Clone,
     F: FnOnce() -> Fut,
     Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
 {
-    let mut handle = DurableCallSession::<Pair, Cancellable>::start_access(
+    let (mut handle, decision) = DurableCallSession::<Pair, Cancellable>::start_authorized_access(
         store,
         durable_worker_ctx::<Ctx, T>,
-        request,
         function_type,
+        AccessClaimOptions::default(),
+        request.clone(),
+        targets,
     )
     .await
     .map_err(wasmtime::Error::from)?;
+    let denied = decision
+        .as_ref()
+        .and_then(|decision| decision.as_ref().err())
+        .map(|denial| Pair::denied(&request, denial));
+
+    if handle.is_live()
+        && let Some(response) = denied
+    {
+        return handle
+            .complete_access(store, durable_worker_ctx::<Ctx, T>, response)
+            .await
+            .map_err(wasmtime::Error::from);
+    }
 
     if !handle.is_live() {
         match handle

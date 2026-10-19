@@ -487,6 +487,16 @@ impl Display for BenchmarkResultView {
             let show_length = first_config.length.is_some();
             let show_duration = items.iter().any(|i| i.duration.is_some());
             let show_count = items.iter().any(|i| i.count.is_some());
+            // When every count is a single reported value (avg == min == max),
+            // the three-column avg/min/max table is noise — collapse it to one
+            // "Count" column. Real distributions (where the three differ for any
+            // row) keep all three.
+            let count_is_single_value = items.iter().all(|i| {
+                i.count
+                    .as_ref()
+                    .map(|c| c.avg == c.min && c.min == c.max)
+                    .unwrap_or(true)
+            });
 
             fn bold(s: &str) -> Cell {
                 Cell::new(s).add_attribute(Attribute::Bold)
@@ -515,9 +525,13 @@ impl Display for BenchmarkResultView {
                 header.push(bold("Duration p99"));
             }
             if show_count {
-                header.push(bold("Count Avg"));
-                header.push(bold("Count Min"));
-                header.push(bold("Count Max"));
+                if count_is_single_value {
+                    header.push(bold("Count"));
+                } else {
+                    header.push(bold("Count Avg"));
+                    header.push(bold("Count Min"));
+                    header.push(bold("Count Max"));
+                }
             }
 
             let mut tbl = Table::new();
@@ -562,9 +576,13 @@ impl Display for BenchmarkResultView {
                 if show_count {
                     let count_cell =
                         |c: Option<u64>| right(c.map(|c| format!("{c}")).unwrap_or_default());
-                    record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
-                    record.push(count_cell(item.count.as_ref().map(|c| c.min)));
-                    record.push(count_cell(item.count.as_ref().map(|c| c.max)));
+                    if count_is_single_value {
+                        record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
+                    } else {
+                        record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
+                        record.push(count_cell(item.count.as_ref().map(|c| c.min)));
+                        record.push(count_cell(item.count.as_ref().map(|c| c.max)));
+                    }
                 }
                 tbl.add_row(record);
             }
@@ -599,6 +617,17 @@ pub struct RunMetadata {
     /// Container image tag of the deployed `worker-service`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub worker_service_image_tag: Option<String>,
+    /// Image digest of the deployed `worker-executor`, when the manifest pins
+    /// one. A tag can be moved; the digest is what actually identifies the
+    /// build a run tested, which is the whole point of recording it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_executor_image_digest: Option<String>,
+    /// Image digest of the deployed `registry-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub registry_service_image_digest: Option<String>,
+    /// Image digest of the deployed `worker-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_service_image_digest: Option<String>,
     /// Aurora ACU capacity for the main (`golem_dev`) cluster at run start.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub aurora_acu_main: Option<f64>,
@@ -655,6 +684,9 @@ impl RunMetadata {
             worker_executor_image_tag: env_str("GOLEM_BENCH_WORKER_EXECUTOR_IMAGE_TAG"),
             registry_service_image_tag: env_str("GOLEM_BENCH_REGISTRY_SERVICE_IMAGE_TAG"),
             worker_service_image_tag: env_str("GOLEM_BENCH_WORKER_SERVICE_IMAGE_TAG"),
+            worker_executor_image_digest: env_str("GOLEM_BENCH_WORKER_EXECUTOR_IMAGE_DIGEST"),
+            registry_service_image_digest: env_str("GOLEM_BENCH_REGISTRY_SERVICE_IMAGE_DIGEST"),
+            worker_service_image_digest: env_str("GOLEM_BENCH_WORKER_SERVICE_IMAGE_DIGEST"),
             aurora_acu_main: env_f64("GOLEM_BENCH_AURORA_ACU_MAIN"),
             aurora_acu_indexed: env_f64("GOLEM_BENCH_AURORA_ACU_INDEXED"),
             aurora_acu_keyvalue: env_f64("GOLEM_BENCH_AURORA_ACU_KEYVALUE"),

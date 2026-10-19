@@ -41,7 +41,7 @@ use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::component::Component;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::OwnedMutexGuard;
@@ -141,10 +141,13 @@ impl WalletCommit {
     }
 }
 
+/// Immutable payloads and unchanged membership nodes are shared across retained prefixes.
+pub(crate) type WalletCards = im::OrdMap<CardId, Arc<StoredCard>>;
+
 /// Membership and its durable version always travel as one immutable publication.
 #[derive(Clone, Debug)]
 pub(crate) struct WalletSnapshot {
-    pub(crate) cards: BTreeMap<CardId, StoredCard>,
+    pub(crate) cards: WalletCards,
     pub(crate) generation: u64,
     pub(crate) wallet_id_hash: [u8; 32],
     pub(crate) metadata: Arc<Component>,
@@ -244,14 +247,14 @@ impl WalletSnapshot {
                 if !card_holder_is_agent(target_holder, agent_id) => {}
             ReplayEvent::CardInstalled { card, .. } | ReplayEvent::CardTransferred { card, .. } => {
                 if let Some(existing) = self.cards.get(&card.card_id()) {
-                    if existing != card {
+                    if existing.as_ref() != card {
                         return Err(WorkerExecutorError::runtime(format!(
                             "wallet card {} conflicts with its existing payload",
                             card.card_id()
                         )));
                     }
                 } else {
-                    self.cards.insert(card.card_id(), card.clone());
+                    self.cards.insert(card.card_id(), Arc::new(card.clone()));
                 }
             }
             ReplayEvent::CardTransferStarted {
@@ -260,7 +263,7 @@ impl WalletSnapshot {
                 ..
             } => {
                 if transfer_started_removes_source_membership(
-                    self.cards.get(card_id),
+                    self.cards.get(card_id).map(Arc::as_ref),
                     source_holder,
                     agent_id,
                 ) {
@@ -269,10 +272,14 @@ impl WalletSnapshot {
             }
             ReplayEvent::CardRevokedCascade { card_ids, .. } => {
                 for card_id in card_ids {
-                    self.cards.remove(card_id);
+                    if self.cards.contains_key(card_id) {
+                        self.cards.remove(card_id);
+                    }
                 }
             }
-            ReplayEvent::CardRevoked { card_id, .. } | ReplayEvent::CardExpired { card_id, .. } => {
+            ReplayEvent::CardRevoked { card_id, .. } | ReplayEvent::CardExpired { card_id, .. }
+                if self.cards.contains_key(card_id) =>
+            {
                 self.cards.remove(card_id);
             }
             _ => {}
@@ -313,7 +320,7 @@ impl WalletSnapshot {
                 ..
             } if card_holder_is_agent(source_holder, agent_id) => {
                 if transfer_started_removes_source_membership(
-                    self.cards.get(card_id),
+                    self.cards.get(card_id).map(Arc::as_ref),
                     source_holder,
                     agent_id,
                 ) {
@@ -363,7 +370,7 @@ impl WalletSnapshot {
     ) -> Result<Self, WorkerExecutorError> {
         let card = initial_card(owner_context, metadata)?;
         Ok(Self {
-            cards: BTreeMap::from([(card.card_id(), card)]),
+            cards: WalletCards::from(vec![(card.card_id(), Arc::new(card))]),
             generation: 0,
             metadata: Arc::new(metadata.clone()),
             wallet_id_hash: CardHolder::Agent(AgentCardHolder {
@@ -413,7 +420,7 @@ impl WalletSnapshot {
                 ..
             } if card_holder_is_agent(source_holder, &owner_id.agent_id) => {
                 if transfer_started_removes_source_membership(
-                    self.cards.get(card_id),
+                    self.cards.get(card_id).map(Arc::as_ref),
                     source_holder,
                     &owner_id.agent_id,
                 ) {
@@ -481,7 +488,7 @@ impl WalletSnapshot {
                     replace_wallet_cards(
                         &mut self.cards,
                         &mut self.generation,
-                        BTreeMap::from([(card.card_id(), card)]),
+                        WalletCards::from(vec![(card.card_id(), Arc::new(card))]),
                     )?;
                 }
                 self.metadata = Arc::new(metadata);
@@ -561,7 +568,7 @@ impl WalletBaseline {
                     WalletSnapshot {
                         cards: active_cards
                             .into_iter()
-                            .map(|card| (card.card_id(), card))
+                            .map(|card| (card.card_id(), Arc::new(card)))
                             .collect(),
                         generation: wallet_generation,
                         metadata: Arc::new(metadata.clone()),

@@ -20,6 +20,12 @@ lazy_static! {
     static ref VERSION_INFO: IntCounterVec =
         register_int_counter_vec!("version_info", "Version info of the server", &["version"])
             .unwrap();
+    pub(crate) static ref COMPILATION_ENQUEUE_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "component_compilation_enqueue_total",
+        "Cache-warming enqueue attempts by outcome (accepted, rejected, failed, timeout)",
+        &["outcome"]
+    )
+    .unwrap();
 }
 
 pub fn register_all() -> Registry {

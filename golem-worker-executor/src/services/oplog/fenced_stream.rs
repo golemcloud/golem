@@ -29,6 +29,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
 use golem_common::retries::get_delay;
+use golem_common::serialization::DecodeError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::{Arc, OnceLock};
 use tracing::warn;
@@ -242,7 +243,7 @@ impl FencedIndexedStream {
         id: OplogIndex,
     ) -> Result<Option<(OplogIndex, V)>, OplogArchiveError> {
         let labels = self.labels;
-        retry_storage_op(
+        let found = retry_storage_op(
             &self.retry_config,
             &format!("{}_closest", labels.op),
             &self.key,
@@ -252,14 +253,14 @@ impl FencedIndexedStream {
                 let key = self.key.clone();
                 async move {
                     is.with_entity(labels.svc, "read", labels.entity)
-                        .closest::<V>(ns, &key, id.into())
+                        .closest_try_decode(ns, &key, id.into())
                         .await
                 }
             },
         )
         .await
-        .map(|found| found.map(|(id, value)| (OplogIndex::from_u64(id), value)))
-        .map_err(|error| self.read_error("read", error))
+        .map_err(|error| self.read_error("read", error))?;
+        found.map(|(id, value)| self.decoded(id, value)).transpose()
     }
 
     /// Every entry whose id lies in `from..=to`.
@@ -269,7 +270,7 @@ impl FencedIndexedStream {
         to: OplogIndex,
     ) -> Result<Vec<(OplogIndex, V)>, OplogArchiveError> {
         let labels = self.labels;
-        retry_storage_op(
+        let entries = retry_storage_op(
             &self.retry_config,
             &format!("{}_read", labels.op),
             &self.key,
@@ -279,19 +280,32 @@ impl FencedIndexedStream {
                 let key = self.key.clone();
                 async move {
                     is.with_entity(labels.svc, "read", labels.entity)
-                        .read::<V>(ns, &key, from.into(), to.into())
+                        .read_try_decode(ns, &key, from.into(), to.into())
                         .await
                 }
             },
         )
         .await
-        .map(|entries| {
-            entries
-                .into_iter()
-                .map(|(id, value)| (OplogIndex::from_u64(id), value))
-                .collect()
-        })
-        .map_err(|error| self.read_error("read", error))
+        .map_err(|error| self.read_error("read", error))?;
+        entries
+            .into_iter()
+            .map(|(id, value)| self.decoded(id, value))
+            .collect()
+    }
+
+    fn decoded<V>(
+        &self,
+        id: u64,
+        value: Result<V, DecodeError>,
+    ) -> Result<(OplogIndex, V), OplogArchiveError> {
+        value
+            .map(|value| (OplogIndex::from_u64(id), value))
+            .map_err(|error| {
+                OplogArchiveError::Corruption(format!(
+                    "failed to decode {} for {} at {id}: {error}",
+                    self.labels.what, self.agent_id
+                ))
+            })
     }
 
     pub async fn length(&self) -> Result<u64, OplogArchiveError> {

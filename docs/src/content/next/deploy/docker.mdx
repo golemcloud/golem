@@ -2,42 +2,61 @@ import { Callout } from "nextra/components"
 
 # Deploy using Docker
 
-To try Golem with Docker, use a Docker Compose file from the [Golem Docker examples](https://github.com/golemcloud/golem/tree/main/docker-examples). You need [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/).
+To try Golem with Docker, use the [PostgreSQL example](https://github.com/golemcloud/golem/tree/main/docker-examples/published-postgres). You need Docker Engine and Docker Compose v2. The example uses the published `v1.6.0-rc3` images, including the Envoy router. All Golem images must use the same version. The release provides Linux amd64 and arm64 images; amd64 needs an x86-64-v3 CPU.
 
 <Callout type="warning">
-  These examples are for trying Golem on one machine. Their `.env` files contain tokens that are public, and they keep the blobs on a local volume. For a production deployment, see the [production checklist](/next/deploy/production-checklist) and the [fixed cluster with Docker Compose](/next/deploy/vm#fixed-cluster-with-docker-compose).
+  This is a development example, not a production deployment. For a production deployment, see the [production checklist](/next/deploy/production-checklist) and the [fixed cluster with Docker Compose](/next/deploy/vm#fixed-cluster-with-docker-compose).
 </Callout>
 
+## Start the published images
+
+Download the Compose file and its environment file from the same repository revision. Until these examples are included in a release, use a full commit ID from `main` that contains them:
+
 ```bash filename="Terminal" copy
-# Download the PostgreSQL example: the compose file and its .env file
-curl -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/published-postgres/compose.yaml \
-     -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/published-postgres/.env
+GOLEM_REVISION=YOUR_FULL_COMMIT_ID
+curl -fLO "https://raw.githubusercontent.com/golemcloud/golem/$GOLEM_REVISION/docker-examples/published-postgres/compose.yaml"
+curl -fLO "https://raw.githubusercontent.com/golemcloud/golem/$GOLEM_REVISION/docker-examples/published-postgres/.env"
 
-# Start Golem with PostgreSQL and Redis as storage
-docker compose -f compose.yaml up
+docker compose config --quiet
+docker compose pull
+docker compose up -d --no-build
+docker compose ps
 ```
 
-You may need to modify it to suit your needs. The `golemservices/golem-router` image of the example is newer than the image version in `.env`; the comment in `compose.yaml` says how to build it. The [`distributed-etcd` example](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd) runs the shard manager in etcd mode instead.
+The Docker image tag includes the `v`: `GOLEM_IMAGES_VERSION=v1.6.0-rc3`. The Compose file also has build definitions for development from source, but the commands above pull the release images and do not build them. Do not combine a router from another revision with these service images. For a controlled deployment, pin upstream images such as PostgreSQL and Redis to verified versions or digests too.
 
-The Golem images run as uid and gid 65534. The example mounts its blob storage volume at `/data/blob_storage`, which belongs to that user in the images. If you replace a named volume with a bind mount, give the host directory to uid 65534 first. See [User and Permissions](/next/deploy#user-and-permissions).
+The [`distributed-etcd` example](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd) runs the shard manager in etcd mode instead. Its README describes the leader and standby checks.
 
-### Accessing Golem APIs
+## Local access and security
 
-The ports are set in the [`.env`](https://github.com/golemcloud/golem/blob/main/docker-examples/published-postgres/.env) file:
+The example has known account tokens and database credentials, disables login, and serves plain HTTP. The Compose file binds every published port to `127.0.0.1`. PostgreSQL, Redis, internal HTTP ports, and gRPC ports are not published. Other containers on the Compose network can still reach the services; do not attach untrusted containers to it.
 
-| Port | Serves |
-| --- | --- |
-| 9881 (`GOLEM_ROUTER_PORT`) | The router: the [Golem APIs](/next/rest-api) for the host `GOLEM_ROUTER_MANAGEMENT_HOST` (`localhost`), and the HTTP API and MCP deployments for every other host |
-| 9006 (`WORKER_SERVICE_CUSTOM_REQUEST_PORT`) | HTTP API and MCP deployments, chosen by the request's host. See [HTTP gateway](/next/operate/architecture#the-gateway) |
-| 9007 (`WORKER_SERVICE_MCP_PORT`) | MCP deployments only. See [MCP](/next/invoke/mcp) |
+- The management [REST API](/next/rest-api) uses port `9881` with the host `localhost`. The router selects the management API by `GOLEM_ROUTER_MANAGEMENT_HOST`; other hosts go to deployed HTTP/MCP endpoints. Host routing is not an access-control boundary.
+- The direct HTTP gateway uses port `9006`; the direct MCP listener uses port `9007`. They are also loopback-only.
+- Use the downloaded `.env` to inspect port settings. Change host-side ports in `compose.yaml` if local ports conflict; keep container ports and their service configuration consistent.
 
-### Troubleshooting
+Before **any remote exposure**, replace both account tokens in `.env` with distinct securely generated tokens and replace the database password in **every** matching Compose environment setting. Do not commit real credentials or print resolved `docker compose config` output: it includes credentials. Protect `.env` and restrict access to the Docker daemon and data volumes. Changing bootstrap tokens or PostgreSQL initialization variables does not rotate credentials already stored in existing volumes; use a fresh development stack or explicitly rotate stored credentials.
 
-- If a port is already in use on your machine, change it in the `.env` file.
-- In some cases `docker compose` fails with the following error:
+Terminate TLS at a trusted reverse proxy before sending credentials or application traffic over a network. Preserve the intended host when proxying to the router. Restrict management access to a private network, VPN, or authenticated administrative proxy, with firewall rules that deny public access. Do not publish the database, Redis, internal service ports, or the direct gateway/MCP listeners to bypass these controls. Configure deployment authentication and appropriate CORS origins; CORS does not restrict non-browser clients. Replacing credentials alone does not make this example production-ready.
 
-```bash
-error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH, out: `
+## Storage and lifecycle
+
+Golem images run as uid and gid `65534`. The example mounts a shared named blob volume at `/data/blob_storage`, which belongs to that user in the images. If you use a bind mount, give the host directory to uid `65534` first. See [User and Permissions](/next/deploy#user-and-permissions).
+
+The example disables the default plan's per-agent disk limit because it uses temporary agent filesystems. Finite disk limits need `ManagedXfs`; see [Plans](/next/deploy/cluster#plans).
+
+```bash filename="Terminal" copy
+# Inspect startup failures locally; logs can contain sensitive application data.
+docker compose logs --tail=100
+
+# Stop the stack but keep its data.
+docker compose down
 ```
 
-In this situation, rename `credsStore` to `credStore` in the `.docker/config.json` file.
+`docker compose down --volumes` permanently deletes this development stack's data. Back up data before removing volumes. To upgrade, change the image version for every Golem service together, pull the images, and recreate the containers.
+
+## Troubleshooting
+
+- If Compose tries to build an image, check the image tag and run `docker compose pull` first. The Dockerfiles package prebuilt Linux binaries; they do not compile Rust.
+- If Docker reports a missing `docker-credential-desktop`, repair or install the credential helper configured in your Docker client configuration. Do not work around it by disabling credential storage or renaming configuration keys.
+- Use `docker compose ps` and service logs to diagnose database health checks or startup failures. This recipe provides no SQLite fallback Compose file.

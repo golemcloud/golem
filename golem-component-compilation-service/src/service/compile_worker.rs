@@ -84,20 +84,20 @@ impl CompileWorker {
                                 "Failed to compile component"
                             );
                         }
-                        Ok(component) => {
-                            let send_result = sender
-                                .send(CompiledComponent {
+                        Ok(component) => match sender.reserve().await {
+                            Ok(permit) => {
+                                crate::metrics::increment_upload_queue_length();
+                                permit.send(CompiledComponent {
                                     component_and_revision: request.component,
                                     component,
                                     environment_id: request.environment_id,
-                                })
-                                .await;
-
-                            if send_result.is_err() {
+                                });
+                            }
+                            Err(_) => {
                                 tracing::error!("Failed to send compiled component");
                                 break;
                             }
-                        }
+                        },
                     };
                 }
             }

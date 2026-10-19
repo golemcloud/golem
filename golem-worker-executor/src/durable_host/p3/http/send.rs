@@ -18,8 +18,8 @@ use super::serialization::{serialize_error_code, serialize_request, serialize_re
 use super::*;
 use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallSpanObserver, Cancellable, DeferredCallReplayOutcome, DropPolicy,
-    DurableCallSession, authorize_live_permissions_at_serialized_access, finish_span_in_memory,
+    AccessClaimOptions, AccessPermissionCheck, CallSpanObserver, Cancellable,
+    DeferredCallReplayOutcome, DropPolicy, DurableCallSession, finish_span_in_memory,
     reserve_access_invocation_id,
 };
 use crate::durable_host::durability::{
@@ -44,9 +44,9 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpScheme,
 };
 use golem_common::model::oplog::{
-    AttributeMap, DurableFunctionType, DurableInvocationId, HostRequestP3HttpClientSend,
-    HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex, SpanFinished, SpanKind,
-    SpanStarted,
+    AttributeMap, DeniablePair, DurableFunctionType, DurableInvocationId,
+    HostRequestP3HttpClientSend, HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex,
+    SpanFinished, SpanKind, SpanStarted,
 };
 use golem_common::model::{NamedRetryPolicy, OwnedAgentId, RetryContext, RetryProperties};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -92,40 +92,9 @@ where
     U: Send + 'static,
     P: DropPolicy,
 {
-    // The live path awaits authorization before it starts the send, so the send reserves its
-    // invocation id first. The body transmission recorded after the send carries the same id.
+    // The body transmission recorded after the send carries the same invocation id.
     let invocation_id = reserve_access_invocation_id(store, durable_worker_ctx::<Ctx, U>)
         .map_err(HttpError::trap)?;
-    // Replay must claim and restore the recorded outcome without rebuilding a permission target.
-    // On the live path only the request head is inspected here; no body/resource ownership or
-    // transmission state is consumed before admission.
-    let live = store.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut())
-            .state
-            .is_live()
-    });
-    let authorization_permits = if live {
-        match serialize_request::<Ctx, U>(store, borrow_resource(&req))
-            .ok()
-            .and_then(|request_head| {
-                http_target(&outgoing_http_request_uri(&request_head))
-                    .ok()
-                    .map(|target| target.permission)
-            }) {
-            Some(permission) => authorize_live_permissions_at_serialized_access(
-                store,
-                durable_worker_ctx::<Ctx, U>,
-                &[permission],
-            )
-            .await
-            .ok()
-            .and_then(Result::ok),
-            None => None,
-        }
-    } else {
-        None
-    };
-    let authorization_denied = live && authorization_permits.is_none();
 
     // Detach the request's body-transmission wiring (installed by the durable
     // `request::new`) *before* anything else: the inner `WasiHttp::send` deletes
@@ -147,22 +116,6 @@ where
             .pending_p3_http_request_transmissions
             .remove(&req.rep())
     });
-
-    // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
-    // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
-    // no-op during replay and for a send that may still adopt its retained
-    // recorded `Start`. Permission-denied calls are durably recorded below
-    // without consuming quota.
-    if !authorization_denied {
-        store.with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            ctx.state
-                .check_and_increment_http_call_count()
-                .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
-            ctx.record_monthly_http_call()
-                .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
-        })?;
-    }
 
     // The request head is serialized (and recorded) exactly as the guest built
     // it. The send's `outgoing-http-request` invocation-context span is
@@ -188,10 +141,17 @@ where
     let host_request = HostRequestP3HttpClientSend {
         request: serialized_request.clone(),
     };
+    // Initiation evaluates these targets only for a new claim; historical calls use
+    // their recorded permission decision, including when today's target is invalid.
+    let targets = http_target(&outgoing_http_request_uri(&serialized_request))
+        .map(|target| vec![target.permission])
+        .map_err(|error| error.to_string());
+    let (permission_check, permission_decision) = AccessPermissionCheck::new(targets);
     let claim_options = AccessClaimOptions {
         parent_start_index: None,
         observational_owner: None,
         invocation_id,
+        permission_check: Some(permission_check),
         ..Default::default()
     };
     let span_seed = store.with(|mut access| {
@@ -226,13 +186,28 @@ where
     // Keep request cleanup owned by the Store until either replay or live send takes it.
     let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
     spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
+    let quota_request = host_request.clone();
     let mut handle =
         DurableCallSession::<P3HttpClientSend, P>::start_access_with_options_and_indexed_span(
             store,
             durable_worker_ctx::<Ctx, U>,
             function_type.clone(),
             claim_options,
-            host_request,
+            move |start, store| {
+                Box::pin(async move {
+                    if start.is_live && !start.is_denied {
+                        store.with(|mut access| {
+                            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+                            ctx.state
+                                .check_and_increment_http_call_count()
+                                .map_err(wasmtime::Error::from)?;
+                            ctx.record_monthly_http_call()
+                                .map_err(wasmtime::Error::from_anyhow)
+                        })?;
+                    }
+                    Ok(quota_request)
+                })
+            },
             move |start_index| {
                 let (owned_agent_id, trace_id, trace_states, parent_span_id) = span_seed;
                 Ok(SpanStarted {
@@ -256,6 +231,15 @@ where
         .map_err(HttpError::trap)?;
     let send_start_index = handle.start_index();
     let observational_owner = handle.observational_owner();
+    let decision = permission_decision.await.map_err(|_| {
+        HttpError::trap(WorkerExecutorError::runtime(
+            "p3 HTTP send permission decision channel closed",
+        ))
+    })?;
+    let denied = match decision {
+        Some(Err(denial)) => Some(P3HttpClientSend::denied(&host_request, &denial)),
+        Some(Ok(_)) | None => None,
+    };
 
     let span_started = if handle.is_persisted() {
         lifecycle.started_span().ok_or_else(|| {
@@ -577,16 +561,13 @@ where
         let _ = disarm_leak_guard_tx.send(());
     }
 
-    if authorization_denied {
+    if let Some(denied) = denied {
         let _ = consume_replayed_request::<Ctx, U>(store, req, None).await?;
-        let error_code = ErrorCode::HttpRequestDenied;
-        let result =
-            SerializableP3HttpClientSendResult::HttpError(serialize_error_code(&error_code));
-        let (_, delivery) = handle
+        let (response, delivery) = handle
             .complete_access_deferred_with_span(
                 store,
                 durable_worker_ctx::<Ctx, U>,
-                HostResponseP3HttpClientSendResult { result },
+                denied,
                 p3_send_span_finished(&span, golem_common::model::oplog::SpanOutcome::Denied),
             )
             .await
@@ -612,7 +593,7 @@ where
             .attach(store, delivery)
             .await
             .map_err(HttpError::trap)?;
-        return Err(error_code.into());
+        return replay_send_response::<Ctx, U>(store, response.result);
     }
 
     // Inject the Golem-managed headers into the request resource before the
@@ -1950,6 +1931,7 @@ mod terminal_tests {
                 attributes: AttributeMap(HashMap::new()),
                 kind: SpanKind::Client,
             })),
+            denial: None,
         }
     }
 
@@ -2080,6 +2062,7 @@ mod terminal_tests {
                     ))),
                     durable_function_type: DurableFunctionType::WriteRemote,
                     span_started: None,
+                    denial: None,
                 })
                 .await
                 .unwrap();

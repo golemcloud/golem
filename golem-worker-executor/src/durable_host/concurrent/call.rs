@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::durability::reserve_invocation_id;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::workerctx::ReplayAdmissionStage;
 use futures::future::BoxFuture;
+use golem_common::SafeDisplay;
+use golem_common::model::card::PermissionTarget;
 use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
 use golem_common::model::oplog::DurableInvocationId;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
@@ -303,28 +306,21 @@ pub(crate) struct PreparedContextStart<Pair: HostPayloadPair, P: DropPolicy, Ctx
 }
 
 /// The request of an accessor call's `Start`.
-enum AccessRequest<Req, T: 'static, D: HasData + ?Sized + 'static> {
+enum AccessRequest<Req, T: 'static, D: HasData + ?Sized + 'static, E = WorkerExecutorError> {
     /// A request known when the call is made.
     Ready(Req),
     /// A request built between the durable-scope open and the `Start` write or claim; see
     /// [`DurableCallSession::start_access_with`].
-    Built(AccessRequestBuilder<Req, T, D>),
+    Built(AccessRequestBuilder<Req, T, D, E>),
 }
 
-type AccessRequestBuilder<Req, T, D> = Box<
-    dyn for<'a> FnOnce(
-            AccessStartContext,
-            &'a Accessor<T, D>,
-        ) -> BoxFuture<'a, Result<Req, WorkerExecutorError>>
+type AccessRequestBuilder<Req, T, D, E> = Box<
+    dyn for<'a> FnOnce(AccessStartContext, &'a Accessor<T, D>) -> BoxFuture<'a, Result<Req, E>>
         + Send,
 >;
 
-impl<Req, T: 'static, D: HasData + ?Sized + 'static> AccessRequest<Req, T, D> {
-    async fn build(
-        self,
-        context: AccessStartContext,
-        store: &Accessor<T, D>,
-    ) -> Result<Req, WorkerExecutorError> {
+impl<Req, T: 'static, D: HasData + ?Sized + 'static, E> AccessRequest<Req, T, D, E> {
+    async fn build(self, context: AccessStartContext, store: &Accessor<T, D>) -> Result<Req, E> {
         match self {
             Self::Ready(request) => Ok(request),
             Self::Built(build) => build(context, store).await,
@@ -393,24 +389,26 @@ struct OwnedAccessStart<
     T: 'static,
     D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
+    E,
 > {
     stage: OwnedStartStage<Pair, P, Ctx>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    request: AccessRequest<Pair::Req, T, D>,
+    request: AccessRequest<Pair::Req, T, D, E>,
     build_span: Option<BuildSpanCallback>,
     span_observer: Option<Arc<dyn CallSpanObserver>>,
-    started: oneshot::Sender<Result<DurableCallSession<Pair, P>, WorkerExecutorError>>,
+    started: oneshot::Sender<Result<DurableCallSession<Pair, P>, E>>,
     _activity: crate::durable_host::tail_work::TailActivity,
 }
 
-impl<Pair, P, T, D, Ctx> wasmtime::component::AccessorTask<T, D>
-    for OwnedAccessStart<Pair, P, T, D, Ctx>
+impl<Pair, P, T, D, Ctx, E> wasmtime::component::AccessorTask<T, D>
+    for OwnedAccessStart<Pair, P, T, D, Ctx, E>
 where
     Pair: HostPayloadPair,
     P: DropPolicy,
     T: 'static,
     D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
+    E: From<WorkerExecutorError> + Send + 'static + Into<anyhow::Error>,
 {
     async fn run(self, accessor: &Accessor<T, D>) -> wasmtime::Result<()> {
         let Self {
@@ -515,17 +513,18 @@ where
 /// Hands the result of an owned start to the guest's call. The start races the worker's
 /// interrupt signal like a park point does, so an interruption unwinds the task even while the
 /// start waits. A result the guest no longer waits for goes to `discard`.
-async fn hand_over_owned_start<R, T, D, Ctx>(
+async fn hand_over_owned_start<R, T, D, Ctx, E>(
     accessor: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    start: impl Future<Output = Result<R, WorkerExecutorError>>,
-    handed: oneshot::Sender<Result<R, WorkerExecutorError>>,
+    start: impl Future<Output = Result<R, E>>,
+    handed: oneshot::Sender<Result<R, E>>,
     discard: impl FnOnce(R),
 ) -> wasmtime::Result<()>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
+    E: From<WorkerExecutorError> + Into<anyhow::Error>,
 {
     let interrupt =
         accessor.with(|mut access| get_ctx(access.data_mut()).create_interrupt_signal());
@@ -533,7 +532,7 @@ where
         result = start => result,
         interruption = interrupt => {
             let error = WorkerExecutorError::from(interruption);
-            let _ = handed.send(Err(error.clone()));
+            let _ = handed.send(Err(error.clone().into()));
             return Err(error.into());
         }
     };
@@ -544,7 +543,7 @@ where
             Ok(())
         }
         // The guest dropped the call, so nobody else can fail with this error.
-        Err(Err(error)) => Err(error.into()),
+        Err(Err(error)) => Err(wasmtime::Error::from_anyhow(error.into())),
     }
 }
 
@@ -806,6 +805,28 @@ pub(crate) struct AccessClaimOptions {
     pub(crate) host_internal_calls: bool,
     /// The invocation id this call records in its `Start`s and claims them by on replay.
     pub(crate) invocation_id: InvocationIdSource,
+    /// The denial a live call records in its `Start` (see [`OplogEntry::Start`]). A call that
+    /// claims a recorded `Start` ignores it and uses the recorded denial.
+    pub(crate) denial: Option<String>,
+    pub(crate) permission_check: Option<AccessPermissionCheck>,
+}
+
+/// Authorization owned by call initiation, evaluated only after a claim resolves to new work.
+pub(crate) struct AccessPermissionCheck {
+    targets: Result<Vec<PermissionTarget>, String>,
+    decision: oneshot::Sender<Option<Result<LiveAuthorizationPermit, String>>>,
+}
+
+impl AccessPermissionCheck {
+    pub(crate) fn new(
+        targets: Result<Vec<PermissionTarget>, String>,
+    ) -> (
+        Self,
+        oneshot::Receiver<Option<Result<LiveAuthorizationPermit, String>>>,
+    ) {
+        let (decision, receive) = oneshot::channel();
+        (Self { targets, decision }, receive)
+    }
 }
 
 impl AccessClaimOptions {
@@ -1318,6 +1339,7 @@ pub(crate) struct AccessStartContext {
     /// Whether the call executes live (the built request will be persisted) or replays (the built
     /// request is discarded; the builder still runs for its positional replay side effects).
     pub(crate) is_live: bool,
+    pub(crate) is_denied: bool,
 }
 
 pub(crate) enum ReplayAccessStartOutcome<H> {
@@ -1578,8 +1600,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-        mut options: AccessClaimOptions,
+        options: AccessClaimOptions,
     ) -> Result<Self, WorkerExecutorError> {
+        Self::start_with_options_and_authorize(ctx, request, function_type, options, async |_| {
+            Ok(None)
+        })
+        .await
+    }
+
+    /// Resolves replay and scope readiness before authorizing a new immutable Start.
+    pub(crate) async fn start_with_options_and_authorize<
+        Ctx: WorkerCtx,
+        E: From<WorkerExecutorError>,
+    >(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        mut options: AccessClaimOptions,
+        authorize: impl AsyncFnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<Option<String>, E>,
+    ) -> Result<Self, E> {
         let mut begun = Self::begin_inner(ctx, function_type, false).await?;
         let started_replaying = !begun.is_live();
         let _readiness_permit =
@@ -1605,7 +1644,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         .await_new_call_readiness::<Pair>()
                         .await?;
                 }
-                let mut session = begun.start_live(ctx, request).await?;
+                let denial = authorize(ctx).await?;
+                let request: HostRequest = request.into();
+                let mut session = begun
+                    .start_live_with_host_request_index(ctx, denial, move |_| Ok((request, None)))
+                    .await?;
                 session.scope_replay_recovery = options.scope_replay_recovery.into();
                 Ok(session)
             }
@@ -1782,7 +1825,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::Ready(request),
+            AccessRequest::<_, T, D, WorkerExecutorError>::Ready(request),
             None,
             None,
         )
@@ -1791,6 +1834,32 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .supersede_prior_completion_delivery(store, get_ctx)
             .await?;
         Ok(handle)
+    }
+
+    /// Authorizes a new call before its immutable `Start`. Recorded calls, including incomplete
+    /// repairs, keep their recorded decision. Initiation owns the check even if the guest cancels.
+    pub(crate) async fn start_authorized_access<T, D, Ctx>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        mut options: AccessClaimOptions,
+        request: Pair::Req,
+        targets: Result<Vec<PermissionTarget>, String>,
+    ) -> Result<(Self, Option<Result<LiveAuthorizationPermit, String>>), WorkerExecutorError>
+    where
+        Pair: DeniablePair,
+        T: 'static,
+        D: HasData + ?Sized + 'static,
+        Ctx: WorkerCtx,
+    {
+        let (check, receive) = AccessPermissionCheck::new(targets);
+        options.permission_check = Some(check);
+        let call = Self::start_access_with_options(store, get_ctx, function_type, options, request)
+            .await?;
+        let decision = receive.await.map_err(|_| {
+            WorkerExecutorError::runtime("durable call start lost its authorization decision")
+        })?;
+        Ok((call, decision))
     }
 
     /// Starts an accessor call with metadata prepared before its immutable `Start` is appended.
@@ -1812,7 +1881,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::Ready(request),
+            AccessRequest::<_, T, D, WorkerExecutorError>::Ready(request),
             Some(Box::new(move |_| Ok(span_started))),
             None,
         )
@@ -1827,19 +1896,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// `Start` index. The span metadata is constructed inside the same serialized oplog step that
     /// appends the immutable `Start`; replay claims the call by its ordinary execution identity
     /// and reads the recorded metadata afterwards.
-    pub(crate) async fn start_access_with_options_and_indexed_span<T, D, Ctx, S>(
+    pub(crate) async fn start_access_with_options_and_indexed_span<T, D, Ctx, S, F>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
-        request: Pair::Req,
+        build_request: F,
         build_span: S,
         span_observer: Arc<dyn CallSpanObserver>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> Result<Self, wasmtime::Error>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
         Ctx: WorkerCtx,
+        F: for<'a> FnOnce(
+                AccessStartContext,
+                &'a Accessor<T, D>,
+            ) -> BoxFuture<'a, Result<Pair::Req, wasmtime::Error>>
+            + Send
+            + 'static,
         S: FnOnce(
                 OplogIndex,
             )
@@ -1852,7 +1927,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::Ready(request),
+            AccessRequest::Built(Box::new(build_request)),
             Some(Box::new(build_span)),
             Some(span_observer.clone()),
         )
@@ -1865,19 +1940,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// The start shared by the accessor entry points. See [`Self::start_access_with_options`]
     /// for when the start is owned.
-    async fn start_access_request<T, D, Ctx>(
+    async fn start_access_request<T, D, Ctx, E>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
-        request: AccessRequest<Pair::Req, T, D>,
+        request: AccessRequest<Pair::Req, T, D, E>,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> Result<Self, E>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
         Ctx: WorkerCtx,
+        E: From<WorkerExecutorError> + Send + 'static + Into<anyhow::Error>,
     {
         let identity = AccessCallIdentity::capture(store, get_ctx, &function_type, &claim_options)?;
         if !store.has_guest_visible_subtask() || claim_options.host_internal_owner.is_some() {
@@ -2097,7 +2173,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     /// The start of a call whose identity is already captured.
-    async fn start_identified<T, D, Ctx, R, C, F>(
+    async fn start_identified<T, D, Ctx, R, C, F, E>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         identity: AccessCallIdentity,
@@ -2108,13 +2184,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         capture: Option<C>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> Result<Self, E>
     where
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
-        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        E: From<WorkerExecutorError>,
     {
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
@@ -2212,7 +2289,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         .await
     }
 
-    async fn continue_prepared_context<T, D, Ctx, R, C, F>(
+    async fn continue_prepared_context<T, D, Ctx, R, C, F, E>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         prepared: PreparedContextStart<Pair, P, Ctx>,
@@ -2220,18 +2297,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         capture: Option<C>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> Result<Self, E>
     where
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
-        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        E: From<WorkerExecutorError>,
     {
         let PreparedContextStart { prepared } = prepared;
         let host_internal_calls = prepared.claim_options.host_internal_calls;
         if let Err(err) = drain_dropped_call_events_context(store, get_ctx).await {
-            return Err(err.source);
+            return Err(err.source.into());
         }
 
         let executed = Self::execute_access_start(
@@ -2694,7 +2772,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .with_host_internal_calls(claim_options.host_internal_calls))
     }
 
-    async fn execute_access_start<T, D, Ctx, R, C, F>(
+    async fn execute_access_start<T, D, Ctx, R, C, F, E>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         mut prepared: PreparedAccessStart<Pair, P, Ctx>,
@@ -2702,13 +2780,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         mut capture: Option<C>,
-    ) -> Result<ExecutedAccessStart<Pair, P>, WorkerExecutorError>
+    ) -> Result<ExecutedAccessStart<Pair, P>, E>
     where
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
-        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        E: From<WorkerExecutorError>,
     {
         // Match borrowed admission: capture live authority before appending the Start.
         // A replaying call captures nothing until claim continuation goes live.
@@ -2795,7 +2874,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             return Err(WorkerExecutorError::unexpected_oplog_entry(
                                 format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                                 "completed parent has no recorded host-internal child",
-                            ));
+                            )
+                            .into());
                         }
                         let primary_replay_tail = prepared.primary_runtime
                             && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
@@ -2806,7 +2886,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                     "replay continuation at {} is valid only for an incomplete entity",
                                     prepared.replay_state.last_replayed_index()
                                 ),
-                            ));
+                            ).into());
                         }
 
                         prepare_access_replay_continuation::<Pair, _, _, _>(
@@ -2944,10 +3024,39 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .await?;
         }
 
-        // Build the request before the host-call `Start` write. It runs
-        // on replay too so positional side entries written by the builder are consumed in the same
-        // order.
-        let request = build_request(AccessStartContext { is_live }, captured).await?;
+        if let Some(check) = prepared.claim_options.permission_check.take() {
+            let decision = if is_live
+                && !(prepared.unpersisted
+                    && store.with(|mut access| !get_ctx(access.data_mut()).state.is_live()))
+            {
+                Some(match check.targets {
+                    Ok(targets) => {
+                        authorize_live_permissions_at_serialized_access(store, get_ctx, &targets)
+                            .await?
+                            .map_err(|error| error.to_safe_string())
+                    }
+                    Err(denial) => Err(denial),
+                })
+            } else {
+                None
+            };
+            prepared.claim_options.denial = decision
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .cloned();
+            let _ = check.decision.send(decision);
+        }
+
+        // Build after permission admission and before Start, including on replay for positional
+        // side entries. Snapshot loading retains its reconstructed authority behavior above.
+        let request = build_request(
+            AccessStartContext {
+                is_live,
+                is_denied: prepared.claim_options.denial.is_some(),
+            },
+            captured,
+        )
+        .await?;
 
         if is_live
             && !prepared.unpersisted
@@ -2981,13 +3090,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
                     return Err(WorkerExecutorError::runtime(
                         "live accessor start returned to replay during boundary synchronization",
-                    ));
+                    )
+                    .into());
                 }
                 let request: HostRequest = request.into();
                 let function_type = retry.function_type().clone();
                 let parent_start_index = execution_scope.parent_start_index;
                 let observational_owner = execution_scope.observational_owner;
                 let invocation_id = execution_scope.invocation_id;
+                let denial = prepared.claim_options.denial.clone();
                 let span_started = Arc::new(std::sync::Mutex::new((OplogIndex::INITIAL, None)));
                 let built_span = span_started.clone();
                 let span_activity = span_observer.as_ref().map(|_| {
@@ -3061,6 +3172,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                         request: Some(request_payload),
                                         durable_function_type: function_type,
                                         span_started,
+                                        denial,
                                     };
                                     // All fallible preparation is complete. The actor pushes this entry
                                     // without yielding; cleanup enqueued here follows the current job.
@@ -3850,6 +3962,63 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// [`Self::invoke_access`] for a call that the host can deny before it runs. A new call
+    /// authorizes `targets` after its claim resolves and before its immutable `Start`.
+    /// A live denied call records the denial in its
+    /// `Start` and completes with [`DeniablePair::denied`] without running `live_action`. A
+    /// replayed call uses the recorded decision, also when it repairs an incomplete `Start`.
+    pub(crate) async fn invoke_deniable_access<T, D, Ctx, A, E>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        targets: Result<Vec<PermissionTarget>, String>,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        Pair: DeniablePair,
+        Pair::Req: Clone,
+        T: 'static,
+        D: HasData + ?Sized + 'static,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        let (call, decision) = Self::start_authorized_access(
+            store,
+            get_ctx,
+            function_type,
+            AccessClaimOptions::default(),
+            request.clone(),
+            targets,
+        )
+        .await?;
+        let denied = decision
+            .as_ref()
+            .and_then(|decision| decision.as_ref().err())
+            .map(|denial| Pair::denied(&request, denial));
+        if call.is_live() {
+            match denied {
+                Some(response) => call
+                    .complete_access(store, get_ctx, response)
+                    .await
+                    .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow())),
+                None => {
+                    call.run_live_action_access(store, get_ctx, live_action)
+                        .await
+                }
+            }
+        } else {
+            match call.replay_access(store, get_ctx).await? {
+                CallReplayOutcome::Replayed(response) => Ok(response),
+                CallReplayOutcome::Incomplete(call) => {
+                    call.run_live_action_access(store, get_ctx, live_action)
+                        .await
+                }
+            }
+        }
+    }
+
     pub(crate) fn host_internal_owner(&self) -> HostInternalCallOwner {
         HostInternalCallOwner {
             start_index: self.start_idx,
@@ -4016,16 +4185,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// than falling back to ambient worker state a sibling could have clobbered once durable calls
     /// overlap.
     pub(crate) async fn complete<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut impl DurableContext<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, TerminalCallError> {
+        self.complete_drained(ctx, response, None).await
+    }
+
+    async fn complete_drained<Ctx: WorkerCtx>(
         mut self,
         ctx: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<Pair::Resp, TerminalCallError> {
         let context = self.trap_context();
         if let Err(err) = ctx.drain().await {
             self.abandon_for_trap();
             return Err(err);
         }
-        self.complete_context(ctx, response, None, None, false)
+        self.complete_context(ctx, response, span_finished, None, false)
             .await
             .map_err(|source| TerminalCallError::new(source, context))
     }
@@ -4197,9 +4375,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Completes a call without publishing its response to the caller. Native callers prepare
     /// the delivery token and consume it at the Rust return, with no intervening await.
     pub(crate) async fn complete_deferred<Ctx: WorkerCtx>(
+        self,
+        access: &mut impl DurableContext<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError> {
+        self.complete_deferred_drained(access, response, None).await
+    }
+
+    async fn complete_deferred_drained<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
         response: Pair::Resp,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError> {
         let context = self.trap_context();
         if let Err(err) = access.drain().await {
@@ -4207,7 +4394,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             return Err(err);
         }
         let (response, mut guard) = self
-            .complete_terminal(access, response, None, AccessResultDestination::Guest)
+            .complete_terminal(
+                access,
+                response,
+                span_finished,
+                AccessResultDestination::Guest,
+            )
             .await
             .map_err(|source| TerminalCallError::new(source, context))?;
         Ok((response, guard.take_completion_delivery()))
@@ -4513,12 +4705,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         access: &mut impl DurableContext<Ctx>,
         guard: &mut AccessTerminalGuard<P>,
     ) -> Result<(), WorkerExecutorError> {
-        let result = async {
-            access
-                .finish_scope(self.retry.function_type().clone(), self.begin_index())
-                .await
-        }
-        .await;
+        let function_type = self.retry.function_type().clone();
+        let begin_index = self.begin_index();
+        let result = access.finish_scope(function_type, begin_index).await;
         if result.is_err() {
             // The caller observes this failure; it is not a guest-discarded completion.
             guard.suppress_discard_marker();
@@ -4677,6 +4866,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if let Err(error) = access.publish_direct_replay_tail(self.start_idx).await {
                     self.finished = true;
                     return Err(error);
+                }
+                if let Some((response, span_finished)) =
+                    self.recorded_denied_response(access).await?
+                {
+                    let response = self
+                        .complete_drained(access, response, span_finished)
+                        .await
+                        .map_err(|error| error.source)?;
+                    return Ok(CallReplayOutcome::Replayed(response));
                 }
                 if self.requires_agent_authority {
                     match access.agent_auth_ctx().await {
@@ -4844,6 +5042,27 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if let Err(error) = synchronization {
                     self.abandon_for_trap();
                     return Err(error);
+                }
+                let denied = self
+                    .recorded_denied_response(&mut AccessorContext::new(store, get_ctx))
+                    .await?;
+                if let Some((response, span_finished)) = denied {
+                    if destination != AccessResultDestination::Guest {
+                        self.abandon_for_trap();
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "host-internal Start without a denial",
+                            format!("denied host-internal Start {}", self.start_idx),
+                        ));
+                    }
+                    let response = match span_finished {
+                        Some(span_finished) => {
+                            self.complete_access_with_span(store, get_ctx, response, span_finished)
+                                .await
+                        }
+                        None => self.complete_access(store, get_ctx, response).await,
+                    }
+                    .map_err(|error| error.source)?;
+                    return Ok(CallReplayOutcome::Replayed(response));
                 }
                 Ok(CallReplayOutcome::Incomplete(self))
             }
@@ -5150,6 +5369,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.abandon_for_trap();
                     return Err(error);
                 }
+                if let Some((response, span_finished)) =
+                    self.recorded_denied_response(access).await?
+                {
+                    let (response, delivery) = self
+                        .complete_deferred_drained(access, response, span_finished)
+                        .await
+                        .map_err(|error| error.source)?;
+                    return Ok(DeferredCallReplayOutcome::Replayed(response, delivery));
+                }
                 Ok(DeferredCallReplayOutcome::Incomplete(self))
             }
         }
@@ -5362,6 +5590,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.finished = true;
                     return Err(error);
                 }
+                if let Some((response, span_finished)) = self.recorded_denied_response(ctx).await? {
+                    return self
+                        .complete_context(ctx, response, span_finished, None, true)
+                        .await;
+                }
                 self.complete_context(ctx, failure, None, None, true).await
             }
         }
@@ -5546,6 +5779,67 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// The response of an incomplete call whose `Start` records a denial: the host denied the
+    /// call before it ran, so the repair completes the `Start` with the denied response and does
+    /// not run the operation. A `Start` that opens a span gets the span transition that closes it
+    /// as denied, as the live denial does. `None` when the `Start` records no denial.
+    async fn recorded_denied_response<Ctx: WorkerCtx>(
+        &mut self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<
+        Option<(Pair::Resp, Option<golem_common::model::oplog::SpanFinished>)>,
+        WorkerExecutorError,
+    > {
+        let oplog = access.with_ctx(|ctx| ctx.state.oplog.clone());
+        let start_idx = self.start_idx;
+        let result = async {
+            let (request, denial, span_started) = match oplog.read(start_idx).await? {
+                OplogEntry::Start { denial: None, .. } => return Ok(None),
+                OplogEntry::Start {
+                    request: Some(request),
+                    denial: Some(denial),
+                    span_started,
+                    ..
+                } => (request, denial, span_started),
+                entry => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!("denied {} Start with a request", Pair::FQFN),
+                        format!("{entry:?}"),
+                    ));
+                }
+            };
+            let request = oplog.download_payload(request).await.map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to load the request of the denied {} call at {}: {error}",
+                    Pair::FQFN,
+                    start_idx
+                ))
+            })?;
+            let request = Pair::Req::try_from(request).map_err(|actual| {
+                WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN.to_string(), actual)
+            })?;
+            let span_finished =
+                span_started.map(|started| golem_common::model::oplog::SpanFinished {
+                    span_id: started.span_id,
+                    finished_at: Timestamp::now_utc(),
+                    outcome: golem_common::model::oplog::SpanOutcome::Denied,
+                });
+            Pair::denied_response(&request, &denial)
+                .map(|response| Some((response, span_finished)))
+                .ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        format!("{} Start without a denial", Pair::FQFN),
+                        format!("denial at {}: {denial}", start_idx),
+                    )
+                })
+        }
+        .await;
+        if result.is_err() {
+            self.abandon_for_trap();
+        }
+        result
     }
 
     /// Handles a [`ResolutionOutcome::Incomplete`] resolution, shared by every replay variant.
@@ -5977,7 +6271,11 @@ fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseQuotaTokenAcquired>(),
         TypeId::of::<HostResponseQuotaCommitResult>(),
         TypeId::of::<HostResponsePermissionCardDerived>(),
+        TypeId::of::<HostResponsePermissionCardLiveness>(),
+        TypeId::of::<HostResponsePermissionCardDecision>(),
         TypeId::of::<HostResponsePermissionCardTransferComplete>(),
+        TypeId::of::<HostResponsePermissionWallet>(),
+        TypeId::of::<HostResponsePermissionWalletVersion>(),
         TypeId::of::<HostResponseP3KeyvalueIncomingValueStream>(),
         TypeId::of::<HostResponseP3BlobstoreIncomingValueStream>(),
         TypeId::of::<HostResponseP3HttpClientConsumeBodyChunk>(),
@@ -6254,8 +6552,57 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         request: Pair::Req,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
         let request: HostRequest = request.into();
-        self.start_live_with_host_request_index(ctx, move |_| Ok((request, None)))
+        self.start_live_with_host_request_index(ctx, None, move |_| Ok((request, None)))
             .await
+    }
+
+    /// Records a call that the host denied before it ran: a `Start` that holds the denial and an
+    /// `End` with the pair's denied response. The operation does not run. Recovery of the `Start`
+    /// alone completes it with the same response (see [`HostPayloadPair::denied_response`]).
+    pub(crate) async fn start_live_denied<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        denial: String,
+    ) -> anyhow::Result<Pair::Resp>
+    where
+        Pair: DeniablePair,
+    {
+        let response = Pair::denied(&request, &denial);
+        let request: HostRequest = request.into();
+        let handle = self
+            .start_live_with_host_request_index(ctx, Some(denial), move |_| Ok((request, None)))
+            .await?;
+        Ok(handle.complete(ctx, response).await?)
+    }
+
+    /// [`Self::start_live_denied`] for a call that opens a span: the `Start` records
+    /// `span_started` and the `End` closes the span as denied.
+    pub(crate) async fn start_live_denied_with_span<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        denial: String,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> anyhow::Result<Pair::Resp>
+    where
+        Pair: DeniablePair,
+    {
+        let response = Pair::denied(&request, &denial);
+        let request: HostRequest = request.into();
+        let span_finished = golem_common::model::oplog::SpanFinished {
+            span_id: span_started.span_id.clone(),
+            finished_at: Timestamp::now_utc(),
+            outcome: golem_common::model::oplog::SpanOutcome::Denied,
+        };
+        let handle = self
+            .start_live_with_host_request_index(ctx, Some(denial), move |_| {
+                Ok((request, Some(span_started)))
+            })
+            .await?;
+        Ok(handle
+            .complete_with_span(ctx, response, span_finished)
+            .await?)
     }
 
     pub(crate) async fn start_live_with_span<Ctx: WorkerCtx>(
@@ -6265,8 +6612,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         span_started: golem_common::model::oplog::SpanStarted,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
         let request: HostRequest = request.into();
-        self.start_live_with_host_request_index(ctx, move |_| Ok((request, Some(span_started))))
-            .await
+        self.start_live_with_host_request_index(ctx, None, move |_| {
+            Ok((request, Some(span_started)))
+        })
+        .await
     }
 
     /// Second phase on the live path for requests whose durable identity depends on the exact
@@ -6287,7 +6636,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     where
         Pair::Req: Send + 'static,
     {
-        self.start_live_with_host_request_index(ctx, move |start_index| {
+        self.start_live_with_host_request_index(ctx, None, move |start_index| {
             build(start_index).map(|(request, span)| (request.into(), Some(span)))
         })
         .await
@@ -6296,6 +6645,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     async fn start_live_with_host_request_index<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
+        denial: Option<String>,
         build_request: impl FnOnce(
             OplogIndex,
         ) -> Result<
@@ -6345,6 +6695,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         request: Some(request_payload),
                         durable_function_type: function_type,
                         span_started: span_started.lock().unwrap().take(),
+                        denial,
                     },
                 )
                 .await
@@ -6587,6 +6938,7 @@ mod tests {
                     request: Some(OplogPayload::Inline(Box::new(request.clone().into()))),
                     durable_function_type: DurableFunctionType::ReadLocal,
                     span_started: None,
+                    denial: None,
                 })
                 .await
                 .unwrap();
