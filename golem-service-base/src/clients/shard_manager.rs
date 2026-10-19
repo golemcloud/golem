@@ -235,6 +235,20 @@ pub struct BatchRenewalEntry {
     pub pending_reservations: Vec<PendingReservation>,
 }
 
+/// How to reach the shard manager. Only the leader replica serves, and the client finds it through
+/// the configured address, so these client settings apply with three exceptions:
+///
+/// - Connections to a leader that a replica named, and to the configured address, send an HTTP/2
+///   ping every 2 s (or more often, if the settings say so) and wait at most 5 s for the answer,
+///   also while idle, whatever the keep-alive settings say. A replica whose node lost power closes
+///   nothing, and the connection is idle between lease renewals, so only the ping notices it in
+///   time for a lease renewal's deadline. A sidecar proxy answers pings itself, so behind one the
+///   ping detects a dead proxy but not a dead replica.
+/// - The configured address uses one connection that is never replaced for its age, whatever
+///   `connection_pool_size` and `max_connection_age` say. A pool spreads no load when one replica
+///   serves, and each replacement dials the Service again, which can reach a pod that is gone while
+///   the Service still lists it.
+/// - Connections to a named leader make one attempt and connect for at most 2 s.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GrpcShardManagerConfig {
     pub host: String,
