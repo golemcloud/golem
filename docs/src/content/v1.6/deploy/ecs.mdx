@@ -83,6 +83,43 @@ Point the hosts of the services at each other with their DNS names: `GOLEM__REGI
 
 Give the registry service a health check grace period long enough to download and inspect the built-in plugins and tools before it opens its listeners, for example 600 seconds. With no persistent cache at `/app/builtin-artifacts`, every replacement repeats this startup work and needs HTTPS access to GitHub. Size the grace period for a start with an empty cache, not only for a warm restart.
 
+#### Persistent artifact cache
+
+Mount Amazon EFS at `/app/builtin-artifacts` in the registry container to keep downloaded built-in plugins and tools across task replacements:
+
+1. Create an encrypted EFS file system in the VPC, with a mount target in each Availability Zone where registry tasks can run. Allow TCP port 2049 on the mount targets from the registry tasks' security group only.
+2. Create an access point with POSIX user uid and gid **65534**. Set its root directory to `/builtin-artifacts`, with owner uid and gid **65534** and permissions `0750`. EFS creates this directory on the first mount.
+3. Add this volume to the task definition. Replace the file system and access point IDs. Use Linux Fargate platform version **1.4.0** or later.
+
+```json copy
+{
+  "name": "builtin-artifacts",
+  "efsVolumeConfiguration": {
+    "fileSystemId": "fs-0123456789abcdef0",
+    "rootDirectory": "/",
+    "transitEncryption": "ENABLED",
+    "authorizationConfig": {
+      "accessPointId": "fsap-0123456789abcdef0",
+      "iam": "DISABLED"
+    }
+  }
+}
+```
+
+4. Add this entry to the registry container's `mountPoints`:
+
+```json copy
+{
+  "sourceVolume": "builtin-artifacts",
+  "containerPath": "/app/builtin-artifacts",
+  "readOnly": false
+}
+```
+
+The task volume's `rootDirectory` must be `/` or omitted when it uses an access point; the access point selects the directory inside EFS. This configuration uses network and POSIX permissions, not task-role IAM authorization, for EFS access. Keep the mount targets private and restrict their security group as described above.
+
+The cache holds both downloaded artifacts and their extracted metadata. Replacement tasks verify the artifacts' checksums and reuse valid cached metadata instead of repeating the expensive extraction. The registry still validates the descriptors and provisions the built-in plugins and tools before it opens its listeners. Keep the health check grace period for an empty cache or a release with new artifacts, and retain HTTPS access to GitHub for downloads.
+
 #### Shard manager
 
 Run exactly one shard manager task, in Postgres mode. With minimum healthy 0% and maximum 100%, ECS stops the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two shard managers could run the same agent twice. See [One shard manager](/v1.6/deploy/modes#one-shard-manager).
