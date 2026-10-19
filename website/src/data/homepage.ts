@@ -67,7 +67,7 @@ export const coreVm = {
   eyebrow: "The core of Golem",
   heading: "A lightweight, durable VM with permissions agents can't bypass",
   lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can resume anywhere.",
-  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2 from the oplog. It resumes at the last instruction with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
+  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2 from the oplog. It resumes where it left off, with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
   vm: { name: "Agent", where: "node 1", sub: "in its own WebAssembly VM" },
   golem: { name: "Golem", sub: "the VM's only way out" },
   calls: [
@@ -84,7 +84,7 @@ export const coreVm = {
   restored: {
     name: "Agent, recovered",
     where: "node 2",
-    state: "Resumes at the last instruction",
+    state: "Resumes where it left off",
     sub: "memory, call stack, files and environment restored",
     reused: "Orders API not called again: the recorded result is used",
   },
@@ -96,7 +96,7 @@ export const coreVm = {
     },
     {
       title: "Durable",
-      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored at the last instruction, without repeating completed calls.",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, without repeating completed calls.",
     },
     {
       title: "Secure",
