@@ -174,6 +174,7 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                 let ctx = (self.getter)(store.data_mut());
                 let delivery = InputObservationDelivery {
                     replay: ctx.state.replay_state.clone(),
+                    guest_order: ctx.guest_read_order(),
                     activity: ctx.tail_work_tracker().activity(),
                     runtime_teardown: ctx.stream_runtime_teardown_probe(),
                     cleanup_sink: ctx
@@ -549,6 +550,7 @@ impl NativeAttachmentInput {
                     capacity: self.controller.metadata().capacity_bytes,
                     delivery: InputObservationDelivery {
                         replay: ctx.state.replay_state.clone(),
+                        guest_order: None,
                         activity: ctx.tail_work_tracker().activity(),
                         runtime_teardown: ctx.stream_runtime_teardown_probe(),
                         cleanup_sink: ctx

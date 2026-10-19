@@ -6259,6 +6259,7 @@ struct PrepareInputObservation {
     observation: PendingConsumerObservation,
     streams: StreamSession,
     replay: ReplayState,
+    guest_order: Option<super::replay_state::GuestReadOrder>,
     activity: TailActivity,
     result: oneshot::Sender<Result<StreamReadObserver, WorkerExecutorError>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -6326,6 +6327,7 @@ impl PrepareInputObservation {
         }
         InputObservationDelivery {
             replay: self.replay,
+            guest_order: self.guest_order,
             activity: self.activity,
             runtime_teardown: self.runtime_teardown,
             cleanup_sink: self.cleanup_sink,
@@ -7325,6 +7327,7 @@ impl DurableInputProducer {
                 observation,
                 streams: self.input.streams.clone(),
                 replay: ctx.state.replay_state.clone(),
+                guest_order: ctx.guest_read_order(),
                 activity: ctx.tail_work_tracker().activity(),
                 result,
                 runtime_teardown: self.runtime_teardown.clone(),

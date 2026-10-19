@@ -35,7 +35,7 @@ fn bad_cwds_are_rejected_before_the_script_runs() {
             format!("cwd {}: Not a directory", file.display()),
         ),
     ] {
-        match block_on(run_script(&cwd, &script, DEFAULT_TIMEOUT)) {
+        match block_on(run_script(&cwd, &script, DEFAULT_TIMEOUT, None)) {
             Err(BashError::InvalidCwd { reason: got }) => assert_eq!(got, reason),
             other => panic!("{cwd:?}: {other:?}"),
         }
@@ -49,7 +49,7 @@ fn a_time_limit_outside_one_second_to_an_hour_is_rejected_before_the_script_runs
     let marker = std::env::temp_dir().join(format!("bash-tool-timeout-{}", std::process::id()));
     let script = format!("touch '{}'", marker.display());
     for timeout in [0, MAX_TIMEOUT + 1] {
-        match block_on(run_script("", &script, timeout)) {
+        match block_on(run_script("", &script, timeout, None)) {
             Err(BashError::InvalidTimeout { reason }) => assert_eq!(
                 reason,
                 format!("timeout {timeout}: must be between 1 and 3600 seconds")
@@ -59,7 +59,7 @@ fn a_time_limit_outside_one_second_to_an_hour_is_rejected_before_the_script_runs
         assert!(!marker.exists(), "{timeout} ran the script");
     }
     assert_eq!(
-        block_on(run_script("", "exit 3", MAX_TIMEOUT))
+        block_on(run_script("", "exit 3", MAX_TIMEOUT, None))
             .unwrap()
             .exit_code,
         3
@@ -74,6 +74,7 @@ fn every_call_is_a_fresh_shell_that_starts_in_the_given_cwd() {
             "cd /tmp; x=kept; f() { echo function; }; alias ll='echo alias'; set -o pipefail; \
              trap 'echo caught' ERR; set -- a b; pushd / >/dev/null; (exit 7)",
             DEFAULT_TIMEOUT,
+            None,
         )
         .await
         .unwrap();
@@ -87,6 +88,7 @@ fn every_call_is_a_fresh_shell_that_starts_in_the_given_cwd() {
              type f ll 2>/dev/null || printf '[none]'; [[ -o pipefail ]] || printf '[no-pipefail]'; \
              false",
             DEFAULT_TIMEOUT,
+            None,
         )
         .await
         .unwrap();
@@ -109,7 +111,7 @@ fn every_call_is_a_fresh_shell_that_starts_in_the_given_cwd() {
             "echo \"$(umask)\"",
             "trap 'coproc echo hidden' PIPE",
         ] {
-            let refused = run_script("", script, DEFAULT_TIMEOUT).await.unwrap();
+            let refused = run_script("", script, DEFAULT_TIMEOUT, None).await.unwrap();
             assert_eq!(refused.exit_code, 2, "{script}: {}", refused.stderr);
             assert!(refused.stdout.is_empty(), "{script}: {}", refused.stdout);
         }
