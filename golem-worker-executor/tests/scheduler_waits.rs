@@ -131,10 +131,20 @@ fn observer_layers_keep_debug_evidence_without_enabling_trace_work() {
         Some(tracing::level_filters::LevelFilter::DEBUG),
         "test observers must not enable dependency trace argument construction"
     );
+    let debug_message = uuid::Uuid::new_v4().to_string();
+    let trace_message = uuid::Uuid::new_v4().to_string();
+    let mut debug = collector().subscribe(debug_message.clone());
+    let mut trace = collector().subscribe(trace_message.clone());
     tracing::subscriber::with_default(subscriber, || {
-        assert!(tracing::event_enabled!(target: TARGET, tracing::Level::DEBUG));
-        assert!(!tracing::event_enabled!(target: TARGET, tracing::Level::TRACE));
+        // Emit complete events: enabled-only probes leave per-layer filter state on this thread.
+        tracing::debug!(target: TARGET, "{debug_message}");
+        tracing::trace!(target: TARGET, "{trace_message}");
     });
+    assert_eq!(debug.receive.try_recv(), Ok(()));
+    assert!(matches!(
+        trace.receive.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
 }
 
 #[test]

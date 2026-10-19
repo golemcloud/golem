@@ -293,7 +293,14 @@ async fn pending_block(
             registry.set_policy(exhausted);
             Some(applied_refresh(&limits, &registry, context.account_id).await?)
         };
-        let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
+        // A usage flush can already be queued and does not acknowledge a capacity check.
+        // Storage-only enforcement uses the normal 30-second monthly monitor cadence.
+        let signal_timeout = if resource == Resource::Storage {
+            Duration::from_secs(45)
+        } else {
+            Duration::from_secs(10)
+        };
+        let signal = tokio::time::timeout(signal_timeout, raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         if resource == Resource::Storage {
             let other = if durable {
