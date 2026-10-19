@@ -303,7 +303,7 @@ fn write_go(ctx: &TestContext) {
 
             type UuidHolder struct {
             	Primary values.UUID
-            	Maybe   *values.UUID
+            	Maybe   values.Option[values.UUID]
             	All     []values.UUID
             }
 
@@ -378,16 +378,16 @@ fn write_go(ctx: &TestContext) {
             		key := golem.Must(values.ParseUUID(in.Key))
             		var nilUUID values.UUID
             		maxUUID := golem.Must(values.ParseUUID("ffffffff-ffff-ffff-ffff-ffffffffffff"))
-            		remote := golem.Must(rust.GetRustUuidTarget(rust.RustUuidTargetID{{Key: key}}))
+            		remote := golem.Must(rust.GetRustUUIDTarget(rust.RustUUIDTargetID{{Key: key}}))
             		for _, value := range []values.UUID{{key, nilUUID, maxUUID}} {{
             			echoed := golem.Must(remote.Echo(value))
             			check(echoed == value, "echo %s returned %s", value, echoed)
             		}}
-            		for _, maybe := range []*values.UUID{{&maxUUID, nil}} {{
+            		for _, maybe := range []values.Option[values.UUID]{{values.Some(maxUUID), values.None[values.UUID]()}} {{
             			all := []values.UUID{{key, nilUUID, maxUUID}}
-            			back := golem.Must(remote.Nested(rust.UuidHolder{{Primary: key, Maybe: maybe, All: all}}))
+            			back := golem.Must(remote.Nested(rust.UUIDHolder{{Primary: key, Maybe: maybe, All: all}}))
             			check(back.Primary == key, "nested primary %s", back.Primary)
-            			check((back.Maybe == nil) == (maybe == nil) && (maybe == nil || *back.Maybe == *maybe), "nested maybe")
+            			check(back.Maybe == maybe, "nested maybe")
             			check(slices.Equal(back.All, all), "nested all %v", back.All)
             		}}
             		check(golem.Must(remote.Identity()) == key, "identity")
@@ -876,16 +876,16 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
             	key := must(values.ParseUUID("{KEY}"))
             	var nilUUID values.UUID
             	maxUUID := must(values.ParseUUID("ffffffff-ffff-ffff-ffff-ffffffffffff"))
-            	target := must(client.GetRustUuidTarget(client.RustUuidTargetID{{Key: key}}))
+            	target := must(client.GetRustUUIDTarget(client.RustUUIDTargetID{{Key: key}}))
             	for _, value := range []values.UUID{{key, nilUUID, maxUUID}} {{
             		if echoed := must(target.Echo(ctx, value)); echoed != value {{
             			log.Fatalf("echo %s returned %s", value, echoed)
             		}}
             	}}
-            	for _, maybe := range []*values.UUID{{&maxUUID, nil}} {{
+            	for _, maybe := range []values.Option[values.UUID]{{values.Some(maxUUID), values.None[values.UUID]()}} {{
             		all := []values.UUID{{key, nilUUID, maxUUID}}
-            		back := must(target.Nested(ctx, client.UuidHolder{{Primary: key, Maybe: maybe, All: all}}))
-            		if back.Primary != key || (back.Maybe == nil) != (maybe == nil) || (maybe != nil && *back.Maybe != *maybe) || !slices.Equal(back.All, all) {{
+            		back := must(target.Nested(ctx, client.UUIDHolder{{Primary: key, Maybe: maybe, All: all}}))
+            		if back.Primary != key || back.Maybe != maybe || !slices.Equal(back.All, all) {{
             			log.Fatalf("nested returned %+v", back)
             		}}
             	}}
