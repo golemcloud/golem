@@ -7,18 +7,25 @@ import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 // recovery the executor restores `count` from the last snapshot and replays the
 // oplog tail. This is the declarative replacement for overriding
 // `save`/`loadSnapshot` in the decorator SDK.
-export const CounterWithSnapshot = defineAgent({
-  name: 'CounterWithSnapshot',
+export const CounterWithSnapshotAgent = defineAgent({
+  name: 'CounterWithSnapshotAgent',
   id: { name: z.string() },
   http: http.mount('/snapshot-counters/{name}'),
-  snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 5 } },
+  snapshotting: {
+    state: z.object({ count: z.number() }),
+    policy: { everyNInvocations: 5 },
+  },
   methods: {
-    value: method({ input: {}, returns: z.number() }),
-    increment: method({ input: {}, returns: z.number(), http: http.post('/increment') }),
+    value: method({ input: {}, returns: z.number(), http: http.get('/value') }),
+    increment: method({
+      input: {},
+      returns: z.number(),
+      http: http.post('/increment'),
+    }),
   },
 });
 
-export const CounterWithSnapshotImpl = CounterWithSnapshot.implement({
+export const CounterWithSnapshotAgentImpl = CounterWithSnapshotAgent.implement({
   init: () => ({ count: 0 }),
   methods: {
     value() {

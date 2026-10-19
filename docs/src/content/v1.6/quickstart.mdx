@@ -1,4 +1,4 @@
-import { Callout, Cards, Tabs } from "nextra/components"
+import { Cards, Tabs } from "nextra/components"
 import { ArtifactLink } from "@/components/releaselink"
 import { NEXT_RELEASE_VERSION } from "@/lib/releases"
 import { ThemedImage } from "@/components/themed-image"
@@ -72,8 +72,6 @@ golem new --template ts --yes agent-examples
 ```shell copy
 golem new --template effect --yes agent-examples
 ```
-
-The Effect template names its agent type `Counter`, not `CounterAgent`.
   </Tabs.Tab>
   <Tabs.Tab>
 ```shell copy
@@ -127,8 +125,8 @@ export const CounterAgentImpl = CounterAgent.implement({
   <Tabs.Tab>
 ```typescript
 // src/counter-agent.ts (excerpt)
-export const Counter = defineAgent({
-  name: "Counter",
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
   mode: "durable",
   id: { name: Schema.String },
   methods: {
@@ -139,7 +137,14 @@ export const Counter = defineAgent({
     }),
   },
 }).implement<Ref.Ref<{ count: number }>>({
-  init: () => Ref.make({ count: 0 }),
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make({ count: 0 });
+      yield* Effect.logInfo("Counter constructed").pipe(
+        Effect.annotateLogs({ name }),
+      );
+      return state;
+    }),
   methods: (state) => ({
     increment: () =>
       Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
@@ -275,10 +280,6 @@ golem agent invoke 'CounterAgent("my-counter")' increment
 golem agent invoke 'CounterAgent("my-counter")' increment
 ```
 
-<Callout type="info">
-  **Effect:** write `'Counter("my-counter")'` wherever this page writes `'CounterAgent("my-counter")'`.
-</Callout>
-
 Each command ends with the method's result. The first call prints `1` and the second prints `2`. Excerpt of the second call's output (the label names the component's language):
 
 ```text
@@ -336,7 +337,7 @@ golem agent oplog 'CounterAgent("my-counter")'
 
 The counter's state survived between calls. This second example shows Golem recovering a method that is still running. A `WorkflowAgent` starts a workflow, asks a `HumanAgent` for approval, and then waits inside its `start` method until the human decides. You restart the server while it waits, approve the workflow afterwards, and the method continues from the line where it stopped.
 
-The example uses the `human-in-the-loop` template, or a manual setup for Effect. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
+The example uses the `human-in-the-loop` template. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The constructor parameter `report-q3` names the workflow agent. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
 
 `--trigger` returns before the workflow finishes registering its request. If the pending list is
 empty, repeat the list command. Restart only after the list contains the workflow ID and
@@ -376,7 +377,7 @@ golem agent get 'WorkflowAgent("report-q3")'
 
 ```text
 Invocation result in TypeScript syntax:
-["<workflow-id>"]
+["report-q3"]
 ...
   Status:                   Suspended
 ```
@@ -384,102 +385,36 @@ Invocation result in TypeScript syntax:
 In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
 
 ```shell copy
-golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
 ```text
 Invocation result in TypeScript syntax:
-"Workflow <workflow-id> was approved"
+"Workflow report-q3 was approved"
 ```
   </Tabs.Tab>
   <Tabs.Tab>
-Effect has no `human-in-the-loop` template. Create an Effect application instead:
+```typescript
+// src/workflow-agent.ts (excerpt)
+start: ({ approver }) =>
+  Effect.gen(function* () {
+    const promiseId = yield* Agents.Promises.create;
+    const human = yield* HumanAgent.client.get({ username: approver });
+    const requestId = yield* Schema.decodeEffect(Ids.PromiseId)(promiseId);
+    yield* human.requestApproval({ workflowId, promiseId: requestId });
+    const bytes = yield* Agents.Promises.await(promiseId);
+    const decision = new TextDecoder().decode(bytes);
+    return decision === "approved"
+      ? `Workflow ${workflowId} was approved`
+      : `Workflow ${workflowId} was rejected`;
+  }).pipe(Effect.orDie, Effect.scoped),
+```
 
 ```shell copy
 cd ..
-golem new --template effect --yes approvals
+golem new --template effect/human-in-the-loop --yes approvals
 cd approvals
-```
-
-Replace `src/counter-agent.ts` with the following complete implementation. Keep the generated
-`src/main.ts` import of `./counter-agent.js`. The human agent stores the full promise identity;
-the workflow waits on the host promise, not an in-memory JavaScript promise.
-
-```typescript
-import { Effect, Ref, Schema } from "effect"
-import { Agents, WitTypes, defineAgent, method } from "@golemcloud/effect-golem"
-
-const PromiseIdentity = Schema.Struct({
-  agentId: Schema.Struct({
-    componentId: Schema.Struct({
-      uuid: Schema.Struct({ highBits: WitTypes.Uint64, lowBits: WitTypes.Uint64 }),
-    }),
-    agentId: Schema.String,
-  }),
-  oplogIdx: WitTypes.Uint64,
-})
-
-const HumanAgent = defineAgent({
-  name: "HumanAgent",
-  mode: "durable",
-  id: { username: Schema.String },
-  methods: {
-    requestApproval: method({
-      input: { workflowId: Schema.String, promiseId: PromiseIdentity },
-      success: Schema.String,
-    }),
-    listPendingApprovals: method({ input: {}, success: Schema.Array(Schema.String) }),
-    decide: method({
-      input: { workflowId: Schema.String, decision: Schema.String },
-      success: Schema.String,
-    }),
-  },
-}).implement<Ref.Ref<Map<string, typeof PromiseIdentity.Type>>>({
-  init: () => Ref.make(new Map()),
-  methods: (pending) => ({
-    requestApproval: ({ workflowId, promiseId }) =>
-      Ref.update(pending, (entries) => new Map(entries).set(workflowId, promiseId)).pipe(
-        Effect.as("Approval requested"),
-      ),
-    listPendingApprovals: () => Ref.get(pending).pipe(Effect.map((entries) => [...entries.keys()])),
-    decide: ({ workflowId, decision }) => Effect.gen(function* () {
-      if (decision !== "approved" && decision !== "rejected") return "Invalid decision"
-      const promiseId = (yield* Ref.get(pending)).get(workflowId)
-      if (!promiseId) return "No pending request"
-      yield* Agents.Promises.complete(promiseId, new TextEncoder().encode(decision)).pipe(Effect.orDie)
-      yield* Ref.update(pending, (entries) => {
-        const next = new Map(entries)
-        next.delete(workflowId)
-        return next
-      })
-      return `Workflow ${workflowId} was ${decision}`
-    }),
-  }),
-})
-
-export const WorkflowAgent = defineAgent({
-  name: "WorkflowAgent",
-  mode: "durable",
-  id: { workflowId: Schema.String },
-  methods: {
-    start: method({ input: { approver: Schema.String }, success: Schema.String }),
-  },
-}).implement<{ workflowId: string }>({
-  init: ({ workflowId }) => Effect.succeed({ workflowId }),
-  methods: (state) => ({
-    start: ({ approver }) => Effect.gen(function* () {
-      const promiseId = yield* Agents.Promises.create
-      const human = yield* HumanAgent.client.get({ username: approver })
-      yield* human.requestApproval({ workflowId: state.workflowId, promiseId })
-      const bytes = yield* Agents.Promises.await(promiseId)
-      return `Workflow ${state.workflowId} was ${new TextDecoder().decode(bytes)}`
-    }).pipe(Effect.scoped, Effect.orDie),
-  }),
-})
-```
-
-```shell copy
 golem build
 golem deploy --yes
 golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
@@ -492,21 +427,19 @@ Wait for `listPendingApprovals` to contain `report-q3` and for the workflow stat
 `golem server run` (without `--clean`). In **Terminal 2**:
 
 ```shell copy
-golem agent invoke 'HumanAgent("alice")' decide '"report-q3"' '"approved"'
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
-The original invocation returns `"Workflow report-q3 was approved"`. This minimal example uses
-oplog recovery, not snapshots. It turns host/RPC failures into defects with `Effect.orDie`;
-production code should define its application error handling.
+The original invocation returns `"Workflow report-q3 was approved"`.
   </Tabs.Tab>
   <Tabs.Tab>
 ```rust
 // src/workflow_agent.rs (excerpt)
-async fn start(&mut self) -> String {
+async fn start(&mut self, approver: String) -> String {
     let approval_promise_id = create_promise();
 
-    let mut approver = HumanAgentClient::get("bob".to_string());
+    let mut approver = HumanAgentClient::get(approver);
     approver
         .request_approval(self.id.clone(), approval_promise_id.clone())
         .await;
@@ -524,22 +457,20 @@ async fn start(&mut self) -> String {
 }
 ```
 
-In the Rust template, `WorkflowAgent` is a phantom agent without constructor parameters, and `start` always asks the human agent `"bob"`. Give the workflow an ID of your own choice in square brackets, as below, so every command reaches the same agent.
-
 ```shell copy
 cd ..
 golem new --template rust/human-in-the-loop --yes approvals
 cd approvals
 golem build
 golem deploy --yes
-golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
-golem agent invoke 'HumanAgent("bob")' list_pending_approvals
-golem agent get 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]'
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' list_pending_approvals
+golem agent get 'WorkflowAgent("report-q3")'
 ```
 
 ```text
 Invocation result in Rust syntax:
-["<workflow-id>"]
+["report-q3"]
 ...
   Status:                   Suspended
 ```
@@ -547,13 +478,13 @@ Invocation result in Rust syntax:
 In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
 
 ```shell copy
-golem agent invoke 'HumanAgent("bob")' decide_approval '"<workflow-id>"' 'Approved'
-golem agent invoke --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
+golem agent invoke 'HumanAgent("alice")' decide_approval '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
 ```text
 Invocation result in Rust syntax:
-"Workflow <workflow-id> was approved ✅"
+"Workflow report-q3 was approved ✅"
 ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -577,7 +508,7 @@ In **Terminal 1**, stop the server with `Ctrl+C` and restart it with `golem serv
 (without `--clean`). In **Terminal 2**, complete the promise and retrieve the original result:
 
 ```shell copy
-golem agent invoke 'HumanAgent("alice")' decide '"report-q3"' '"approved"'
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
@@ -604,7 +535,7 @@ In **Terminal 1**, stop the server with `Ctrl+C` and restart it with `golem serv
 (without `--clean`). In **Terminal 2**:
 
 ```shell copy
-golem agent invoke 'HumanAgent("alice")' decide '"report-q3"' '"approved"'
+golem agent invoke 'HumanAgent("alice")' decide_approval '"report-q3"' '"approved"'
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
@@ -645,7 +576,7 @@ golem agent get 'WorkflowAgent("report-q3")'
 
 ```text
 Invocation result in Go syntax:
-["<workflow-id>"]
+["report-q3"]
 ...
   Status:                   Suspended
 ```
@@ -653,13 +584,13 @@ Invocation result in Go syntax:
 In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
 
 ```shell copy
-golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
+golem agent invoke 'HumanAgent("alice")' decideApproval '"report-q3"' '"approved"'
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
 ```text
 Invocation result in Go syntax:
-"Workflow <workflow-id> was approved"
+"Workflow report-q3 was approved"
 ```
   </Tabs.Tab>
 </Tabs>

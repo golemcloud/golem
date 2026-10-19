@@ -12,6 +12,30 @@ class StreamingConfig extends defineConfig("StreamingAgent.Config", {
   externalAuth: Schema.Redacted(Schema.String),
 }) {}
 
+// Only an early close counts as cancellation, not normal stream exhaustion.
+function trackCancellation<A, E, R>(
+  input: Stream.Stream<A, E, R>,
+  cancelled: Ref.Ref<number>,
+) {
+  return Stream.suspend(() => {
+    let completed = false;
+    return input.pipe(
+      Stream.concat(
+        Stream.fromEffectDrain(
+          Effect.sync(() => {
+            completed = true;
+          }),
+        ),
+      ),
+      Stream.ensuring(
+        Effect.suspend(() =>
+          completed ? Effect.void : Ref.update(cancelled, (count) => count + 1),
+        ),
+      ),
+    );
+  });
+}
+
 export const StreamingAgent = defineAgent({
   name: "StreamingAgent",
   id: { name: Schema.String },
@@ -22,7 +46,10 @@ export const StreamingAgent = defineAgent({
       input: { input: WitTypes.AgentStream(Schema.Number) },
       success: Schema.Number,
     }),
-    produce: method({ input: {}, success: WitTypes.AgentStream(Schema.Number) }),
+    produce: method({
+      input: {},
+      success: WitTypes.AgentStream(Schema.Number),
+    }),
     transform: method({
       input: {
         prefix: Schema.String,
@@ -36,7 +63,9 @@ export const StreamingAgent = defineAgent({
     }),
     recoverable: method({
       input: {},
-      success: WitTypes.AgentStream(Schema.Result(Schema.Number, Schema.String)),
+      success: WitTypes.AgentStream(
+        Schema.Result(Schema.Number, Schema.String),
+      ),
     }),
     status: method({ input: {}, success: Schema.String }),
     durableEcho: method({
@@ -79,17 +108,36 @@ export const StreamingAgent = defineAgent({
         ),
         Effect.orDie,
       ),
-    produce: () => Effect.succeed(Stream.make(1, 2, 3)),
+    produce: () =>
+      Effect.succeed(
+        trackCancellation(Stream.make(1, 2, 3), cancelledProducers),
+      ),
     transform: ({ prefix, input }) =>
-      Effect.succeed(input.pipe(Stream.map((value) => `${prefix}:${value}`))),
+      Effect.succeed(
+        trackCancellation(
+          input.pipe(Stream.map((value) => `${prefix}:${value}`)),
+          cancelledProducers,
+        ),
+      ),
     nested: () =>
-      Effect.succeed(Stream.make(Stream.make(10, 20), Stream.make(30, 40))),
+      Effect.succeed(
+        trackCancellation(
+          Stream.make(
+            trackCancellation(Stream.make(10, 20), cancelledProducers),
+            trackCancellation(Stream.make(30, 40), cancelledProducers),
+          ),
+          cancelledProducers,
+        ),
+      ),
     recoverable: () =>
       Effect.succeed(
-        Stream.make(
-          Result.succeed(1),
-          Result.fail("this item could not be produced"),
-          Result.succeed(2),
+        trackCancellation(
+          Stream.make(
+            Result.succeed(1),
+            Result.fail("this item could not be produced"),
+            Result.succeed(2),
+          ),
+          cancelledProducers,
         ),
       ),
     status: () =>
@@ -97,7 +145,12 @@ export const StreamingAgent = defineAgent({
         Effect.map((count) => `ready (${count} cancelled producers)`),
       ),
     durableEcho: ({ input }) =>
-      Effect.succeed(input.pipe(Stream.map((value) => `echo:${value}`))),
+      Effect.succeed(
+        trackCancellation(
+          input.pipe(Stream.map((value) => `echo:${value}`)),
+          cancelledProducers,
+        ),
+      ),
     appendExternal: ({ url, producerId, values, close }) =>
       Effect.gen(function* () {
         const config = yield* StreamingConfig;

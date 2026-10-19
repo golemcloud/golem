@@ -23,6 +23,39 @@ impl<I: Image> ContainerHandle<I> {
         Self(Arc::new(Mutex::new(Some(container_async))))
     }
 
+    /// Stops the container and starts it again; its file system, and so its data, is kept.
+    pub(super) async fn restart(&self) {
+        let guard = self.0.lock().await;
+        let container = guard.as_ref().expect("The container was already removed");
+        container
+            .stop_with_timeout(Some(1))
+            .await
+            .expect("Failed to stop the container");
+        container
+            .start()
+            .await
+            .expect("Failed to start the container again");
+    }
+
+    /// Stops the container without removing it; [`Self::start`] starts it again with its data.
+    pub(super) async fn stop(&self) {
+        let guard = self.0.lock().await;
+        let container = guard.as_ref().expect("The container was already removed");
+        container
+            .stop_with_timeout(Some(1))
+            .await
+            .expect("Failed to stop the container");
+    }
+
+    pub(super) async fn start(&self) {
+        let guard = self.0.lock().await;
+        let container = guard.as_ref().expect("The container was already removed");
+        container
+            .start()
+            .await
+            .expect("Failed to start the container again");
+    }
+
     pub(super) async fn kill(&self) {
         if let Some(container) = self.0.lock().await.take() {
             let id = container.id().to_string();

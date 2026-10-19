@@ -14,4 +14,13 @@ trait CounterAgent extends BaseAgent {
   @description("Increases the count by one and returns the new value")
   @endpoint(method = "POST", path = "/increment")
   def increment(): Future[Int]
+
+  @endpoint(method = "GET", path = "/value")
+  def value(): Future[Int]
+
+  @endpoint(method = "POST", path = "/add")
+  def add(by: Int): Future[Int]
+
+  @endpoint(method = "POST", path = "/reset")
+  def reset(): Future[Unit]
 }

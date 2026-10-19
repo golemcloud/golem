@@ -28,7 +28,7 @@ struct TaskAgent {
 ///|
 /// Creates a new task agent with the given name
 fn TaskAgent::new(name : String) -> TaskAgent {
-  { name, next_id: 1, tasks: [] }
+  { name, next_id: 1, tasks: [], }
 }
 
 ///|
@@ -36,11 +36,13 @@ fn TaskAgent::new(name : String) -> TaskAgent {
 #derive.prompt_hint("Create a new task with the given title")
 #derive.endpoint(post="/tasks")
 pub fn TaskAgent::create_task(self : Self, request : CreateTaskRequest) -> Task {
+  // Store Unix epoch seconds with nanosecond precision.
+  let now = @systemClock.now()
   let task : Task = {
     id: self.next_id,
     title: request.title,
     completed: false,
-    created_at: "",
+    created_at: "\{now.seconds}.\{now.nanoseconds.to_string().pad_start(9, '0')}",
   }
   self.next_id += 1
   self.tasks.push(task)

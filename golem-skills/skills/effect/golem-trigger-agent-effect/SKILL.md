@@ -34,11 +34,11 @@ For an agent declared with `defineAgent` and `method`:
 
 Do not infer the runtime name from an exported TypeScript binding or translate method names to
 snake_case. The generated Effect starter declares its counter with the exact runtime name
-`Counter`:
+`CounterAgent`:
 
 ```typescript
-export const Counter = defineAgent({
-  name: "Counter",
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
   id: { name: Schema.String },
   methods: {
     increment: method({
@@ -49,10 +49,10 @@ export const Counter = defineAgent({
 });
 ```
 
-Trigger that starter agent as `Counter("c1")`, not `CounterAgent("c1")`:
+Trigger that starter agent as `CounterAgent("c1")`:
 
 ```shell
-golem agent invoke --trigger 'Counter("c1")' increment
+golem agent invoke --trigger 'CounterAgent("c1")' increment
 ```
 
 Pass one native TypeScript literal per user-supplied `input` field in declaration order. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not wrap them in the named input

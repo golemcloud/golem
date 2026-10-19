@@ -189,8 +189,8 @@ With explicit approval to delete and recreate those tags, recreate each at its
 original commit and push it separately. Keep all source commits and versions
 unchanged; do not delete the Go tags, which need no publication workflow.
 
-For explicitly authorized local recovery, use the exact clean tag, full history,
-and authenticated write access to both repositories:
+For explicitly authorized local recovery, use Python 3.14 as `python3`, the exact
+clean tag, full history, and authenticated write access to both repositories:
 
 ```shell
 BUILTIN_VERSION=1.6.0 cargo make validate-builtin-release
@@ -202,3 +202,9 @@ BUILTIN_VERSION=1.6.0 cargo make publish-builtin-artifacts
 Validation fetches refs but does not build; dry run builds/packages without
 publication or manifest creation. Local recovery keeps all immutability and
 provenance checks. Never bypass the CI guard or give normal CI write credentials.
+Builds on different hosts can produce different WASM bytes from the same source.
+Do not replace a package when a rebuild differs. To retain a complete package
+already verified by the original publisher and publish only missing components,
+follow [recovery across build hosts](../../../BUILTIN_ARTIFACTS.md#recovery-across-build-hosts).
+This manual procedure requires explicit publication authorization and the original
+verification evidence; it does not relax the all-entry publisher's byte checks.

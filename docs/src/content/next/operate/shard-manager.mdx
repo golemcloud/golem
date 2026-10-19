@@ -34,7 +34,7 @@ compaction_retention_revisions = 0
 Use one load-balanced endpoint rather than a list of etcd members. An unavailable member in the client's rotation can delay writes and leader election.
 
 <Callout type="warning">
-  The etcd client supports only `http://` endpoints and does not configure authentication. Keep this connection on a trusted private network, or use a local proxy that secures the connection to etcd. Do not expose an unauthenticated etcd endpoint publicly.
+  Without `persistence.config.tls` and an etcd user, the connection to etcd is plaintext and unauthenticated. Keep it on a trusted private network, or [secure it](#secure-the-etcd-connection). Do not expose an unauthenticated etcd endpoint publicly.
 </Callout>
 
 Check these settings before starting replicas:
@@ -49,6 +49,45 @@ Check these settings before starting replicas:
 Compaction removes old revisions across the **entire etcd cluster**, not just Golem's keys. Disabling Golem's compaction does not remove the need to compact: configure etcd's automatic compaction or another operator-managed policy.
 
 For all settings and their environment variable equivalents, see the [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml) and [sample environment file](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env).
+
+## Secure the etcd connection
+
+Distributed mode can talk to etcd over **TLS**, with a client certificate (mTLS), and as an etcd **user**. With `persistence.config.tls` set, every entry in `persistence.config.endpoints` must start with `https://`; without it, every entry must start with `http://`, and a replica configured otherwise refuses to start. Each TLS item comes from a PEM file or from an inline value (the PEM in standard Base64 with padding, on one line, as `base64 -w0` writes it), not both: `tls.ca_cert_file` or `tls.ca_cert` is the CA that signed etcd's server certificate; `tls.client_cert_file` or `tls.client_cert`, and `tls.client_key_file` or `tls.client_key`, are the shard manager's client certificate and its unencrypted key (PKCS#8, PKCS#1 or SEC1; set both or neither); `tls.server_name` is the name to check etcd's certificate against when the endpoint host is an IP address or an alias that the certificate does not name. The `ca.crt` in a Secret that cert-manager makes for the client certificate is the CA of that certificate's issuer, so it works only when the same issuer signed etcd's server certificate; otherwise mount a trust bundle that holds etcd's CA.
+
+At startup a replica reads every TLS item once and logs each certificate's subject, end of validity and SHA-256 fingerprint. It refuses to start when an item cannot be read or holds no certificate or key, when the key is encrypted or does not belong to the client certificate, when the client certificate has expired or is not valid yet, when every certificate of the CA item has expired, when etcd refuses the TLS handshake (a certificate that etcd rejects, or a server certificate that the CA did not sign or that does not name the endpoint), and when the user's role may not write `/golem/`. Each refusal names the setting or the reason. An etcd server certificate that has expired, or is not valid yet, is for etcd to renew: the replica then waits, as for an etcd that is down, and logs the certificate's end of validity on every attempt.
+
+### Renew certificates
+
+**A renewed certificate takes effect on a restart.** A connection that is open keeps working after a renewal; a new connection presents the certificate read at startup. While a replica runs, a TLS handshake that etcd refuses, or that refuses etcd's certificate, is retried like a network fault, because the cause can be on etcd's side. Every `persistence.config.retry_max_delay` the replica checks, through both of its etcd connections, whether etcd refuses its certificates. When it does and the TLS files have changed since startup, the replica tries the files on disk on a new connection; when etcd accepts them, the replica stops, so that its restart reads them. When etcd refuses the new files too - as when etcd's own certificate has expired - a restart would not help, and the replica keeps retrying. A controller that rolls the pods when the Secret changes saves the wait for that first refusal. **Mount the Secret as a directory, not with `subPath`**: with `subPath` the files in the pod never change, and a replica keeps retrying with the old certificate. An inline value changes only with a rollout.
+
+```yaml
+# In the shard manager's pod template
+containers:
+  - name: golem-shard-manager
+    env:
+      - name: GOLEM__PERSISTENCE__CONFIG__ENDPOINTS
+        value: '["https://etcd-client.etcd.svc:2379"]'
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE
+        value: /etc/etcd-tls/ca.crt
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE
+        value: /etc/etcd-tls/tls.crt
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE
+        value: /etc/etcd-tls/tls.key
+      - name: GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME
+        value: etcd-client.etcd.svc
+    volumeMounts:
+      - name: etcd-tls
+        mountPath: /etc/etcd-tls   # the whole Secret as a directory, never subPath
+        readOnly: true
+volumes:
+  - name: etcd-tls
+    secret:
+      secretName: golem-shard-manager-etcd-client   # the cert-manager Certificate's Secret
+```
+
+### Authenticate as an etcd user
+
+With etcd authentication enabled, set `persistence.config.username` and the password, either as `persistence.config.password_file` - a file that holds it, such as a key of a Secret mounted as files; only one trailing line ending is removed - or as `persistence.config.password`, usually from a Secret through `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Neither the logs, the configuration display nor a refused configuration shows the password. The configuration loader reads an environment value made only of digits, or `true` or `false`, as a number or a boolean, and a replica refuses it without printing it; the loader also removes spaces around a value and double quotes around a whole value, without a warning. Use `password_file` for any password with such characters (or, in an environment variable that you write yourself, put double quotes around the value). A user needs TLS as well: a replica refuses a user name and password over `http://`, because the password, and then the auth token on every request, would cross the network in plain text, so switch TLS and the user on together. The user's role needs `readwrite` permission on the key prefix `/golem/`. With client certificates, etcd can also take the user from the certificate's common name (CN) instead of a password: leave `username` and the password unset. etcd drops an auth token that goes unused for its `--auth-token-ttl` (300s by default), a JWT token at the end of its lifetime, and its simple tokens when a member restarts. When etcd answers that a token is not valid, the shard manager logs in again and sends the request once more, so no token setting is needed. With JWT tokens (`--auth-token=jwt`), etcd also refuses every token that was issued before a change to its users or roles, such as a new user or a changed password: the campaign and the step-down then log in again, a new leader logs in again before its first read, and a leader whose state write is refused stops, so that its restart logs in.
 
 ## Executor leases
 
