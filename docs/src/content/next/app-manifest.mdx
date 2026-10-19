@@ -14,7 +14,7 @@ import {MultiPlatformCommand} from "@/components/multi-platform-command"
 
 ## JSON schema
 
-For the application manifest format we also publish _JSON schemas_. The current version (1.6.0-dev.9) is available [here](https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json).
+For the application manifest format we also publish _JSON schemas_. The current version (1.6.0) is available [here](https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json).
 
 The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
 
@@ -24,12 +24,12 @@ Use the following _YAML comments_ at the start of your `golem.yaml` documents to
   commands={[
     {
       label: "IntelliJ IDEA based products",
-      command: "# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
+      command: "# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json",
     },
     {
       label: "VSCode with YAML Language Support plugin",
       command:
-        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json",
     },
   ]}
   language={"yaml"}
@@ -509,7 +509,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "manifestVersion",
   }}>
-    ***Required manifest format marker***: use `manifestVersion: "1.6.0"` in every manifest document. All loaded documents must use the same marker. The CLI validates it separately from the editor's `1.6.0-dev.9` JSON schema URL; it is not the application's deployment version.
+    ***Required manifest format marker***: use `manifestVersion: "1.6.0"` in every manifest document. All loaded documents must use the same marker. The CLI validates it separately from the editor's `1.6.0` JSON schema URL; it is not the application's deployment version.
   </Field>
 
   <Field meta={{
