@@ -1,0 +1,576 @@
+---
+import { coreVm } from "../data/homepage";
+
+const {
+  eyebrow,
+  heading,
+  lead,
+  alt,
+  vm,
+  golem,
+  calls,
+  recorded,
+  oplog,
+  rebuilt,
+  restored,
+  caption,
+  explanations,
+} = coreVm;
+---
+
+<section class="cv" aria-labelledby="cv-heading">
+  <div class="container">
+    <span class="eyebrow">{eyebrow}</span>
+    <h2 class="section-heading" id="cv-heading">{heading}</h2>
+    <p class="section-lead">{lead}</p>
+    <figure class="fig">
+      <div class="rig" role="img" aria-label={alt}>
+        <div class="box vm">
+          <span class="name">{vm.name} <span class="where">· {vm.where}</span></span>
+          <span class="sub">{vm.sub}</span>
+        </div>
+
+        <div class="golem"><b>{golem.name}</b><span>{golem.sub}</span></div>
+        <div class="door"></div>
+        {
+          calls.map((c, i) => (
+            <div class={`call c${i + 1} ${c.status === "denied" ? "no" : "ok"}`}>
+              <span class="in" />
+              <span class="pill">{c.status}</span>
+              <span class="out" />
+              <span class="target">{c.target}</span>
+            </div>
+          ))
+        }
+
+        <div class="down"></div>
+        <span class="downlbl">{recorded}</span>
+
+        <div class="box oplog">
+          <span class="name">{oplog.title}</span>
+          <span class="sub">{oplog.sub}</span>
+          <span class="entries">
+            {
+              oplog.entries.map((e) => (
+                <span class="entry">
+                  {e.name} <em>{e.value}</em>
+                </span>
+              ))
+            }
+          </span>
+        </div>
+
+        <div class="back"><span class="backlbl">{rebuilt}</span><span class="backline"></span></div>
+
+        <div class="box restored">
+          <span class="name">{restored.name} <span class="where">· {restored.where}</span></span>
+          <strong class="state">{restored.state}</strong>
+          <span class="sub">{restored.sub}</span>
+          <span class="reused">✓ {restored.reused}</span>
+        </div>
+      </div>
+      <figcaption class="cap">{caption}</figcaption>
+    </figure>
+    <div class="explain">
+      {
+        explanations.map((ex) => (
+          <article class="ex">
+            <h3>{ex.title}</h3>
+            <p>{ex.body}</p>
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .cv {
+    padding: var(--section-y-tight) 0;
+  }
+  .section-heading {
+    max-width: none;
+  }
+  .section-lead {
+    max-width: 54rem;
+    margin-bottom: 1.5rem;
+  }
+  .fig {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-top-color: var(--accent-border);
+    border-radius: 10px;
+    padding: 1.75rem 2rem 0;
+  }
+
+  /* One loop: the VM acts through Golem (top), and is rebuilt from Golem's record (bottom) */
+  .rig {
+    --door: 28px;
+    display: grid;
+    grid-template-columns:
+      minmax(200px, 1.5fr) minmax(0, 1fr) 150px minmax(0, 1fr)
+      minmax(250px, 1.7fr);
+    grid-template-rows: auto 64px 64px 72px auto;
+  }
+  .rig > * {
+    min-width: 0;
+  }
+
+  .box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    background: var(--code-bg);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+    position: relative;
+    z-index: 1;
+  }
+  .name {
+    font-size: 1.0625rem;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.35;
+  }
+  .where {
+    font-family: var(--font-mono);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--accent);
+  }
+  .sub {
+    font-size: 0.9375rem;
+    color: var(--text-secondary);
+  }
+
+  .vm {
+    grid-column: 1;
+    grid-row: 2 / 4;
+    align-self: center;
+  }
+
+  /* Golem: the only way out */
+  .golem {
+    grid-column: 2 / 5;
+    grid-row: 1;
+    justify-self: center;
+    text-align: center;
+    padding-bottom: 0.75rem;
+  }
+  .golem b {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.9375rem;
+    letter-spacing: 0.2em;
+    padding-left: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .golem span {
+    font-size: 0.9375rem;
+    color: var(--text);
+  }
+  .door {
+    grid-column: 3;
+    grid-row: 2 / 4;
+    justify-self: center;
+    width: var(--door);
+    background: linear-gradient(
+      90deg,
+      rgba(245, 176, 62, 0.08),
+      rgba(245, 176, 62, 0.24) 50%,
+      rgba(245, 176, 62, 0.08)
+    );
+    border: 1px solid var(--accent-border);
+    border-bottom: 0;
+    border-top: 2px solid var(--accent);
+    border-radius: 3px 3px 0 0;
+    position: relative;
+  }
+  .door::before,
+  .down::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    margin-left: -1px;
+    border-left: 2px solid var(--accent);
+  }
+
+  .call {
+    display: contents;
+  }
+  .c1 > * {
+    grid-row: 2;
+  }
+  .c2 > * {
+    grid-row: 3;
+  }
+  .in {
+    grid-column: 2 / 4;
+    align-self: center;
+    margin-right: calc(75px + var(--door) / 2);
+    border-top: 1px solid var(--text-muted);
+  }
+  .out {
+    grid-column: 3 / 5;
+    align-self: center;
+    margin-left: calc(75px + var(--door) / 2);
+    position: relative;
+  }
+  .ok .out {
+    border-top: 1px solid rgba(134, 239, 172, 0.65);
+  }
+  .ok .out::after {
+    content: "";
+    position: absolute;
+    right: 1px;
+    top: -4.5px;
+    width: 7px;
+    height: 7px;
+    border-top: 1.5px solid var(--green);
+    border-right: 1.5px solid var(--green);
+    transform: rotate(45deg);
+  }
+  .no .out {
+    border-top: 1px dashed var(--border-strong);
+  }
+  .no .out::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: -10px;
+    height: 19px;
+    border-left: 3px solid var(--marker);
+  }
+  .pill {
+    grid-column: 4;
+    justify-self: start;
+    align-self: center;
+    margin-left: 18px;
+    position: relative;
+    z-index: 1;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+    padding: 0 0.6rem;
+    border-radius: 999px;
+    border: 1px solid;
+  }
+  .ok .pill {
+    color: var(--green);
+    background: #15201a;
+    border-color: rgba(134, 239, 172, 0.45);
+  }
+  .no .pill {
+    color: var(--marker);
+    background: #2a1b13;
+    border-color: rgba(224, 122, 61, 0.6);
+  }
+  .target {
+    grid-column: 5;
+    align-self: center;
+    font-size: 1rem;
+    color: var(--text);
+    background: var(--code-bg);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 0.5rem 0.85rem;
+  }
+  .no .target {
+    color: var(--text-secondary);
+    border-style: dashed;
+    background: transparent;
+  }
+
+  /* recorded: down into the oplog */
+  .down {
+    grid-column: 3;
+    grid-row: 4;
+    justify-self: center;
+    width: var(--door);
+    position: relative;
+  }
+  .down::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 1px;
+    width: 7px;
+    height: 7px;
+    margin-left: -3.5px;
+    border-top: 1.5px solid var(--accent);
+    border-right: 1.5px solid var(--accent);
+    transform: rotate(135deg);
+  }
+  .downlbl {
+    grid-column: 3 / 5;
+    grid-row: 4;
+    align-self: center;
+    padding-left: calc(75px + 14px);
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--accent);
+  }
+  .oplog {
+    grid-column: 1 / 4;
+    grid-row: 5;
+    align-self: start;
+    margin-left: 18%;
+    border-color: var(--accent-border);
+  }
+  .entries {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .entry {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--text);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.15rem 0.55rem;
+  }
+  .entry em {
+    font-style: normal;
+    color: var(--text-secondary);
+  }
+
+  /* rebuilt: back from the oplog into a VM on another node */
+  .back {
+    grid-column: 4;
+    grid-row: 5;
+    align-self: start;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 0.5rem;
+    padding: 2.85rem 0.6rem 0;
+  }
+  .backlbl {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--accent);
+    text-align: center;
+    line-height: 1.4;
+  }
+  .backline {
+    border-top: 2px solid var(--accent);
+    position: relative;
+    margin: 0 -0.6rem;
+  }
+  .backline::after {
+    content: "";
+    position: absolute;
+    right: 1px;
+    top: -5px;
+    width: 8px;
+    height: 8px;
+    border-top: 2px solid var(--accent);
+    border-right: 2px solid var(--accent);
+    transform: rotate(45deg);
+  }
+  .restored {
+    grid-column: 5;
+    grid-row: 5;
+    border-color: var(--accent-border);
+  }
+  .restored .state {
+    font-size: 1.0625rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .reused {
+    margin-top: 0.55rem;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--accent);
+  }
+
+  .cap {
+    margin: 1.75rem -2rem 0;
+    padding: 0.9rem 2rem;
+    border-top: 1px solid var(--border);
+    font-size: 1rem;
+    font-weight: 500;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  /* Explanations */
+  .explain {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.75rem 2rem;
+    margin-top: 2rem;
+  }
+  .ex h3 {
+    font-size: 1.08rem;
+    margin-bottom: 0.5rem;
+  }
+  .ex p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+  /* Narrow screens: the same loop, read top to bottom */
+  @media (max-width: 1099.98px) {
+    .fig {
+      padding: 1.25rem 1rem 0;
+    }
+    .cap {
+      margin: 1.5rem -1rem 0;
+      padding: 0.9rem 1rem;
+    }
+    .rig {
+      display: flex;
+      flex-direction: column;
+    }
+    .door,
+    .in {
+      display: none;
+    }
+    .golem {
+      position: relative;
+      margin-top: 2.25rem;
+      padding: 0.6rem 1rem;
+      justify-self: auto;
+      align-self: stretch;
+      border: 1px solid var(--accent-border);
+      border-top: 2px solid var(--accent);
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(245, 176, 62, 0.16), rgba(245, 176, 62, 0.05));
+    }
+    .golem::before {
+      content: "";
+      position: absolute;
+      left: 1.75rem;
+      top: calc(-2.25rem - 1px);
+      height: 2.25rem;
+      border-left: 1px solid var(--text-muted);
+    }
+    .vm,
+    .oplog,
+    .restored {
+      align-self: stretch;
+    }
+    .golem {
+      border-bottom: 0;
+      border-radius: 8px 8px 0 0;
+      padding-bottom: 0.25rem;
+    }
+    .call {
+      display: grid;
+      grid-template-columns: 5.5rem 1.75rem minmax(0, 1fr);
+      align-items: center;
+      padding: 0.4rem 1rem;
+      border: 1px solid var(--accent-border);
+      border-top: 0;
+      border-bottom: 0;
+      background: rgba(245, 176, 62, 0.05);
+    }
+    .c2 {
+      border-bottom: 1px solid var(--accent-border);
+      border-radius: 0 0 8px 8px;
+      padding-bottom: 0.9rem;
+    }
+    .call > * {
+      grid-row: 1;
+    }
+    .pill {
+      grid-column: 1;
+      justify-self: start;
+      margin-left: 0;
+    }
+    .out {
+      grid-column: 2;
+      margin: 0 0.25rem;
+    }
+    .no .out::before {
+      top: -8px;
+      height: 15px;
+    }
+    .target {
+      grid-column: 3;
+    }
+    .down {
+      height: 3rem;
+      width: 2px;
+      margin-left: calc(1.75rem - 1px);
+      align-self: flex-start;
+    }
+    .down::before {
+      left: 0;
+      margin-left: 0;
+    }
+    .down::after {
+      left: 1px;
+    }
+    .downlbl {
+      align-self: flex-start;
+      margin: -2.2rem 0 0.85rem 2.6rem;
+      padding: 0;
+    }
+    .oplog {
+      margin-left: 0;
+    }
+    .back {
+      align-self: stretch;
+      flex-direction: row;
+      align-items: center;
+      gap: 0.9rem;
+      padding: 0 0 0 calc(1.75rem - 1px);
+      min-height: 4rem;
+    }
+    .backline {
+      order: -1;
+      align-self: stretch;
+      margin: 0;
+      border-top: 0;
+      border-left: 2px solid var(--accent);
+    }
+    .backline::after {
+      right: auto;
+      top: auto;
+      left: -5px;
+      bottom: 1px;
+      transform: rotate(135deg);
+    }
+    .backlbl {
+      text-align: left;
+    }
+  }
+  @media (max-width: 899.98px) {
+    .explain {
+      grid-template-columns: 1fr;
+    }
+    .ex p {
+      max-width: 68ch;
+    }
+  }
+  @media (forced-colors: active) {
+    .door,
+    .door::before,
+    .down::before,
+    .down::after,
+    .backline,
+    .backline::after,
+    .golem {
+      border-color: Highlight;
+    }
+    .golem b,
+    .downlbl,
+    .backlbl,
+    .where,
+    .reused {
+      color: Highlight;
+    }
+    .no .target,
+    .no .out {
+      border-style: dashed;
+    }
+  }
+</style>

@@ -1,0 +1,377 @@
+---
+import { Code } from "astro:components";
+import { agentsChapter, toolsChapter, artifactsChapter, type ChapterItem } from "../data/homepage";
+
+interface Props {
+  kind: "agents" | "tools" | "artifacts";
+}
+
+const { kind } = Astro.props;
+const chapter = { agents: agentsChapter, tools: toolsChapter, artifacts: artifactsChapter }[kind];
+const { eyebrow, heading, lead } = chapter;
+const items: ChapterItem[] = chapter.items;
+const id = `ch-${kind}`;
+
+const sourceLines = agentsChapter.figure.code.split("\n");
+const codeLines = {
+  line(node: any, line: number) {
+    const hang = sourceLines[line - 1].search(/\S|$/) + 2;
+    node.properties.style = `padding-left:${hang}ch;text-indent:-${hang}ch`;
+    for (const span of node.children) {
+      const text = span.children?.[0];
+      if (text?.type !== "text") continue;
+      span.children = text.value
+        .split(/(?<=[(.])/)
+        .flatMap((part: string) => [
+          { type: "text", value: part },
+          ...(/[(.]$/.test(part)
+            ? [{ type: "element", tagName: "wbr", properties: {}, children: [] }]
+            : []),
+        ]);
+    }
+    if (line === agentsChapter.figure.highlightLine) this.addClassToHast(node, "hl");
+  },
+};
+---
+
+<section
+  class:list={["chapter", `chapter-${kind}`, { band: kind === "tools" }]}
+  aria-labelledby={id}
+>
+  <div class="container grid">
+    <header class="head">
+      <span class="eyebrow">{eyebrow}</span>
+      <h2 class="section-heading" id={id}>{heading}</h2>
+    </header>
+    <p class="lead">{lead}</p>
+
+    <figure class="fig">
+      {
+        kind === "agents" && (
+          <>
+            <div class="code-block">
+              <div class="code-header">
+                <span class="lang mono">TypeScript</span>
+                <span class="code-filename mono">{agentsChapter.figure.filename}</span>
+              </div>
+              <Code
+                code={agentsChapter.figure.code}
+                lang="typescript"
+                theme="github-dark-default"
+                wrap
+                transformers={[codeLines]}
+              />
+            </div>
+          </>
+        )
+      }
+      {
+        kind === "tools" && (
+          <>
+            <h3 class="fig-title">{toolsChapter.figure.title}</h3>
+            <div class="terminal mono">
+              {toolsChapter.figure.terminal.map((t, i, all) => (
+                <div class:list={["term-group", { key: i === all.length - 1 }]}>
+                  <div class="term-cmd">
+                    <span class="prompt" aria-hidden="true">
+                      $
+                    </span>{" "}
+                    {t.cmd}
+                  </div>
+                  <div class="term-result">
+                    <span aria-hidden="true">✓ </span>
+                    {t.result}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <figcaption>{toolsChapter.figure.caption}</figcaption>
+          </>
+        )
+      }
+      {
+        kind === "artifacts" && (
+          <>
+            <h3 class="fig-title">{artifactsChapter.figure.title}</h3>
+            <div class="stream" aria-hidden="true">
+              <span class="stream-label mono">{artifactsChapter.figure.before}</span>
+              <div class="bars">
+                <span style="width: 82%" />
+                <span style="width: 64%" />
+                <span style="width: 74%" />
+              </div>
+              <div class="seam">
+                <span class="mono">↻ {artifactsChapter.figure.seam}</span>
+              </div>
+              <div class="bars cont">
+                <span style="width: 70%" />
+                <span style="width: 52%" />
+              </div>
+            </div>
+            <p class="payoff">{artifactsChapter.figure.payoff}</p>
+          </>
+        )
+      }
+    </figure>
+
+    <ul class="points">
+      {
+        items.map((item) => (
+          <li>
+            <strong>{item.title}</strong>
+            <span>{item.body}</span>
+            {item.examples && (
+              <span class="examples">
+                {item.examples.map((e) => (
+                  <span>
+                    <b>{e.label}:</b> {e.value}.{" "}
+                  </span>
+                ))}
+              </span>
+            )}
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</section>
+
+<style>
+  .chapter {
+    padding: 2.5rem 0;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .head .section-heading {
+    margin-bottom: 0.75rem;
+  }
+  .lead {
+    font-size: 1.05rem;
+    max-width: 60ch;
+    margin: 0 0 1.5rem;
+  }
+  .fig {
+    margin: 0 0 1.75rem;
+    min-width: 0;
+  }
+  .fig-title {
+    font-size: 1.08rem;
+    margin-bottom: 0.5rem;
+  }
+  figcaption {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  /* Agents: code */
+  .code-block {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--code-bg);
+  }
+  .code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.6rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+    font-size: 0.78rem;
+  }
+  .lang {
+    color: var(--accent);
+  }
+  .code-filename {
+    color: var(--text-muted);
+  }
+  .code-block :global(pre) {
+    border: 0 !important;
+    border-radius: 0 !important;
+    margin: 0;
+    padding: 1rem 1.25rem;
+    font-size: 13px;
+    line-height: 21px;
+    overflow-wrap: break-word;
+  }
+  .code-block :global(pre code) {
+    display: flex;
+    flex-direction: column;
+  }
+  .code-block :global(.line.hl) {
+    background: var(--accent-dim);
+    box-shadow:
+      -1.25rem 0 0 var(--accent-dim),
+      1.25rem 0 0 var(--accent-dim);
+  }
+  @media (max-width: 400px) {
+    .code-block :global(pre) {
+      padding: 1rem 0.875rem;
+    }
+    .code-block :global(.line.hl) {
+      box-shadow:
+        -0.875rem 0 0 var(--accent-dim),
+        0.875rem 0 0 var(--accent-dim);
+    }
+  }
+
+  /* Tools: terminal */
+  .terminal {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .term-cmd {
+    font-size: 0.875rem;
+    color: var(--text);
+  }
+  .prompt {
+    color: var(--text-secondary);
+  }
+  .term-result {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-top: 0.15rem;
+  }
+  .term-group.key .term-result {
+    font-family: var(--font-sans);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--green);
+  }
+
+  /* Artifacts: stream */
+  .stream {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+  }
+  .bars {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .bars span {
+    display: block;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--border-strong);
+  }
+  .bars.cont {
+    border-left: 2px solid var(--green);
+    padding-left: 0.75rem;
+  }
+  .bars.cont span {
+    background: var(--green);
+    opacity: 0.75;
+  }
+  .stream-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+  }
+  .seam {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 1rem 0;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+  .seam::before,
+  .seam::after {
+    content: "";
+    flex: 1;
+    border-top: 1px dashed var(--border-strong);
+  }
+  .seam::before {
+    flex: 0 0 1.5rem;
+  }
+  .payoff {
+    margin: 0.9rem 0 0;
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  /* Bullets */
+  .points {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .points li {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .points li:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .points strong {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .points span {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+  .points .examples {
+    margin-top: 0.35rem;
+  }
+  .points .examples b {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  @media (min-width: 1100px) {
+    .chapter {
+      padding: 3rem 0;
+    }
+    .grid {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      grid-template-rows: auto auto 1fr;
+      column-gap: 48px;
+    }
+    .head {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .lead {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    .points {
+      grid-column: 1;
+      grid-row: 3;
+    }
+    .fig {
+      grid-column: 2;
+      grid-row: 2 / span 2;
+      margin: 0;
+    }
+    .chapter-tools .head,
+    .chapter-tools .lead,
+    .chapter-tools .points {
+      grid-column: 2;
+    }
+    .chapter-tools .fig {
+      grid-column: 1;
+    }
+  }
+</style>
