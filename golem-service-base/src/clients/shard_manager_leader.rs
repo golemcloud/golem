@@ -103,6 +103,10 @@ pub fn not_leader_status(leader: &LeaderAddress) -> Status {
 /// starting or stopping, its belief that it leads has lapsed, or no leader is ready. `UNAVAILABLE`
 /// like [`not_leader_status`]. A client that knows this detail sees that the call did not run, so
 /// it may go to another replica even when it must not repeat the call.
+///
+/// Return it only before the service handler starts, from the gate in front of it, and never from
+/// a handler: a client sends any call on after this mark, so a handler that had begun to act
+/// could have its call run a second time.
 pub fn refusal_status(message: impl Into<String>) -> Status {
     status_with_detail(
         prost_types::Any {
