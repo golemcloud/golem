@@ -34,14 +34,15 @@ GOLEM_S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com \
 cat >> golem.env <<'EOF'
 AWS_ACCESS_KEY_ID=<access key>
 AWS_SECRET_ACCESS_KEY=<secret key>
-PORT=9881
+PORT=10000
+GOLEM__ROUTER__PORT=10000
 GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
 GOLEM_LITESTREAM=true
 GOLEM_LITESTREAM_REPLICA_URL=s3://my-bucket/litestream?endpoint=https://<account id>.r2.cloudflarestorage.com&region=auto
 EOF
 ```
 
-Render routes to the port that the service listens on, and `PORT=9881` names that port. The server listens on `::`, which accepts IPv4 connections too. `golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
+Set both variables: `GOLEM__ROUTER__PORT` sets Golem's listener, and `PORT` tells Render which port to use. The live SQLite with Litestream test used port 10000. The server listens on `::`, which accepts IPv4 connections too. `golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
 
 ### Create the web service
 
@@ -51,13 +52,15 @@ Create a web service from the existing image `golemservices/golem:<version>` wit
 
 - **Environment.** Add the variables with **Add from .env** and paste `golem.env`.
 - **Disk.** Add a persistent disk with the mount path `/var/lib/golem`.
-- **Health check.** Set the health check path to `/healthcheck`. Render accepted this probe with the service's `onrender.com` domain as the management host. The first start on a new disk downloads and inspects the [built-in plugins and tools](/v1.6/deploy/server#built-in-plugins-and-tools), which can take several minutes.
+- **Health check.** Leave the health check path empty to use Render's default TCP check. With verified custom domains, [Render sends HTTP health checks](https://render.com/docs/health-checks#http-health-checks-web-services-only) with one of those domains as `Host`. An HTTP API or MCP domain routes `/healthcheck` to the application, which returns 404, not to the management API. TCP checks confirm only that the listener accepts connections; monitor `https://golem.example.com/healthcheck` separately for application readiness. Without custom domains, `/healthcheck` worked in the management-only test. The first start on a new disk downloads and inspects the [built-in plugins and tools](/v1.6/deploy/server#built-in-plugins-and-tools), which can take several minutes.
 
 ### Add the domains
 
 Add the management host (`golem.example.com`) and each domain of an HTTP API or MCP deployment as custom domains of the service. Render shows the DNS records to create and gets the certificates.
 
 For an initial management API test, use the service's generated `onrender.com` domain as `GOLEM__ROUTER__MANAGEMENT_HOST`. Use only the host name, without `https://`. HTTP API and MCP deployments each need a different domain; the management domain cannot serve them.
+
+The live test added two custom subdomains with CNAME records that pointed to the service's `onrender.com` domain. Render verified both and issued TLS certificates. HTTP API calls and MCP Streamable HTTP calls at `/mcp` reached the same agent state. Set `scheme: https` in the HTTP API deployment so its OpenAPI document advertises HTTPS; this does not require trusting forwarded headers.
 
 ### Deploy an application
 
@@ -69,6 +72,10 @@ To upgrade, change the image tag of the service. To restore after the loss of th
 
 <Callout type="warning">
   Litestream is off by default; turn it on from the first start of a new disk. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the disk can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. It does not replicate the cache of the built-in plugins and tools either, so a restore onto a new disk downloads them again and needs HTTPS connections to GitHub. At startup, the image restores only the databases that are missing from the disk, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/v1.6/deploy/server#litestream-limits).
+</Callout>
+
+<Callout type="info">
+  The `v1.6.0-rc3` SQLite with Litestream test used the stock image, a persistent disk and an S3-compatible bucket. CLI deployment, WebSocket invocations, custom-domain HTTP API calls and MCP tool calls worked. Task state survived a service restart, and new writes worked after recovery. Litestream replica files reached the bucket. This test did not restore the databases onto an empty disk.
 </Callout>
 
 ## Managed Postgres
@@ -84,7 +91,8 @@ GOLEM_POSTGRES_USER=<user> GOLEM_POSTGRES_PASSWORD=<password> \
 cat >> golem.env <<'EOF'
 AWS_ACCESS_KEY_ID=<access key>
 AWS_SECRET_ACCESS_KEY=<secret key>
-PORT=9881
+PORT=10000
+GOLEM__ROUTER__PORT=10000
 GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
 EOF
 ```
@@ -94,7 +102,7 @@ This command replaces `golem.env`, so it repeats the bucket credentials, port an
 Leave out the Litestream variables: the state is in Postgres. **Keep the disk at `/var/lib/golem`**: it makes Render stop the old instance before it starts the new one. Point-in-time recovery of the database needs a paid Postgres instance.
 
 <Callout type="info">
-  The `v1.6.0-rc3` managed Postgres test used Render Postgres 18, a private database host and an S3-compatible bucket. CLI deployment and WebSocket invocations worked. Task state survived an image redeploy and a database restart, and new writes worked after recovery. The database restart temporarily made the service unavailable. Custom-domain HTTP API and MCP routing, SQLite with Litestream, point-in-time restore and fixed clusters still need live Render tests.
+  The `v1.6.0-rc3` managed Postgres test used Render Postgres 18, a private database host and an S3-compatible bucket. CLI deployment and WebSocket invocations worked. Task state survived an image redeploy and a database restart, and new writes worked after recovery. The database restart temporarily made the service unavailable. Custom-domain routing with Postgres, Litestream restore onto an empty disk, point-in-time restore and fixed clusters still need live Render tests.
 </Callout>
 
 ## Fixed cluster
