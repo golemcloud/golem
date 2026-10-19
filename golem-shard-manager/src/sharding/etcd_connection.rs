@@ -52,11 +52,14 @@ fn check_endpoints(config: &EtcdConfig) -> Result<(), ShardManagerError> {
 
 /// A client for ordinary key/value requests, bounded by `request_timeout`.
 ///
-/// The connection is probed only while a stream is open, so only during a request that lasts longer
-/// than the probe interval; with a shorter request timeout the probe rarely fires. It is not probed
-/// while idle: etcd counts a ping on a connection with no open stream as a strike and closes the
-/// connection after the third, unless it was started to permit them, which is not its default. The
-/// client library probes while idle unless told not to, so this is set explicitly.
+/// The connection is probed only while a stream is open, never while idle: etcd counts a ping on a
+/// connection with no open stream as a strike and closes the connection after the third, unless it
+/// was started to permit them, which is not its default. The client library probes while idle
+/// unless told not to, so this is set explicitly. Hyper sends a ping as soon as a stream opens
+/// after an interval without a read, so the first request after 6 s of silence probes the
+/// connection: a dead idle connection costs that one request (up to `request_timeout`) and is then
+/// replaced. Reads retry onto the new connection; a write fails with an unknown outcome, as any
+/// write in flight does.
 pub async fn connect_for_requests(config: &EtcdConfig) -> Result<Client, ShardManagerError> {
     check_endpoints(config)?;
 

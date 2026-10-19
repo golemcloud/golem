@@ -1297,10 +1297,11 @@ async fn reach_resolved_address(
 /// A replica whose network does not route a pod's own traffic to its externally advertised address
 /// stays unready as well.
 ///
-/// Reaching the address once is the whole check. A load-balanced name (a Service address, a
-/// round-robin DNS name) can pass by chance, when the probe lands on this very process, and the
-/// replica then stays confirmed. The rule against two replicas advertising one address still
-/// covers that case.
+/// Reaching the address once is the whole check, and it accepts the first resolved address that is
+/// this process. It catches a typo or an address that reaches another replica, and nothing more: a
+/// name that resolves to several replicas including this one (a headless Service, a Compose alias)
+/// passes, and a ClusterIP name passes after a few attempts. A name that several replicas advertise
+/// is caught by the rule against duplicate advertised addresses, not here.
 async fn confirm_own_address(
     own: LeaderAddress,
     tls: bool,
