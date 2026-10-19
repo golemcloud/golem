@@ -6567,6 +6567,73 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         "trap recovery must consume the recorded nested durable effect exactly once"
     );
 
+    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.lane.holder.is_none());
+        assert_eq!(active.lane.active_invocation_count, 0);
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
+    http_server.abort();
+    trap_once_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn rust_generated_client_interrupt_releases_held_tool_streams(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The backpressured provider writes 4 KiB chunks, each a durable call, so the capacity
+    // bounds how many writes the unread stdout needs before the producer blocks.
+    const CAPACITY: usize = 64 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = CAPACITY;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
     for (name, method, calls) in [
         ("interrupt-stdin", "hold_open_stdin", 3_u32),
         ("interrupt-stdout", "hold_unread_stdout", 1_u32),
@@ -6594,7 +6661,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
                         .await
                         .and_then(|active| active.tool_operations.operations.into_iter().next())
                         .and_then(|operation| operation.stdout)
-                        && stdout.buffered_bytes == 16 * 1024 * 1024
+                        && stdout.buffered_bytes == CAPACITY
                     {
                         break stdout;
                     }
@@ -6605,7 +6672,8 @@ async fn rust_generated_client_streams_live_and_handles_edges(
             .map_err(|_| {
                 anyhow::anyhow!("await-result-before-read never reached bounded backpressure")
             })?;
-            assert_eq!(stdout.accepted_bytes, 16 * 1024 * 1024);
+            assert_eq!(stdout.capacity_bytes, CAPACITY);
+            assert_eq!(stdout.accepted_bytes, CAPACITY as u64);
             assert_eq!(stdout.delivered_bytes, 0);
             assert!(!stdout.terminal_selected);
         }
@@ -6618,15 +6686,6 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         }
         executor.delete_worker(&held_worker_id).await?;
     }
-
-    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await {
-        assert!(active.tool_operations.operations.is_empty());
-        assert!(active.lane.holder.is_none());
-        assert_eq!(active.lane.active_invocation_count, 0);
-        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
-    }
-    http_server.abort();
-    trap_once_server.abort();
 
     Ok(())
 }
