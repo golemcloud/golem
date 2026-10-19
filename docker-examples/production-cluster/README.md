@@ -17,3 +17,5 @@ docker compose up -d
 - `WORKER_EXECUTOR_REPLICAS` sets the number of worker executors.
 - All services share one bucket with `namespace_prefixes = true`. Do not change it after the first
   start.
+- The registry service keeps its built-in artifact cache in the `builtin_artifacts` volume, so
+  replacing its container does not download the artifacts again.

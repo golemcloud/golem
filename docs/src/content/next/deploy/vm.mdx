@@ -114,7 +114,7 @@ This setup runs [modes 1 and 2](/next/deploy/server) from the [`golemservices/go
 
 ### Download the example
 
-Install [Docker Engine](https://docs.docker.com/engine/install/) with the Compose plugin, and download the example:
+Install [Docker Engine](https://docs.docker.com/engine/install/) with Docker Compose 2.30 or newer, and download the example:
 
 ```shell filename="Terminal" copy
 mkdir golem && cd golem
@@ -127,7 +127,7 @@ cp .env.example .env
 
 ### Write the configuration
 
-Set the image version and the host names in `.env`. Then write the secrets, the bucket and, for mode 2, the database to `golem.env`, and add the credentials of the bucket:
+Set the image version and the host names in `.env`. The example uses `v1.6.0-rc3`, including the `v`. Then write the secrets, the bucket and, for mode 2, the database to `golem.env`, and add the credentials of the bucket:
 
 ```shell filename="Terminal" copy
 umask 077
@@ -137,6 +137,8 @@ echo "AWS_SECRET_ACCESS_KEY=<secret key>" >> golem.env
 ```
 
 For mode 2, also pass `GOLEM_POSTGRES_HOST` and `GOLEM_POSTGRES_PASSWORD` to the script. See [Environment file](/next/deploy/server#environment-file).
+
+Compose reads `golem.env` in raw format, so it does not expand dollar signs in passwords. Write values in this file without surrounding quotes.
 
 In mode 1, you can set `GOLEM_LITESTREAM=true` and `GOLEM_LITESTREAM_REPLICA_URL` in `.env` to replicate the SQLite databases to the bucket. Litestream is off by default, and a VM whose disk is reliable and backed up does not need it: it is for disks that are ephemeral or belong to one host. Turn it on from the first start of a new volume. See [Litestream](/next/deploy/server#litestream).
 
@@ -199,6 +201,7 @@ The shard manager logs the address of each executor that registers: the address 
 
 - Caddy routes the management host by path to the registry service and the worker service, and the deployment domains to the worker service's custom request port. It has a fixed address on the Compose network, `172.30.0.10`, which the worker service trusts for `X-Forwarded-Proto` and `X-Forwarded-Host`.
 - All services share one bucket with `namespace_prefixes = true`, and keep their state in their own schemas of one database. The worker service keeps its sessions in Postgres, so there is no Redis.
+- The registry service keeps its built-in artifact cache in the `builtin_artifacts` volume at `/app/builtin-artifacts`.
 - The shard manager runs as one replica in Postgres mode. `docker compose up` stops its old container before it starts the new one.
 - `WORKER_EXECUTOR_REPLICAS` sets the number of executors. Change it and run `docker compose up -d` again to scale.
 - The `default` plan has no per-agent disk limit, because the executors keep agent files in temporary directories. See [Plans](/next/deploy/cluster#plans).

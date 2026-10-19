@@ -14,8 +14,10 @@ Download the Compose file and its environment file from the same repository revi
 
 ```bash filename="Terminal" copy
 GOLEM_REVISION=YOUR_FULL_COMMIT_ID
-curl -fLO "https://raw.githubusercontent.com/golemcloud/golem/$GOLEM_REVISION/docker-examples/published-postgres/compose.yaml"
-curl -fLO "https://raw.githubusercontent.com/golemcloud/golem/$GOLEM_REVISION/docker-examples/published-postgres/.env"
+BASE=https://raw.githubusercontent.com/golemcloud/golem
+EXAMPLE="$BASE/$GOLEM_REVISION/docker-examples/published-postgres"
+curl -fLO "$EXAMPLE/compose.yaml"
+curl -fLO "$EXAMPLE/.env"
 
 docker compose config --quiet
 docker compose pull

@@ -12,9 +12,8 @@ The Golem APIs are then on `http://localhost:9881`, as in the other example. The
 requests for `localhost` (`GOLEM_ROUTER_MANAGEMENT_HOST`) to the Golem APIs, and requests for every
 other host to the HTTP API and MCP deployments.
 
-Distributed mode and the `golem-router` image are newer than the image tag in `.env`
-(`GOLEM_IMAGES_VERSION`), which is shared with `published-postgres`. Point that variable at a release
-that includes them, or at images built from this repository, before bringing the stack up.
+The example uses the published `v1.6.0-rc3` images. Keep `GOLEM_IMAGES_VERSION` the same for every
+Golem service, including the router.
 
 ### Checking that it runs
 

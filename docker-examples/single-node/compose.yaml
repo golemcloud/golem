@@ -26,7 +26,10 @@ services:
   golem:
     image: golemservices/golem:${GOLEM_IMAGE_VERSION}
     restart: unless-stopped
-    env_file: golem.env
+    env_file:
+      # Keep generated values literal, including dollar signs in database passwords.
+      - path: golem.env
+        format: raw
     environment:
       GOLEM__ROUTER__MANAGEMENT_HOST: ${GOLEM_MANAGEMENT_HOST}
       GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES: '["172.31.0.10"]'

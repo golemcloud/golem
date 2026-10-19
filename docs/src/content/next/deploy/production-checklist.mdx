@@ -32,10 +32,10 @@ The default configuration uses secrets that are public: the admin token, the key
 ## 4. Put a reverse proxy in front
 
 - [ ] **TLS.** Terminate TLS in a reverse proxy or a load balancer. The Golem listeners serve plain HTTP.
-- [ ] **Host routing.** Point the management host (for example `golem.example.com`) at the management API. Point the domains of HTTP API and MCP deployments at the worker service's custom request port, which chooses the deployment by the request's host. A domain holds either an HTTP API deployment or an MCP deployment, not both. Reserve the management host with `domain_registration.reserved_domains` in the registry service, so that no environment can register it. See [Serving HTTP APIs and MCP on one port](/next/invoke/http-routers#serving-http-apis-and-mcp-on-one-port).
+- [ ] **Host routing.** Point the management host (for example `golem.example.com`) at the management API. Point the domains of HTTP API and MCP deployments at the worker service's custom request port, which chooses the deployment by the request's host. A domain holds either an HTTP API deployment or an MCP deployment, not both. Reserve the management host with `domain_registration.reserved_domains` in the registry service, so that no environment can register it. See [Serving HTTP APIs and MCP on one port](/next/operate/http-gateway#serving-http-apis-and-mcp-on-one-port).
 - [ ] **Streams.** Do not buffer responses: MCP and HTTP APIs use server-sent events. Allow WebSocket upgrades on the management API, for `/v1/components/<component>/workers/<agent>/connect` and `/v1/agents/invoke-agent-session`. Raise idle and read timeouts to at least an hour, so that long streams stay open.
 - [ ] **Uploads.** Allow request bodies at least as large as your largest component.
-- [ ] **Forwarded headers.** Forward the original `Host`. To give the worker service the public scheme and host, list the proxy's own address in `route_resolver.trusted_ingress_addresses` of the worker service, and make the proxy replace any client `X-Forwarded-Proto` and `X-Forwarded-Host` with exactly one value each. A trusted proxy that does not send `X-Forwarded-Host` makes every request fail, so do not list one that cannot send it, such as an AWS Application Load Balancer. See [Configuring ingress](/next/invoke/http-routers#configuring-ingress).
+- [ ] **Forwarded headers.** Forward the original `Host`. To give the worker service the public scheme and host, list the proxy's own address in `route_resolver.trusted_ingress_addresses` of the worker service, and make the proxy replace any client `X-Forwarded-Proto` and `X-Forwarded-Host` with exactly one value each. A trusted proxy that does not send `X-Forwarded-Host` makes every request fail, so do not list one that cannot send it, such as an AWS Application Load Balancer. See [Configuring ingress](/next/operate/http-gateway#configuring-ingress).
 - [ ] **Private ports.** Keep every other port private. The gRPC ports and the ports of the internal services do not authenticate their callers.
 - [ ] **CORS.** Set `cors_origin_regex` of the registry service to the origins of the browser applications that call the management API.
 
@@ -63,5 +63,5 @@ This item applies to the fixed cluster.
 - [ ] Collect the logs and the [metrics](/next/operate/metrics).
 
 <Callout type="info">
-  The `next` documentation describes the unreleased version of Golem. Some settings on these pages, such as `namespace_prefixes`, `bind_address`, `grpc.advertised_ip` and the Postgres session store, need a release that includes them.
+  These examples use the `v1.6.0-rc3` container images. Include the `v` in the image tag, and use the same release for every Golem service and the router. This is a release candidate, not a stable release.
 </Callout>

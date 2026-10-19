@@ -78,7 +78,7 @@ The registry service's default login is GitHub OAuth2 with placeholder credentia
 The registry service creates the `default` plan from `initial_plans.default` at every start, and updates the plan when the values change. The defaults of the image limit applications, components, storage and uploads; set `GOLEM__INITIAL_PLANS__DEFAULT__<LIMIT>` to change them.
 
 <Callout type="warning">
-  With the default `Temporary` agent filesystem storage, an agent whose plan has a finite `max_disk_space_per_worker` does not start: the invocation fails with `failed to install limits without quota authority`. Set `GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER=1000000000000000000`, the unlimited value, unless the executors use [`ManagedXfs` storage](/next/operate/filesystem_snapshots#xfs-storage-with-project-quotas-managedxfs). Executors cache the limits they have read, so restart them after you change the plan.
+  With the default `Temporary` agent filesystem storage, an agent whose plan has a finite `max_disk_space_per_worker` does not start: the invocation fails with `failed to install limits without quota authority`. Set `GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER=1000000000000000000`, the unlimited value, unless the executors use [`ManagedXfs` storage](/next/operate/filesystem_snapshots/xfs#prepare-storage-with-project-quotas). Executors cache the limits they have read, so restart them after you change the plan.
 </Callout>
 
 ## Built-in plugins and tools

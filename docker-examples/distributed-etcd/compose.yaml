@@ -6,9 +6,7 @@ x-aliases:
 services:
   # Requests for GOLEM_ROUTER_MANAGEMENT_HOST reach the management API; requests for every
   # other host reach the HTTP API and MCP deployments on the worker service's custom request port.
-  # Releases up to v1.5.0 have no golem-router image. For such a GOLEM_IMAGES_VERSION, build it
-  # from the repository root first:
-  #   docker build -f golem-router/docker/Dockerfile -t golemservices/golem-router:<version> .
+  # Use the same published release for every Golem image, including the router.
   router:
     image: golemservices/golem-router:${GOLEM_IMAGES_VERSION}
     pull_policy: missing
@@ -91,6 +89,8 @@ services:
       GOLEM__INITIAL_ACCOUNTS__MARKETING__TOKEN: ${MARKETING_TOKEN}
       GOLEM__LOGIN__TYPE: Disabled
       GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS: '["${GOLEM_ROUTER_MANAGEMENT_HOST}"]'
+      # Temporary agent filesystems have no quota authority. Finite disk limits need ManagedXfs.
+      GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER: 1000000000000000000
 
       GOLEM__DB__TYPE: Postgres
       GOLEM__DB__CONFIG__DATABASE: golem_db

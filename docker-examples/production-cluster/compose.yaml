@@ -81,6 +81,8 @@ services:
 
       GOLEM__COMPONENT_COMPILATION__CONFIG__HOST: golem-component-compilation-service
       GOLEM__COMPONENT_COMPILATION__CONFIG__PORT: 9010
+    volumes:
+      - builtin_artifacts:/app/builtin-artifacts
 
   # Exactly one replica: two shard managers on one database can run the same agent twice.
   # `docker compose up` stops the old container before it starts the new one.
@@ -220,3 +222,4 @@ networks:
 
 volumes:
   caddy_data:
+  builtin_artifacts:

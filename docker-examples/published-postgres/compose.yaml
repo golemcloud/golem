@@ -9,13 +9,14 @@ x-aliases:
 services:
   # Requests for GOLEM_ROUTER_MANAGEMENT_HOST reach the management API; requests for every
   # other host reach the HTTP API and MCP deployments on the worker service's custom request port.
-  # Build all Golem images from the same checkout; Dockerfiles package prebuilt Linux binaries.
+  # Pull all Golem images at the same release version. The optional build definitions package
+  # prebuilt Linux binaries from one checkout; they do not compile Rust.
   router:
     image: golemservices/golem-router:${GOLEM_IMAGES_VERSION}
     build:
       context: ../..
       dockerfile: golem-router/docker/Dockerfile
-    pull_policy: never
+    pull_policy: missing
     ports:
       - "127.0.0.1:${GOLEM_ROUTER_PORT}:8080"
     environment:
@@ -50,7 +51,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-registry-service/docker/Dockerfile
-    pull_policy: never
+    pull_policy: missing
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -66,6 +67,8 @@ services:
       GOLEM__INITIAL_ACCOUNTS__MARKETING__TOKEN: ${MARKETING_TOKEN}
       GOLEM__LOGIN__TYPE: Disabled
       GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS: '["${GOLEM_ROUTER_MANAGEMENT_HOST}"]'
+      # Temporary agent filesystems have no quota authority. Finite disk limits need ManagedXfs.
+      GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER: 1000000000000000000
 
       GOLEM__DB__TYPE: Postgres
       GOLEM__DB__CONFIG__DATABASE: golem_db
@@ -89,7 +92,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-shard-manager/docker/Dockerfile
-    pull_policy: never
+    pull_policy: missing
     restart: on-failure
     environment:
       RUST_BACKTRACE: 1
@@ -121,7 +124,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-worker-service/docker/Dockerfile
-    pull_policy: never
+    pull_policy: missing
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -165,7 +168,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-component-compilation-service/docker/Dockerfile
-    pull_policy: never
+    pull_policy: missing
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -188,7 +191,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-worker-executor/docker/Dockerfile
-    pull_policy: never
+    pull_policy: missing
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
