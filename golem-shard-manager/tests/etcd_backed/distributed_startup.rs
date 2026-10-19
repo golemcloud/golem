@@ -29,7 +29,9 @@ use golem_common::model::RetryConfig;
 use golem_service_base::clients::shard_manager::{
     GrpcShardManager, GrpcShardManagerConfig, ShardManager,
 };
-use golem_service_base::clients::shard_manager_leader::{LeaderAddress, leader_of};
+use golem_service_base::clients::shard_manager_leader::{
+    LeaderAddress, leader_of, refused_before_running,
+};
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_shard_manager::config::{
     EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
@@ -3004,6 +3006,66 @@ async fn a_leader_that_stops_answers_nothing_on_the_connections_it_had_accepted(
         !status.message().contains("stopping"),
         "the connection was still open and the gate answered on it: {status:?}"
     );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A leader that is stopping refuses new calls before it gives the leadership up, so that no call
+// begins that the next leader could also run. Observed from outside: while the stop is held in
+// the drain, a call on a connection opened before the stop is refused with the mark that says it
+// did not run, and the election key is still in etcd.
+async fn a_stopping_leader_refuses_calls_before_it_releases_the_leadership(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let shutdown = CancellationToken::new();
+    let (details, mut join_set) = start_leader(&distributed_config(etcd), shutdown.clone()).await;
+    let port = details.grpc_port;
+
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+        .expect("The replica's address is a valid endpoint")
+        .connect()
+        .await
+        .expect("The leader accepts the connection");
+    let mut client = ShardManagerServiceClient::new(channel);
+    client
+        .get_routing_table(GetRoutingTableRequest {})
+        .await
+        .expect("The leader serves before it stops");
+
+    // A task that holds a runtime thread and cannot be aborted until it returns holds the drain.
+    const HELD: Duration = Duration::from_secs(3);
+    join_set.spawn(async move {
+        std::thread::sleep(HELD);
+        std::future::pending::<()>().await;
+        Ok(())
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    shutdown.cancel();
+    let stopping = tokio::spawn(golem_shard_manager::serve_until_stopped(
+        details, join_set, shutdown,
+    ));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!stopping.is_finished(), "the drain should still be held");
+
+    let status = client
+        .get_routing_table(GetRoutingTableRequest {})
+        .await
+        .expect_err("a stopping leader answered a call on a connection from before the stop");
+    assert_eq!(status.code(), tonic::Code::Unavailable);
+    assert!(
+        refused_before_running(&status),
+        "the refusal should carry the mark that the call did not run: {status:?}"
+    );
+    assert!(
+        !campaigner_keys(etcd).await.is_empty(),
+        "the refusal came after the leadership was released, not before"
+    );
+
+    timeout(STARTUP_TIMEOUT, stopping)
+        .await
+        .expect("The stop should finish once the held task returns")
+        .expect("The stop should not panic")
+        .expect("A shutdown is a clean stop, not a failure");
 }
 
 #[test]
