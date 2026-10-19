@@ -1007,6 +1007,139 @@ async fn ssh_prompt_feels_like_a_shell() {
     .await;
 }
 
+// A stopped command is rebuilt as it ran. Each case stops a command on its own agent, and the
+// server is then restarted, so the next command on each agent first rebuilds the agent from its
+// oplog, the stopped call included. Each agent then answers, and the files that its stopped script
+// wrote are as the first run left them.
+#[cfg(unix)]
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_stopped_commands_survive_a_rebuild() {
+    const SLEEPING: &str = r#"BashOwner("rebuild-sleeping")"#;
+    const TWO_SLEEPS: &str = r#"BashOwner("rebuild-two-sleeps")"#;
+    const COMPUTING: &str = r#"BashOwner("rebuild-computing")"#;
+    const COUNTING: &str = r#"BashOwner("rebuild-counting")"#;
+    const PIPELINE: &str = r#"BashOwner("rebuild-pipeline")"#;
+    const JOB: &str = r#"BashOwner("rebuild-job")"#;
+    const SUBSTITUTION: &str = r#"BashOwner("rebuild-substitution")"#;
+    const STATE: &str = "cat /tmp/rebuild/*";
+
+    let mut ctx = context().await;
+    let agents = [
+        SLEEPING,
+        TWO_SLEEPS,
+        COMPUTING,
+        COUNTING,
+        PIPELINE,
+        JOB,
+        SUBSTITUTION,
+    ];
+    for agent in agents {
+        let made = ctx.cli(["--yes", "agent", "invoke", agent, "name"]).await;
+        assert!(made.success_or_dump());
+    }
+
+    // A command that waits.
+    stop_a_command(
+        &ctx,
+        SLEEPING,
+        "mkdir -p /tmp/rebuild && echo before >/tmp/rebuild/state && sleep 300; \
+         echo after >/tmp/rebuild/state",
+        None,
+        STATE,
+        "before\r\n",
+    )
+    .await;
+    // Waits that end, output, and a wait that the stop ends.
+    stop_a_command(
+        &ctx,
+        TWO_SLEEPS,
+        "mkdir -p /tmp/rebuild; sleep 0.5; echo first; sleep 0.5; \
+         echo second >/tmp/rebuild/state; sleep 300; echo after >/tmp/rebuild/state",
+        Some("first\r\n"),
+        STATE,
+        "second\r\n",
+    )
+    .await;
+    // A command that computes and never waits.
+    stop_a_command(
+        &ctx,
+        COMPUTING,
+        "mkdir -p /tmp/rebuild && echo started >/tmp/rebuild/state && while :; do :; done",
+        None,
+        STATE,
+        "started\r\n",
+    )
+    .await;
+    // A command that computes and writes where it is: what it wrote last depends on where the
+    // stop met it.
+    stop_a_command(
+        &ctx,
+        COUNTING,
+        "mkdir -p /tmp/rebuild; n=0; while :; do n=$((n+1)); \
+         if [ $((n % 500)) -eq 0 ]; then echo $n >/tmp/rebuild/state; fi; done",
+        None,
+        "true",
+        "",
+    )
+    .await;
+    // A pipeline whose stages compute.
+    stop_a_command(
+        &ctx,
+        PIPELINE,
+        "mkdir -p /tmp/rebuild; n=0; while :; do n=$((n+1)); echo $n; done | \
+         while read -r x; do if [ $((x % 200)) -eq 0 ]; then echo $x >/tmp/rebuild/state; fi; done",
+        None,
+        "true",
+        "",
+    )
+    .await;
+    // A job in the background that ends before the stop, next to a command that waits.
+    stop_a_command(
+        &ctx,
+        JOB,
+        "mkdir -p /tmp/rebuild; (sleep 1; echo job >/tmp/rebuild/state) & \
+         echo front >/tmp/rebuild/front; sleep 300",
+        None,
+        STATE,
+        "front\r\njob\r\n",
+    )
+    .await;
+    // A command substitution that waits, then a wait that the stop ends.
+    stop_a_command(
+        &ctx,
+        SUBSTITUTION,
+        "mkdir -p /tmp/rebuild; x=$(sleep 0.5; echo sub); echo $x >/tmp/rebuild/state; sleep 300",
+        None,
+        STATE,
+        "sub\r\n",
+    )
+    .await;
+
+    // What each stopped script left, before the rebuild.
+    let mut before = HashMap::new();
+    for agent in agents {
+        let state = ssh(&ctx, &[agent, "-c", STATE], "").await;
+        assert_eq!(status(&state), 0, "{agent}: {}", state.stderr_text());
+        assert!(!state.stdout_text().is_empty(), "{agent} wrote nothing");
+        before.insert(agent, state.stdout_text());
+    }
+
+    ctx.stop_server().await;
+    ctx.start_server().await;
+
+    // The first command on each agent rebuilds it, the stopped call included.
+    for agent in agents {
+        let state = ssh(&ctx, &[agent, "-c", STATE], "").await;
+        assert_eq!(status(&state), 0, "{agent}: {}", state.stderr_text());
+        assert_eq!(
+            state.stdout_text(),
+            before[agent],
+            "{agent}: the files after the rebuild"
+        );
+    }
+}
+
 // Starts an interactive session, runs `script`, and presses Ctrl+C when the command runs. The
 // command must stop: the session prints `printed`, the prompt shows status 130, and `next` runs
 // at once and prints `expected`. The command itself would run for minutes.
