@@ -22,7 +22,7 @@
 //! several endpoints a share of reads fail fast until it is back; a slow answer counts too.
 
 use crate::config::EtcdConfig;
-use crate::sharding::error::ShardManagerError;
+use crate::sharding::error::{ShardManagerError, dropped_before_sending};
 use golem_common::retriable_error::IsRetriableError;
 use std::error::Error as _;
 use std::future::Future;
@@ -45,13 +45,13 @@ fn is_request_timeout(err: &ShardManagerError) -> bool {
     )
 }
 
-/// Whether a failed request was never sent, because no connection to the chosen endpoint could be
-/// made.
+/// Whether a failed request was never sent: no connection to the chosen endpoint could be made,
+/// or the connection it was handed to closed before it took the request.
 ///
 /// A request that was never sent cannot have landed, so a compare-and-swap that failed this way
-/// still has the right expected revision and sending it again is safe. That is the only failure
-/// for which it is: an answer from etcd is final, and a timeout or a reset connection may come
-/// after etcd received the request, so those stay false.
+/// still has the right expected revision and sending it again is safe. These are the only
+/// failures for which it is: an answer from etcd is final, and a timeout or a reset connection may
+/// come after etcd received the request, so those stay false.
 ///
 /// `etcd-client` hands each request to a random endpoint of its balancer, and an endpoint that
 /// cannot be connected to stays in the rotation, so with one member down a share of the requests
@@ -64,7 +64,13 @@ fn is_request_timeout(err: &ShardManagerError) -> bool {
 /// timeout, a reset or a closed connection), so it is the marker used here and the operating
 /// system's error kind is not: a timed-out or reset socket can also happen after the request was
 /// written.
+///
+/// A connection that closes under a request it has not yet taken is the other case: hyper drops
+/// the request unsent and reports that it did; see [`dropped_before_sending`].
 pub fn never_reached_etcd(err: &etcd_client::Error) -> bool {
+    if dropped_before_sending(err) {
+        return true;
+    }
     let etcd_client::Error::GRpcStatus(status) = err else {
         return false;
     };
