@@ -1,5 +1,16 @@
 # Node tool process boundary probe
 
+## Current checkpoint
+
+The [October 19 post-merge observations](observations-2026-10-19-post-merge.json) record
+the current production-adapter reruns. Golem [draft #4269](https://github.com/golemcloud/golem/pull/4269)
+depends on WRQJS [draft #201](https://github.com/golemcloud/wasm-rquickjs/pull/201).
+The timeout-selection crash cut still fails strict descendant validation. Repeated completed
+replay passes the lower-verbosity control but times out with debug logging; that failure is not
+waived. No assertion or timeout was relaxed. The draft is not ready to merge.
+
+## Original boundary probe
+
 This is a feasibility probe, not a `node:child_process` implementation. It checks whether
 synchronous JavaScript can wait for an asynchronous host function and a separately scheduled
 component without a nested guest executor or an rquickjs fork.
