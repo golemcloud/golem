@@ -26,7 +26,8 @@ INFO golem_shard_manager: Configured the etcd client for shard lease state persi
      endpoints="http://etcd:2379" state_key="/golem/shard-manager/state"
 INFO ...leader_election: Elected as the shard manager leader
      leader_key="/golem/shard-manager/leader/..." create_revision=2 granted_ttl=10s
-INFO golem_shard_manager: Started shard manager on ports: grpc: 9002
+INFO golem_shard_manager: Started shard manager
+     grpc_port=9002
 ```
 
 and reports `shard_manager_is_serving 1` on its HTTP port's `/metrics`. The other two log
@@ -74,7 +75,7 @@ at, here its own service name. On Kubernetes that is the pod IP; see the deploym
 example.
 
 Use two probes on the HTTP port (`GOLEM__HTTP_PORT`). Readiness is `/readyz`: it answers 200 while the replica
-serves, or, for a standby or a just-elected leader still starting, while etcd has answered it within one lease TTL. A replica is also not ready until it has reached its own advertised address, so a wrong `GOLEM__GRPC__ADVERTISED_HOST` keeps it unready, with a warning that names the address. Liveness is `/healthcheck`.
+serves, or, for a standby or a just-elected leader still starting, while etcd has answered it within one lease TTL. A replica is also not ready until it has reached its own advertised address, so a wrong `GOLEM__GRPC__ADVERTISED_HOST` keeps it unready, with a warning that names the address; such a replica does not join the election either, so it neither queues nor leads. Liveness is `/healthcheck`.
 The shard manager image has neither `curl` nor `wget`, so this example defines no container healthcheck.
 
 Each replica's `GOLEM__GRPC__ADVERTISED_HOST` is its own service name. It must stay unique: a replica that
