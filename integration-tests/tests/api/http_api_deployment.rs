@@ -14,15 +14,16 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateHttpApiDeploymentError,
-    RegistryServiceDeleteHttpApiDeploymentError,
+    RegistryServiceCreateMcpDeploymentError, RegistryServiceDeleteHttpApiDeploymentError,
     RegistryServiceGetEnvironmentHttpApiDeploymentError, RegistryServiceGetHttpApiDeploymentError,
     RegistryServiceUpdateHttpApiDeploymentError,
 };
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::domain_registration::Domain;
+use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation, HttpApiDeploymentUpdate,
 };
+use golem_common::model::mcp_deployment::{McpDeploymentAgentOptions, McpDeploymentCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -42,6 +43,7 @@ async fn create_http_api_deployment_for_nonexitant_domain(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: Domain("testdomain.com".to_string()),
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -75,6 +77,7 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -132,6 +135,7 @@ async fn create_http_api_deployment_normalizes_webhooks_url(
         .create_http_api_deployment(
             &env.id.0,
             &HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain,
                 agents: BTreeMap::from_iter([(
                     AgentTypeName("test-api".to_string()),
@@ -162,6 +166,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -176,6 +181,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         .await?;
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
+        scheme: None,
         current_revision: http_api_deployment.revision,
         agents: Some(BTreeMap::from_iter([
             (
@@ -268,6 +274,7 @@ async fn update_http_api_deployment_normalizes_webhooks_url(
         .create_http_api_deployment(
             &env.id.0,
             &HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain,
                 agents: BTreeMap::from_iter([(
                     AgentTypeName("test-api".to_string()),
@@ -284,6 +291,7 @@ async fn update_http_api_deployment_normalizes_webhooks_url(
         .update_http_api_deployment(
             &http_api_deployment.id.0,
             &HttpApiDeploymentUpdate {
+                scheme: None,
                 current_revision: http_api_deployment.revision,
                 agents: None,
                 webhook_prefix: Some("webhooks2".to_string()),
@@ -315,6 +323,7 @@ async fn update_http_api_deployment_openapi_endpoint_can_be_set_and_cleared(
         .create_http_api_deployment(
             &env.id.0,
             &HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain,
                 agents: BTreeMap::from_iter([(
                     AgentTypeName("test-api".to_string()),
@@ -331,6 +340,7 @@ async fn update_http_api_deployment_openapi_endpoint_can_be_set_and_cleared(
         .update_http_api_deployment(
             &http_api_deployment.id.0,
             &HttpApiDeploymentUpdate {
+                scheme: None,
                 current_revision: http_api_deployment.revision,
                 webhook_prefix: None,
                 openapi_endpoint_prefix: Some("/docs/".to_string()),
@@ -357,6 +367,7 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -423,6 +434,7 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -462,6 +474,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -476,6 +489,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
         .await?;
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
+        scheme: None,
         current_revision: http_api_deployment.revision.next()?,
         webhook_prefix: None,
         openapi_endpoint_prefix: None,
@@ -515,6 +529,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -570,6 +585,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("HttpAgent".to_string()),
@@ -617,6 +633,7 @@ async fn cannot_access_http_api_deployment_from_another_user(
     let client_a = deps.registry_service().client(&user_a.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -658,6 +675,7 @@ async fn cannot_delete_http_api_deployment_from_another_user(
     let client_a = deps.registry_service().client(&user_a.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -695,6 +713,7 @@ async fn delete_with_wrong_revision_is_rejected(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -734,6 +753,7 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -761,6 +781,142 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
             RegistryServiceDeleteHttpApiDeploymentError::Error404(_)
         ))
     ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_domain_holds_an_http_api_deployment_or_an_mcp_deployment_not_both(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let domain = user.register_domain(&env.id).await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
+        domain: domain.clone(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
+        webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+        openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
+    };
+    let mcp_deployment_creation = McpDeploymentCreation {
+        domain: domain.clone(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-mcp".to_string()),
+            McpDeploymentAgentOptions::default(),
+        )]),
+        tools: BTreeMap::new(),
+    };
+
+    let http_api_deployment = client
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .await?;
+
+    let error = client
+        .create_mcp_deployment(&env.id.0, &mcp_deployment_creation)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceCreateMcpDeploymentError::Error409(body)) = error
+    else {
+        panic!("expected a domain kind conflict, got {error:?}")
+    };
+    assert_eq!(body.code, "DOMAIN_HAS_HTTP_API_DEPLOYMENT");
+
+    client
+        .delete_http_api_deployment(
+            &http_api_deployment.id.0,
+            http_api_deployment.revision.into(),
+        )
+        .await?;
+
+    client
+        .create_mcp_deployment(&env.id.0, &mcp_deployment_creation)
+        .await?;
+
+    let error = client
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceCreateHttpApiDeploymentError::Error409(body)) =
+        error
+    else {
+        panic!("expected a domain kind conflict, got {error:?}")
+    };
+    assert_eq!(body.code, "DOMAIN_HAS_MCP_DEPLOYMENT");
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn equivalent_domain_spellings_cannot_hold_another_deployment_kind(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let domain = user.register_domain(&env.id).await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    client
+        .create_http_api_deployment(
+            &env.id.0,
+            &HttpApiDeploymentCreation {
+                scheme: Default::default(),
+                domain: domain.clone(),
+                agents: BTreeMap::from_iter([(
+                    AgentTypeName("test-api".to_string()),
+                    HttpApiDeploymentAgentOptions::default(),
+                )]),
+                webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+                openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(
+                ),
+            },
+        )
+        .await?;
+
+    for spelling in [domain.0.to_uppercase(), format!("{}.", domain.0)] {
+        // The equivalent spelling cannot be registered, so it cannot hold an MCP deployment.
+        assert!(
+            client
+                .create_domain_registration(
+                    &env.id.0,
+                    &DomainRegistrationCreation {
+                        domain: Domain(spelling.clone()),
+                    },
+                )
+                .await
+                .is_err(),
+            "{spelling}"
+        );
+        let error = client
+            .create_mcp_deployment(
+                &env.id.0,
+                &McpDeploymentCreation {
+                    domain: Domain(spelling.clone()),
+                    agents: BTreeMap::from_iter([(
+                        AgentTypeName("test-mcp".to_string()),
+                        McpDeploymentAgentOptions::default(),
+                    )]),
+                    tools: BTreeMap::new(),
+                },
+            )
+            .await
+            .unwrap_err();
+        let golem_client::Error::Item(RegistryServiceCreateMcpDeploymentError::Error409(body)) =
+            error
+        else {
+            panic!("expected the domain to be unregistered for {spelling}, got {error:?}")
+        };
+        assert_eq!(body.code, "DOMAIN_NOT_REGISTERED", "{spelling}");
+    }
 
     Ok(())
 }

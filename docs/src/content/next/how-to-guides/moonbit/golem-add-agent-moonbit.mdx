@@ -57,7 +57,7 @@ enum Status {
 
 Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
 
-- **Uncaught errors** (uncaught `raise`, aborts, runtime panics) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Uncaught errors** (uncaught `raise`, aborts, runtime panics) fail the invocation without retry. They do not repeat completed effects.
 - **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Result[T, E]`. Custom error types need `#derive.golem_schema`.
 
 ```moonbit
@@ -90,7 +90,7 @@ pub fn Wallet::withdraw(self : Self, amount : UInt64) -> Result[UInt64, Withdraw
 }
 ```
 
-Returning `Err(...)` completes the invocation successfully — the caller receives the error as a value. Letting an exception propagate out of the method (e.g. an unhandled `raise`, or `abort(...)`) will instead trigger a retry and eventually fail the whole agent.
+Returning `Err(...)` completes the invocation successfully — the caller receives the error as a value. Letting an exception propagate out of the method (e.g. an unhandled `raise`, or `abort(...)`) instead fails the invocation without retry.
 
 ## Key Constraints
 

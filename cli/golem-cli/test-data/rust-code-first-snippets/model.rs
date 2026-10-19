@@ -2,7 +2,9 @@ use std::collections::Bound;
 
 use std::collections::HashMap;
 
-use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema, Schema};
+use golem_rust::{
+    AllowedLanguages, AllowedMimeTypes, FromWire, IntoWire, MultimodalSchema, Schema, WireSchema,
+};
 
 #[derive(Schema)]
 pub struct AllPrimitives {
@@ -121,7 +123,7 @@ pub struct ComplexStruct {
     pub enum_complex: ComplexEnum,
 }
 
-#[derive(MultimodalSchema)]
+#[derive(MultimodalSchema, IntoWire, FromWire, WireSchema)]
 pub enum TextImageData {
     Text(String),
     Image(Vec<u8>),

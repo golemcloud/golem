@@ -29,6 +29,7 @@
 import {
   emptyMetadata,
   field,
+  SchemaBuilder,
   mergeGraphDefs,
   schemaType,
   SchemaType,
@@ -42,21 +43,36 @@ import {
   type NumericRestrictions,
   type Role,
 } from '../internal/schema-model';
-import { GuestSecretHandle } from '../internal/schema-model/secretHandle';
+import {
+  adoptGuestSecretHandle,
+  GuestSecretHandle,
+  releaseGuestSecretHandle,
+} from '../internal/schema-model/secretHandle';
 import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
-import { GuestQuotaTokenHandle } from '../internal/schema-model/quotaTokenHandle';
+import {
+  adoptGuestQuotaTokenHandle,
+  GuestQuotaTokenHandle,
+  releaseGuestQuotaTokenHandle,
+} from '../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
 import { GuestPermissionCardHandle } from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
+import {
+  PermissionCard,
+  permissionCardFromSchemaHandleInternal,
+  permissionCardToSchemaValueInternal,
+  PolymorphicPermissionCard,
+  polymorphicPermissionCardFromSchemaHandleInternal,
+} from '../host/permissions';
 import type {
   BinaryRestrictions,
+  TextRestrictions,
   PathDirection,
   PathKind,
   QuantitySpec,
   QuantityValue,
   Secret as RawSecret,
   QuotaToken as RawQuotaToken,
-  PermissionCard as RawPermissionCard,
 } from 'golem:core/types@2.0.0';
 import { SchemaCodec } from './codec';
 import { buildResultCodec } from './result';
@@ -64,6 +80,7 @@ import { StandardSchemaV1 } from './standardSchema';
 import { Result } from '../host/result';
 import { Principal, sdkPrincipalToHost, sdkPrincipalFromHost } from '../principal';
 import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from './agentStream';
+import { Uuid } from '../uuid';
 import type {
   Principal as HostPrincipal,
   OidcPrincipal as HostOidcPrincipal,
@@ -100,6 +117,7 @@ export type MarkerKind =
   | 'unstructured-binary'
   | 'secret'
   | 'result'
+  | 'option'
   | 'typed-array'
   | 'principal'
   | 'stream';
@@ -318,6 +336,23 @@ function charMarker(): MarkerSchema<string> {
     graph: { defs: new Map(), root: t.char() },
     toValue: (value) => v.char(value as string),
     fromValue: (sv) => (sv as { tag: 'char'; value: string }).value,
+  });
+  return marker(validate, descriptor);
+}
+
+function uuidMarker(): MarkerSchema<Uuid> {
+  const validate: Validator<Uuid> = (value) =>
+    value instanceof Uuid &&
+    value.highBits >= 0n &&
+    value.highBits < 1n << 64n &&
+    value.lowBits >= 0n &&
+    value.lowBits < 1n << 64n
+      ? ok(value)
+      : fail('Expected a Uuid with unsigned 64-bit halves');
+  const descriptor: MarkerDescriptor = () => ({
+    graph: { defs: new Map(), root: t.uuid() },
+    toValue: (value) => v.uuid(value as Uuid),
+    fromValue: (sv) => (sv as { tag: 'uuid'; value: Uuid }).value,
   });
   return marker(validate, descriptor);
 }
@@ -587,6 +622,37 @@ function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array
   );
 }
 
+function textMarker(options: TextRestrictions = {}): MarkerSchema<string> {
+  const restrictions: TextRestrictions = {
+    languages: options.languages ? [...options.languages] : undefined,
+    minLength: options.minLength,
+    maxLength: options.maxLength,
+    regex: options.regex,
+  };
+  return marker(
+    (value) => {
+      if (typeof value !== 'string') return fail('Expected a string for WIT text');
+      const length = [...value].length;
+      if (restrictions.minLength !== undefined && length < restrictions.minLength) {
+        return fail(`Text value has fewer than ${restrictions.minLength} characters`);
+      }
+      if (restrictions.maxLength !== undefined && length > restrictions.maxLength) {
+        return fail(`Text value has more than ${restrictions.maxLength} characters`);
+      }
+      if (restrictions.regex !== undefined && !new RegExp(restrictions.regex, 'u').test(value)) {
+        return fail('Text value does not match the required pattern');
+      }
+      return ok(value);
+    },
+    () => ({
+      graph: { defs: new Map(), root: schemaType({ tag: 'text', restrictions }) },
+      concrete: { tag: 'plain-text' },
+      toValue: (value) => v.text(value as string),
+      fromValue: (value) => (value as Extract<SchemaValue, { tag: 'text' }>).text,
+    }),
+  );
+}
+
 /** A filesystem path value backed by the rich WIT `path` schema node. */
 export function Path(options?: PathOptions): MarkerSchema<string> {
   return pathMarker(options);
@@ -635,15 +701,21 @@ function typedArrayMarker<TArr, E extends number | bigint>(spec: {
     value instanceof spec.ctor
       ? ok(value)
       : fail(`Expected a ${spec.ctor.name} for a typed-array WIT list`);
-  const descriptor: MarkerDescriptor = () => {
-    const itemCodec: SchemaCodec = {
-      graph: { defs: new Map(), root: spec.elemType() },
-      toValue: (value) => spec.elemValue(value as E),
-      fromValue: (value) => (value as unknown as { value: E }).value,
-    };
+  const descriptor: MarkerDescriptor = (recurse) => {
+    const itemCodec = recurse(
+      marker<E>(
+        (value) => ok(value as E),
+        () => ({
+          graph: { defs: new Map(), root: spec.elemType() },
+          toValue: (value) => spec.elemValue(value as E),
+          fromValue: (value) => (value as unknown as { value: E }).value,
+        }),
+      ),
+    );
     return {
       graph: { defs: new Map(), root: t.list(itemCodec.graph.root) },
       listItem: itemCodec,
+      typedArrayConstructor: spec.ctor,
       toValue: (value) => v.list(Array.from(value as Iterable<E>).map((x) => spec.elemValue(x))),
       fromValue: (sv) => {
         const elements = (sv as Extract<SchemaValue, { tag: 'list' }>).elements;
@@ -677,10 +749,10 @@ function secretMarker<Output>(inner: StandardSchemaV1<Output>): SecretMarkerSche
       graph: { ...innerCodec.graph, root: t.secret(innerCodec.graph.root) },
       // Encode: wrap the freshly received owned `secret` resource in a
       // take-once handle. Decode: move the owned handle back out (take once).
-      toValue: (value) => v.secret(GuestSecretHandle.fromRaw(SECRET_INTERNAL, value as RawSecret)),
+      toValue: (value) => v.secret(adoptGuestSecretHandle(SECRET_INTERNAL, value as RawSecret)),
       fromValue: (sv) => {
         const handle = (sv as { tag: 'secret'; handle: GuestSecretHandle }).handle;
-        const raw = handle.take();
+        const raw = releaseGuestSecretHandle(SECRET_INTERNAL, handle);
         if (raw === undefined) {
           throw new Error(
             'secret handle was already consumed; an owned secret can only be decoded once',
@@ -713,10 +785,10 @@ function quotaTokenMarker(): MarkerSchema<RawQuotaToken> {
   const descriptor: MarkerDescriptor = () => ({
     graph: { defs: new Map(), root: t.quotaToken({}) },
     toValue: (value) =>
-      v.quotaToken(GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, value as RawQuotaToken)),
+      v.quotaToken(adoptGuestQuotaTokenHandle(QUOTA_INTERNAL, value as RawQuotaToken)),
     fromValue: (sv) => {
       const handle = (sv as { tag: 'quota-token'; handle: GuestQuotaTokenHandle }).handle;
-      const raw = handle.take();
+      const raw = releaseGuestQuotaTokenHandle(QUOTA_INTERNAL, handle);
       if (raw === undefined) {
         throw new Error(
           'quota-token handle was already consumed; an owned quota-token can only be decoded once',
@@ -741,6 +813,7 @@ function streamMarker<Output>(
     const itemCodec = recurse(inner);
     return {
       graph: { defs: itemCodec.graph.defs, root: t.stream(itemCodec.graph.root) },
+      streamItem: itemCodec,
       toValue: (value) => v.stream(agentStreamToHandle(value as AgentStream<Output>, itemCodec)),
       fromValue: (value) => {
         if (value.tag !== 'stream') {
@@ -757,22 +830,52 @@ function streamMarker<Output>(
 // Capability node: permission-card
 // ============================================================
 
-export interface PermissionCardOptions {
-  /** Whether the card schema may carry slot variables in its owner or resource id. */
-  polymorphic: boolean;
+export interface PermissionCardOptions<Polymorphic extends boolean = boolean> {
+  /**
+   * `true` for a template card, whose grants may contain slot variables;
+   * `false` for a concrete card. `s.permissionCard` needs a literal value.
+   */
+  polymorphic: Polymorphic;
 }
 
-function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawPermissionCard> {
-  const validate: Validator<RawPermissionCard> = (value) =>
-    value !== null && typeof value === 'object'
-      ? ok(value as RawPermissionCard)
-      : fail('Expected an opaque permission-card handle for WIT permission-card');
+/**
+ * A `permission-card` schema node. `polymorphic: false` declares a concrete
+ * {@link PermissionCard}; `polymorphic: true` declares a template
+ * {@link PolymorphicPermissionCard}. A received card is decoded into the
+ * declared type; the host keeps the card's real kind.
+ */
+function permissionCardMarker(options: PermissionCardOptions<false>): MarkerSchema<PermissionCard>;
+function permissionCardMarker(
+  options: PermissionCardOptions<true>,
+): MarkerSchema<PolymorphicPermissionCard>;
+function permissionCardMarker(
+  options: PermissionCardOptions,
+): MarkerSchema<PermissionCard | PolymorphicPermissionCard> {
+  const polymorphic = options.polymorphic;
+  if (typeof polymorphic !== 'boolean') {
+    throw new TypeError('s.permissionCard expects { polymorphic: boolean }');
+  }
+  const validate: Validator<PermissionCard | PolymorphicPermissionCard> = polymorphic
+    ? (value) =>
+        value instanceof PolymorphicPermissionCard
+          ? ok(value)
+          : fail(
+              'Expected a PolymorphicPermissionCard for WIT permission-card { polymorphic: true }',
+            )
+    : (value) =>
+        value instanceof PermissionCard
+          ? ok(value)
+          : fail('Expected a PermissionCard for WIT permission-card { polymorphic: false }');
   const descriptor: MarkerDescriptor = () => ({
-    graph: { defs: new Map(), root: t.permissionCard(options) },
-    toValue: (value) =>
-      v.permissionCard(
-        GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
-      ),
+    graph: { defs: new Map(), root: t.permissionCard({ polymorphic }) },
+    toValue: (value) => {
+      const issues = (validate(value) as StandardSchemaV1.FailureResult).issues;
+      if (issues !== undefined) throw new TypeError(issues[0].message);
+      return permissionCardToSchemaValueInternal(
+        PERMISSION_CARD_INTERNAL,
+        value as PermissionCard | PolymorphicPermissionCard,
+      );
+    },
     fromValue: (sv) => {
       const handle = (
         sv as {
@@ -780,13 +883,9 @@ function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawP
           handle: GuestPermissionCardHandle;
         }
       ).handle;
-      const raw = handle.take();
-      if (raw === undefined) {
-        throw new Error(
-          'permission-card handle was already consumed; an owned permission-card can only be decoded once',
-        );
-      }
-      return raw;
+      return polymorphic
+        ? polymorphicPermissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle)
+        : permissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle);
     },
   });
   return marker(validate, descriptor);
@@ -977,6 +1076,36 @@ function multimodalMarker(
 }
 
 // ============================================================
+// Option (WIT `option<inner>`)
+// ============================================================
+
+/**
+ * An `option<inner>` marker. Its output type is `Inner | undefined`: `undefined`
+ * is `none`, any other value is `some`. It wraps any schema, including markers
+ * such as `s.unstructuredBinary()` that vendor `optional` wrappers cannot wrap.
+ */
+function optionMarker<Inner>(
+  innerSchema: StandardSchemaV1<Inner>,
+): MarkerSchema<Inner | undefined, 'option'> {
+  const validate: Validator<Inner | undefined> = (value) =>
+    value === undefined ? ok(undefined) : innerSchema['~standard'].validate(value);
+  const descriptor: MarkerDescriptor = (recurse) => {
+    const innerCodec = recurse(innerSchema);
+    return {
+      graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
+      optionKind: 'optional',
+      optionInner: innerCodec,
+      toValue: (value) => v.option(value === undefined ? undefined : innerCodec.toValue(value)),
+      fromValue: (sv) => {
+        const inner = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
+        return inner === undefined ? undefined : innerCodec.fromValue(inner);
+      },
+    };
+  };
+  return marker<Inner | undefined, 'option'>(validate, descriptor);
+}
+
+// ============================================================
 // Result (WIT `result<ok, err>`)
 // ============================================================
 
@@ -1026,8 +1155,7 @@ function resultMarker<Ok, Err>(
 const PRINCIPAL_TAGS = ['oidc', 'agent', 'golem-user', 'anonymous'];
 
 // --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType =>
-  t.record([field('highBits', t.u64()), field('lowBits', t.u64())]);
+const uuidType = (): SchemaType => t.uuid();
 const componentIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
 const agentIdType = (): SchemaType =>
   t.record([field('componentId', componentIdType()), field('agentId', t.string())]);
@@ -1051,7 +1179,6 @@ const golemUserType = (): SchemaType => t.record([field('accountId', accountIdTy
 // --- SchemaValue field accessors (positional record reads) ---
 const recFields = (sv: SchemaValue): SchemaValue[] =>
   (sv as { tag: 'record'; fields: SchemaValue[] }).fields;
-const u64Of = (f: SchemaValue): bigint => (f as { tag: 'u64'; value: bigint }).value;
 const strOf = (f: SchemaValue): string => (f as { tag: 'string'; value: string }).value;
 const boolOf = (f: SchemaValue): boolean => (f as { tag: 'bool'; value: boolean }).value;
 const optOf = (f: SchemaValue): SchemaValue | undefined =>
@@ -1061,11 +1188,11 @@ const optOf = (f: SchemaValue): SchemaValue | undefined =>
 type HostUuid = { highBits: bigint; lowBits: bigint };
 
 function uuidToValue(u: HostUuid): SchemaValue {
-  return v.record([v.u64(u.highBits), v.u64(u.lowBits)]);
+  return v.uuid(Uuid.from(u));
 }
 function uuidFromValue(sv: SchemaValue): HostUuid {
-  const f = recFields(sv);
-  return { highBits: u64Of(f[0]), lowBits: u64Of(f[1]) };
+  const uuid = (sv as { tag: 'uuid'; value: Uuid }).value;
+  return { highBits: uuid.highBits, lowBits: uuid.lowBits };
 }
 
 function agentIdToValue(a: HostAgentId): SchemaValue {
@@ -1188,6 +1315,48 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
 }
 
 // ============================================================
+// Process exit status
+// ============================================================
+
+export interface ProcessExitStatus {
+  exit_code: number;
+}
+
+/** The nominal process status contract shared by command tools. */
+export const processExitStatusSchema: StandardSchemaV1<ProcessExitStatus> =
+  marker<ProcessExitStatus>(
+    (value) => {
+      if (typeof value !== 'object' || value === null || !('exit_code' in value)) {
+        return fail('Expected a process exit status record');
+      }
+      const code = value.exit_code;
+      return typeof code === 'number' && Number.isInteger(code) && code >= 0 && code <= 255
+        ? ok({ exit_code: code })
+        : fail('Expected an unsigned 8-bit integer exit_code');
+    },
+    () => {
+      const builder = new SchemaBuilder();
+      const root = builder.register(
+        'golem.tool.ProcessExitStatus',
+        () => t.record([field('exit_code', t.u8())]),
+        'ProcessExitStatus',
+      );
+      return {
+        graph: builder.buildGraph(root),
+        toValue: (value) => v.record([v.u8((value as ProcessExitStatus).exit_code)]),
+        fromValue: (value) => ({
+          exit_code: (
+            (value as Extract<SchemaValue, { tag: 'record' }>).fields[0] as Extract<
+              SchemaValue,
+              { tag: 'u8' }
+            >
+          ).value,
+        }),
+      };
+    },
+  );
+
+// ============================================================
 // Public `s` namespace
 // ============================================================
 
@@ -1195,9 +1364,9 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
  * Vendor-neutral marker schemas for WIT kinds Standard Schema can't express on
  * its own: numeric pins, `char`, `datetime`, `duration`, `url`, `bytes`, plus
  * the capability / rich nodes (`secret`, `quota-token`, `permission-card`, `multimodal`,
- * `unstructured*`). Each returns a {@link MarkerSchema} usable anywhere a
- * Standard Schema is accepted; `stream` is restricted to agent method inputs
- * and outputs by the agent schema validator.
+ * `unstructured*`) and the `option` / `result` wrappers. Each returns a
+ * {@link MarkerSchema} usable anywhere a Standard Schema is accepted; `stream`
+ * is restricted to agent method inputs and outputs by the agent schema validator.
  */
 export const s = {
   // Numeric pins (f64 is the default `number`, so it is intentionally absent).
@@ -1221,9 +1390,11 @@ export const s = {
 
   // Scalars Standard Schema can't pin.
   char: () => charMarker(),
+  uuid: () => uuidMarker(),
   datetime: () => datetimeMarker(),
   duration: () => durationMarker(),
   url: () => urlMarker(),
+  text: (opts?: TextRestrictions) => textMarker(opts),
   bytes: () => typedArrayMarker({ ctor: Uint8Array, elemType: t.u8, elemValue: v.u8 }),
   binary: (opts?: BinaryRestrictions) => binaryMarker(opts),
 
@@ -1245,7 +1416,7 @@ export const s = {
   secret: <Output>(inner: StandardSchemaV1<Output>) => secretMarker(inner),
   quotaToken: () => quotaTokenMarker(),
   stream: <Output>(inner: StandardSchemaV1<Output>) => streamMarker(inner),
-  permissionCard: (options: PermissionCardOptions) => permissionCardMarker(options),
+  permissionCard: permissionCardMarker,
 
   // Principal carried as a data value (WIT `principal` variant).
   principal: () => principalMarker(),
@@ -1254,6 +1425,9 @@ export const s = {
   multimodal: (cases: MultimodalCase[]) => multimodalMarker(cases),
   unstructuredText: (opts?: UnstructuredTextOpts) => unstructuredTextMarker(opts),
   unstructuredBinary: (opts?: UnstructuredBinaryOpts) => unstructuredBinaryMarker(opts),
+
+  // Optional value: `s.option(inner)` → WIT `option<inner>`, `undefined` is `none`.
+  option: <Inner>(innerSchema: StandardSchemaV1<Inner>) => optionMarker(innerSchema),
 
   // Typed method result: `returns: s.result(ok, err)` → WIT `result<ok, err>`.
   result: <Ok, Err>(okSchema: StandardSchemaV1<Ok>, errSchema: StandardSchemaV1<Err>) =>

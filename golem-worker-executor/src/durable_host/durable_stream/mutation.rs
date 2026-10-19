@@ -1,0 +1,988 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::*;
+use futures::StreamExt;
+use futures::future::BoxFuture;
+use futures::stream::FuturesUnordered;
+use tokio::sync::mpsc;
+
+use crate::worker::suspension::{ExternalActivity, RuntimeSource};
+
+tokio::task_local! {
+    static OUTPUT_MUTATION_SOURCE: Option<RuntimeSource>;
+}
+
+type Mutation = BoxFuture<'static, MutationCompletion>;
+
+struct MutationCompletion {
+    finish: BoxFuture<'static, ()>,
+}
+
+enum MutationJob {
+    Write(Mutation),
+    Detached(BoxFuture<'static, ()>),
+}
+
+pub(super) struct MutationQueue(std::sync::Mutex<Option<mpsc::UnboundedSender<MutationJob>>>);
+
+impl MutationQueue {
+    pub(super) fn new() -> Self {
+        // Admission bounds both queued mutations and their outstanding delivery work.
+        let (sender, mut receiver) = mpsc::unbounded_channel::<MutationJob>();
+        tokio::spawn(async move {
+            let mut current: Option<Mutation> = None;
+            let mut pending = std::collections::VecDeque::new();
+            let mut completions = FuturesUnordered::new();
+            let mut closed = false;
+            loop {
+                if current.is_none() {
+                    current = pending.pop_front();
+                }
+                tokio::select! {
+                    job = receiver.recv(), if !closed => {
+                        match job {
+                            Some(MutationJob::Write(job)) => pending.push_back(job),
+                            Some(MutationJob::Detached(job)) => completions.push(job),
+                            None => closed = true,
+                        }
+                    }
+                    completion = async { current.as_mut().unwrap().await }, if current.is_some() => {
+                        current = None;
+                        completions.push(completion.finish);
+                    }
+                    Some(()) = completions.next(), if !completions.is_empty() => {}
+                    else => break,
+                }
+            }
+        });
+        Self(std::sync::Mutex::new(Some(sender)))
+    }
+
+    fn send(&self, job: MutationJob) -> Result<(), StreamStoreError> {
+        let sender = self.0.lock().unwrap();
+        sender
+            .as_ref()
+            .ok_or(StreamStoreError::RecoveryRequired)?
+            .send(job)
+            .map_err(|_| StreamStoreError::RecoveryRequired)
+    }
+
+    fn close(&self) {
+        self.0.lock().unwrap().take();
+    }
+}
+
+struct ProducerMutationScope {
+    producer: Arc<DurableStreamStore>,
+    admission: Arc<StreamWriteAdmission>,
+    commit_tails: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    publication_guard: Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
+    session_records_changed: AtomicBool,
+}
+
+/// Bounds a detached operation across local writes and remote waits without readmission.
+pub struct StreamWriteAdmission {
+    producer: Arc<DurableStreamStore>,
+    status_receipts: std::sync::Mutex<Vec<oneshot::Receiver<Result<(), StreamStoreError>>>>,
+    publications: std::sync::Mutex<Vec<PublicationReceipt>>,
+    _external_activity: Option<Arc<ExternalActivity>>,
+    _operation: OwnedSemaphorePermit,
+    _memory: OwnedSemaphorePermit,
+}
+
+impl StreamWriteAdmission {
+    pub(super) fn producer(&self) -> Arc<DurableStreamStore> {
+        self.producer.clone()
+    }
+
+    /// Gives output mutations their own suspension charge before admission waits. The scoped
+    /// source is not inherited by spawned tasks; each output drain installs its own source.
+    pub(crate) async fn account_output_mutations<T>(
+        source: Option<RuntimeSource>,
+        operation: impl Future<Output = T>,
+    ) -> T {
+        OUTPUT_MUTATION_SOURCE.scope(source, operation).await
+    }
+
+    /// Queues a local write and waits for durability; the admitted operation joins status callbacks.
+    pub(crate) async fn submit<T, E, F, Fut>(self: &Arc<Self>, operation: F) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<DurableStreamStore>, StreamWriteContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.producer.submit(self.clone(), operation).await
+    }
+
+    /// Joins status publication for the submissions captured by this call, not live delivery.
+    /// The sequential admitted orchestration must await this outside its write bodies, without
+    /// cancellation or another concurrent drainer. The finalizer joins any remaining submissions.
+    pub(crate) async fn wait_published(&self) -> Result<(), StreamStoreError> {
+        let receipts = std::mem::take(
+            &mut *self
+                .status_receipts
+                .lock()
+                .expect("status receipt list lock poisoned"),
+        );
+        let mut failure = None;
+        for receipt in receipts {
+            if let Err(error) = receipt
+                .await
+                .unwrap_or(Err(StreamStoreError::RecoveryRequired))
+            {
+                match &error {
+                    StreamStoreError::Fenced(fence) => self.producer.poison_refused(fence),
+                    _ => self.producer.poison(),
+                }
+                // The fence is why the producer stopped, so a failure after it does not replace it.
+                if !matches!(failure, Some(StreamStoreError::Fenced(_))) {
+                    failure = Some(error);
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Defers live delivery until the operation has released its session lock.
+    pub(crate) fn defer_publication(&self, publication: PublicationReceipt) {
+        self.publications
+            .lock()
+            .expect("publication receipt list lock poisoned")
+            .push(publication);
+    }
+}
+
+/// An admitted write's effects and completion obligations, passed explicitly to nested writes.
+pub struct StreamWriteContext {
+    scope: Arc<ProducerMutationScope>,
+    effects: Arc<WriteEffects>,
+}
+
+struct WriteEffects {
+    pending: AtomicBool,
+    active: AtomicBool,
+}
+
+struct ProducerMutationEffects {
+    producer: Arc<DurableStreamStore>,
+    effects: Arc<WriteEffects>,
+}
+
+impl Drop for ProducerMutationEffects {
+    fn drop(&mut self) {
+        self.effects.active.store(false, Ordering::Release);
+        if self.effects.pending.load(Ordering::Acquire) {
+            self.producer.poison();
+        }
+    }
+}
+
+impl StreamWriteContext {
+    async fn execute<T, E, F, Fut>(scope: Arc<ProducerMutationScope>, operation: F) -> Result<T, E>
+    where
+        F: FnOnce(Arc<DurableStreamStore>, Self) -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let effects = Arc::new(WriteEffects {
+            pending: AtomicBool::new(false),
+            active: AtomicBool::new(true),
+        });
+        let guard = ProducerMutationEffects {
+            producer: scope.producer.clone(),
+            effects: effects.clone(),
+        };
+        let context = Self {
+            scope: scope.clone(),
+            effects,
+        };
+        let outcome = operation(scope.producer.clone(), context).await;
+        if outcome.is_ok() {
+            guard.effects.pending.store(false, Ordering::Release);
+        }
+        drop(guard);
+        outcome
+    }
+
+    /// Runs a nested write inline under the existing admission, with independent failure tracking.
+    pub(crate) async fn run_nested<T, E, F, Fut>(&self, operation: F) -> Result<T, E>
+    where
+        E: From<StreamStoreError>,
+        F: FnOnce(Arc<DurableStreamStore>, Self) -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        self.assert_owner(&self.scope.producer);
+        self.scope.producer.ensure_healthy()?;
+        Self::execute(self.scope.clone(), operation).await
+    }
+
+    /// Rejects use by another store or after this write has returned or been dropped.
+    pub(crate) fn assert_owner(&self, store: &DurableStreamStore) {
+        assert!(std::ptr::eq(self.scope.producer.as_ref(), store));
+        assert!(
+            self.effects.active.load(Ordering::Acquire),
+            "stream write context used after its operation completed"
+        );
+    }
+
+    /// Excludes lifecycle observation from prearming through final status publication.
+    /// Acquire before prearming an obligation and before producer metadata locks. Nested writes
+    /// share the guard; the independently driven completion releases it after all callback tails.
+    pub(crate) async fn begin_lifecycle_publication(&self) -> Result<(), StreamStoreError> {
+        self.assert_owner(&self.scope.producer);
+        let mut guard = self.scope.publication_guard.lock().await;
+        if guard.is_none() {
+            *guard = Some(
+                self.scope
+                    .producer
+                    .publication_gate
+                    .clone()
+                    .lock_owned()
+                    .await,
+            );
+        }
+        self.scope.producer.ensure_healthy()
+    }
+
+    /// Marks a durable effect that must finish before this operation can fail safely.
+    pub(crate) fn begin_durable_effect(&self) {
+        self.assert_owner(&self.scope.producer);
+        self.effects.pending.store(true, Ordering::Release);
+    }
+
+    /// Marks this operation's effects complete without clearing a parent's or sibling's effects.
+    pub(crate) fn finish_durable_effect(&self) {
+        self.assert_owner(&self.scope.producer);
+        self.effects.pending.store(false, Ordering::Release);
+    }
+
+    /// Defers reader notifications until the committed session status has been published.
+    pub(crate) fn notify_session_records_changed(&self) {
+        self.assert_owner(&self.scope.producer);
+        self.scope
+            .session_records_changed
+            .store(true, Ordering::Release);
+    }
+
+    /// Keeps admission charged while the live bus retains this write's payloads.
+    pub(super) fn publication_keepalive(&self) -> Arc<dyn Send + Sync> {
+        self.assert_owner(&self.scope.producer);
+        self.scope.admission.clone()
+    }
+
+    /// Defers delivery backpressure until the serial write body has released the queue.
+    pub(crate) fn defer_publication(&self, publication: PublicationReceipt) {
+        self.assert_owner(&self.scope.producer);
+        self.scope.admission.defer_publication(publication);
+    }
+}
+
+impl DurableStreamStore {
+    /// Rejects work after the resident producer has been poisoned or retired.
+    pub(crate) fn ensure_healthy(&self) -> Result<(), StreamStoreError> {
+        if self.poisoned.load(Ordering::Acquire) {
+            // A refused write poisons the store and every later write would be refused too:
+            // report the fence so a caller reroutes instead of recovering locally.
+            match self.refused_by.get() {
+                Some(fence) => Err(StreamStoreError::Fenced(fence.clone())),
+                None => Err(StreamStoreError::RecoveryRequired),
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Waits until every admitted durable effect has completed.
+    pub(crate) async fn wait_durable_drained(&self) {
+        self.durable_activity.wait_drained().await;
+    }
+
+    /// Keeps retirement from completing while metadata is being read or projected.
+    pub(crate) async fn with_metadata_activity<T>(
+        &self,
+        lookup: impl Future<Output = T>,
+    ) -> Result<T, StreamStoreError> {
+        self.ensure_healthy()?;
+        let activity = self
+            .durable_activity
+            .inherit_or_enter()
+            .ok_or(StreamStoreError::RecoveryRequired)?;
+        let result = activity.scope(lookup).await;
+        self.ensure_healthy()?;
+        Ok(result)
+    }
+
+    /// Cancels only the forwarded waiter on retirement; local durable mutations finish independently.
+    pub(crate) async fn remote_until_retired<T>(
+        &self,
+        remote: impl Future<Output = Result<T, StreamStoreError>>,
+    ) -> Result<T, StreamStoreError> {
+        let result = tokio::select! {
+            biased;
+            _ = self.retirement.cancelled() => Err(StreamStoreError::RecoveryRequired),
+            result = remote => result,
+        }?;
+        self.ensure_healthy()?;
+        Ok(result)
+    }
+
+    /// Retires only when no durable or metadata work remains active.
+    pub(crate) fn try_retire_quiescent(&self) -> bool {
+        if self.ensure_healthy().is_err() || !self.durable_activity.try_close_if_idle() {
+            return false;
+        }
+        self.poison();
+        true
+    }
+
+    /// Prevents new work and cancels resident forwarded operations after failure or retirement.
+    /// Poisons the store because the storage refused one of its writes.
+    pub(crate) fn poison_refused(&self, fence: &OplogFence) {
+        let _ = self.refused_by.set(fence.clone());
+        self.poison();
+    }
+
+    pub(crate) fn poison(&self) {
+        self.poisoned.store(true, Ordering::Release);
+        self.retirement.cancel();
+        self.durable_activity.close();
+        self.mutations.close();
+        self.owned_operations.close();
+        self.owned_operation_bytes.close();
+        self.lifecycle_operations.close();
+        self.lifecycle_operation_bytes.close();
+        for bus in self
+            .buses
+            .read()
+            .expect("durable stream bus map lock poisoned")
+            .values()
+        {
+            bus.retire();
+        }
+        self.terminal_progress.notify_one();
+        self.session_records_changed.notify_waiters();
+    }
+
+    /// Queues one producer mutation and resolves after its durable callback completes.
+    pub(crate) async fn run_owned<T, E, F, Fut>(
+        &self,
+        context: Option<&StreamWriteContext>,
+        retained_bytes: usize,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, StreamWriteContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.run_owned_mutation(context, retained_bytes, false, operation)
+            .await
+    }
+
+    /// Queues lifecycle work separately from ordinary producer mutations.
+    pub(crate) async fn run_lifecycle<T, E, F, Fut>(
+        &self,
+        context: Option<&StreamWriteContext>,
+        retained_bytes: usize,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, StreamWriteContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.run_owned_mutation(context, retained_bytes, true, operation)
+            .await
+    }
+
+    async fn run_owned_mutation<T, E, F, Fut>(
+        &self,
+        context: Option<&StreamWriteContext>,
+        retained_bytes: usize,
+        lifecycle: bool,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, StreamWriteContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.ensure_healthy()?;
+        if let Some(context) = context {
+            context.assert_owner(self);
+            return context.run_nested(operation).await;
+        }
+        self.run_admitted(
+            None,
+            retained_bytes,
+            lifecycle,
+            move |_, admission| async move { admission.submit(operation).await },
+        )
+        .await
+    }
+
+    /// Runs detached orchestration under one reservation, outside the serial local writer.
+    /// Reusing an admission avoids acquiring a second count or byte reservation for nested work.
+    pub(crate) async fn run_admitted<T, E, F, Fut>(
+        &self,
+        admission: Option<&Arc<StreamWriteAdmission>>,
+        retained_bytes: usize,
+        lifecycle: bool,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, Arc<StreamWriteAdmission>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        let activity = OUTPUT_MUTATION_SOURCE
+            .try_with(|source| source.as_ref().map(RuntimeSource::external_activity))
+            .ok()
+            .flatten();
+        self.run_admitted_accounted(admission, retained_bytes, lifecycle, activity, operation)
+            .await
+    }
+
+    pub(crate) async fn run_admitted_accounted<T, E, F, Fut>(
+        &self,
+        admission: Option<&Arc<StreamWriteAdmission>>,
+        retained_bytes: usize,
+        lifecycle: bool,
+        activity: Option<ExternalActivity>,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, Arc<StreamWriteAdmission>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.ensure_healthy()?;
+        if let Some(admission) = admission {
+            assert!(std::ptr::eq(admission.producer.as_ref(), self));
+            return operation(admission.producer.clone(), admission.clone()).await;
+        }
+        let producer = self
+            .self_weak
+            .upgrade()
+            .expect("live producer has an owning Arc");
+        if !lifecycle && retained_bytes > 256 * 1024 * 1024 {
+            return Err(StreamStoreError::ItemTooLarge.into());
+        }
+        let (operations, bytes) = if lifecycle {
+            (&self.lifecycle_operations, &self.lifecycle_operation_bytes)
+        } else {
+            (&self.owned_operations, &self.owned_operation_bytes)
+        };
+        let permit = operations
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| StreamStoreError::RecoveryRequired)?;
+        let memory = bytes
+            .clone()
+            .acquire_many_owned(
+                // A single large lifecycle error must still be finalized. Reserving the
+                // entire lane excludes other byte-retaining lifecycle operations.
+                retained_bytes.min(256 * 1024 * 1024) as u32,
+            )
+            .await
+            .map_err(|_| StreamStoreError::RecoveryRequired)?;
+        self.ensure_healthy()?;
+        let admission = Arc::new(StreamWriteAdmission {
+            producer: producer.clone(),
+            status_receipts: std::sync::Mutex::new(Vec::new()),
+            publications: std::sync::Mutex::new(Vec::new()),
+            _external_activity: activity.map(Arc::new),
+            _operation: permit,
+            _memory: memory,
+        });
+        let (reply, result) = oneshot::channel();
+        self.mutations
+            .send(MutationJob::Detached(Box::pin(async move {
+                let mut outcome = match std::panic::AssertUnwindSafe(async {
+                    producer.ensure_healthy()?;
+                    operation(producer.clone(), admission.clone()).await
+                })
+                .catch_unwind()
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        producer.poison();
+                        Err(
+                            StreamStoreError::Oplog("durable stream operation panicked".into())
+                                .into(),
+                        )
+                    }
+                };
+                if let Err(error) = admission.wait_published().await {
+                    outcome = Err(error.into());
+                }
+                let mut publications = std::mem::take(
+                    &mut *admission
+                        .publications
+                        .lock()
+                        .expect("publication receipt list lock poisoned"),
+                );
+                if !lifecycle {
+                    for publication in publications.drain(..) {
+                        if let Err(error) = publication
+                            .await
+                            .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
+                        {
+                            producer.poison();
+                            outcome = Err(StreamStoreError::from(error).into());
+                        }
+                    }
+                }
+                let external_activity = admission._external_activity.clone();
+                let mut accounting_publications = Vec::new();
+                if lifecycle && external_activity.is_some() {
+                    publications = publications
+                        .into_iter()
+                        .map(|publication| {
+                            let publication = publication.shared();
+                            accounting_publications.push(publication.clone());
+                            Box::pin(publication) as PublicationReceipt
+                        })
+                        .collect();
+                }
+                // Lifecycle admission must not be held by an abandoned or backpressured reader.
+                drop(admission);
+                let _ = reply.send((outcome, publications));
+                drop(producer);
+                // Deferred terminals do not retain admission in the bus. Keep only the external
+                // charge through their publication handoff, independently of the abandoned caller.
+                for publication in accounting_publications {
+                    let _ = publication.await;
+                }
+                drop(external_activity);
+            })))?;
+        let (mut outcome, publications) = result
+            .await
+            .expect("durable stream admitted operation terminated");
+        for publication in publications {
+            if let Err(error) = publication
+                .await
+                .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
+            {
+                self.poison();
+                outcome = Err(StreamStoreError::from(error).into());
+            }
+        }
+        outcome
+    }
+
+    async fn submit<T, E, F, Fut>(
+        &self,
+        admission: Arc<StreamWriteAdmission>,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, StreamWriteContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.ensure_healthy()?;
+        let activity = self
+            .durable_activity
+            .try_enter()
+            .ok_or(StreamStoreError::RecoveryRequired)?;
+        let producer = admission.producer.clone();
+        let (reply, result) = oneshot::channel();
+        let (status_reply, status_receipt) = oneshot::channel();
+        admission
+            .status_receipts
+            .lock()
+            .expect("status receipt list lock poisoned")
+            .push(status_receipt);
+        let scope = Arc::new(ProducerMutationScope {
+            producer: producer.clone(),
+            admission,
+            commit_tails: std::sync::Mutex::new(Vec::new()),
+            publication_guard: Mutex::new(None),
+            session_records_changed: AtomicBool::new(false),
+        });
+        self.mutations
+            .send(MutationJob::Write(Box::pin(async move {
+                let outcome = match std::panic::AssertUnwindSafe(async {
+                    producer.ensure_healthy()?;
+                    activity
+                        .clone()
+                        .scope(StreamWriteContext::execute(scope.clone(), operation))
+                        .await
+                })
+                .catch_unwind()
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        producer.poison();
+                        Err(
+                            StreamStoreError::Oplog("durable stream mutation panicked".into())
+                                .into(),
+                        )
+                    }
+                };
+                let _ = reply.send(outcome);
+                // Guarded orchestration can join this completion before releasing its session lock.
+                MutationCompletion {
+                    finish: async move {
+                        let mut status = Ok(());
+                        let tails = std::mem::take(
+                            &mut *scope
+                                .commit_tails
+                                .lock()
+                                .expect("commit tail list lock poisoned"),
+                        );
+                        for tail in tails {
+                            if let Err(error) = tail.await {
+                                producer.poison();
+                                status = Err(StreamStoreError::Oplog(format!(
+                                    "durable stream commit callback failed: {error}"
+                                )));
+                            }
+                        }
+                        // Slot readers use published worker status, which is folded after the
+                        // durability receipt but before the commit callback completes.
+                        if scope.session_records_changed.load(Ordering::Acquire) {
+                            producer.session_records_changed.notify_waiters();
+                        }
+                        drop(scope.publication_guard.lock().await.take());
+                        drop(activity);
+                        drop(scope);
+                        let _ = status_reply.send(status);
+                    }
+                    .boxed(),
+                }
+            })))?;
+        result
+            .await
+            .expect("durable stream producer-owned write terminated")
+    }
+
+    /// Observes authoritative lifecycle state without racing a prearmed publication.
+    /// The observation must not submit mutations, acquire session locks, or perform recovery/RPC.
+    /// Status-actor reconstruction is allowed; cached status is not an authoritative observation.
+    #[cfg(test)]
+    pub(crate) async fn observe_publication<T>(
+        &self,
+        observation: impl Future<Output = Result<T, StreamStoreError>>,
+    ) -> Result<T, StreamStoreError> {
+        self.ensure_healthy()?;
+        let _activity = self
+            .durable_activity
+            .try_enter()
+            .ok_or(StreamStoreError::RecoveryRequired)?;
+        let _guard = self.publication_gate.lock().await;
+        self.ensure_healthy()?;
+        let outcome = std::panic::AssertUnwindSafe(observation)
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(StreamStoreError::Oplog(
+                    "durable stream publication observation panicked".into(),
+                ))
+            });
+        if outcome.is_err() {
+            self.poison();
+        }
+        outcome
+    }
+
+    pub(super) async fn commit(
+        &self,
+        context: &StreamWriteContext,
+    ) -> Result<(), StreamStoreError> {
+        context.assert_owner(self);
+        context.begin_durable_effect();
+        let scope = &context.scope;
+        let (committed, receipt) = oneshot::channel();
+        let callback = (self.commit)(Some(committed));
+        let producer = scope.producer.clone();
+        let task = spawn_with_activity(async move {
+            if let Err(panic) = std::panic::AssertUnwindSafe(callback).catch_unwind().await {
+                producer.poison();
+                std::panic::resume_unwind(panic);
+            }
+        });
+        scope
+            .commit_tails
+            .lock()
+            .expect("commit tail list lock poisoned")
+            .push(task);
+        receipt
+            .await
+            .expect("durable stream commit failed before durability receipt")
+            .map_err(|refusal| match refusal {
+                OplogRefusal::Fenced(fence) => {
+                    self.poison_refused(&fence);
+                    StreamStoreError::Fenced(fence)
+                }
+                refusal => {
+                    self.poison();
+                    StreamStoreError::from(OplogError::from(refusal))
+                }
+            })
+    }
+
+    /// Commits unless an earlier commit already made every entry through `index` durable and
+    /// folded it into the owner's published status. Commits always flush the whole oplog buffer,
+    /// so a write whose entry an earlier write's commit flushed needs no commit of its own.
+    pub(super) async fn commit_through(
+        &self,
+        context: &StreamWriteContext,
+        index: OplogIndex,
+    ) -> Result<(), StreamStoreError> {
+        context.assert_owner(self);
+        if self
+            .published_horizon
+            .get()
+            .and_then(|horizon| horizon())
+            .is_some_and(|horizon| horizon >= index)
+        {
+            return Ok(());
+        }
+        self.commit(context).await
+    }
+
+    pub(super) async fn commit_notifying(
+        &self,
+        context: &StreamWriteContext,
+        committed: oneshot::Sender<()>,
+    ) -> Result<(), StreamStoreError> {
+        self.commit(context).await?;
+        let _ = committed.send(());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::durable_stream::tests::{TestOplog, identity};
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::{blocked_timer, eligible_now};
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("30s")]
+    async fn abandoned_output_mutation_retains_external_charge_through_commit_tail() {
+        for lifecycle in [false, true] {
+            for fail in [false, true] {
+                let owner = OwnerSuspension::new();
+                let (runtime, _, _timer) = blocked_timer(
+                    &owner,
+                    std::time::Instant::now() + std::time::Duration::from_secs(60),
+                );
+                assert!(eligible_now(&owner));
+                let (entered, body_entered) = oneshot::channel();
+                let (release, released) = oneshot::channel();
+                let (body_completed, body_finished) = oneshot::channel();
+                let (tail_entered, tail_started) = oneshot::channel();
+                let (tail_release, tail_released) = oneshot::channel();
+                let callback = std::sync::Mutex::new(Some((tail_entered, tail_released)));
+                let identity = identity();
+                let producer = DurableStreamStore::load_with_commit(
+                    Arc::new(TestOplog::default()),
+                    identity.environment_id,
+                    identity.agent_id,
+                    identity.fingerprint,
+                    None,
+                    Arc::new(move |committed| {
+                        let (entered, released) = callback.lock().unwrap().take().unwrap();
+                        Box::pin(async move {
+                            committed.unwrap().send(Ok(())).unwrap();
+                            entered.send(()).unwrap();
+                            released.await.unwrap();
+                        })
+                    }),
+                )
+                .await
+                .unwrap();
+                let mut waiter = Box::pin(StreamWriteAdmission::account_output_mutations(
+                    Some(runtime.source()),
+                    producer.run_admitted(None, 0, lifecycle, move |_, admission| async move {
+                        admission
+                            .submit(move |producer, context| async move {
+                                entered.send(()).unwrap();
+                                released.await.unwrap();
+                                producer.commit(&context).await?;
+                                context.finish_durable_effect();
+                                body_completed.send(()).unwrap();
+                                if fail {
+                                    Err(StreamStoreError::Oplog("output preparation failed".into()))
+                                } else {
+                                    Ok(())
+                                }
+                            })
+                            .await
+                    }),
+                ));
+                assert!(futures::poll!(waiter.as_mut()).is_pending());
+                body_entered.await.unwrap();
+                drop(waiter);
+                assert!(!eligible_now(&owner));
+                release.send(()).unwrap();
+                tail_started.await.unwrap();
+                body_finished.await.unwrap();
+                assert!(!eligible_now(&owner));
+                tail_release.send(()).unwrap();
+                while !eligible_now(&owner) {
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn abandoned_output_mutation_retains_external_charge_through_live_publication() {
+        use crate::durable_host::stream_bus::DurableLiveStreamEvent;
+
+        for (lifecycle, deferred_terminal) in [(false, false), (true, false), (true, true)] {
+            let owner = OwnerSuspension::new();
+            let (runtime, _, _timer) = blocked_timer(
+                &owner,
+                std::time::Instant::now() + std::time::Duration::from_secs(60),
+            );
+            assert!(eligible_now(&owner));
+            let identity = identity();
+            let producer = DurableStreamStore::load(
+                Arc::new(TestOplog::default()),
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let bus = Arc::new(DurableLiveStreamBus::<u8>::new(1).unwrap());
+            let reader = bus.subscribe().await.unwrap();
+            bus.publish_committed(DurableLiveStreamEvent {
+                offset: StreamOffset::new(OplogIndex::from_u64(1), 0),
+                payload: 1,
+            })
+            .await
+            .unwrap();
+            let (entered, body_entered) = oneshot::channel();
+            let (release, released) = oneshot::channel();
+            let publication_bus = bus.clone();
+            let mut waiter = Box::pin(StreamWriteAdmission::account_output_mutations(
+                Some(runtime.source()),
+                producer.run_admitted(None, 0, lifecycle, move |_, admission| async move {
+                    let publication = if deferred_terminal {
+                        publication_bus
+                            .defer_terminal(
+                                StreamOffset::new(OplogIndex::from_u64(2), 0),
+                                false,
+                                Arc::new(tokio::sync::Notify::new()),
+                            )
+                            .unwrap()
+                    } else {
+                        publication_bus.enqueue_batch(
+                            vec![DurableLiveStreamEvent {
+                                offset: StreamOffset::new(OplogIndex::from_u64(2), 0),
+                                payload: 2,
+                            }],
+                            false,
+                            admission.clone(),
+                        )
+                    };
+                    admission.defer_publication(publication);
+                    entered.send(()).unwrap();
+                    released.await.unwrap();
+                    Ok::<(), StreamStoreError>(())
+                }),
+            ));
+            assert!(futures::poll!(waiter.as_mut()).is_pending());
+            body_entered.await.unwrap();
+            drop(waiter);
+            release.send(()).unwrap();
+            // Lifecycle orchestration hands receipts back without awaiting them. Accounting must
+            // survive a reply without a receiver, including terminals with no bus keepalive.
+            producer
+                .run_admitted(None, 0, true, |_, _| async {
+                    Ok::<(), StreamStoreError>(())
+                })
+                .await
+                .unwrap();
+            assert!(!eligible_now(&owner));
+            let weak_producer = Arc::downgrade(&producer);
+            drop(producer);
+            if deferred_terminal {
+                while weak_producer.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+                assert!(!eligible_now(&owner));
+            }
+            drop(reader);
+            if deferred_terminal {
+                bus.retire();
+            }
+            while !eligible_now(&owner) {
+                tokio::task::yield_now().await;
+            }
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn publication_failure_joins_remaining_receipts_before_returning() {
+        let identity = identity();
+        let producer = DurableStreamStore::load(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        producer
+            .run_admitted(None, 0, true, move |owner, admission| async move {
+                let (failed, failure) = oneshot::channel();
+                let (completed, completion) = oneshot::channel();
+                admission
+                    .status_receipts
+                    .lock()
+                    .unwrap()
+                    .extend([failure, completion]);
+                let expected = StreamStoreError::Oplog("status publication failed".into());
+                failed.send(Err(expected.clone())).unwrap();
+                let waiting = admission.wait_published();
+                tokio::pin!(waiting);
+                assert!(futures::poll!(waiting.as_mut()).is_pending());
+                assert_eq!(
+                    owner.ensure_healthy(),
+                    Err(StreamStoreError::RecoveryRequired)
+                );
+                completed.send(Ok(())).unwrap();
+                assert_eq!(waiting.await, Err(expected));
+                Ok::<(), StreamStoreError>(())
+            })
+            .await
+            .unwrap();
+    }
+}

@@ -1,0 +1,55 @@
+import { Callout } from "nextra/components"
+
+# Filesystem Snapshots
+
+Filesystem snapshots save a durable agent's files to blob storage alongside its application snapshot. They preserve files when an agent recovers from a snapshot, performs a snapshot-based manual update, or uses a snapshot-assisted automatic update. For agent code and snapshotting policies, see [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots).
+
+The local macOS server enables filesystem snapshots by default. Standalone executors and local servers on other platforms disable them by default. Ephemeral agents do not take snapshots.
+
+## Choose a storage backend
+
+Set the backend with `[filesystem_storage.mode]`:
+
+| Backend | Use | Filesystem snapshots | Per-agent disk limits and metering |
+| --- | --- | --- | --- |
+| `ReflinkXfs` | Production on Linux with XFS reflink | Supported | Not supported |
+| `ManagedXfs` | Production on Linux with XFS reflink and project quotas | Supported | Supported; requires `xfs-quotad` |
+| `Apfs` | Local development and tests on macOS | Supported | Not supported |
+| `Directory` | Agent directories under a configured root | Not supported | Not supported |
+| `Temporary` | Temporary agent directories; the standalone default | Not supported | Not supported |
+
+Production requires Linux 5.8 or later and a dedicated XFS filesystem for each executor. Use `ReflinkXfs` unless you also need per-agent disk quotas or filesystem metering. The executor needs no capabilities in either XFS mode; only the separate quota daemon needs `CAP_SYS_ADMIN`.
+
+## Enable filesystem snapshots
+
+1. [Prepare XFS storage](/next/operate/filesystem_snapshots/xfs) on each production executor. For local development, follow the [macOS guide](/next/operate/filesystem_snapshots/macos).
+2. [Configure snapshots](/next/operate/filesystem_snapshots/configuration): retain an encryption key, configure blob storage, and enable the feature on every executor that can run the same agents.
+3. Enable a [snapshotting policy](/next/develop/snapshotting#configuring-snapshot-based-recovery) on the agent. Enabling filesystem snapshots on an executor does not enable application snapshots. A policy of `enabled` uses `[oplog.default_snapshotting]`, which defaults to `Disabled`.
+4. [Verify a snapshot](#verify-a-snapshot), then use the [monitoring guide](/next/operate/filesystem_snapshots/monitoring) to watch uploads, restores, and storage growth.
+
+<Callout type="warning">
+  All executors that can run the same agents must enable filesystem snapshots and use the same encryption key and blob storage. An agent whose recovery baseline requires a filesystem snapshot cannot start on an executor where the feature is disabled or the key is wrong.
+</Callout>
+
+## Verify a snapshot
+
+- At startup, check the executor's `Using configuration:` log. Under `filesystem snapshots:`, check that it reports `enabled:`. The key is masked as `****`. Under `filesystem storage:`, check the selected mode and root.
+- Make an agent that writes a file take a snapshot. An agent with only untouched read-only initial files does not upload a filesystem snapshot.
+- Check that `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` increases.
+- Run `golem agent oplog <agent_id>`. Look for a `SNAPSHOT` entry with a `filesystem:` name and a `SNAPSHOT CONFIRMED` entry with the same name.
+
+See [Monitoring and troubleshooting](/next/operate/filesystem_snapshots/monitoring) if captures are skipped, uploads fail, or starts use older snapshots.
+
+## When filesystem snapshots are disabled
+
+The executor can write a snapshot record without a filesystem snapshot only when the files can be reconstructed from untouched read-only initial files. There must be no other files or provisioned files, no renames or hard links, and no explicitly assigned file or directory modification times.
+
+If the agent's files do not meet those conditions, it skips automatic snapshots and recovers by replay. A snapshot-based manual update fails. See [Snapshot availability](/next/operate/filesystem_snapshots/recovery#without-filesystem-snapshots).
+
+## Operational details
+
+- [XFS setup](/next/operate/filesystem_snapshots/xfs): storage modes, containers, quota-daemon deployment, and startup checks.
+- [Local macOS setup](/next/operate/filesystem_snapshots/macos): APFS defaults, overrides, and key retention.
+- [Configuration](/next/operate/filesystem_snapshots/configuration): encryption, blob-storage permissions, concurrency, memory, pressure, and retries.
+- [Recovery and storage](/next/operate/filesystem_snapshots/recovery): captures, confirmations, retention, clean-up, and repository locations.
+- [Monitoring and troubleshooting](/next/operate/filesystem_snapshots/monitoring): symptoms, metrics, and log messages.

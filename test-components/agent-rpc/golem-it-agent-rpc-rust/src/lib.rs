@@ -1,11 +1,18 @@
 use bytes::Bytes;
-use golem_rust::agentic::{AgentStream, spawn_local};
+use golem_rust::agentic::{AgentStream, Config, spawn_local};
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
+use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
+use golem_rust::bindings::wasi::config::store as wasi_config;
+use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
+use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
-    FromSchema, IntoSchema, PromiseId, SchemaValue, Uuid, agent_definition, agent_implementation,
-    encode_schema_value,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid,
+    WireSchema, agent_definition, agent_implementation, encode_schema_value, oplog_commit,
 };
+use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+mod http_router;
 
 fn encode_single_parameter<T: IntoSchema>(
     value: T,
@@ -16,13 +23,13 @@ fn encode_single_parameter<T: IntoSchema>(
     .expect("failed to encode RPC parameter")
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum State {
     Initial,
     Ongoing,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct Payload {
     pub field1: String,
     pub field2: Uuid,
@@ -35,6 +42,7 @@ pub trait RustParent {
 
     async fn spawn_child(&self, data: String) -> Uuid;
     async fn call_ts_agent(&self, name: String) -> f64;
+    fn inspect_missing_rpc_type(&self) -> String;
 }
 
 struct RustParentImpl {
@@ -62,6 +70,15 @@ impl RustParent for RustParentImpl {
     async fn call_ts_agent(&self, name: String) -> f64 {
         let client = SimpleChildAgentClient::get(name);
         client.value().await
+    }
+
+    fn inspect_missing_rpc_type(&self) -> String {
+        let constructor = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+            .expect("failed to encode empty RPC constructor");
+        match WasmRpc::create("MissingReflectedType", constructor, None, Vec::new()) {
+            Ok(_) => "unexpected success".to_string(),
+            Err(error) => format!("{error:?}"),
+        }
     }
 }
 
@@ -231,7 +248,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 }
 
-fn agent_stream<T: IntoSchema + 'static>(values: Vec<T>) -> AgentStream<T> {
+fn agent_stream<T: IntoWire + FromWire + 'static>(values: Vec<T>) -> AgentStream<T> {
     let (mut writer, stream) = AgentStream::new();
     spawn_local(async move {
         let _ = writer.write_all(values).await;
@@ -257,19 +274,19 @@ fn agent_error_stream() -> AgentStream<u32> {
     AgentStream::from_raw(output)
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct NestedStreamInput {
     pub labels: AgentStream<String>,
     pub values: Option<AgentStream<u32>>,
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct NestedStreamItem {
     pub label: String,
     pub values: AgentStream<u32>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingRpcReport {
     pub input_only: Vec<u32>,
     pub output_only: Vec<u32>,
@@ -283,19 +300,62 @@ pub struct StreamingRpcReport {
     pub after_consumer_drop: u64,
 }
 
+#[derive(ConfigSchema)]
+pub struct ConfiguredRpcTargetConfig {
+    pub label: String,
+    pub count: u32,
+}
+
+#[agent_definition]
+pub trait ConfiguredRpcTarget {
+    fn new(name: String, #[agent_config] config: Config<ConfiguredRpcTargetConfig>) -> Self;
+
+    fn describe(&self) -> (String, String, u32);
+}
+
+struct ConfiguredRpcTargetImpl {
+    name: String,
+    config: Config<ConfiguredRpcTargetConfig>,
+}
+
+#[agent_implementation]
+impl ConfiguredRpcTarget for ConfiguredRpcTargetImpl {
+    fn new(name: String, #[agent_config] config: Config<ConfiguredRpcTargetConfig>) -> Self {
+        Self { name, config }
+    }
+
+    fn describe(&self) -> (String, String, u32) {
+        let config = self.config.get().expect("config access should be allowed");
+        (self.name.clone(), config.label.clone(), config.count)
+    }
+}
+
 #[agent_definition]
 pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8>;
+    async fn consume_nested_before_timer(
+        &mut self,
+        input: NestedStreamInput,
+    ) -> (Vec<String>, Vec<u32>);
     async fn consume_strings(&self, input: AgentStream<String>) -> Vec<String>;
     async fn drop_input(&self, input: AgentStream<u32>) -> u64;
+    async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64;
     async fn hold_input(&self, input: AgentStream<u32>) -> u64;
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32>;
+    fn produce_context_stream(&self, gate: PromiseId) -> AgentStream<(String, String, String)>;
+    fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes>;
     fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8>;
     fn produce_bytes(&self, values: Vec<u8>) -> AgentStream<u8>;
     fn produce_byte_then_wait(&self) -> AgentStream<u8>;
+    fn produce_after_timer(&self) -> AgentStream<u32>;
+    fn produce_bytes_after_prefix_timer(&self) -> AgentStream<u8>;
+    fn produce_nested_after_prefix_timer(&self) -> AgentStream<NestedStreamItem>;
+    fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     fn produce_many_bytes(&self, count: u32) -> AgentStream<u8>;
     fn transform_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
     fn transform_binary(&self, input: AgentStream<Bytes>) -> AgentStream<Bytes>;
@@ -307,10 +367,32 @@ pub trait StreamingRpcTarget {
         &self,
     ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>);
     fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
+    fn create_output_gate(&self) -> PromiseId;
+    fn produce_gated_siblings(&self, gate: PromiseId) -> (AgentStream<String>, AgentStream<u32>);
+    fn benchmark_output(&self, length: u32, domain: u32) -> AgentStream<u32>;
+    fn benchmark_gated_output(&self, length: u32, domain: u32, gate: PromiseId)
+    -> AgentStream<u32>;
+    fn benchmark_gated_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<u32>, AgentStream<u32>);
+    fn benchmark_gated_nested_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>);
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>);
     fn produce_error(&self) -> AgentStream<u32>;
     fn ping(&self) -> u64;
     fn increment_scalar(&mut self) -> u64;
+    fn increment_stream(&mut self) -> AgentStream<u64>;
+    async fn increment_stream_input(&mut self, input: AgentStream<u64>) -> AgentStream<u64>;
+    fn increment_gated_stream(&mut self, gate: PromiseId) -> AgentStream<u64>;
+    fn increment_many_stream(&mut self) -> AgentStream<u64>;
+    fn scalar_value(&self) -> u64;
     fn noop(&self);
 }
 
@@ -342,7 +424,36 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             .expect("failed to consume string input stream")
     }
 
+    async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32> {
+        self.scalar += 1;
+        let values = self.consume(input).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        values
+    }
+
+    async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8> {
+        self.scalar += 1;
+        let values = self.consume_bytes(input).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        values
+    }
+
+    async fn consume_nested_before_timer(
+        &mut self,
+        input: NestedStreamInput,
+    ) -> (Vec<String>, Vec<u32>) {
+        self.scalar += 1;
+        let values = self.consume_nested(input).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        values
+    }
+
     async fn drop_input(&self, input: AgentStream<u32>) -> u64 {
+        drop(input);
+        42
+    }
+
+    async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64 {
         drop(input);
         42
     }
@@ -354,6 +465,41 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
 
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32> {
         agent_stream(values)
+    }
+
+    fn produce_context_stream(&self, gate: PromiseId) -> AgentStream<(String, String, String)> {
+        let snapshot = || {
+            let context = current_context();
+            let Some(AttributeValue::String(name)) = context.get_attribute("name", false) else {
+                panic!("current span has no name");
+            };
+            (context.trace_id(), context.span_id(), name)
+        };
+        let before_return = snapshot();
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(before_return).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            writer.write_one(snapshot()).await.unwrap();
+            let span = start_span("stream-child");
+            writer.write_one(snapshot()).await.unwrap();
+            span.finish();
+            writer.write_one(snapshot()).await.unwrap();
+        });
+        output
+    }
+
+    fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            for index in 0..chunk_count {
+                writer
+                    .write_one(Bytes::from(vec![(index % 251) as u8; chunk_size as usize]))
+                    .await
+                    .expect("failed to write benchmark chunk");
+            }
+        });
+        output
     }
 
     fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
@@ -392,6 +538,68 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                 .await
                 .expect("failed to write byte before waiting");
             std::future::pending::<()>().await;
+        });
+        output
+    }
+
+    fn produce_after_timer(&self) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            for value in [23, 169, 7] {
+                writer
+                    .write_one(value)
+                    .await
+                    .expect("failed to write delayed output");
+            }
+        });
+        output
+    }
+
+    fn produce_bytes_after_prefix_timer(&self) -> AgentStream<u8> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(23).await.unwrap();
+            writer.write_one(169).await.unwrap();
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            writer.write_one(7).await.unwrap();
+            writer.write_one(201).await.unwrap();
+        });
+        output
+    }
+
+    fn produce_nested_after_prefix_timer(&self) -> AgentStream<NestedStreamItem> {
+        let (mut writer, output) = AgentStream::new();
+        let (mut nested_writer, nested) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(NestedStreamItem {
+                    label: "asymmetric".to_string(),
+                    values: nested,
+                })
+                .await
+                .unwrap();
+            nested_writer.write_one(169).await.unwrap();
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            nested_writer.write_one(7).await.unwrap();
+            nested_writer.write_one(201).await.unwrap();
+            drop(nested_writer);
+            drop(writer);
+        });
+        output
+    }
+
+    fn produce_then_spin(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            assert_eq!(input.next().await.expect("input available"), Some(7));
+            writer.write_one(7).await.expect("output attached");
+            assert_eq!(input.next().await.expect("input available"), Some(8));
+            writer.write_one(8).await.expect("output attached");
+            let mut value = 0u64;
+            loop {
+                value = std::hint::black_box(value.wrapping_add(1));
+            }
         });
         output
     }
@@ -518,6 +726,74 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         )
     }
 
+    fn create_output_gate(&self) -> PromiseId {
+        golem_rust::create_promise()
+    }
+
+    fn produce_gated_siblings(&self, gate: PromiseId) -> (AgentStream<String>, AgentStream<u32>) {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_all(0..16).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            writer.write_all(16..64).await.unwrap();
+        });
+        (agent_stream(vec!["a".to_string(), "b".to_string()]), stream)
+    }
+
+    fn benchmark_output(&self, length: u32, domain: u32) -> AgentStream<u32> {
+        agent_stream((0..length).map(|index| domain + index * 3).collect())
+    }
+
+    fn benchmark_gated_output(
+        &self,
+        length: u32,
+        domain: u32,
+        gate: PromiseId,
+    ) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            let prefix = (length / 4).clamp(1, 8).min(length);
+            for index in 0..length {
+                if index == prefix {
+                    golem_rust::await_promise(&gate).await;
+                }
+                writer.write_one(domain + index * 3).await.unwrap();
+            }
+        });
+        output
+    }
+
+    fn benchmark_gated_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<u32>, AgentStream<u32>) {
+        (
+            self.benchmark_gated_output(length, 1000, left_gate),
+            self.benchmark_gated_output(length + 3, 100_000, right_gate),
+        )
+    }
+
+    fn benchmark_gated_nested_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>) {
+        let (left, right) = self.benchmark_gated_siblings(length, left_gate, right_gate);
+        (
+            agent_stream(vec![NestedStreamItem {
+                label: "left".to_string(),
+                values: left,
+            }]),
+            agent_stream(vec![NestedStreamItem {
+                label: "right".to_string(),
+                values: right,
+            }]),
+        )
+    }
+
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>) {
         (agent_error_stream(), agent_stream((0..64).collect()))
     }
@@ -535,7 +811,94 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         self.scalar
     }
 
+    fn increment_stream(&mut self) -> AgentStream<u64> {
+        self.scalar += 1;
+        agent_stream(vec![self.scalar])
+    }
+
+    async fn increment_stream_input(&mut self, input: AgentStream<u64>) -> AgentStream<u64> {
+        assert_eq!(input.collect().await.unwrap(), vec![13, 29]);
+        self.increment_stream()
+    }
+
+    fn increment_gated_stream(&mut self, gate: PromiseId) -> AgentStream<u64> {
+        self.scalar += 1;
+        let value = self.scalar;
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(value).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            writer.write_one(value).await.unwrap();
+        });
+        stream
+    }
+
+    fn increment_many_stream(&mut self) -> AgentStream<u64> {
+        self.scalar += 1;
+        agent_stream(std::iter::repeat_n(self.scalar, 10_000).collect())
+    }
+
+    fn scalar_value(&self) -> u64 {
+        self.scalar
+    }
+
     fn noop(&self) {}
+}
+
+#[agent_definition(mode = "ephemeral")]
+pub trait EphemeralStreamingRpcTarget {
+    fn new(name: String) -> Self;
+
+    fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
+    fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
+    fn produce_gated_siblings(&self) -> (PromiseId, AgentStream<String>, AgentStream<u32>);
+    fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32>;
+    async fn hold_input(&self, input: AgentStream<u32>) -> u64;
+    fn spin(&self) -> u64;
+}
+
+struct EphemeralStreamingRpcTargetImpl {
+    inner: StreamingRpcTargetImpl,
+}
+
+#[agent_implementation]
+impl EphemeralStreamingRpcTarget for EphemeralStreamingRpcTargetImpl {
+    fn new(name: String) -> Self {
+        Self {
+            inner: StreamingRpcTargetImpl::new(name),
+        }
+    }
+
+    fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32> {
+        self.inner.transform(input)
+    }
+
+    fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>) {
+        self.inner.produce_siblings()
+    }
+
+    fn produce_gated_siblings(&self) -> (PromiseId, AgentStream<String>, AgentStream<u32>) {
+        let gate = golem_rust::create_promise();
+        let (strings, numbers) = self.inner.produce_gated_siblings(gate.clone());
+        (gate, strings, numbers)
+    }
+
+    fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32> {
+        self.inner.produce_then_spin(input)
+    }
+
+    async fn hold_input(&self, input: AgentStream<u32>) -> u64 {
+        let _input = input;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(30_000_000_000).await;
+        42
+    }
+
+    fn spin(&self) -> u64 {
+        let mut value = 0u64;
+        loop {
+            value = std::hint::black_box(value.wrapping_add(1));
+        }
+    }
 }
 
 #[agent_definition]
@@ -543,10 +906,46 @@ pub trait StreamingRpcCaller {
     fn new(name: String) -> Self;
 
     async fn run(&self) -> StreamingRpcReport;
+    async fn benchmark_producer(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+    ) -> StreamingRpcBenchmarkResult;
     fn create_input_gate(&self) -> PromiseId;
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
+    async fn recover_cancelled_output(
+        &self,
+        source_gate: PromiseId,
+        resume_gate: PromiseId,
+        after_delivery: bool,
+        pending_gate: Option<PromiseId>,
+    ) -> Vec<u32>;
+    async fn recover_ready_output(
+        &self,
+        source_gate: PromiseId,
+        cancel_gate: PromiseId,
+        resume_gate: PromiseId,
+    ) -> Vec<u32>;
+    async fn transfer_input_after_timer(&self) -> Vec<u32>;
+    async fn fork_drop_inherited_output(
+        &self,
+        gate: PromiseId,
+        original_agent_id: String,
+        forwarded_drop: bool,
+    ) -> Vec<u64>;
+    async fn drop_new_increment_output(&self);
+    async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
+    async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)>;
+    async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64;
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct StreamingRpcBenchmarkResult {
+    pub first_chunk_nanos: u64,
+    pub total_nanos: u64,
+    pub chunks_read: u32,
 }
 
 struct StreamingRpcCallerImpl {
@@ -557,6 +956,42 @@ struct StreamingRpcCallerImpl {
 impl StreamingRpcCaller for StreamingRpcCallerImpl {
     fn new(name: String) -> Self {
         Self { name }
+    }
+
+    async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)> {
+        StreamingRpcTargetClient::get(self.name.clone())
+            .produce_context_stream(gate)
+            .await
+            .collect()
+            .await
+            .expect("failed to collect invocation context stream")
+    }
+
+    async fn benchmark_producer(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+    ) -> StreamingRpcBenchmarkResult {
+        assert!(chunk_count > 0);
+        let target = StreamingRpcTargetClient::get(self.name.clone());
+        let started = std::time::Instant::now();
+        let mut output = target.produce_binary_chunks(chunk_count, chunk_size).await;
+        let mut chunks_read = 0;
+        let mut first_chunk_nanos = 0;
+        while let Some(chunk) = output.next().await.expect("benchmark RPC stream failed") {
+            if chunks_read == 0 {
+                first_chunk_nanos = started.elapsed().as_nanos() as u64;
+            }
+            assert_eq!(chunk.len(), chunk_size as usize);
+            assert!(chunk.iter().all(|byte| *byte == (chunks_read % 251) as u8));
+            chunks_read += 1;
+        }
+        assert_eq!(chunks_read, chunk_count);
+        StreamingRpcBenchmarkResult {
+            first_chunk_nanos,
+            total_nanos: started.elapsed().as_nanos() as u64,
+            chunks_read,
+        }
     }
 
     async fn run(&self) -> StreamingRpcReport {
@@ -633,6 +1068,46 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         golem_rust::create_promise()
     }
 
+    async fn transfer_input_after_timer(&self) -> Vec<u32> {
+        let (mut writer, input) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(23).await.unwrap();
+            writer.write_one(169).await.unwrap();
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            writer.write_all([7, 201]).await.unwrap();
+        });
+        StreamingRpcTargetClient::get(self.name.clone())
+            .consume(input)
+            .await
+    }
+
+    async fn streaming_increment(&self, synchronous: bool) -> Vec<u64> {
+        let output = if synchronous {
+            let rpc = WasmRpc::new(
+                "StreamingRpcTarget",
+                encode_single_parameter(self.name.clone()),
+                None,
+                Vec::new(),
+            );
+            let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+            let result = rpc
+                .invoke_and_await("increment_stream", input, None)
+                .unwrap();
+            AgentStream::<u64>::from_value(
+                &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
+            )
+            .unwrap()
+        } else {
+            StreamingRpcTargetClient::get(self.name.clone())
+                .increment_stream_input(agent_stream(vec![13, 29]))
+                .await
+        };
+        output
+            .collect()
+            .await
+            .expect("failed to drain increment stream")
+    }
+
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32> {
         let target = StreamingRpcTargetClient::get(self.name.clone());
         let (mut writer, input) = AgentStream::new();
@@ -655,6 +1130,150 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .expect("failed to collect transformed input after caller recovery")
     }
 
+    async fn recover_cancelled_output(
+        &self,
+        source_gate: PromiseId,
+        resume_gate: PromiseId,
+        after_delivery: bool,
+        pending_gate: Option<PromiseId>,
+    ) -> Vec<u32> {
+        use std::future::poll_fn;
+        use std::task::Poll;
+
+        let output = StreamingRpcTargetClient::get(self.name.clone())
+            .benchmark_gated_output(7, 17, source_gate)
+            .await;
+        let mut reader = output.into_raw().await.expect("unwrap durable output");
+        let decode = |tree| {
+            u32::from_value(&golem_rust::decode_schema_value(tree).expect("decode raw item"))
+                .expect("decode u32 item")
+        };
+        let (_, prefix) = reader.read(Vec::with_capacity(1)).await;
+        assert_eq!(prefix.len(), 1);
+        let mut values = prefix.into_iter().map(decode).collect::<Vec<_>>();
+        assert_eq!(values, [17]);
+        for capacity in [3, 2] {
+            let mut read = Box::pin(reader.read(Vec::with_capacity(capacity)));
+            poll_fn(|cx| match read.as_mut().poll(cx) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(result) => panic!("read completed before source gate: {result:?}"),
+            })
+            .await;
+            if capacity == 3
+                && let Some(gate) = &pending_gate
+            {
+                log::info!("native read pending");
+                golem_rust::await_promise(gate).await;
+            }
+            let (result, buffer) = read.as_mut().cancel();
+            assert_eq!(format!("{result:?}"), "Cancelled");
+            assert!(buffer.is_empty());
+        }
+        log::info!("native reads cancelled");
+        if !after_delivery {
+            golem_rust::await_promise(&resume_gate).await;
+        }
+        let (_, first) = reader.read(Vec::with_capacity(1)).await;
+        assert_eq!(
+            first.len(),
+            1,
+            "retained output must deliver after cancellation"
+        );
+        values.extend(first.into_iter().map(decode));
+        if after_delivery {
+            golem_rust::await_promise(&resume_gate).await;
+        }
+        loop {
+            let (result, buffer) = reader.read(Vec::with_capacity(1)).await;
+            if format!("{result:?}") == "Dropped" {
+                assert!(buffer.is_empty());
+                break;
+            }
+            assert_eq!(buffer.len(), 1);
+            values.extend(buffer.into_iter().map(decode));
+        }
+        values
+    }
+
+    async fn recover_ready_output(
+        &self,
+        source_gate: PromiseId,
+        cancel_gate: PromiseId,
+        resume_gate: PromiseId,
+    ) -> Vec<u32> {
+        use std::future::poll_fn;
+        use std::task::Poll;
+
+        let output = StreamingRpcTargetClient::get(self.name.clone())
+            .benchmark_gated_output(7, 17, source_gate)
+            .await;
+        let mut reader = output.into_raw().await.expect("unwrap durable output");
+        let decode = |tree| {
+            u32::from_value(&golem_rust::decode_schema_value(tree).expect("decode raw item"))
+                .expect("decode u32 item")
+        };
+        let (_, prefix) = reader.read(Vec::with_capacity(1)).await;
+        let mut values = prefix.into_iter().map(decode).collect::<Vec<_>>();
+        assert_eq!(values, [17]);
+        let mut read = Box::pin(reader.read(Vec::with_capacity(3)));
+        poll_fn(|cx| match read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("read completed before source gate: {result:?}"),
+        })
+        .await;
+        golem_rust::await_promise(&cancel_gate).await;
+        let (result, buffer) = read.as_mut().cancel();
+        assert_eq!(format!("{result:?}"), "Complete(1)");
+        assert_eq!(buffer.len(), 1, "ready cancellation must retain its item");
+        values.extend(buffer.into_iter().map(decode));
+        assert_eq!(values, [17, 20]);
+        drop(read);
+        golem_rust::await_promise(&resume_gate).await;
+        loop {
+            let (result, buffer) = reader.read(Vec::with_capacity(1)).await;
+            if format!("{result:?}") == "Dropped" {
+                assert!(buffer.is_empty());
+                break;
+            }
+            assert_eq!(buffer.len(), 1);
+            values.extend(buffer.into_iter().map(decode));
+        }
+        values
+    }
+
+    async fn fork_drop_inherited_output(
+        &self,
+        gate: PromiseId,
+        original_agent_id: String,
+        forwarded_drop: bool,
+    ) -> Vec<u64> {
+        let output = StreamingRpcTargetClient::get(self.name.clone())
+            .increment_gated_stream(gate)
+            .await;
+        if golem_rust::get_self_metadata().unwrap().agent_id.agent_id == original_agent_id {
+            output.collect().await.expect("original caller output")
+        } else if forwarded_drop {
+            assert_eq!(
+                StreamingRpcTargetClient::get(format!("{}-forwarded-drop", self.name))
+                    .drop_input_u64(output)
+                    .await,
+                42
+            );
+            Vec::new()
+        } else {
+            drop(output);
+            Vec::new()
+        }
+    }
+
+    async fn drop_new_increment_output(&self) {
+        drop(
+            StreamingRpcTargetClient::get(self.name.clone())
+                .increment_many_stream()
+                .await,
+        );
+    }
+
     async fn call_producer_error(&self) -> Vec<u32> {
         let mut target = StreamingRpcTargetClient::get(self.name.clone());
         target
@@ -669,6 +1288,40 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         let mut target = StreamingRpcTargetClient::get(self.name.clone());
         target.increment_scalar().await
     }
+
+    async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64 {
+        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        let mut rpc = Box::pin(target.increment_scalar());
+        let mut request = Box::pin(
+            wasi_fetch::Client::new()
+                .post(&format!("http://{host}:{port}/gate"))
+                .send(),
+        );
+        let mut rpc_result = None;
+        let mut request_complete = false;
+
+        std::future::poll_fn(|cx| {
+            if rpc_result.is_none()
+                && let std::task::Poll::Ready(result) = rpc.as_mut().poll(cx)
+            {
+                rpc_result = Some(result);
+            }
+            if !request_complete && request.as_mut().poll(cx).is_ready() {
+                request_complete = true;
+            }
+
+            if request_complete {
+                if let Some(result) = rpc_result {
+                    std::task::Poll::Ready(result)
+                } else {
+                    std::task::Poll::Pending
+                }
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+        .await
+    }
 }
 
 // -- RPC test agents (replacing old caller/counters components) --
@@ -677,6 +1330,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 pub trait RpcCounter {
     fn new(name: String) -> Self;
     fn inc_by(&mut self, value: u64);
+    fn inc_and_return_text(&mut self, bytes: u32) -> String;
     fn get_value(&self) -> u64;
     fn get_args(&self) -> Vec<String>;
     fn get_env(&self) -> Vec<(String, String)>;
@@ -700,6 +1354,11 @@ impl RpcCounter for RpcCounterImpl {
         self.value += value;
     }
 
+    fn inc_and_return_text(&mut self, bytes: u32) -> String {
+        self.value += 1;
+        "x".repeat(bytes as usize)
+    }
+
     fn get_value(&self) -> u64 {
         self.value
     }
@@ -713,7 +1372,7 @@ impl RpcCounter for RpcCounterImpl {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum TimelineNode {
     Leaf,
 }
@@ -896,6 +1555,7 @@ pub trait RpcBlockingCounter {
     fn create_promise(&self) -> PromiseId;
     /// Blocks on a previously created promise
     fn await_promise(&self, promise_id: PromiseId);
+    fn inc_after_promise(&mut self, promise_id: PromiseId) -> u64;
 }
 
 struct RpcBlockingCounterImpl {
@@ -927,13 +1587,19 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
     fn await_promise(&self, promise_id: PromiseId) {
         golem_rust::blocking_await_promise(&promise_id);
     }
+
+    fn inc_after_promise(&mut self, promise_id: PromiseId) -> u64 {
+        golem_rust::blocking_await_promise(&promise_id);
+        self.value += 7;
+        self.value
+    }
 }
 
 // -- RPC auth parity test agent --
 
 /// Mirror of the WIT `rpc-error` variant so it can be returned from an agent
 /// method and pattern-matched in integration tests.
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum RpcCallOutcome {
     Ok,
     Denied { details: String },
@@ -966,6 +1632,14 @@ pub trait RpcAuthTester {
     /// Attempt to call `inc_by(1)` on an `RpcCounter` agent with the given name.
     /// Returns `RpcCallOutcome::Ok` on success or a typed denial/error on failure.
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome;
+
+    fn try_ephemeral_call(&self) -> RpcCallOutcome;
+
+    async fn try_ephemeral_call_async(&self) -> RpcCallOutcome;
+
+    async fn denied_streaming_metadata(&self) -> String;
+
+    fn invalid_async_call_without_get(&self) -> String;
 }
 
 struct RpcAuthTesterImpl {
@@ -983,6 +1657,44 @@ pub trait CancelTester {
 
     /// Starts an async RPC call, awaits its completion, then cancels (should be no-op)
     async fn test_cancel_completed(&self, counter_name: String) -> u64;
+
+    /// Polls an async RPC get until it is pending, then drops the get and RPC resources.
+    async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId);
+
+    fn name(&self) -> String;
+
+    fn grow_memory_before_rpc_activation(&self, counter_name: String);
+
+    async fn await_counter(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+        asynchronous: bool,
+    ) -> u64;
+
+    async fn receive_large_rpc_result(&self, counter_name: String) -> u64;
+
+    async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64;
+
+    async fn sync_counter_with_pending_timer(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+    ) -> u64;
+
+    async fn grow_memory_after_rpc_result(&self, counter_name: String);
+
+    async fn durable_operation_after_rpc_result(&self, counter_name: String, operation: String);
+
+    async fn replay_barrier_probe(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+        counter: String,
+        rounds: u32,
+    ) -> u64;
 }
 
 struct CancelTesterImpl {
@@ -993,6 +1705,66 @@ struct CancelTesterImpl {
 impl RpcAuthTester for RpcAuthTesterImpl {
     fn new(name: String) -> Self {
         Self { _name: name }
+    }
+
+    fn try_ephemeral_call(&self) -> RpcCallOutcome {
+        let rpc = WasmRpc::new(
+            "EphemeralStreamingRpcTarget",
+            encode_single_parameter("denied-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+        match rpc.invoke_and_await("spin", input, None) {
+            Ok(_) => RpcCallOutcome::Ok,
+            Err(error) => RpcCallOutcome::from(error),
+        }
+    }
+
+    async fn try_ephemeral_call_async(&self) -> RpcCallOutcome {
+        let rpc = WasmRpc::new(
+            "EphemeralStreamingRpcTarget",
+            encode_single_parameter("denied-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+        let result = rpc.async_invoke_and_await("spin", input, None);
+        match result.future.get().await {
+            Ok(_) => RpcCallOutcome::Ok,
+            Err(error) => RpcCallOutcome::from(error),
+        }
+    }
+
+    async fn denied_streaming_metadata(&self) -> String {
+        let rpc = WasmRpc::new(
+            "EphemeralStreamingRpcTarget",
+            encode_single_parameter("denied-streaming-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+        let result = rpc.async_invoke_and_await("produce_siblings", input, None);
+        assert!(matches!(
+            result.future.get().await,
+            Err(RpcError::Denied(_))
+        ));
+        result.metadata.idempotency_key
+    }
+
+    fn invalid_async_call_without_get(&self) -> String {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter("invalid-async-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let result = rpc.async_invoke_and_await(
+            "method-that-does-not-exist",
+            encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
+            None,
+        );
+        result.metadata.idempotency_key
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {
@@ -1017,6 +1789,241 @@ impl CancelTester for CancelTesterImpl {
         Self { _name: name }
     }
 
+    async fn replay_barrier_probe(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+        counter: String,
+        rounds: u32,
+    ) -> u64 {
+        let mut a = Box::pin(async move {
+            RpcBlockingCounterClient::get(target_a)
+                .inc_after_promise(gate_a)
+                .await
+        });
+        let mut b = Box::pin(async move {
+            let rpc = WasmRpc::new(
+                "RpcCounter",
+                encode_single_parameter(counter),
+                None,
+                Vec::new(),
+            );
+            for _ in 0..rounds {
+                rpc.invoke_and_await("inc_by", encode_single_parameter(3u64), None)
+                    .unwrap();
+            }
+            let value = RpcBlockingCounterClient::get(target_b)
+                .inc_after_promise(gate_b)
+                .await;
+            for _ in 0..rounds {
+                rpc.invoke_and_await("inc_by", encode_single_parameter(5u64), None)
+                    .unwrap();
+            }
+            value
+        });
+        let mut result_a = None;
+        let mut result_b = None;
+        std::future::poll_fn(|cx| {
+            if result_a.is_none()
+                && let std::task::Poll::Ready(value) = a.as_mut().poll(cx)
+            {
+                result_a = Some(value);
+            }
+            if result_b.is_none()
+                && let std::task::Poll::Ready(value) = b.as_mut().poll(cx)
+            {
+                result_b = Some(value);
+            }
+            match (result_a, result_b) {
+                (Some(a), Some(b)) => std::task::Poll::Ready(a + b),
+                _ => std::task::Poll::Pending,
+            }
+        })
+        .await
+    }
+
+    fn grow_memory_before_rpc_activation(&self, counter_name: String) {
+        let constructor = encode_single_parameter(counter_name);
+        let input = encode_single_parameter(1u64);
+        let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
+        rpc.invoke_and_await("inc_by", input, None).unwrap();
+    }
+
+    async fn await_counter(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+        asynchronous: bool,
+    ) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let input = encode_single_parameter(promise_id);
+        let result = if asynchronous {
+            rpc.async_invoke_and_await("inc_after_promise", input, None)
+                .future
+                .get()
+                .await
+                .unwrap()
+                .unwrap()
+        } else {
+            rpc.invoke_and_await("inc_after_promise", input, None)
+                .unwrap()
+                .result
+                .unwrap()
+        };
+        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+    }
+
+    async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let future = rpc
+            .async_invoke_and_await(
+                "inc_after_promise",
+                encode_single_parameter(promise_id),
+                None,
+            )
+            .future;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        let result = future.get().await.unwrap().unwrap();
+        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+    }
+
+    async fn sync_counter_with_pending_timer(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+    ) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let deadline = golem_rust::wasip3::clocks::monotonic_clock::now() + 30_000_000_000;
+        let mut timer = Box::pin(golem_rust::wasip3::clocks::monotonic_clock::wait_until(
+            deadline,
+        ));
+        // Poll the timer before borrowing the Store for the synchronous host call.
+        // Keeping both in this poll prevents a timer-only suspension between them.
+        let result = std::future::poll_fn(|cx| {
+            assert!(timer.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(
+                rpc.invoke_and_await(
+                    "inc_after_promise",
+                    encode_single_parameter(promise_id.clone()),
+                    None,
+                )
+                .unwrap()
+                .result
+                .unwrap(),
+            )
+        })
+        .await;
+        timer.await;
+        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+    }
+
+    async fn receive_large_rpc_result(&self, counter_name: String) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let future = rpc
+            .async_invoke_and_await(
+                "inc_and_return_text",
+                encode_single_parameter(4 * 1024 * 1024u32),
+                None,
+            )
+            .future;
+        let result = future.get().await.unwrap().unwrap();
+        let value = golem_rust::decode_schema_value(result).unwrap();
+        let text = String::from_value(&value).unwrap();
+        assert!(text.bytes().all(|byte| byte == b'x'));
+        text.len() as u64
+    }
+
+    async fn grow_memory_after_rpc_result(&self, counter_name: String) {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let future = rpc
+            .async_invoke_and_await("inc_by", encode_single_parameter(1u64), None)
+            .future;
+        future.get().await.unwrap();
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
+    }
+
+    async fn durable_operation_after_rpc_result(&self, counter_name: String, operation: String) {
+        let bucket = if operation == "kv-get" {
+            Some(Bucket::open_bucket("rpc-replay-tail").unwrap())
+        } else {
+            None
+        };
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let future = rpc
+            .async_invoke_and_await("inc_by", encode_single_parameter(1u64), None)
+            .future;
+        assert!(future.get().await.unwrap().is_none());
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
+
+        match operation.as_str() {
+            "kv-get" => {
+                let _ = get(bucket.as_ref().unwrap(), "missing").unwrap();
+            }
+            "config-get" => {
+                let _ = wasi_config::get("missing").unwrap();
+            }
+            "fire-and-forget-rpc" => {
+                rpc.invoke("inc_by", encode_single_parameter(7u64), None)
+                    .unwrap();
+            }
+            "async-rpc" => {
+                assert!(
+                    rpc.async_invoke_and_await("inc_by", encode_single_parameter(7u64), None)
+                        .future
+                        .get()
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            "span" => {
+                let span = start_span("rpc-replay-tail");
+                drop(span);
+            }
+            "commit" => {
+                oplog_commit(0);
+            }
+            "retry-policy" => {
+                let policy = NamedPolicy::named("rpc-replay-tail", Policy::immediate());
+                set_named_policy(&policy).unwrap();
+            }
+            _ => panic!("unknown durable operation: {operation}"),
+        }
+    }
+
     fn test_cancel_before_await(&self, counter_name: String) {
         let constructor_data = encode_single_parameter(counter_name);
         let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
@@ -1030,6 +2037,33 @@ impl CancelTester for CancelTesterImpl {
         future.cancel();
         // Don't call get() - that would trigger retry logic
         // The test verifies from outside that the counter was NOT incremented
+    }
+
+    async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId) {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let result = rpc
+            .async_invoke_and_await(
+                "inc_after_promise",
+                encode_single_parameter(promise_id),
+                None,
+            )
+            .future;
+        let mut get = Box::pin(result.get());
+
+        std::future::poll_fn(|cx| match get.as_mut().poll(cx) {
+            std::task::Poll::Pending => std::task::Poll::Ready(()),
+            std::task::Poll::Ready(_) => panic!("promise-blocked RPC completed unexpectedly"),
+        })
+        .await;
+    }
+
+    fn name(&self) -> String {
+        self._name.clone()
     }
 
     async fn test_cancel_completed(&self, counter_name: String) -> u64 {

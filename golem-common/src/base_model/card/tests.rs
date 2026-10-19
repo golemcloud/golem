@@ -13,6 +13,50 @@
 // limitations under the License.
 
 use super::*;
+
+#[test]
+fn component_external_tool_owner_recipient_roundtrips_and_agent_substitution_is_scoped() {
+    use crate::model::account::AccountEmail;
+    use crate::model::agent::AgentTypeName;
+    use crate::model::application::ApplicationName;
+    use crate::model::card::recipient::{
+        PolymorphicRecipientPattern, RecipientMonomorphizationContext, RecipientOwnerContext,
+        RecipientPattern,
+    };
+    use crate::model::component::ComponentName;
+    use crate::model::environment::EnvironmentName;
+
+    let external =
+        RecipientPattern::parse("owner@example.com/app/prod/component/~external-tool-owner")
+            .unwrap();
+    assert_eq!(
+        external.render(),
+        "owner@example.com/app/prod/component/~external-tool-owner"
+    );
+
+    let base = RecipientMonomorphizationContext {
+        account: AccountEmail::new("owner@example.com"),
+        application: ApplicationName("app".to_string()),
+        environment: EnvironmentName("prod".to_string()),
+        component: ComponentName("component".to_string()),
+        owner: RecipientOwnerContext::ComponentExternalToolOwner,
+    };
+    assert_eq!(
+        PolymorphicRecipientPattern::parse("?agent")
+            .unwrap()
+            .monomorphize(&base),
+        external
+    );
+
+    let real = RecipientMonomorphizationContext {
+        owner: RecipientOwnerContext::AgentType(AgentTypeName("real".to_string())),
+        ..base
+    };
+    assert!(matches!(
+        PolymorphicRecipientPattern::parse("?agent").unwrap().monomorphize(&real),
+        RecipientPattern::Agent { agent_type, .. } if agent_type.0 == "real"
+    ));
+}
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::component::{ComponentId, ComponentRevision};

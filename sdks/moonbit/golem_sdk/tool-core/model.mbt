@@ -18,6 +18,7 @@ pub suberror ToolBuildError {
 ///|
 pub(all) struct ToolDef {
   version : String
+  requires_filesystem : Bool
   commands : Array[CommandNodeDef]
 }
 
@@ -45,6 +46,7 @@ pub(all) struct CommandBodyDef {
   constraints : Array[ConstraintDef]
   stdin : @toolCommon.StreamSpec?
   stdout : @toolCommon.StreamSpec?
+  stderr : @toolCommon.StreamSpec?
   result : ResultSpecDef?
   errors : Array[ErrorCaseDef]
   annotations : @toolCommon.CommandAnnotations?
@@ -184,8 +186,26 @@ pub(all) struct ErrorCaseDef {
 /// generated for error enums referenced by tool commands.
 pub(open) trait ToolErrorSchema {
   fn error_cases() -> Result[Array[ErrorCaseDef], ToolBuildError]
-  fn to_error_payload_value(Self) -> Result[@model.TypedSchemaValue, String]
-  fn from_error_payload_value(@model.TypedSchemaValue) -> Result[Self, String]
+  fn to_error_payload_value(Self) -> Result[
+    (String, @model.TypedSchemaValue),
+    String,
+  ]
+  fn from_error_payload_value(String, @model.TypedSchemaValue) -> Result[
+    Self,
+    String,
+  ]
+}
+
+///|
+pub fn[E : ToolErrorSchema] decode_named_tool_error(
+  name : String,
+  value : @model.TypedSchemaValue,
+) -> Result[E, String]? {
+  match E::error_cases() {
+    Ok(cases) if cases.any(case => case.name == name) =>
+      Some(E::from_error_payload_value(name, value))
+    _ => None
+  }
 }
 
 ///|
@@ -229,6 +249,7 @@ pub fn ToolDef::to_tool(
   }
   {
     version: self.version,
+    requires_filesystem: self.requires_filesystem,
     commands: @toolCommon.CommandTree::{ nodes, },
     schema,
   }
@@ -356,6 +377,7 @@ fn CommandBodyDef::to_command_body(
     },
     stdin: self.stdin,
     stdout: self.stdout,
+    stderr: self.stderr,
     result: match self.result {
       Some(result) => Some(result.to_result_spec(encoder))
       None => None

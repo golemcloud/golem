@@ -10,7 +10,7 @@ golem agent new <AGENT_ID> [OPTIONS]
 
 This **creates a new agent instance** without invoking any method on it. The agent is initialized with its constructor parameters and starts in an idle state, ready to receive invocations. If the agent's component has not been deployed yet and the CLI is run from an application directory, it will automatically build and deploy the component first.
 
-Unlike `golem agent invoke`, which implicitly creates the agent on first call, `golem agent new` explicitly pre-creates the agent — useful when you need to set environment variables, configuration, or WASI config at creation time.
+Unlike `golem agent invoke`, which implicitly creates the agent on first call, `golem agent new` explicitly pre-creates the agent — useful when you need to set environment variables or configuration at creation time.
 
 ## Agent ID Format
 
@@ -62,12 +62,6 @@ golem agent new 'MyAgent("user-123")' --env API_KEY=sk-abc123 --env LOG_LEVEL=de
 golem agent new 'MyAgent()' --config max_retries=5 --config timeout_seconds=30
 ```
 
-### Create an agent with WASI config
-
-```shell
-golem agent new 'MyAgent()' --wasi-config MY_WASI_VAR=some-value
-```
-
 ### Create an agent in a specific environment
 
 ```shell
@@ -89,7 +83,6 @@ golem agent new 'OrderProcessor("us-east")' \
 |--------|-------------|
 | `-e, --env <ENV=VAL>` | Environment variables visible to the agent (can be repeated) |
 | `-c, --config <PATH=VALUE>` | Configuration entries for the agent, using dot-separated paths (can be repeated). Only configuration declared by the agent can be provided. If not provided, the default from the manifest (`agents.*.config`) is used. |
-| `-w, --wasi-config <VAR=VAL>` | WASI config entries visible to the agent (can be repeated). This is for compatibility with third-party libraries that depend on `wasi:config`; prefer typed configuration (`-c`) for your own agent config. |
 
 ## Auto-Deploy
 
@@ -97,21 +90,21 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 ## Value Syntax
 
-The agent ID parameters use **Rust syntax**:
+The agent ID parameters use **MoonBit syntax**:
 
 - Field names use `snake_case`
 - Options: `Some(value)` / `None`
-- Records: `MyRecord { field_one: 1, field_two: "hello" }`
+- Records: `MyRecord::{ field_one: 1, field_two: "hello" }`
 - Enums/Variants: `MyEnum::VariantName` or `MyEnum::VariantName(value)`
 - Tuples: `(1, "hello")`
 - Results: `Ok(value)` / `Err(value)`
 
 ```shell
-golem agent new 'UserManager(MyConfig { region: "us-east", max_connections: Some(10) })'
+golem agent new 'UserManager(MyConfig::{ region: "us-east", max_connections: Some(10) })'
 ```
 
 ## When to Use `golem agent new` vs `golem agent invoke`
 
-- Use `golem agent new` when you need to **pre-create** an agent with specific environment variables, configuration, or WASI config before any invocation.
+- Use `golem agent new` when you need to **pre-create** an agent with specific environment variables or configuration before any invocation.
 - Use `golem agent invoke` when you want to call a method — the agent is created automatically on first invocation if it doesn't exist.
 - An agent created with `golem agent new` can be invoked later with `golem agent invoke` using the same agent ID.

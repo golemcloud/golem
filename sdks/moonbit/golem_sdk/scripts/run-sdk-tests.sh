@@ -17,7 +17,8 @@ if [[ ${GOLEM_MOONRUN_DISPATCH:-} == 1 ]]; then
     exit 2
   fi
 
-  if grep -aFq 'golem:core/types@2.0.0' "$artifact"; then
+  if grep -aFq 'golem:core/types@2.0.0' "$artifact" ||
+    grep -aFq "\$root" "$artifact"; then
     exec node "$script_dir/run-wasm-test.mjs" "$@"
   fi
 

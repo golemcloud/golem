@@ -1,0 +1,187 @@
+# effect-golem contributor guide
+
+`@golemcloud/effect-golem` is the Effect 4 SDK for Golem 1.6. It compiles TypeScript into
+QuickJS-backed WASI Preview 3 components.
+
+## Current public model
+
+- Agent metadata uses `id`, methods use `input`, and `defineAgent` returns a spec with `.client` and
+  `.implement(...)`. Do not reintroduce `constructorParams`, `params`, or standalone old clients.
+- Durable agents expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral agents expose
+  `getPhantom` and `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are
+  fiber-interruptible.
+- `defineAgentClient({ name, id, methods, mode?, config? })` is the recommended full caller-owned
+  client with `agentId` and lifecycle factories. Its method-only `{ methods }` form has neither
+  factory nor identity constructor and binds without discovery using durable results. Unimplemented
+  `defineAgent` specs remain available as shared definitions. `identity.client(clientDefinition)` validates
+  declared names and constructor schemas before opening RPC.
+  `DynamicClient.bind(identity)` uses schema-native values with no client definition or discovery. Full
+  ephemeral specs and reflected ephemeral types reject generic existing-ID binding; use their
+  `getPhantom` or `newPhantom` factories. `identity.dynamicClient()` binds schema-native values.
+- Config secrets are `Schema.Redacted` opaque handles. They are uncached, excluded from overrides,
+  and never snapshotted.
+- Implement agents with `{ init, methods, snapshot? }`. `init` determines the state type;
+  `methods` is shared between initialization and restoration. `snapshotting` enables snapshots:
+  schema-shaped state restores automatically, `Snapshot.ref()` reconstructs Ref state, and custom
+  strategies receive `SnapshotRestorationContext`. SQLite images restore before methods are built.
+- Agent streams use native Effect `Stream`. Local programs are reusable; received P3 endpoints
+  are affine and single-reader. Transformed programs claim endpoints lazily during execution;
+  direct forwarding transfers ownership at commit. Interruption joins producer and codec
+  finalizers. Arbitrary JavaScript producers must cooperate with iterator cancellation.
+- `Tool` contains definition, guest, and typed client APIs. Standalone middleware is imported from
+  `@golemcloud/effect-golem/middleware`; it supports universal and typed middleware.
+- Permission cards are opaque affine schema capabilities. Successful encoding transfers them;
+  transactional encoding must leave them retryable when preparation fails. `Permissions` manages
+  cards over all six `golem:permissions@0.1.0` interfaces, which the world imports. Borrowing
+  operations peek the handle; `revoke`, `install`, and `release` take it before the host call.
+  New cards are wrapped only through `createGuestPermissionCardHandle` with the private key and
+  a kind. `PermissionCard` and `PolymorphicPermissionCard` are `GuestPermissionCardHandle<K>` for
+  `concrete` and `template`; the kind lives in the shared handle state. A card received on the
+  wire has no kind until a schema or `Bridge` decode assigns the declared one (also after a local
+  encode; the host keeps the real kind), and the kind of a handle never changes. `wallet` maps the WIT `wallet-card` cases to the `WalletCard` union;
+  `CardId` is opaque (module-local keys, redacted printing) and nothing converts data into a card.
+  The card-handle registry is on `globalThis` because the main and middleware bundles both carry
+  cards; the comment in `permissionCardHandle.ts` states the aliasing limit this implies.
+  `deriveScope` returns the distinct `ScopeCard` type (module-local state, no schema codec). Only
+  scope cards attach to awaited calls, including dynamic, reflected, and generated bridge calls;
+  `awaitInvocation` checks the scope card before encoding and gives encoded cards, secrets, and
+  quota tokens back when the host never receives the input (not for caller-supplied dynamic
+  trees; streams stay moved and their wire wrapper is dropped). Every async wire encode registers
+  `restoreEncodedCapabilitiesOnAbort` so an interrupted encode does not lose capabilities; release
+  marks a handle so a restore drops it.
+- Durability uses `golem:durability/durability@1.6.0`. Successful/typed-failure wrappers finish the
+  live resource exactly once; defects, interruption, and encode failures drop it unfinished.
+  Custom durability is sequential-only, including properly nested operations. A body may await
+  host calls only when no unrelated guest work runs during the wait. Do not overlap wrappers with
+  other fibers, concurrent effects, or promises, including ordinary host calls: sibling effects can
+  acquire the wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably
+  detected. Await nested operations; do not detach work. Stop and join children before the body
+  exits, including on failure or interruption. Structured finalization alone does not isolate scopes.
+- Do not add Golem 1.5 compatibility shims or claims. Complete cross-language acceptance is still a
+  final parity gate. Runtime discovery is in `Reflection`, immutable schema views in `SchemaRef`,
+  and value-only identity binding in `DynamicClient`. Parse strings through `AgentIdentity.parse`
+  once; pass parsed identities to typed, reflected, and dynamic binding. Narrow reflected `mode`
+  before selecting a lifecycle factory; ephemeral clients expose identity only in invocation metadata.
+
+The CLI accepts middleware metadata and attachment. Runtime traversal and invocation gates remain
+separate concerns and must be tested independently.
+
+## Layout and public modules
+
+- `src/`: PascalCase public modules. `src/index.ts` exports namespace modules alphabetically.
+- `src/internal/`: camelCase implementation modules. Never expose these as package imports.
+- `src/host/`: WIT host `Context.Service` wrappers. This is a private injection seam.
+- `src/{Sqlite,Postgres,Mysql,Ignite}/`: database adapter sources, published through `/sqlite`,
+  `/postgres`, `/mysql`, and `/ignite2`.
+- `wit/main.wit`: the single `agent-guest` world for agents, tools, and tool middleware.
+- `golem-types/`: generated ambient declarations for all worlds and host interfaces.
+- `scripts/template-matrix.mjs`: source of truth for world/template/declaration/artifact names.
+- `agent-template/`: generated wrapper crate.
+- `wasm/`: generated base WASM for the default world.
+- `test/`: unit, property, and compile-time tests with host fakes.
+- `integration-test/`: real Golem components and harness.
+
+Public code follows Effect package organization: users normally import namespaces (`Snapshot.*`,
+`Tool.*`, `Durability.*`). Only `defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases.
+Every public export needs JSDoc with `@since` and `@category`. Package exports block `internal/*`
+and `host/*`.
+
+Preserve the existing Effect-native integrations when changing the core model: HTTP metadata,
+webhooks, WebSockets, sagas, SQLite, Postgres/MySQL/Ignite SQL, key-value/blob storage, quota, retry,
+oplog, logging, and tracing.
+
+## Host injection seam
+
+All WIT access goes through a service in `src/host`. `HostLive.ts` merges live services once and the
+agent dispatcher provides that layer to initialization, restoration, invocation, and snapshot
+effects. User-facing combinators must let host tags flow in their `R` channel; never provide a live
+host layer inside a combinator or add mutable `__set*` production hooks. Tests replace services with
+`Layer.succeed`, `Layer.scoped`, or shared fakes.
+
+When adding a host wrapper:
+
+1. Add a focused `XxxClient.ts`/`XxxHost.ts` service and live layer under `src/host`.
+2. Merge the live layer in `HostLive.ts`.
+3. Consume it with `yield* Xxx`; let the requirement reach the dispatcher.
+4. Test with an alternate Layer.
+
+## WIT and generated artifacts
+
+Repository-root `wit/deps` is canonical. Never manually edit `sdks/effect/wit/deps` or generated
+ambient declarations. From the repository root:
+
+```nu
+cargo make wit
+cd sdks/effect
+npm run generate-dts
+npm run check:dts
+npm run check:contracts
+npm run check:artifacts
+```
+
+`generate-dts` runs `wasm-rquickjs generate-dts` for every entry in the template matrix and merges
+shared host declarations while retaining one exports declaration per world. `check:dts` detects
+drift. `check:artifacts` checks the provenance manifest for all bundles, wrappers, and WASMs.
+
+WIT-derived wrapper behavior should be tied to declarations through one useful mechanism: a local
+`satisfies Record<TagUnion, ...>` value witness, an exhaustive switch over the WIT union, or a
+schema/WIT equality assertion in `test/wit-drift.ts`. Do not add inert null-valued shape snapshots.
+
+## Commands
+
+From `sdks/effect`, no TypeScript SDK preparation is required. `npm ci` installs the private
+`../http-contract` source package; the SDK build bundles its code and declarations. Published
+packages must not depend on that private package or on `@golemcloud/golem-ts-sdk` at runtime.
+
+```nu
+npm ci
+npm run lint
+npm run format:check
+npm run typecheck
+npm test
+npm run build
+npm run build:bundle
+$env.WASI_SDK_PATH = "/opt/wasi-sdk"
+npm run build-agent-template
+npm run check:dts
+npm run check:contracts
+npm run check:artifacts
+```
+
+`build-agent-template` builds all three worlds. A changed runtime bundle, WIT contract, generated
+wrapper, or template input requires rebuilding the affected artifacts; verify the complete matrix,
+not only `agent_guest.wasm`.
+
+For one unit test:
+
+```nu
+npx vitest run test/agent.test.ts -t "registers the Counter"
+```
+
+Unit tests only exercise mocks. After non-trivial runtime, WIT, stream, capability, snapshot,
+durability, tool, or middleware changes, build fresh bundles/templates and run the smallest relevant
+real-runtime integration case. Broaden to the complete Effect harness when shared dispatch, codec,
+or artifact behavior changes. Middleware deployment cannot be an acceptance requirement until the
+CLI supports attachment.
+
+## Package and release
+
+The committed manifest version is `0.0.0`, matching the root TypeScript SDK convention. A root
+workflow publishes trusted/provenance npm releases from `golem-effect-v<semver>` tags and derives
+the npm version from the tag. Never add `sdks/effect/.github`.
+
+The release gate performs a clean install, lint/format/typecheck/tests, all-world package and
+template builds, `check:dts`, `check:contracts`, `check:artifacts`, and `check:package`. The latter
+must create an npm tarball and smoke-test all public imports, declarations, and the three WASM
+artifacts from a clean directory without checkout-relative files. Dry runs validate but do not
+publish; publishing is separately authorized.
+
+## Style
+
+- Strict ESM TypeScript; relative imports end in `.js`.
+- Two-space indentation, no semicolons, double quotes, trailing commas; use Prettier.
+- Public files/modules are PascalCase; internal implementation files are camelCase.
+- Prefer typed Effect failures to throws at public boundaries.
+- Do not log or expose secrets or opaque capability handles.
+- Keep user examples Effect-native rather than Promise-oriented.
+- Inline cargo-make scripts are duckscript, never shell.

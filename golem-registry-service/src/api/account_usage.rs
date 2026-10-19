@@ -20,8 +20,8 @@ use crate::services::auth::AuthService;
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    DEFAULT_STORAGE_USAGE_HISTORY_PERIODS, MemoryLimit, SetMemoryLimit, SetStorageLimit,
-    StorageLimit, StorageUsage, StorageUsageHistory,
+    AccountUsage, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit, SetMemoryLimit,
+    SetStorageLimit, StorageLimit,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -57,22 +57,28 @@ impl AccountUsageApi {
         }
     }
 
-    /// Get current durable and ephemeral storage usage and storage limit.
+    /// Get account usage for a UTC calendar month.
+    ///
+    /// Compute is reported in GCU, memory in allocated linear-memory GB-seconds, and durable and
+    /// ephemeral storage in GB-month using byte-seconds / (1024^3 * 730 * 3600). `asOf` is when
+    /// the registry last received a usage snapshot for the period, or the response time if no
+    /// snapshot exists. Metering status distinguishes enabled meters that measured zero from
+    /// disabled meters. `unknown` means no usage producer has reported metering state for the
+    /// period. Durable and ephemeral storage both reflect the shared filesystem meter.
     #[oai(
         path = "/:account_id/usage",
         method = "get",
-        operation_id = "get_account_storage_usage"
+        operation_id = "get_account_usage"
     )]
     async fn get_usage(
         &self,
         account_id: Path<AccountId>,
+        /// Billing period in YYYY-MM format. Defaults to the current UTC calendar month.
         period: Query<Option<String>>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<StorageUsage>> {
-        let record = recorded_http_api_request!(
-            "get_account_storage_usage",
-            account_id = account_id.0.to_string()
-        );
+    ) -> ApiResult<Json<AccountUsage>> {
+        let record =
+            recorded_http_api_request!("get_account_usage", account_id = account_id.0.to_string());
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = match period.0 {
             Some(period) => {
@@ -80,13 +86,13 @@ impl AccountUsageApi {
                     ApiError::bad_request(api::error_code::INVALID_USAGE_PERIOD, message)
                 })?;
                 self.account_usage_service
-                    .get_storage_usage_for_period(account_id.0, period, &auth)
+                    .get_usage_for_period(account_id.0, period, &auth)
                     .instrument(record.span.clone())
                     .await?
             }
             None => {
                 self.account_usage_service
-                    .get_storage_usage(account_id.0, &auth)
+                    .get_usage(account_id.0, &auth)
                     .instrument(record.span.clone())
                     .await?
             }
@@ -95,28 +101,31 @@ impl AccountUsageApi {
         record.result(Ok(Json(response)))
     }
 
-    /// Get storage usage for closed billing periods, newest first.
+    /// Get sparse account usage for closed UTC calendar months, newest first.
+    ///
+    /// Each item uses the same metrics and metering-status contract as current usage. The response
+    /// does not include plan or limit metadata because historical limits are not snapshotted.
     #[oai(
         path = "/:account_id/usage/history",
         method = "get",
-        operation_id = "get_account_storage_usage_history"
+        operation_id = "get_account_usage_history"
     )]
     async fn get_usage_history(
         &self,
         account_id: Path<AccountId>,
         last: Query<Option<usize>>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<StorageUsageHistory>>> {
+    ) -> ApiResult<Json<Vec<AccountUsage>>> {
         let record = recorded_http_api_request!(
-            "get_account_storage_usage_history",
+            "get_account_usage_history",
             account_id = account_id.0.to_string()
         );
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = self
             .account_usage_service
-            .get_storage_usage_history(
+            .get_usage_history(
                 account_id.0,
-                last.0.unwrap_or(DEFAULT_STORAGE_USAGE_HISTORY_PERIODS),
+                last.0.unwrap_or(DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS),
                 &auth,
             )
             .instrument(record.span.clone())

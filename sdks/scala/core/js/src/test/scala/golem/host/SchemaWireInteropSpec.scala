@@ -16,17 +16,25 @@
 
 package golem.host
 
+import golem.FutureInterop
 import golem.schema._
 import golem.schema.wire._
 import golem.schema.wire.WitSchemaTypeBody._
 import golem.schema.wire.WitSchemaValueNode._
-import golem.host.js.schema.{JsSchemaTypeBody, JsSchemaValueNode, JsSchemaValueTree}
+import golem.host.js.schema.{
+  JsSchemaGraph,
+  JsSchemaTypeBody,
+  JsSchemaTypeNode,
+  JsSchemaValueNode,
+  JsSchemaValueTree,
+  JsTypedSchemaValue
+}
 import zio.ZIO
 import zio.test._
 
 import scala.scalajs.js
 import scala.scalajs.js.typedarray.Uint8Array
-import scala.concurrent.Future
+import scala.concurrent.{Future, Promise}
 
 /**
  * Exhaustive `Wit* -> Js* -> Wit*` round-trip for the v2
@@ -128,6 +136,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     PathType(pathOut),
     UrlType(urlFull),
     UrlType(urlNone),
+    UuidType,
     DatetimeType,
     DurationType,
     QuantityType(quantFull),
@@ -160,6 +169,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   // --- value nodes: one (or more) per WitSchemaValueNode case ---------------
 
   private val datetime = Datetime(1_700_000_000L, 123_456_789)
+  private val uuid     = golem.Uuid(BigInt("1311768465173141112"), BigInt("1311768465173141112"))
 
   // Quota-token handle nodes are intentionally excluded from this structural
   // round-trip vector: an owned `quota-token` handle is affine, so encoding
@@ -200,6 +210,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     BinaryValue(WitBinaryValuePayload(Vector.empty, None)),
     PathValue("/tmp/x"),
     UrlValue("https://example.com"),
+    UuidValue(uuid),
     DatetimeValue(datetime),
     DurationValue(WitDurationValuePayload(987654321L)),
     QuantityValueNode(qvalue),
@@ -225,6 +236,31 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
       },
       test("schema value tree round-trips Wit -> Js -> Wit") {
         assertTrue(SchemaWireInterop.valueTreeFromJs(SchemaWireInterop.valueTreeToJs(valueTree)) == valueTree)
+      },
+      test("resource-free async lowering preserves a large nested list and its nonzero root") {
+        val bytes = Vector.tabulate(10000)(i => U8Value(i % 251))
+        val tree  = WitSchemaValueTree(
+          bytes ++ Vector(ListValue(bytes.indices.toVector), RecordValue(Vector(10000))),
+          10001
+        )
+        ZIO.fromFuture(_ => SchemaWireInterop.valueTreeToJsAsync(tree)).map { lowered =>
+          assertTrue(SchemaWireInterop.valueTreeFromJs(lowered) == tree)
+        }
+      },
+      test("resource-free async lowering still checks invalid unreachable nodes") {
+        val invalid = Vector(
+          U8Value(256),
+          U16Value(-1),
+          U32Value(4294967296L),
+          CharValue(0xd800),
+          DatetimeValue(Datetime(1L, 1000000000))
+        )
+        val rejected = invalid.map { node =>
+          scala.util
+            .Try(SchemaWireInterop.valueTreeToJsAsync(WitSchemaValueTree(Vector(BoolValue(true), node), 0)))
+            .isFailure
+        }
+        assertTrue(rejected.forall(identity))
       },
       test("typed schema value round-trips Wit -> Js -> Wit (all cases)") {
         assertTrue(SchemaWireInterop.typedFromJs(SchemaWireInterop.typedToJs(typed)) == typed)
@@ -387,7 +423,10 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
                                 for {
                                   first <- stream.pull()
                                   end   <- stream.pull()
-                                } yield assertTrue(first.contains(SchemaValue.StringValue("first")), end.isEmpty)
+                                } yield assertTrue(
+                                  first.contains(WitSchemaValueTree(Vector(StringValue("first")), 0)),
+                                  end.isEmpty
+                                )
                               }
                             case other =>
                               Future.successful(assertTrue(false).label(s"expected wrapped stream, got $other"))
@@ -395,6 +434,559 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
                         case other => Future.successful(assertTrue(false).label(s"expected StreamValue, got $other"))
                       }
           } yield result
+        }
+      },
+      test("schema value stream: async lowering rolls back a prepared stream when final lowering fails") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          var finalizations = 0
+          val source        = AgentStream.fromPull[SchemaValue](
+            () => Future.successful(None),
+            () => {
+              finalizations += 1
+              Future.successful(())
+            }
+          )
+          val secret = GuestSecretHandle.fromRaw(js.Dynamic.literal(marker = 104))
+          val tree   = WitSchemaValueTree(
+            Vector(
+              TupleValue(Vector(1, 2)),
+              StreamValue(GuestSchemaValueStreamHandle.native(source)),
+              SecretValue(secret)
+            ),
+            0
+          )
+
+          val encoding = SchemaWireInterop.valueTreeToJsAsync(tree)
+          secret.take()
+          encoding.failed.map(_ => assertTrue(finalizations == 1, streamMock.state.unwraps.asInstanceOf[Int] == 1))
+        }
+      },
+      test("schema value stream: deferred lowering does not partially move non-stream handles") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          streamMock.state.deferWrapAt = 1
+          var finalizations = 0
+          val source        = AgentStream.fromPull[SchemaValue](
+            () => Future.successful(None),
+            () => {
+              finalizations += 1
+              Future.successful(())
+            }
+          )
+          val first  = GuestSecretHandle.fromRaw(js.Dynamic.literal(marker = 105))
+          val second = GuestSecretHandle.fromRaw(js.Dynamic.literal(marker = 106))
+          val tree   = WitSchemaValueTree(
+            Vector(
+              TupleValue(Vector(1, 2, 3)),
+              SecretValue(first),
+              StreamValue(GuestSchemaValueStreamHandle.native(source)),
+              SecretValue(second)
+            ),
+            0
+          )
+          val encoding = SchemaWireInterop.valueTreeToJsAsync(tree)
+
+          for {
+            _ <- FutureInterop.fromPromise(
+                   streamMock.waitForPendingWrap().asInstanceOf[js.Promise[js.Any]]
+                 )
+            _  = second.take()
+            _  = streamMock.releaseWraps()
+            _ <- encoding.failed
+          } yield assertTrue(
+            first.isPresent,
+            !second.isPresent,
+            finalizations == 1,
+            streamMock.state.unwraps.asInstanceOf[Int] == 1
+          )
+        }
+      },
+      test("schema value stream: rollback releases earlier wraps when a later wrap fails") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          streamMock.state.failWrapAt = 2
+          var finalizations = 0
+
+          def source = AgentStream.fromPull[SchemaValue](
+            () => Future.successful(None),
+            () => {
+              finalizations += 1
+              Future.successful(())
+            }
+          )
+
+          val tree = WitSchemaValueTree(
+            Vector(
+              TupleValue(Vector(1, 2)),
+              StreamValue(GuestSchemaValueStreamHandle.native(source)),
+              StreamValue(GuestSchemaValueStreamHandle.native(source))
+            ),
+            0
+          )
+
+          SchemaWireInterop.valueTreeToJsAsync(tree).failed.map { _ =>
+            assertTrue(
+              streamMock.state.wraps.asInstanceOf[Int] == 2,
+              streamMock.state.unwraps.asInstanceOf[Int] == 1,
+              finalizations == 2
+            )
+          }
+        }
+      },
+      test("generated output lowering disposes streams not reached after a failed wrap") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          streamMock.state.failWrapAt = 1
+          var closed             = Vector.empty[Int]
+          def source(index: Int) = AgentStream.fromPull[Int](
+            () => Future.successful(None),
+            () => { closed :+= index; Future.successful(()) }
+          )
+          val tree = golem.schema.wire.ConcreteCodec
+            .derived[(AgentStream[Int], AgentStream[Int])]
+            .encodeValue((source(1), source(2)))
+          SchemaWireInterop.ownedValueTreeToJsAsync(tree).failed.map(_ => assertTrue(closed.sorted == Vector(1, 2)))
+        }
+      },
+      test("schema value stream: a failed first wrap finalizes its source") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          streamMock.state.failWrapAt = 1
+          var finalizations = 0
+          val source        = AgentStream.fromPull[SchemaValue](
+            () => Future.successful(None),
+            () => {
+              finalizations += 1
+              Future.successful(())
+            }
+          )
+          val tree = WitSchemaValueTree(
+            Vector(StreamValue(GuestSchemaValueStreamHandle.native(source))),
+            0
+          )
+
+          SchemaWireInterop.valueTreeToJsAsync(tree).failed.map { _ =>
+            assertTrue(
+              streamMock.state.wraps.asInstanceOf[Int] == 1,
+              streamMock.state.unwraps.asInstanceOf[Int] == 0,
+              finalizations == 1
+            )
+          }
+        }
+      },
+      test("schema value stream: failed native item encoding disposes nested streams once") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val invocationOwnership = new AgentStreamOwnership
+          var nestedFinalizations = 0
+          var emitted             = false
+          val source              = AgentStream.fromPull[SchemaValue](() =>
+            if (emitted) Future.successful(None)
+            else {
+              emitted = true
+              val nested = AgentStream.fromPull[SchemaValue](
+                () => Future.successful(None),
+                () => {
+                  nestedFinalizations += 1
+                  Future.successful(())
+                }
+              )
+              Future.successful(
+                Some(
+                  SchemaValue.TupleValue(
+                    List(
+                      SchemaValue.StreamValue(GuestSchemaValueStreamHandle.native(nested)),
+                      SchemaValue.DatetimeValue(Datetime(0L, -1))
+                    )
+                  )
+                )
+              )
+            }
+          )
+          val handle = AgentStreamOwnership.capture(invocationOwnership) {
+            GuestSchemaValueStreamHandle.native(source)
+          }
+          val endpoint = handle.withHandle(identity).get
+          val tree     = WitSchemaValueTree(Vector(StreamValue(handle)), 0)
+
+          for {
+            encoded <- SchemaWireInterop.valueTreeToJsAsync(tree)
+            _       <- invocationOwnership.close()
+            decoded  = SchemaWireInterop.valueTreeFromJs(encoded)
+            stream  <- decoded.valueNodes(0) match {
+                        case StreamValue(received) =>
+                          received.take() match {
+                            case Some(wrapped: GuestSchemaValueStream.Wrapped) => wrapped.unwrap()
+                            case other                                         => Future.failed(new AssertionError(s"expected wrapped stream, got $other"))
+                          }
+                        case other => Future.failed(new AssertionError(s"expected StreamValue, got $other"))
+                      }
+            _     <- stream.pull().failed
+            before = nestedFinalizations
+            _     <- endpoint.dispose()
+          } yield assertTrue(before == 1, nestedFinalizations == 1)
+        }
+      },
+      test("schema value stream: outbound iterator return closes its source exactly once") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          var finalizations = 0
+          var item          = Option(SchemaValue.StringValue("first"))
+          val source        = AgentStream.fromPull[SchemaValue](
+            () => {
+              val result = item
+              item = None
+              Future.successful(result)
+            },
+            () => {
+              finalizations += 1
+              Future.successful(())
+            }
+          )
+
+          for {
+            encoded <- SchemaWireInterop.valueTreeToJsAsync(
+                         WitSchemaValueTree(Vector(StreamValue(GuestSchemaValueStreamHandle.native(source))), 0)
+                       )
+            iterator = outboundIterator(encoded.valueNodes(0))
+            first   <- callIterator(iterator, "next")
+            _       <- callIterator(iterator, "return")
+            _       <- callIterator(iterator, "return")
+          } yield assertTrue(
+            !first.asInstanceOf[js.Dynamic].selectDynamic("done").asInstanceOf[Boolean],
+            js.typeOf(iterator.selectDynamic("return")) == "function",
+            finalizations == 1
+          )
+        }
+      },
+      test("schema value stream: outbound return cancels pending item lowering") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          var outerFinalizations  = 0
+          var nestedFinalizations = 0
+          var emitted             = false
+          val source              = AgentStream.fromPull[SchemaValue](
+            () => {
+              if (emitted) Future.successful(None)
+              else {
+                emitted = true
+                val nested = AgentStream.fromPull[SchemaValue](
+                  () => Future.successful(None),
+                  () => {
+                    nestedFinalizations += 1
+                    Future.successful(())
+                  }
+                )
+                Future.successful(Some(SchemaValue.StreamValue(GuestSchemaValueStreamHandle.native(nested))))
+              }
+            },
+            () => {
+              outerFinalizations += 1
+              Future.successful(())
+            }
+          )
+
+          for {
+            encoded <- SchemaWireInterop.valueTreeToJsAsync(
+                         WitSchemaValueTree(Vector(StreamValue(GuestSchemaValueStreamHandle.native(source))), 0)
+                       )
+            _        = streamMock.state.deferWrapAt = 2
+            iterator = outboundIterator(encoded.valueNodes(0))
+            next     = callIterator(iterator, "next")
+            _       <- callIterator(iterator, "return")
+            _       <- FutureInterop.fromPromise(
+                   streamMock.waitForPendingWrap().asInstanceOf[js.Promise[js.Any]]
+                 )
+            _  = streamMock.releaseWraps()
+            _ <- next.failed
+          } yield assertTrue(
+            outerFinalizations == 1,
+            nestedFinalizations == 1,
+            streamMock.state.unwraps.asInstanceOf[Int] == 1
+          )
+        }
+      },
+      test("schema value stream: outbound return disposes a nested stream from a late pull result") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val pending            = Promise[Option[AgentStream[String]]]()
+          var childFinalizations = 0
+          val child              = AgentStream.fromPull[String](
+            () => Future.successful(None),
+            () => {
+              childFinalizations += 1
+              Future.successful(())
+            }
+          )
+          val source = AgentStream.fromPull[AgentStream[String]](() => pending.future)
+          val wire   = SchemaWire.schemaValueToWit(IntoSchema[AgentStream[AgentStream[String]]].toValue(source))
+
+          for {
+            encoded <- SchemaWireInterop.valueTreeToJsAsync(wire)
+            iterator = outboundIterator(encoded.valueNodes(0))
+            next     = callIterator(iterator, "next")
+            _       <- callIterator(iterator, "return")
+            _       <- next.failed
+            _        = pending.success(Some(child))
+            _       <- pending.future
+          } yield assertTrue(childFinalizations == 1)
+        }
+      },
+      test("schema value stream: outbound EOF and failure finalize exactly once") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          var eofFinalizations     = 0
+          var failureFinalizations = 0
+          val eofSource            = AgentStream.fromPull[SchemaValue](
+            () => Future.successful(None),
+            () => {
+              eofFinalizations += 1
+              Future.successful(())
+            }
+          )
+          val failedSource = AgentStream.fromPull[SchemaValue](
+            () => Future.failed(new RuntimeException("producer failed")),
+            () => {
+              failureFinalizations += 1
+              Future.successful(())
+            }
+          )
+
+          for {
+            eofEncoded <- SchemaWireInterop.valueTreeToJsAsync(
+                            WitSchemaValueTree(Vector(StreamValue(GuestSchemaValueStreamHandle.native(eofSource))), 0)
+                          )
+            failedEncoded <-
+              SchemaWireInterop.valueTreeToJsAsync(
+                WitSchemaValueTree(Vector(StreamValue(GuestSchemaValueStreamHandle.native(failedSource))), 0)
+              )
+            eofIterator    = outboundIterator(eofEncoded.valueNodes(0))
+            failedIterator = outboundIterator(failedEncoded.valueNodes(0))
+            end           <- callIterator(eofIterator, "next")
+            _             <- callIterator(eofIterator, "return")
+            _             <- callIterator(failedIterator, "next").failed
+            _             <- callIterator(failedIterator, "return")
+          } yield assertTrue(
+            end.asInstanceOf[js.Dynamic].selectDynamic("done").asInstanceOf[Boolean],
+            eofFinalizations == 1,
+            failureFinalizations == 1
+          )
+        }
+      },
+      test("schema value stream: inbound close calls optional iterator return at most once") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val nextResult = js.Dynamic.literal("done" -> false, "value" -> stringTree("unused"))
+          val fixture    = iteratorFixture(() => js.Promise.resolve(nextResult), withReturn = true)
+          val stream     = decodeStream(fixture.raw)
+
+          for {
+            _ <- stream.close()
+            _ <- stream.close()
+          } yield assertTrue(
+            fixture.iteratorCount() == 1,
+            fixture.nextCount() == 0,
+            fixture.returnCount() == 1
+          )
+        }
+      },
+      test("schema value stream: inbound EOF completes without iterator return") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val fixture = iteratorFixture(
+            () => js.Promise.resolve(js.Dynamic.literal("done" -> true)),
+            withReturn = true
+          )
+          val stream = decodeStream(fixture.raw)
+
+          for {
+            end <- stream.pull()
+            _   <- stream.close()
+          } yield assertTrue(
+            end.isEmpty,
+            fixture.iteratorCount() == 1,
+            fixture.nextCount() == 1,
+            fixture.returnCount() == 0
+          )
+        }
+      },
+      test("schema value stream: inbound failure closes the JS iterator exactly once") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val fixture = iteratorFixture(
+            () => js.Promise.reject(new js.Error("next failed")),
+            withReturn = true
+          )
+          val stream = decodeStream(fixture.raw)
+
+          for {
+            _ <- stream.pull().failed
+            _ <- stream.close()
+          } yield assertTrue(
+            fixture.iteratorCount() == 1,
+            fixture.nextCount() == 1,
+            fixture.returnCount() == 1
+          )
+        }
+      },
+      test("schema value stream: inbound close drains a late item without lifting it") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val nextStarted = Promise[Unit]()
+          val lateNext    = Promise[js.Dynamic]()
+          val childClosed = Promise[Unit]()
+          val child       = iteratorFixture(
+            () => js.Promise.resolve(js.Dynamic.literal("done" -> true)),
+            withReturn = true,
+            onReturn = () => childClosed.trySuccess(())
+          )
+          val parent = iteratorFixture(
+            () => FutureInterop.toPromise(lateNext.future),
+            withReturn = true,
+            onNext = () => nextStarted.trySuccess(())
+          )
+          val stream    = decodeStream(parent.raw)
+          val pulling   = stream.pull()
+          val childTree = JsSchemaValueTree(js.Array(JsSchemaValueNode.streamValue(child.raw)), 0)
+
+          for {
+            _ <- nextStarted.future
+            _ <- stream.close()
+            _ <- pulling.failed
+            _  = lateNext.success(js.Dynamic.literal("done" -> false, "value" -> childTree))
+            _ <- childClosed.future
+            _ <- stream.close()
+          } yield assertTrue(
+            parent.nextCount() == 1,
+            parent.returnCount() == 1,
+            child.iteratorCount() == 1,
+            child.returnCount() == 1,
+            js.isUndefined(rawVal(childTree.valueNodes(0)))
+          )
+        }
+      },
+      test("schema value stream: close during inbound lifting disposes nested streams") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val childClosed = Promise[Unit]()
+          val child       = iteratorFixture(
+            () => js.Promise.resolve(js.Dynamic.literal("done" -> true)),
+            withReturn = true,
+            onReturn = () => childClosed.trySuccess(())
+          )
+          var stream = Option.empty[AgentStream[AgentStream[String]]]
+          val item   = js.Dynamic.literal("root" -> 0)
+          js.Dynamic.global.Object.defineProperty(
+            item,
+            "valueNodes",
+            js.Dynamic.literal(
+              "get" -> (((() => {
+                stream.foreach(_.close())
+                js.Array(JsSchemaValueNode.streamValue(child.raw))
+              }): js.Function0[js.Array[JsSchemaValueNode]]))
+            )
+          )
+          val parent = iteratorFixture(
+            () => js.Promise.resolve(js.Dynamic.literal("done" -> false, "value" -> item)),
+            withReturn = true
+          )
+          val tree    = JsSchemaValueTree(js.Array(JsSchemaValueNode.streamValue(parent.raw)), 0)
+          val value   = SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree))
+          val decoded = FromSchema[AgentStream[AgentStream[String]]]
+            .fromValue(value)
+            .fold(throw _, identity)
+          stream = Some(decoded)
+
+          for {
+            _ <- decoded.pull().failed
+            _ <- childClosed.future
+          } yield assertTrue(
+            parent.returnCount() == 1,
+            child.iteratorCount() == 1,
+            child.returnCount() == 1
+          )
+        }
+      },
+      test("schema value stream: inbound close without iterator return is a no-op") {
+        ZIO.fromFuture { implicit ec =>
+          streamMock.reset()
+          val fixture = iteratorFixture(
+            () => js.Promise.resolve(js.Dynamic.literal("done" -> true)),
+            withReturn = false
+          )
+          val stream = decodeStream(fixture.raw)
+
+          stream.close().map(_ => assertTrue(fixture.iteratorCount() == 1, fixture.returnCount() == 0))
+        }
+      },
+      test("schema value stream: malformed inbound trees release converted stream resources") {
+        ZIO.fromFuture { implicit ec =>
+          val source  = AgentStream.fromPull[SchemaValue](() => Future.successful(None))
+          val encoded = SchemaWireInterop.valueTreeToJsAsync(
+            WitSchemaValueTree(Vector(StreamValue(GuestSchemaValueStreamHandle.native(source))), 0)
+          )
+
+          encoded.map { streamTree =>
+            streamMock.reset()
+            val invalidNode = js.Dynamic
+              .literal("tag" -> "unknown-value")
+              .asInstanceOf[JsSchemaValueNode]
+            val malformed = JsSchemaValueTree(js.Array(streamTree.valueNodes(0), invalidNode), 0)
+
+            val result = scala.util.Try(SchemaWireInterop.valueTreeFromJs(malformed))
+            assertTrue(result.isFailure, streamMock.state.unwraps.asInstanceOf[Int] == 1)
+          }
+        }
+      },
+      test("schema value stream: malformed nodes do not prevent later inbound cleanup") {
+        ZIO.fromFuture { implicit ec =>
+          val source = AgentStream.fromPull[SchemaValue](() => Future.successful(None))
+          SchemaWireInterop
+            .valueTreeToJsAsync(
+              WitSchemaValueTree(Vector(StreamValue(GuestSchemaValueStreamHandle.native(source))), 0)
+            )
+            .map { streamTree =>
+              streamMock.reset()
+              val streamNode = streamTree.valueNodes(0)
+              val malformed  = JsSchemaValueTree(
+                js.Array(null.asInstanceOf[JsSchemaValueNode], streamNode),
+                0
+              )
+
+              val result = scala.util.Try(SchemaWireInterop.valueTreeFromJs(malformed))
+              assertTrue(
+                result.isFailure,
+                js.isUndefined(rawVal(streamNode)),
+                streamMock.state.unwraps.asInstanceOf[Int] == 1
+              )
+            }
+        }
+      },
+      test("schema value stream: malformed typed graphs still clean later value resources") {
+        ZIO.fromFuture { implicit ec =>
+          val source = AgentStream.fromPull[SchemaValue](() => Future.successful(None))
+          SchemaWireInterop
+            .valueTreeToJsAsync(
+              WitSchemaValueTree(Vector(StreamValue(GuestSchemaValueStreamHandle.native(source))), 0)
+            )
+            .map { streamTree =>
+              streamMock.reset()
+              val streamNode     = streamTree.valueNodes(0)
+              val malformedGraph = JsSchemaGraph(
+                js.Array(null.asInstanceOf[JsSchemaTypeNode]),
+                js.Array(),
+                0
+              )
+              val typed  = JsTypedSchemaValue(malformedGraph, streamTree)
+              val result = scala.util.Try(SchemaWireInterop.typedFromJs(typed))
+
+              assertTrue(
+                result.isFailure,
+                js.isUndefined(rawVal(streamNode)),
+                streamMock.state.unwraps.asInstanceOf[Int] == 1
+              )
+            }
         }
       },
       test("permission-card handle moves to JS and lifts back into a fresh present handle") {
@@ -453,6 +1045,16 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
       test("raw JS shape: quantity value node tag is `quantity-value-node`") {
         assertTrue(singleValueNodeJs(QuantityValueNode(qvalue)).tag == "quantity-value-node")
       },
+      test("raw JS shape: UUID uses first-class type and value tags") {
+        val node = singleValueNodeJs(UuidValue(uuid))
+        val raw  = rawVal(node).asInstanceOf[golem.host.js.schema.JsUuid]
+        assertTrue(
+          singleTypeBodyJs(UuidType).tag == "uuid-type",
+          node.tag == "uuid-value",
+          BigInt(raw.highBits.toString) == uuid.highBits,
+          BigInt(raw.lowBits.toString) == uuid.lowBits
+        )
+      },
       test("raw JS shape: result value tags are `ok-value` / `err-value`") {
         val ok  = valDict(singleValueNodeJs(ResultValue(WitResultValuePayload.OkValue(Some(9)))))
         val err = valDict(singleValueNodeJs(ResultValue(WitResultValuePayload.ErrValue(None))))
@@ -496,7 +1098,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
           js.typeOf(u32) == "number"
         )
       }
-    )
+    ) @@ TestAspect.sequential
 
   // --- raw-shape helpers -----------------------------------------------------
 
@@ -518,4 +1120,74 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
    */
   private def valDict(o: js.Object): js.Dictionary[js.Any] =
     rawVal(o).asInstanceOf[js.Dictionary[js.Any]]
+
+  private def streamMock: js.Dynamic =
+    js.Dynamic.global.selectDynamic("__golemSchemaValueStreamMock")
+
+  private final case class IteratorFixture(
+    raw: js.Any,
+    iteratorCount: () => Int,
+    nextCount: () => Int,
+    returnCount: () => Int
+  )
+
+  private def iteratorFixture(
+    nextResult: () => js.Promise[js.Dynamic],
+    withReturn: Boolean,
+    onNext: () => Unit = () => (),
+    onReturn: () => Unit = () => ()
+  ): IteratorFixture = {
+    var iterators = 0
+    var nexts     = 0
+    var returns   = 0
+    val iterator  = js.Dynamic.literal(
+      "next" -> (((() => {
+        nexts += 1
+        onNext()
+        nextResult()
+      }): js.Function0[js.Promise[js.Dynamic]]))
+    )
+    if (withReturn)
+      iterator.updateDynamic("return")(
+        ((() => {
+          returns += 1
+          onReturn()
+          js.Promise.resolve(js.Dynamic.literal("done" -> true))
+        }): js.Function0[js.Promise[js.Dynamic]])
+      )
+    val iterable = js.Dynamic.literal()
+    js.Dynamic.global.Reflect.set(
+      iterable,
+      js.Symbol.asyncIterator,
+      ((() => {
+        iterators += 1
+        iterator
+      }): js.Function0[js.Dynamic])
+    )
+    IteratorFixture(
+      js.Dynamic.literal("iterable" -> iterable),
+      () => iterators,
+      () => nexts,
+      () => returns
+    )
+  }
+
+  private def decodeStream(raw: js.Any)(implicit ec: scala.concurrent.ExecutionContext): AgentStream[String] = {
+    val tree  = JsSchemaValueTree(js.Array(JsSchemaValueNode.streamValue(raw)), 0)
+    val value = SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree))
+    FromSchema[AgentStream[String]].fromValue(value).fold(throw _, identity)
+  }
+
+  private def stringTree(value: String): JsSchemaValueTree =
+    SchemaWireInterop.valueTreeToJs(SchemaWire.schemaValueToWit(SchemaValue.StringValue(value)))
+
+  private def outboundIterator(node: JsSchemaValueNode): js.Dynamic = {
+    val raw      = rawVal(node).asInstanceOf[js.Dynamic]
+    val iterable = raw.selectDynamic("iterable")
+    val factory  = js.Dynamic.global.Reflect.get(iterable, js.Symbol.asyncIterator).asInstanceOf[js.Dynamic]
+    factory.applyDynamic("call")(iterable).asInstanceOf[js.Dynamic]
+  }
+
+  private def callIterator(iterator: js.Dynamic, method: String): Future[js.Any] =
+    FutureInterop.fromPromise(iterator.applyDynamic(method)().asInstanceOf[js.Promise[js.Any]])
 }

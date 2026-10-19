@@ -1,4 +1,6 @@
-use crate::app::{TestContext, cmd, flag, merge_into_manifest};
+use crate::app::{
+    CLOSED_OUTPUT_EXIT, CloseWhen, ClosedStream, TestContext, cmd, flag, merge_into_manifest,
+};
 use crate::{crate_path, workspace_path};
 use std::path::PathBuf;
 
@@ -16,46 +18,20 @@ use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{inherit_test_dep, tag, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
-async fn streaming_invocation_context() -> TestContext {
+pub(super) async fn streaming_invocation_context() -> TestContext {
+    let started = std::time::Instant::now();
     let mut ctx = TestContext::new();
-    let component_dir = ctx.cwd_path_join("component");
-    fs::create_dir_all(component_dir.join("src")).unwrap();
-
-    let fixture = workspace_path().join("test-components/agent-rpc/golem-it-agent-rpc-rust");
-    fs::copy(fixture.join("src/lib.rs"), component_dir.join("src/lib.rs")).unwrap();
-
-    let sdk_path = workspace_path().join("sdks/rust/golem-rust");
-    fs::write_str(
-        component_dir.join("Cargo.toml"),
-        formatdoc! {r#"
-            [package]
-            name = "golem_it_agent_rpc_rust"
-            version = "0.0.1"
-            edition = "2024"
-
-            [profile.release]
-            opt-level = "s"
-            lto = true
-
-            [lib]
-            crate-type = ["cdylib"]
-            path = "src/lib.rs"
-
-            [dependencies]
-            bytes = "1.11.0"
-            log = {{ version = "0.4.29", features = ["kv"] }}
-            golem-rust = {{ path = "{sdk_path}", features = ["bytes", "export_golem_agentic"] }}
-            serde = {{ version = "1", features = ["derive"] }}
-            serde_json = "1"
-            wasi-fetch = "=0.2.0"
-        "#, sdk_path = sdk_path.display()},
-    )
-    .unwrap();
+    let fixture = workspace_path().join("test-components/golem_it_agent_rpc_rust_release.wasm");
+    assert!(
+        fixture.is_file(),
+        "build the benchmarks test-component group before running streaming tests"
+    );
+    fs::copy(&fixture, ctx.cwd_path_join("component.wasm")).unwrap();
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
@@ -64,22 +40,10 @@ async fn streaming_invocation_context() -> TestContext {
 
             app: streaming-invocation
 
-            componentTemplates:
-              rust-streaming-test:
-                build:
-                - command: cargo build --target wasm32-wasip2 --release
-                  sources:
-                  - "{{{{ componentDir }}}}/src"
-                  - "{{{{ componentDir }}}}/Cargo.toml"
-                  targets:
-                  - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
-                componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
-                outputWasm: "{{{{ golemTempDir }}}}/agents/golem_it_agent_rpc_rust.wasm"
-
             components:
               golem-it:agent-rpc-rust:
-                dir: component
-                templates: rust-streaming-test
+                componentWasm: component.wasm
+                outputWasm: component-final.wasm
                 presets:
                   release: {{}}
 
@@ -94,11 +58,423 @@ async fn streaming_invocation_context() -> TestContext {
     ctx.start_server().await;
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+    eprintln!(
+        "STREAMING_CONTEXT_READY directory={} seconds={:.3}",
+        ctx.cwd_path_join("").display(),
+        started.elapsed().as_secs_f64(),
+    );
     ctx
 }
 
-fn streaming_agent(name: &str) -> String {
+pub(super) fn streaming_agent(name: &str) -> String {
     format!(r#"StreamingRpcTarget("{name}")"#)
+}
+
+async fn start_interrupting_websocket_proxy(
+    upstream: &str,
+    truncate_accepted_frame: bool,
+) -> (
+    String,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tokio::task::JoinHandle<()>,
+) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let upstream = reqwest::Url::parse(upstream).unwrap();
+    let upstream_host = upstream.host_str().unwrap().to_string();
+    let upstream_port = upstream.port_or_known_default().unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let proxy_url = format!("http://{}", listener.local_addr().unwrap());
+    let websocket_claimed = Arc::new(AtomicBool::new(false));
+    let interruption_observed = Arc::new(AtomicBool::new(false));
+    let observed = interruption_observed.clone();
+    let handle = tokio::spawn(async move {
+        loop {
+            let (mut downstream, _) = listener.accept().await.unwrap();
+            let upstream_host = upstream_host.clone();
+            let websocket_claimed = websocket_claimed.clone();
+            let interruption_observed = interruption_observed.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = downstream.read(&mut buffer).await.unwrap();
+                    if read == 0 || request.len() + read > 64 * 1024 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let websocket = String::from_utf8_lossy(&request)
+                    .to_ascii_lowercase()
+                    .contains("upgrade: websocket");
+                let mut upstream =
+                    tokio::net::TcpStream::connect((upstream_host.as_str(), upstream_port))
+                        .await
+                        .unwrap();
+                upstream.write_all(&request).await.unwrap();
+
+                let interrupt = websocket
+                    && websocket_claimed
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok();
+                if !interrupt {
+                    let _ = tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await;
+                    return;
+                }
+
+                let (mut downstream_read, mut downstream_write) = downstream.into_split();
+                let (mut upstream_read, mut upstream_write) = upstream.into_split();
+                let client_to_server = async {
+                    let _ = tokio::io::copy(&mut downstream_read, &mut upstream_write).await;
+                };
+                let server_to_client = async {
+                    let mut seen = Vec::new();
+                    loop {
+                        let read = upstream_read.read(&mut buffer).await.unwrap();
+                        if read == 0 {
+                            return;
+                        }
+                        let previous_len = seen.len();
+                        seen.extend_from_slice(&buffer[..read]);
+                        if let Some(accepted_offset) = seen
+                            .windows(b"invocationAccepted".len())
+                            .position(|window| window == b"invocationAccepted")
+                        {
+                            let write_len = if truncate_accepted_frame {
+                                accepted_offset + b"invocationAccepted".len() - previous_len
+                            } else {
+                                read
+                            };
+                            downstream_write
+                                .write_all(&buffer[..write_len])
+                                .await
+                                .unwrap();
+                            interruption_observed.store(true, Ordering::SeqCst);
+                            return;
+                        }
+                        downstream_write.write_all(&buffer[..read]).await.unwrap();
+                        if seen.len() > 64 * 1024 {
+                            seen.drain(..seen.len() - 4096);
+                        }
+                    }
+                };
+                tokio::select! {
+                    _ = client_to_server => {}
+                    _ = server_to_client => {}
+                }
+            });
+        }
+    });
+    (proxy_url, observed, handle)
+}
+
+async fn run_generated_driver(command: std::process::Command) -> std::process::Output {
+    tokio::task::spawn_blocking(move || {
+        let mut command = command;
+        let program = Path::new(command.get_program())
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let directory = command.get_current_dir().unwrap().display().to_string();
+        let started = std::time::Instant::now();
+        eprintln!("STREAMING_DRIVER_COMMAND start program={program} directory={directory}");
+        let output = command.output().unwrap();
+        eprintln!(
+            "STREAMING_DRIVER_COMMAND end program={program} directory={directory} seconds={:.3} status={}",
+            started.elapsed().as_secs_f64(),
+            output.status,
+        );
+        for line in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .chain(String::from_utf8_lossy(&output.stderr).lines())
+            .filter(|line| line.starts_with("STREAMING_DRIVER_TIMING "))
+        {
+            eprintln!("{line}");
+        }
+        output
+    })
+    .await
+    .unwrap()
+}
+
+fn assert_generated_driver(output: std::process::Output, language: &str, marker: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "{language} generated streaming driver failed\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+    assert!(
+        stdout.contains(marker),
+        "{language} generated streaming driver omitted {marker}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn test_agent_stream_ends_when_stdout_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let created = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+        .await;
+    assert!(created.success_or_dump());
+
+    let stream = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_with_broken_stdout([cmd::AGENT, "stream", &agent]),
+    );
+    let producer = async {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        for round in 0..6 {
+            let logged = ctx
+                .cli([
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    &agent,
+                    "bug_golem1265",
+                    &format!("\"round {round}\""),
+                ])
+                .await;
+            assert!(logged.success_or_dump());
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+    let (stream, ()) = tokio::join!(stream, producer);
+    let stream = stream.expect("the agent stream kept running with a closed stdout");
+    assert_eq!(
+        stream.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
+        stream.stderr_text()
+    );
+    assert!(!stream.stderr_text().contains("panicked"));
+}
+
+/// The reader takes the first part of the output and then goes away, as `head` does.
+#[test]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_with_the_exit_code_of_sigpipe()
+ {
+    let ctx = streaming_invocation_context().await;
+
+    // An oplog that is much longer than the buffer of a pipe, so that the CLI is still printing
+    // when the reader leaves. The entry of a call holds its argument. Linux refuses a single
+    // command line argument above 128 KiB, so several calls each carry a shorter one.
+    let oplog_agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+    let long_argument = format!("\"{}\"", "x".repeat(100_000));
+    for _ in 0..3 {
+        let called = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                &oplog_agent,
+                "bug_golem1265",
+                &long_argument,
+            ])
+            .await;
+        assert!(called.success_or_dump());
+    }
+    let complete = ctx.cli([cmd::AGENT, "oplog", &oplog_agent]).await;
+    assert!(complete.success_or_dump());
+    let complete_size: usize = complete.stdout().map(|line| line.len() + 1).sum();
+    assert!(
+        complete_size > 500_000,
+        "the oplog is too short to still be printing when the reader leaves: {complete_size} bytes"
+    );
+
+    let oplog = tokio::time::timeout(
+        Duration::from_secs(60),
+        ctx.cli_closing_stdout_after_bytes([cmd::AGENT, "oplog", &oplog_agent], 1),
+    )
+    .await
+    .expect("agent oplog kept running after the reader had left");
+    assert_eq!(
+        oplog.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "agent oplog after the reader left did not end with the exit code of SIGPIPE: {}",
+        oplog.stderr_text()
+    );
+    assert!(!oplog.stderr_text().contains("panicked"));
+    assert!(!oplog.stderr_text().contains("Broken pipe"));
+}
+
+/// Whether the oplog entry is a cancel of a stream with the given role and reason. The record is
+/// a schema value, so the names of the enum cases come from its graph.
+fn stream_cancel_is(entry: &serde_json::Value, role: &str, reason: &str) -> bool {
+    let record = &entry["entry"]["record"];
+    let case_name = |type_name: &str, case: &serde_json::Value| -> Option<String> {
+        let def = record["graph"]["defs"]
+            .as_array()?
+            .iter()
+            .find(|def| def["name"] == type_name)?;
+        def["body"]["value"]["cases"][case["value"]["case"].as_u64()? as usize]
+            .as_str()
+            .map(str::to_string)
+    };
+    let fields = &record["value"]["value"]["fields"];
+    let is_cancel = record["graph"]["root"]["value"]["id"]
+        .as_str()
+        .is_some_and(|id| id.ends_with("StreamCancelRecord"));
+    is_cancel
+        && case_name("StreamCancelRole", &fields[5]).as_deref() == Some(role)
+        && case_name("StreamCancelReason", &fields[6]).as_deref() == Some(reason)
+}
+
+/// Runs `agent invoke` with raw stdout and lets the reader of stdout leave after the first byte.
+/// Asserts that the command ends with the exit code of SIGPIPE and that the server got the cancel
+/// of the output stream from a consumer that dropped it.
+async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+    ctx: &TestContext,
+    method_and_arguments: &[&str],
+) {
+    let invoke_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let mut arguments = vec![cmd::AGENT, cmd::INVOKE, invoke_agent.as_str()];
+    arguments.extend_from_slice(method_and_arguments);
+    arguments.extend(["--stdout-format", "raw"]);
+    let invoked = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_closing_stdout_after_bytes(arguments, 1),
+    )
+    .await
+    .expect("agent invoke kept running after the reader had left");
+    assert_eq!(
+        invoked.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "agent invoke after the reader left did not end with the exit code of SIGPIPE: {}",
+        invoked.stderr_text()
+    );
+    assert!(!invoked.stderr_text().contains("panicked"));
+    assert!(!invoked.stderr_text().contains("Broken pipe"));
+
+    let cancels = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            &invoke_agent,
+            "--query",
+            "stream-cancel",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(cancels.success_or_dump());
+    let entries = cancels
+        .stdout()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| stream_cancel_is(entry, "OutputConsumer", "GuestDrop")),
+        "the server received no cancel of the output stream for a consumer that dropped it: {entries:#?}"
+    );
+}
+
+/// The invocation writes its first byte and then waits. Only the watch of stdout can end it
+/// after the reader has left, because the command writes nothing more.
+#[cfg(unix)]
+#[test]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
+ {
+    let ctx = streaming_invocation_context().await;
+    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+        &ctx,
+        &["produce_byte_then_wait"],
+    )
+    .await;
+}
+
+/// The invocation goes on writing after the reader has left, so a failed write of the output
+/// ends the command, not the watch.
+#[test]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_after_the_cancel() {
+    let ctx = streaming_invocation_context().await;
+    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+        &ctx,
+        &["produce_many_bytes", "1000000"],
+    )
+    .await;
+}
+
+/// The server rejects an invocation that reuses an idempotency key with other arguments. The CLI
+/// reports the rejection on stderr while the session runs. With a closed stderr, that report
+/// fails while `agent invoke` holds back the end of the process, and the command must still end
+/// with the exit code of SIGPIPE when the session is over.
+#[test]
+#[timeout("15 minutes")]
+async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stderr_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = streaming_agent(&Uuid::new_v4().to_string());
+    let idempotency_key = Uuid::new_v4().to_string();
+    let invoke_with = |count: &'static str| {
+        [
+            cmd::AGENT.to_string(),
+            cmd::INVOKE.to_string(),
+            agent.clone(),
+            "produce_many_bytes".to_string(),
+            count.to_string(),
+            "--idempotency-key".to_string(),
+            idempotency_key.clone(),
+        ]
+    };
+
+    let first = ctx.cli(invoke_with("1")).await;
+    assert!(first.success_or_dump());
+    let rejected = ctx.cli(invoke_with("2")).await;
+    assert!(
+        !rejected.success() && rejected.stderr_contains("Invocation rejected ("),
+        "the server did not reject the reuse of the idempotency key: {}",
+        rejected.stderr_text()
+    );
+
+    let closed = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_closing_output(invoke_with("2"), ClosedStream::Stderr, CloseWhen::AtSpawn),
+    )
+    .await
+    .expect("the rejected agent invoke kept running after the reader of stderr had left");
+    assert_eq!(
+        closed.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the rejected agent invoke with a closed stderr did not end with the exit code of SIGPIPE: {}",
+        String::from_utf8_lossy(closed.stdout())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[timeout("15 minutes")]
+async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let created = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+        .await;
+    assert!(created.success_or_dump());
+
+    let stream = tokio::time::timeout(
+        Duration::from_secs(40),
+        ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
+    )
+    .await
+    .expect("an idle agent stream kept running with a closed stdout");
+    assert_eq!(
+        stream.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
+        stream.stderr_text()
+    );
+    assert!(!stream.stderr_text().contains("panicked"));
 }
 
 #[test]
@@ -503,12 +879,13 @@ async fn test_streaming_invocation_cli_end_to_end() {
     assert_eq!(toon.stdout_text().matches("@toon\n").count(), 4);
     assert_eq!(toon.stdout_text().matches("@end\n").count(), 4);
 
+    let malformed_input_agent = streaming_agent(&Uuid::new_v4().to_string());
     let malformed_input = ctx
         .cli_with_input(
             [
                 cmd::AGENT,
                 cmd::INVOKE,
-                &agent,
+                &malformed_input_agent,
                 "consume",
                 "-",
                 "--no-stream",
@@ -612,12 +989,13 @@ async fn test_streaming_invocation_cli_end_to_end() {
             .contains("parameter 'input' at line 33")
     );
 
+    let producer_error_agent = streaming_agent(&Uuid::new_v4().to_string());
     let producer_error = ctx
         .cli_with_input(
             [
                 cmd::AGENT,
                 cmd::INVOKE,
-                &agent,
+                &producer_error_agent,
                 "produce_error",
                 "--no-stream",
             ],
@@ -625,15 +1003,20 @@ async fn test_streaming_invocation_cli_end_to_end() {
         )
         .await;
     assert!(!producer_error.success());
+    assert!(
+        producer_error.stderr_text().contains("Output stream"),
+        "producer stream failure was not reported: {:?}",
+        producer_error.stderr_text()
+    );
     assert!(producer_error.stdout_text().lines().any(|line| line == "1"));
-    assert!(producer_error.stderr_text().contains("Output stream"));
 
+    let sibling_error_agent = streaming_agent(&Uuid::new_v4().to_string());
     let sibling_error = ctx
         .cli_with_input(
             [
                 cmd::AGENT,
                 cmd::INVOKE,
-                &agent,
+                &sibling_error_agent,
                 "produce_sibling_error",
                 "--no-stream",
             ],
@@ -641,26 +1024,258 @@ async fn test_streaming_invocation_cli_end_to_end() {
         )
         .await;
     assert!(!sibling_error.success());
-    assert!(sibling_error.stderr_text().contains("Output stream"));
+    assert!(
+        sibling_error.stderr_text().contains("Output stream"),
+        "sibling failure output was unexpected\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        sibling_error.stdout_text(),
+        sibling_error.stderr_text()
+    );
     assert!(sibling_error.stdout_text().contains("$[1]: 63"));
 
+    let sibling_error_closed_stderr_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let sibling_error_closed_stderr = ctx
+        .cli_with_broken_stderr([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &sibling_error_closed_stderr_agent,
+            "produce_sibling_error",
+            "--no-stream",
+        ])
+        .await;
+    assert!(sibling_error.exit_code().is_some_and(|code| code != 0));
+    assert_eq!(
+        sibling_error_closed_stderr.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "a failed invocation that reports to a closed stderr did not end with the exit code of SIGPIPE: {}",
+        sibling_error_closed_stderr.stderr_text()
+    );
+
+    let broken_pipe_agent = streaming_agent(&Uuid::new_v4().to_string());
     let broken_pipe = ctx
         .cli_with_broken_stdout([
             cmd::AGENT,
             cmd::INVOKE,
-            &agent,
+            &broken_pipe_agent,
             "produce_byte_then_wait",
             "--stdout-format",
             "raw",
         ])
         .await;
-    assert!(
-        broken_pipe.success(),
-        "broken stdout pipe was treated as failure (exit {:?}): {}",
+    assert_eq!(
         broken_pipe.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "a closed stdout did not end the invocation with the exit code of SIGPIPE: {}",
         broken_pipe.stderr_text()
     );
     assert!(!broken_pipe.stderr_text().contains("Broken pipe"));
+
+    for format in ["text", "json"] {
+        let oplog_broken_pipe = ctx
+            .cli_with_broken_stdout([
+                cmd::AGENT,
+                "oplog",
+                &producer_error_agent,
+                flag::FORMAT,
+                format,
+            ])
+            .await;
+        assert_eq!(
+            oplog_broken_pipe.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "a closed stdout did not end the {format} oplog with the exit code of SIGPIPE: {}",
+            oplog_broken_pipe.stderr_text()
+        );
+        assert!(
+            !oplog_broken_pipe.stderr_text().contains("panicked"),
+            "the {format} oplog panicked on a broken stdout pipe: {}",
+            oplog_broken_pipe.stderr_text()
+        );
+        assert!(!oplog_broken_pipe.stderr_text().contains("Broken pipe"));
+    }
+
+    let checkpoint_values = serde_json::to_string(&(0..5_000_u32).collect::<Vec<_>>()).unwrap();
+    let resume_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let resume_checkpoint = ctx.cwd_path_join("resume-invocation-session.json");
+    let resume_checkpoint_args = vec![
+        cmd::AGENT.to_string(),
+        cmd::INVOKE.to_string(),
+        resume_agent.clone(),
+        "produce".to_string(),
+        checkpoint_values.clone(),
+        flag::FORMAT.to_string(),
+        "json".to_string(),
+        "--no-stream".to_string(),
+        "--save-session".to_string(),
+        resume_checkpoint.display().to_string(),
+    ];
+    let mut detached = ctx
+        .cli_process_after(resume_checkpoint_args, "\"kind\":\"item\"", Duration::ZERO)
+        .await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let persisted = std::fs::read(&resume_checkpoint)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .is_some_and(|checkpoint| {
+                    checkpoint["deliveredOutputCursors"]
+                        .as_object()
+                        .is_some_and(|cursors| !cursors.is_empty())
+                });
+            if persisted {
+                break;
+            }
+            assert!(
+                detached.try_wait().unwrap().is_none(),
+                "the initial invocation completed before a delivery checkpoint was persisted"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the resume checkpoint was not persisted");
+    detached.start_kill().unwrap();
+    detached.wait().await.unwrap();
+
+    let saved_checkpoint: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&resume_checkpoint).unwrap()).unwrap();
+    assert!(
+        saved_checkpoint["deliveredOutputCursors"]
+            .as_object()
+            .is_some_and(|cursors| !cursors.is_empty()),
+        "checkpoint did not record the item emitted before interruption: {saved_checkpoint}"
+    );
+    let expected_idempotency_key = saved_checkpoint["idempotencyKey"]
+        .as_str()
+        .expect("checkpoint did not record the invocation idempotency key");
+    let delivered_output_cursors = saved_checkpoint["deliveredOutputCursors"].clone();
+    let resume_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut resume_attempts = 0;
+    let mut initial_rejections = 0;
+    let resumed = loop {
+        resume_attempts += 1;
+        let resumed = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                &resume_agent,
+                "produce",
+                &checkpoint_values,
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+                "--resume-session",
+                resume_checkpoint.to_str().unwrap(),
+            ])
+            .await;
+        let events = resumed.stdout_json::<serde_json::Value>();
+        let retryable_initial_rejection = !resumed.success()
+            && events.len() == 1
+            && events[0]["$type"] == "agent.invoke-session"
+            && events[0]["kind"] == "rejected"
+            && events[0]["reason"] == "invalid-attachment-state"
+            && events[0]["agentId"] == resume_agent
+            && events[0]["idempotencyKey"] == expected_idempotency_key;
+        if !retryable_initial_rejection {
+            break resumed;
+        }
+        initial_rejections += 1;
+        let retry_checkpoint: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&resume_checkpoint).unwrap()).unwrap();
+        assert_eq!(
+            retry_checkpoint["deliveredOutputCursors"], delivered_output_cursors,
+            "resume rejection changed delivered cursors on attempt {resume_attempts}: {retry_checkpoint}"
+        );
+        if tokio::time::Instant::now() >= resume_deadline {
+            panic!(
+                "checkpoint resume exhausted retries after {resume_attempts} attempts \
+                 ({initial_rejections} initial invalid-attachment-state rejections; exit {:?})\n\
+                 --- stdout ---\n{}\n--- stderr ---\n{}",
+                resumed.exit_code(),
+                resumed.stdout_text(),
+                resumed.stderr_text()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert!(
+        resumed.success(),
+        "checkpoint resume failed after {resume_attempts} attempts \
+         ({initial_rejections} initial invalid-attachment-state rejections; exit {:?})\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        resumed.exit_code(),
+        resumed.stdout_text(),
+        resumed.stderr_text()
+    );
+    if initial_rejections > 0 {
+        eprintln!(
+            "checkpoint resume succeeded after {resume_attempts} attempts with \
+             {initial_rejections} initial invalid-attachment-state rejections"
+        );
+    }
+    let resumed_events = resumed
+        .stdout()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        resumed_events
+            .iter()
+            .any(|event| { event["kind"] == "finished" && event["outcome"] == "success" })
+    );
+    assert!(
+        resumed_events
+            .iter()
+            .filter(|event| event["kind"] == "item")
+            .all(|event| event["offset"].as_u64().is_some_and(|offset| offset > 0)),
+        "resume replayed the item delivered before its checkpoint: {resumed_events:?}"
+    );
+
+    let takeover_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let takeover_checkpoint = ctx.cwd_path_join("takeover-invocation-session.json");
+    let takeover_checkpoint_args = vec![
+        cmd::AGENT.to_string(),
+        cmd::INVOKE.to_string(),
+        takeover_agent.clone(),
+        "produce_byte_then_wait".to_string(),
+        flag::FORMAT.to_string(),
+        "json".to_string(),
+        "--no-stream".to_string(),
+        "--save-session".to_string(),
+        takeover_checkpoint.display().to_string(),
+    ];
+    let mut original_attachment = ctx
+        .cli_process_after(
+            takeover_checkpoint_args,
+            "\"kind\":\"item\"",
+            Duration::from_millis(25),
+        )
+        .await;
+    let mut takeover = ctx
+        .cli_process_after(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &takeover_agent,
+                "produce_byte_then_wait",
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+                "--takeover-session",
+                takeover_checkpoint.to_str().unwrap(),
+            ],
+            "\"kind\":\"accepted\"",
+            Duration::ZERO,
+        )
+        .await;
+    assert!(
+        !tokio::time::timeout(Duration::from_secs(10), original_attachment.wait())
+            .await
+            .expect("the original attachment was not revoked by takeover")
+            .unwrap()
+            .success(),
+        "the revoked original attachment exited successfully"
+    );
+    takeover.start_kill().unwrap();
+    takeover.wait().await.unwrap();
 
     let interrupted_agent = streaming_agent(&Uuid::new_v4().to_string());
     #[cfg(unix)]
@@ -738,6 +1353,872 @@ async fn test_streaming_invocation_cli_end_to_end() {
     assert!(after_interrupt.stdout_contains("1"));
 }
 
+/// The Go external bridge against the same streaming agent: inputs, outputs,
+/// nested streams, binary lanes, cancellation and a reconnect after acceptance,
+/// plus typed configuration on a plain call.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("20 minutes")]
+async fn test_go_generated_streaming_bridge_end_to_end() {
+    let ctx = streaming_invocation_context().await;
+    let bridge_root = ctx.cwd_path_join("go-streaming-bridge");
+    for agent_type in ["StreamingRpcTarget", "ConfiguredRpcTarget"] {
+        let output = ctx
+            .cli([
+                cmd::GENERATE_BRIDGE,
+                flag::LANGUAGE,
+                "go",
+                flag::AGENT_TYPE_NAME,
+                agent_type,
+                flag::OUTPUT_DIR,
+                bridge_root.to_str().unwrap(),
+            ])
+            .await;
+        assert!(output.success_or_dump());
+    }
+
+    let worker_service_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    let (proxy, interrupted, proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+
+    let program_dir = ctx.cwd_path_join("go-streaming-e2e");
+    std::fs::create_dir_all(&program_dir).unwrap();
+    let sdks = workspace_path().join("sdks/go");
+    std::fs::write(
+        program_dir.join("go.mod"),
+        formatdoc! {r#"
+            module example.com/go-streaming-e2e
+
+            go {go}
+
+            require (
+            	golem.local/bridge/streaming-rpc-target-client v0.0.0
+            	golem.local/bridge/configured-rpc-target-client v0.0.0
+            	github.com/golemcloud/golem/sdks/go/bridge v0.0.0
+            	github.com/golemcloud/golem/sdks/go/core v0.0.0
+            )
+
+            replace golem.local/bridge/streaming-rpc-target-client => {target}
+
+            replace golem.local/bridge/configured-rpc-target-client => {configured}
+
+            replace github.com/golemcloud/golem/sdks/go/bridge => {bridge}
+
+            replace github.com/golemcloud/golem/sdks/go/core => {core}
+            "#,
+            go = versions::build_tool::GO_MIN,
+            target = bridge_root.join("streaming-rpc-target-client").display(),
+            configured = bridge_root.join("configured-rpc-target-client").display(),
+            bridge = sdks.join("bridge").display(),
+            core = sdks.join("core").display(),
+        },
+    )
+    .unwrap();
+    std::fs::write(
+        program_dir.join("main.go"),
+        formatdoc! {r#"
+            package main
+
+            import (
+            	"context"
+            	"fmt"
+            	"log"
+            	"reflect"
+            	"time"
+
+            	"github.com/golemcloud/golem/sdks/go/bridge"
+            	"github.com/golemcloud/golem/sdks/go/core/values"
+            	configured "golem.local/bridge/configured-rpc-target-client"
+            	target "golem.local/bridge/streaming-rpc-target-client"
+            )
+
+            func must[T any](v T, err error) T {{
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	return v
+            }}
+
+            func expect(what string, got, want any) {{
+            	if !reflect.DeepEqual(got, want) {{
+            		log.Fatalf("%s: got %v, want %v", what, got, want)
+            	}}
+            }}
+
+            func main() {{
+            	started := time.Now()
+            	ctx := context.Background()
+            	if err := bridge.Configure(bridge.Configuration{{
+            		Server:  bridge.Custom("{proxy}", "{token}"),
+            		AppName: "streaming-invocation",
+            		EnvName: "local",
+            	}}); err != nil {{
+            		log.Fatal(err)
+            	}}
+            	agent := must(target.GetStreamingRPCTarget(target.StreamingRPCTargetID{{Name: "go-generated-e2e"}}))
+
+            	expect("consume", must(agent.Consume(ctx, bridge.StreamOf[uint32](1, 2, 3))), []uint32{{1, 2, 3}})
+            	expect("produce", must(must(agent.Produce(ctx, []uint32{{4, 5}})).Collect(ctx)), []uint32{{4, 5}})
+            	expect("transform", must(must(agent.Transform(ctx, bridge.StreamOf[uint32](6, 7))).Collect(ctx)), []uint32{{60, 70}})
+
+            	nested := must(agent.ConsumeNested(ctx, target.NestedStreamInput{{
+            		Labels: bridge.StreamOf("left", "right"),
+            		Values: values.Some(bridge.StreamOf[uint32](10, 11)),
+            	}}))
+            	expect("consume nested", nested, values.Tuple2[[]string, []uint32]{{A: []string{{"left", "right"}}, B: []uint32{{10, 11}}}})
+
+            	var labels []string
+            	var inner [][]uint32
+            	for item, err := range must(agent.ProduceNestedItems(ctx)).All(ctx) {{
+            		if err != nil {{
+            			log.Fatal(err)
+            		}}
+            		labels = append(labels, item.Label)
+            		inner = append(inner, must(item.Values.Collect(ctx)))
+            	}}
+            	expect("nested labels", labels, []string{{"first", "second"}})
+            	expect("nested values", inner, [][]uint32{{{{1, 2}}, {{3, 4, 5}}}})
+
+            	binary := values.Binary{{0, 1, 2, 253, 254, 255}}
+            	expect("transform binary", must(must(agent.TransformBinary(ctx, bridge.StreamOf(binary))).Collect(ctx)), []values.Binary{{binary}})
+
+            	bytes := make([]uint8, 2*1024*1024+17)
+            	for i := range bytes {{
+            		bytes[i] = uint8(i)
+            	}}
+            	bytesStarted := time.Now()
+            	expect("transform bytes", must(must(agent.TransformBytes(ctx, bridge.StreamOf(bytes...))).Collect(ctx)), bytes)
+            	fmt.Printf("STREAMING_DRIVER_TIMING go transform_bytes seconds=%.3f\n", time.Since(bytesStarted).Seconds())
+
+            	cancelled := must(agent.ProduceByteThenWait(ctx))
+            	waiting, cancel := context.WithTimeout(ctx, 10*time.Second)
+            	first, ok, err := cancelled.Next(waiting)
+            	cancel()
+            	if err != nil || !ok || first != 1 {{
+            		log.Fatalf("lone packed byte: %v %v %v", first, ok, err)
+            	}}
+            	if err := cancelled.Close(); err != nil {{
+            		log.Fatal(err)
+            	}}
+
+            	described := must(must(configured.GetConfiguredRPCTarget(
+            		configured.ConfiguredRPCTargetID{{Name: "go-configured"}},
+            		configured.WithConfiguredRPCTargetConfig(configured.ConfiguredRPCTargetConfig{{
+            			Count: values.Some[uint32](7),
+            			Label: values.Some("go-label"),
+            		}}),
+            	)).Describe(ctx))
+            	expect("describe", described, values.Tuple3[string, string, uint32]{{A: "go-configured", B: "go-label", C: 7}})
+            	fmt.Printf("STREAMING_DRIVER_TIMING go execution seconds=%.3f\n", time.Since(started).Seconds())
+            	fmt.Println("GO_STREAMING_BRIDGE_E2E_OK")
+            }}
+            "#
+        },
+    )
+    .unwrap();
+
+    let toolchain = golem_cli::app::build::go_toolchain::ensure_go_toolchain(
+        &golem_cli::model::app::ApplicationConfig {
+            offline: false,
+            dev_mode: false,
+            should_colorize: false,
+            enable_wasmtime_fs_cache: false,
+        },
+    )
+    .await
+    .expect("the Golem Go toolchain");
+    let mut command = std::process::Command::new(&toolchain.go);
+    command
+        .args(["run", "."])
+        .current_dir(&program_dir)
+        .env("GOTOOLCHAIN", "local")
+        .env("GOFLAGS", "-mod=mod");
+    let output = run_generated_driver(command).await;
+    proxy_task.abort();
+    assert_generated_driver(output, "Go", "GO_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "Go driver did not reach post-acceptance reconnect coverage"
+    );
+}
+
+#[test]
+#[tag(agents_streaming)]
+#[timeout("30 minutes")]
+async fn test_generated_streaming_bridges_end_to_end() {
+    let ctx = streaming_invocation_context().await;
+
+    for language in ["rust", "typescript", "scala", "moonbit"] {
+        let bridge_root = ctx.cwd_path_join(format!("{language}-streaming-bridge"));
+        for (agent_type, package) in [
+            ("StreamingRpcTarget", "streaming-rpc-target-client"),
+            ("ConfiguredRpcTarget", "configured-rpc-target-client"),
+        ] {
+            let output = ctx
+                .cli([
+                    cmd::GENERATE_BRIDGE,
+                    flag::LANGUAGE,
+                    language,
+                    flag::AGENT_TYPE_NAME,
+                    agent_type,
+                    flag::OUTPUT_DIR,
+                    bridge_root.to_str().unwrap(),
+                ])
+                .await;
+            assert!(output.success_or_dump());
+            assert!(
+                bridge_root.join(package).exists(),
+                "generated {language} {agent_type} bridge is missing"
+            );
+        }
+    }
+
+    let worker_service_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+
+    let rust_client = ctx.cwd_path_join("rust-streaming-bridge/streaming-rpc-target-client");
+    let mut rust_manifest = std::fs::OpenOptions::new()
+        .append(true)
+        .open(rust_client.join("Cargo.toml"))
+        .unwrap();
+    writeln!(
+        rust_manifest,
+        "\n[dev-dependencies]\nfutures-util = \"0.3\"\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"time\"] }}"
+    )
+    .unwrap();
+    let (rust_proxy, rust_interrupted, rust_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+    let rust_driver = formatdoc! {r#"
+        use futures_util::{{stream, StreamExt, TryStreamExt}};
+        use golem_client::invocation_session::AgentStream;
+        use streaming_rpc_target_client::{{AgentBinary, configure, GolemServer, NestedStreamInput, StreamingRpcTarget}};
+
+        fn input<T: Send + 'static>(values: Vec<T>) -> AgentStream<T> {{
+            AgentStream::input(stream::iter(values.into_iter().map(Ok::<_, std::io::Error>)))
+        }}
+
+        #[tokio::main]
+        async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+            let started = std::time::Instant::now();
+            configure(
+                GolemServer::Custom {{
+                    url: "{rust_proxy}".parse()?,
+                    token: "{token}".to_string(),
+                }},
+                "streaming-invocation",
+                "local",
+            );
+            let agent = StreamingRpcTarget::get("rust-generated-e2e".to_string()).await?;
+
+            assert_eq!(agent.consume(input(vec![1_u32, 2, 3])).await?, vec![1, 2, 3]);
+            assert_eq!(agent.produce(vec![4, 5]).await?.try_collect::<Vec<_>>().await?, vec![4, 5]);
+            assert_eq!(agent.transform(input(vec![6_u32, 7])).await?.try_collect::<Vec<_>>().await?, vec![60, 70]);
+
+            let nested_input = NestedStreamInput {{
+                labels: input(vec!["left".to_string(), "right".to_string()]),
+                values: Some(input(vec![10_u32, 11])),
+            }};
+            assert_eq!(
+                agent.consume_nested(nested_input).await?,
+                (vec!["left".to_string(), "right".to_string()], vec![10, 11]),
+            );
+
+            let mut nested = agent.produce_nested_items().await?;
+            let mut labels = Vec::new();
+            let mut inner = Vec::new();
+            while let Some(item) = nested.next().await.transpose()? {{
+                labels.push(item.label);
+                inner.push(item.values.try_collect::<Vec<_>>().await?);
+            }}
+            assert_eq!(labels, vec!["first", "second"]);
+            assert_eq!(inner, vec![vec![1, 2], vec![3, 4, 5]]);
+
+            let binary = AgentBinary {{
+                bytes: vec![0, 1, 2, 253, 254, 255],
+                mime_type: None,
+            }};
+            let transformed = agent
+                .transform_binary(input(vec![binary.clone()]))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(transformed, vec![binary]);
+
+            let byte_count = 2 * 1024 * 1024 + 17;
+            let bytes = (0..byte_count).map(|value| value as u8).collect::<Vec<_>>();
+            let bytes_started = std::time::Instant::now();
+            let transformed_bytes = agent
+                .transform_bytes(input(bytes.clone()))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(transformed_bytes, bytes);
+            println!("STREAMING_DRIVER_TIMING rust transform_bytes seconds={{:.3}}", bytes_started.elapsed().as_secs_f64());
+
+            let mut cancelled = agent.produce_byte_then_wait().await?;
+            assert_eq!(
+                tokio::time::timeout(std::time::Duration::from_secs(10), cancelled.next())
+                    .await
+                    .map_err(|_| "timed out waiting for a lone packed output byte")?
+                    .transpose()?,
+                Some(1),
+            );
+            cancelled.cancel();
+            println!("STREAMING_DRIVER_TIMING rust execution seconds={{:.3}}", started.elapsed().as_secs_f64());
+            println!("RUST_STREAMING_BRIDGE_E2E_OK");
+            Ok(())
+        }}
+        "#};
+    std::fs::create_dir_all(rust_client.join("examples")).unwrap();
+    std::fs::write(rust_client.join("examples/e2e.rs"), rust_driver).unwrap();
+    let rust_target_dir = ctx.cwd_path_join("rust-bridge-target");
+    let mut rust_command = std::process::Command::new("cargo");
+    rust_command
+        .args(["run", "--quiet", "--example", "e2e"])
+        .env("CARGO_TARGET_DIR", &rust_target_dir)
+        .current_dir(&rust_client);
+    let rust_output = run_generated_driver(rust_command).await;
+    rust_proxy_task.abort();
+    assert_generated_driver(rust_output, "Rust", "RUST_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        rust_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "Rust driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let rust_config_client =
+        ctx.cwd_path_join("rust-streaming-bridge/configured-rpc-target-client");
+    let mut rust_config_manifest = std::fs::OpenOptions::new()
+        .append(true)
+        .open(rust_config_client.join("Cargo.toml"))
+        .unwrap();
+    writeln!(
+        rust_config_manifest,
+        "\n[dev-dependencies]\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\"] }}"
+    )
+    .unwrap();
+    let rust_config_driver = formatdoc! {r#"
+        use configured_rpc_target_client::{{configure, ConfiguredRpcTarget, GolemServer}};
+
+        #[tokio::main]
+        async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+            configure(
+                GolemServer::Custom {{
+                    url: "{worker_service_url}".parse()?,
+                    token: "{token}".to_string(),
+                }},
+                "streaming-invocation",
+                "local",
+            );
+            let agent = ConfiguredRpcTarget::get_with_config(
+                "rust-configured".to_string(),
+                Some(7),
+                Some("rust-label".to_string()),
+            ).await?;
+            assert_eq!(
+                agent.describe().await?,
+                ("rust-configured".to_string(), "rust-label".to_string(), 7),
+            );
+            println!("RUST_CONFIG_BRIDGE_E2E_OK");
+            Ok(())
+        }}
+        "#};
+    std::fs::create_dir_all(rust_config_client.join("examples")).unwrap();
+    std::fs::write(
+        rust_config_client.join("examples/e2e.rs"),
+        rust_config_driver,
+    )
+    .unwrap();
+    let mut rust_config_command = std::process::Command::new("cargo");
+    rust_config_command
+        .args(["run", "--quiet", "--example", "e2e"])
+        .env("CARGO_TARGET_DIR", &rust_target_dir)
+        .current_dir(&rust_config_client);
+    assert_generated_driver(
+        run_generated_driver(rust_config_command).await,
+        "Rust config",
+        "RUST_CONFIG_BRIDGE_E2E_OK",
+    );
+
+    let typescript_client =
+        ctx.cwd_path_join("typescript-streaming-bridge/streaming-rpc-target-client");
+    let (typescript_proxy, typescript_interrupted, typescript_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+    let typescript_driver = formatdoc! {r#"
+        import assert from 'node:assert/strict'
+        import {{ agentStream }} from '@golemcloud/golem-ts-bridge'
+        import {{ configure, StreamingRpcTarget }} from './streaming-rpc-target-client.js'
+
+        const input = <T>(values: T[]) => agentStream((async function* () {{
+          for (const value of values) yield value
+        }})())
+        const collect = async <T>(values: AsyncIterable<T>) => {{
+          const result: T[] = []
+          for await (const value of values) result.push(value)
+          return result
+        }}
+
+        configure({{
+          server: {{ type: 'custom', url: '{typescript_proxy}', token: '{token}' }},
+          application: 'streaming-invocation',
+          environment: 'local',
+        }})
+        const agent = await StreamingRpcTarget.get('typescript-generated-e2e')
+        assert.deepEqual(await agent.consume(input([1, 2, 3])), [1, 2, 3])
+        assert.deepEqual(await collect(await agent.produce([4, 5])), [4, 5])
+        assert.deepEqual(await collect(await agent.transform(input([6, 7]))), [60, 70])
+        assert.deepEqual(
+          await agent.consumeNested({{ labels: input(['left', 'right']), values: input([10, 11]) }}),
+          [['left', 'right'], [10, 11]],
+        )
+
+        const labels: string[] = []
+        const inner: number[][] = []
+        for await (const item of await agent.produceNestedItems()) {{
+          labels.push(item.label)
+          inner.push(await collect(item.values))
+        }}
+        assert.deepEqual(labels, ['first', 'second'])
+        assert.deepEqual(inner, [[1, 2], [3, 4, 5]])
+
+        const binary = {{
+          bytes: Uint8Array.from([0, 1, 2, 253, 254, 255]),
+        }}
+        const binaryResult = await collect(await agent.transformBinary(input([binary])))
+        assert.deepEqual(Array.from(binaryResult[0].bytes), Array.from(binary.bytes))
+        assert.equal(binaryResult[0].mimeType, undefined)
+
+        const transformedBytes = await collect(await agent.transformBytes(input([0, 1, 127, 128, 255])))
+        assert.deepEqual(transformedBytes, [0, 1, 127, 128, 255])
+
+        const affine = await agent.produce([8, 9])
+        const firstConsumer = affine[Symbol.asyncIterator]()
+        assert.throws(() => affine[Symbol.asyncIterator](), /only be iterated once/)
+        assert.equal((await firstConsumer.next()).value, 8)
+        await firstConsumer.return?.()
+
+        const cancelled = await agent.produceByteThenWait()
+        const cancelConsumer = cancelled[Symbol.asyncIterator]()
+        assert.equal((await cancelConsumer.next()).value, 1)
+        await cancelConsumer.return?.()
+        console.log('TYPESCRIPT_STREAMING_BRIDGE_E2E_OK')
+        "#};
+    std::fs::write(typescript_client.join("e2e.ts"), typescript_driver).unwrap();
+    let mut typescript_install = std::process::Command::new("pnpm");
+    typescript_install
+        .args(["install", "--ignore-workspace", "--ignore-scripts"])
+        .current_dir(&typescript_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_install).await,
+        "TypeScript install",
+        "",
+    );
+    let mut typescript_command = std::process::Command::new("pnpm");
+    typescript_command
+        .args(["exec", "tsx", "e2e.ts"])
+        .current_dir(&typescript_client);
+    let typescript_output = run_generated_driver(typescript_command).await;
+    typescript_proxy_task.abort();
+    assert_generated_driver(
+        typescript_output,
+        "TypeScript",
+        "TYPESCRIPT_STREAMING_BRIDGE_E2E_OK",
+    );
+    assert!(
+        typescript_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "TypeScript driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let typescript_config_client =
+        ctx.cwd_path_join("typescript-streaming-bridge/configured-rpc-target-client");
+    let typescript_config_driver = formatdoc! {r#"
+        import assert from 'node:assert/strict'
+        import {{ configure, ConfiguredRpcTarget }} from './configured-rpc-target-client.js'
+
+        configure({{
+          server: {{ type: 'custom', url: '{worker_service_url}', token: '{token}' }},
+          application: 'streaming-invocation',
+          environment: 'local',
+        }})
+        const agent = await ConfiguredRpcTarget.getWithConfig(
+          'typescript-configured',
+          7,
+          'typescript-label',
+        )
+        assert.deepEqual(await agent.describe(), ['typescript-configured', 'typescript-label', 7])
+        console.log('TYPESCRIPT_CONFIG_BRIDGE_E2E_OK')
+        "#};
+    std::fs::write(
+        typescript_config_client.join("e2e.ts"),
+        typescript_config_driver,
+    )
+    .unwrap();
+    let mut typescript_config_install = std::process::Command::new("pnpm");
+    typescript_config_install
+        .args(["install", "--ignore-workspace", "--ignore-scripts"])
+        .current_dir(&typescript_config_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_config_install).await,
+        "TypeScript config install",
+        "",
+    );
+    let mut typescript_config_command = std::process::Command::new("pnpm");
+    typescript_config_command
+        .args(["exec", "tsx", "e2e.ts"])
+        .current_dir(&typescript_config_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_config_command).await,
+        "TypeScript config",
+        "TYPESCRIPT_CONFIG_BRIDGE_E2E_OK",
+    );
+
+    let scala_client = ctx.cwd_path_join("scala-streaming-bridge/streaming-rpc-target-client");
+    let (scala_proxy, scala_interrupted, scala_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+    let scala_driver = formatdoc! {r#"
+        import golem.bridge.client.streaming_rpc_target.{{NestedStreamInput, StreamingRpcTargetClient}}
+        import golem.bridge.runtime.{{AgentBinary, AgentStream, AgentStreamStep, GolemServer, UByte, UInt}}
+        import scala.collection.mutable.ListBuffer
+        import scala.concurrent.{{Await, ExecutionContext, Future}}
+        import scala.concurrent.duration.*
+        import scala.util.Try
+
+        object Main {{
+          given ExecutionContext = ExecutionContext.global
+          val timeout = 90.seconds
+
+          def input[A](values: List[A]): AgentStream[A] = {{
+            var remaining = values
+            AgentStream.fromPull(() => Future.successful(remaining match {{
+              case head :: tail => remaining = tail; AgentStreamStep.Item(head)
+              case Nil => AgentStreamStep.End
+            }}))
+          }}
+
+          def collect[A](stream: AgentStream[A]): List[A] = {{
+            val consumer = Await.result(stream.consume(), timeout)
+            val values = ListBuffer.empty[A]
+            var done = false
+            while (!done) Await.result(consumer.pull(), timeout) match {{
+              case AgentStreamStep.Item(value) => values += value
+              case AgentStreamStep.End => done = true
+            }}
+            values.toList
+          }}
+
+          def main(args: Array[String]): Unit = {{
+            StreamingRpcTargetClient.configure(
+              GolemServer.Custom("{scala_proxy}", "{token}"),
+              "streaming-invocation",
+              "local",
+            )
+            val agent = Await.result(StreamingRpcTargetClient.get("scala-generated-e2e"), timeout)
+
+            assert(Await.result(agent.consume(input(List(UInt(1), UInt(2), UInt(3)))), timeout).map(_.value) == List(1, 2, 3))
+            assert(collect(Await.result(agent.produce(List(UInt(4), UInt(5))), timeout)).map(_.value) == List(4, 5))
+            assert(collect(Await.result(agent.transform(input(List(UInt(6), UInt(7)))), timeout)).map(_.value) == List(60, 70))
+            val nestedInput = NestedStreamInput(
+              input(List("left", "right")),
+              Some(input(List(UInt(10), UInt(11)))),
+            )
+            val nestedInputResult = Await.result(agent.consumeNested(nestedInput), timeout)
+            assert(nestedInputResult._1 == List("left", "right"))
+            assert(nestedInputResult._2.map(_.value) == List(10, 11))
+
+            val nested = collect(Await.result(agent.produceNestedItems(), timeout))
+            assert(nested.map(_.label) == List("first", "second"))
+            assert(nested.map(item => collect(item.values).map(_.value)) == List(List(1, 2), List(3, 4, 5)))
+
+            val binary = AgentBinary(Vector[Byte](0, 1, 2, -3, -2, -1), None)
+            assert(collect(Await.result(agent.transformBinary(input(List(binary))), timeout)) == List(binary))
+            assert(
+              collect(Await.result(agent.transformBytes(input(List(UByte(0), UByte(1), UByte(127), UByte(128), UByte(255)))), timeout))
+                .map(_.value) == List(0, 1, 127, 128, 255)
+            )
+
+            val affine = Await.result(agent.produce(List(UInt(8), UInt(9))), timeout)
+            val firstConsumer = Await.result(affine.consume(), timeout)
+            assert(Try(Await.result(affine.consume(), timeout)).isFailure)
+            assert(Await.result(firstConsumer.pull(), timeout) == AgentStreamStep.Item(UInt(8)))
+            Await.result(firstConsumer.drop(), timeout)
+
+            val cancelled = Await.result(agent.produceByteThenWait(), timeout)
+            val cancelConsumer = Await.result(cancelled.consume(), timeout)
+            assert(Await.result(cancelConsumer.pull(), timeout).isInstanceOf[AgentStreamStep.Item[?]])
+            Await.result(cancelConsumer.cancel(), timeout)
+            println("SCALA_STREAMING_BRIDGE_E2E_OK")
+          }}
+        }}
+        "#};
+    let scala_main_dir = scala_client.join("src/main/scala");
+    std::fs::write(scala_main_dir.join("Main.scala"), scala_driver).unwrap();
+    let mut scala_command = std::process::Command::new("sbt");
+    scala_command
+        .args(["--batch", "runMain Main"])
+        .current_dir(&scala_client);
+    let scala_output = run_generated_driver(scala_command).await;
+    scala_proxy_task.abort();
+    assert_generated_driver(scala_output, "Scala", "SCALA_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        scala_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "Scala driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let scala_config_client =
+        ctx.cwd_path_join("scala-streaming-bridge/configured-rpc-target-client");
+    let scala_config_driver = formatdoc! {r#"
+        import golem.bridge.client.configured_rpc_target.ConfiguredRpcTargetClient
+        import golem.bridge.runtime.{{GolemServer, UInt}}
+        import scala.concurrent.{{Await, ExecutionContext}}
+        import scala.concurrent.duration.*
+
+        object Main {{
+          given ExecutionContext = ExecutionContext.global
+
+          def main(args: Array[String]): Unit = {{
+            ConfiguredRpcTargetClient.configure(
+              GolemServer.Custom("{worker_service_url}", "{token}"),
+              "streaming-invocation",
+              "local",
+            )
+            val timeout = 90.seconds
+            val agent = Await.result(
+              ConfiguredRpcTargetClient.getWithConfig(
+                "scala-configured",
+                Some(UInt(7)),
+                Some("scala-label"),
+              ),
+              timeout,
+            )
+            assert(Await.result(agent.describe(), timeout) == ("scala-configured", "scala-label", UInt(7)))
+            println("SCALA_CONFIG_BRIDGE_E2E_OK")
+          }}
+        }}
+        "#};
+    let scala_config_main_dir = scala_config_client.join("src/main/scala");
+    std::fs::write(
+        scala_config_main_dir.join("Main.scala"),
+        scala_config_driver,
+    )
+    .unwrap();
+    let mut scala_config_command = std::process::Command::new("sbt");
+    scala_config_command
+        .args(["--batch", "runMain Main"])
+        .current_dir(&scala_config_client);
+    assert_generated_driver(
+        run_generated_driver(scala_config_command).await,
+        "Scala config",
+        "SCALA_CONFIG_BRIDGE_E2E_OK",
+    );
+
+    let moonbit_client = ctx.cwd_path_join("moonbit-streaming-bridge/streaming-rpc-target-client");
+    let mut moonbit_test_command = std::process::Command::new("moon");
+    moonbit_test_command
+        .args([
+            "test",
+            "--target",
+            "native",
+            "--deny-warn",
+            "runtime/ws_adapter",
+        ])
+        .current_dir(&moonbit_client);
+    let moonbit_test_output = run_generated_driver(moonbit_test_command).await;
+    assert!(
+        moonbit_test_output.status.success(),
+        "MoonBit WebSocket runtime tests failed\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&moonbit_test_output.stdout),
+        String::from_utf8_lossy(&moonbit_test_output.stderr),
+    );
+    // Cut the accepted WebSocket frame during its payload to cover EOF after header parsing.
+    let (moonbit_proxy, moonbit_interrupted, moonbit_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, true).await;
+    let moonbit_manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(moonbit_client.join("moon.mod.json")).unwrap(),
+    )
+    .unwrap();
+    let moonbit_module = moonbit_manifest["name"].as_str().unwrap();
+    let moonbit_main_pkg = formatdoc! {r#"
+        import {{
+          "moonbitlang/async",
+          "{moonbit_module}/client" @client,
+          "{moonbit_module}/runtime" @runtime,
+        }}
+
+        options(
+          "is-main": true,
+        )
+        "#};
+    let moonbit_driver = formatdoc! {r#"
+        fn uint_input(values : Array[UInt]) -> @runtime.AgentStream[UInt] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
+        fn string_input(values : Array[String]) -> @runtime.AgentStream[String] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
+        fn binary_input(values : Array[@runtime.AgentBinary]) -> @runtime.AgentStream[@runtime.AgentBinary] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
+        fn byte_input(values : Array[Byte]) -> @runtime.AgentStream[Byte] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
+        async fn collect_uint(stream : @runtime.AgentStream[UInt]) -> Array[UInt] raise {{
+          let result = []
+          while true {{
+            match stream.next() {{
+              Some(value) => result.push(value)
+              None => break
+            }}
+          }}
+          result
+        }}
+
+        async fn collect_byte(stream : @runtime.AgentStream[Byte]) -> Array[Byte] raise {{
+          let result = []
+          while true {{
+            match stream.next() {{
+              Some(value) => result.push(value)
+              None => break
+            }}
+          }}
+          result
+        }}
+
+        async fn main {{
+          @client.StreamingRpcTarget::configure(
+            @runtime.Custom("{moonbit_proxy}", "{token}"),
+            "streaming-invocation",
+            "local",
+          )
+          let agent = @client.StreamingRpcTarget::get("moonbit-generated-e2e")
+          assert_eq(agent.consume(uint_input([1, 2, 3])), [1, 2, 3])
+          assert_eq(collect_uint(agent.produce([4, 5])), [4, 5])
+          assert_eq(collect_uint(agent.transform(uint_input([6, 7]))), [60, 70])
+
+          let nested_input = @client.NestedStreamInput::{{
+            labels: string_input(["left", "right"]),
+            values: Some(uint_input([10, 11])),
+          }}
+          assert_eq(agent.consume_nested(nested_input), (["left", "right"], [10, 11]))
+
+          let nested = agent.produce_nested_items()
+          let first = nested.next().unwrap()
+          let second = nested.next().unwrap()
+          assert_true(nested.next() is None)
+          assert_eq((first.label, collect_uint(first.values)), ("first", [1, 2]))
+          assert_eq((second.label, collect_uint(second.values)), ("second", [3, 4, 5]))
+
+          let binary = @runtime.AgentBinary::{{
+            bytes: Bytes::from_array([0, 1, 2, 253, 254, 255]),
+            mime_type: None,
+          }}
+          let transformed_binary = agent.transform_binary(binary_input([binary]))
+          assert_true(transformed_binary.next() == Some(binary))
+          assert_true(transformed_binary.next() is None)
+          assert_eq(
+            collect_byte(agent.transform_bytes(byte_input([0, 1, 127, 128, 255]))),
+            [0, 1, 127, 128, 255],
+          )
+
+          let affine = agent.produce([8, 9])
+          assert_eq(affine.next(), Some(8))
+          affine.drop()
+          try affine.next() catch {{
+            _ => ()
+          }} noraise {{
+            _ => abort("expected the dropped stream to reject another read")
+          }}
+
+          let cancelled = agent.produce_byte_then_wait()
+          assert_eq(cancelled.next(), Some(1))
+          cancelled.cancel()
+          println("MOONBIT_STREAMING_BRIDGE_E2E_OK")
+        }}
+        "#};
+    let moonbit_main_dir = moonbit_client.join("main");
+    std::fs::create_dir_all(&moonbit_main_dir).unwrap();
+    std::fs::write(moonbit_main_dir.join("moon.pkg"), moonbit_main_pkg).unwrap();
+    std::fs::write(moonbit_main_dir.join("main.mbt"), moonbit_driver).unwrap();
+    let mut moonbit_command = std::process::Command::new("moon");
+    moonbit_command
+        .args(["run", "--target", "native", "--deny-warn", "main"])
+        .current_dir(&moonbit_client);
+    let moonbit_output = run_generated_driver(moonbit_command).await;
+    moonbit_proxy_task.abort();
+    assert_generated_driver(moonbit_output, "MoonBit", "MOONBIT_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        moonbit_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "MoonBit driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let moonbit_config_client =
+        ctx.cwd_path_join("moonbit-streaming-bridge/configured-rpc-target-client");
+    let moonbit_config_manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(moonbit_config_client.join("moon.mod.json")).unwrap(),
+    )
+    .unwrap();
+    let moonbit_config_module = moonbit_config_manifest["name"].as_str().unwrap();
+    let moonbit_config_main_pkg = formatdoc! {r#"
+        import {{
+          "moonbitlang/async",
+          "{moonbit_config_module}/client" @client,
+          "{moonbit_config_module}/runtime" @runtime,
+        }}
+
+        options(
+          "is-main": true,
+        )
+        "#};
+    let moonbit_config_driver = formatdoc! {r#"
+        async fn main {{
+          @client.ConfiguredRpcTarget::configure(
+            @runtime.Custom("{worker_service_url}", "{token}"),
+            "streaming-invocation",
+            "local",
+          )
+          let agent = @client.ConfiguredRpcTarget::get_with_config(
+            "moonbit-configured",
+            Some(7),
+            Some("moonbit-label"),
+          )
+          assert_eq(agent.describe(), ("moonbit-configured", "moonbit-label", 7))
+          println("MOONBIT_CONFIG_BRIDGE_E2E_OK")
+        }}
+        "#};
+    let moonbit_config_main_dir = moonbit_config_client.join("main");
+    std::fs::create_dir_all(&moonbit_config_main_dir).unwrap();
+    std::fs::write(
+        moonbit_config_main_dir.join("moon.pkg"),
+        moonbit_config_main_pkg,
+    )
+    .unwrap();
+    std::fs::write(
+        moonbit_config_main_dir.join("main.mbt"),
+        moonbit_config_driver,
+    )
+    .unwrap();
+    let mut moonbit_config_command = std::process::Command::new("moon");
+    moonbit_config_command
+        .args(["run", "--target", "native", "--deny-warn", "main"])
+        .current_dir(&moonbit_config_client);
+    assert_generated_driver(
+        run_generated_driver(moonbit_config_command).await,
+        "MoonBit config",
+        "MOONBIT_CONFIG_BRIDGE_E2E_OK",
+    );
+}
+
 #[test]
 async fn test_rust_counter() {
     let mut ctx = TestContext::new();
@@ -791,6 +2272,258 @@ async fn test_rust_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
+}
+
+/// End-to-end test for the Go SDK: creates a Go app from the composable counter
+/// template, adds a second agent package via the JSON template (proving
+/// the merged main.go barrel deploys and runs, not just compiles), then deploys
+/// and invokes methods on both agents against a live local server. This is the
+/// CLI-driven integration layer for the Go SDK — the wasi-touching RPC/host path
+/// only links and runs on wasm, so it is covered here rather than by `go test`.
+///
+/// Requires the Go toolchain + componentize-go on the PATH.
+#[test]
+#[timeout("15 minutes")]
+async fn test_go_counter() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+    let component_name = "counter:svc";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::COMPONENT_NAME,
+            component_name,
+            flag::TEMPLATE,
+            "go",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    // Compose a second agent (its own package) into the same component, so the
+    // merged main.go barrel is exercised at runtime.
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::COMPONENT_NAME,
+            component_name,
+            flag::TEMPLATE,
+            "go/json",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // CounterAgent: increment -> 1, add 5 -> 6, value -> 6.
+    let counter = format!("CounterAgent(\"{}\")", Uuid::new_v4());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "increment"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("error"));
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "1"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "add", "5"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "6"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "value"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "6"]));
+
+    // Creating and listing a task proves the composed second package runs.
+    let tasks = format!("TaskAgent(\"{}\")", Uuid::new_v4());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &tasks,
+            "createTask",
+            r#"{title: "Review the counter"}"#,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "Review the counter"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &tasks, "getTasks"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "Review the counter"]));
+}
+
+/// Builds a real Scala component and exercises streaming through both the
+/// direct guest ABI and native same-component agent RPC. This does not depend
+/// on generated cross-component bridges or public streaming bridge clients.
+#[test]
+#[timeout("15 minutes")]
+async fn test_scala_streaming_rpc_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "scala-streaming-rpc";
+    let package_name = "scala_streaming_rpc";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let fixture = ctx.test_data_path_join("scala-streaming-rpc/StreamingRpcExample.scala");
+    let source = fs::read_to_string(&fixture).unwrap().replace(
+        "package fixture.streamingrpc",
+        &format!("package {package_name}"),
+    );
+    let destination = ctx
+        .cwd_path_join("src/main/scala")
+        .join(package_name)
+        .join("StreamingRpcExample.scala");
+    fs::write_str(destination, source).unwrap();
+
+    ctx.start_server().await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let id = Uuid::new_v4().to_string();
+    let target = format!(r#"ScalaStreamingTarget("{id}-direct")"#);
+
+    let direct_input = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "consume",
+                "-",
+                "--no-stream",
+            ],
+            b"1\n2\n3\n",
+        )
+        .await;
+    assert!(
+        direct_input.success(),
+        "direct Scala stream input failed: {}",
+        direct_input.stderr_text()
+    );
+    assert!(
+        direct_input.stdout_text().contains("List(1, 2, 3)"),
+        "direct Scala stream input output: {}",
+        direct_input.stdout_text()
+    );
+
+    let direct_output = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "produce",
+                "[4, 5, 6]",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        direct_output.success(),
+        "direct Scala stream output failed: {}",
+        direct_output.stderr_text()
+    );
+    assert!(direct_output.stdout_text().contains("4\n5\n6\n"));
+
+    let direct_input_close = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "consumeFirst",
+                "-",
+                "--no-stream",
+            ],
+            "30\n".repeat(64).as_bytes(),
+        )
+        .await;
+    assert!(
+        direct_input_close.success(),
+        "direct Scala input cancellation failed: {}",
+        direct_input_close.stderr_text()
+    );
+    assert!(direct_input_close.stdout_text().contains("30"));
+
+    let direct_producer_error = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "produceError",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(!direct_producer_error.success());
+    let direct_producer_error_stderr = direct_producer_error.stderr_text();
+    assert!(
+        direct_producer_error_stderr.contains("Invocation failed")
+            || direct_producer_error_stderr.contains("Output stream"),
+        "direct Scala producer failure was not reported: {}",
+        direct_producer_error_stderr
+    );
+
+    let caller = format!(r#"ScalaStreamingCaller("{id}")"#);
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, &caller, "run"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains(
+        "input=1,2,3;output=4,5,6;mixed=mapped:70,80,90;\
+         forwarded=12,13,14;\
+         nested-input=left,right|10,11;nested-output=first:1,2|second:3,4,5;\
+         siblings=a,b|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63;\
+         input-first=30;output-first=100;after-close=42"
+    ));
+
+    let producer_error = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &caller, "callProducerError"])
+        .await;
+    assert!(!producer_error.success());
+    assert!(
+        producer_error.stderr_contains("Invocation Failed")
+            || producer_error.stderr_contains("scala-producer-failed")
+    );
+
+    let recovery_caller = format!(
+        r#"ScalaStreamingCaller("{}-stream-free-after-error")"#,
+        Uuid::new_v4()
+    );
+    let first = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &recovery_caller, "callStreamFree"])
+        .await;
+    assert!(first.success_or_dump());
+    assert!(first.stdout_contains("1"));
+
+    let second = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &recovery_caller, "callStreamFree"])
+        .await;
+    assert!(second.success_or_dump());
+    assert!(second.stdout_contains("2"));
 }
 
 /// End-to-end test for the Scala bridge generator: deploys the Rust counter
@@ -892,6 +2625,277 @@ async fn test_scala_bridge_e2e() {
     assert!(
         stdout.contains("SCALA_BRIDGE_E2E_OK first=1 second=2"),
         "Scala bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+}
+
+/// End-to-end test for the Go external bridge: deploys the Rust counter agent,
+/// generates a Go client for it, then builds and runs a small Go program that
+/// invokes the live agent through the generated client.
+#[test]
+#[timeout("10 minutes")]
+async fn test_go_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    // An ephemeral agent beside the template's durable counter: its client
+    // constructs a phantom per call and reports the instance that ran. Its
+    // configuration, one value nested, is overridden through the typed option.
+    let lib = walkdir::WalkDir::new(ctx.cwd_path())
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .find(|path| path.ends_with("src/lib.rs"))
+        .expect("the Rust component's lib.rs");
+    std::fs::write(
+        lib.with_file_name("echo_agent.rs"),
+        indoc! {r#"
+            use golem_rust::agentic::Config;
+            use golem_rust::{agent_definition, agent_implementation, ConfigSchema};
+
+            #[derive(ConfigSchema)]
+            pub struct EchoConfig {
+                pub mark: String,
+                #[config_schema(nested)]
+                pub style: EchoStyle,
+            }
+
+            #[derive(ConfigSchema)]
+            pub struct EchoStyle {
+                pub repeat: u8,
+            }
+
+            #[agent_definition(ephemeral)]
+            pub trait EchoAgent {
+                fn new(prefix: String, #[agent_config] config: Config<EchoConfig>) -> Self;
+                fn echo(&self, text: String) -> String;
+            }
+
+            struct EchoAgentImpl { prefix: String, config: Config<EchoConfig> }
+
+            #[agent_implementation]
+            impl EchoAgent for EchoAgentImpl {
+                fn new(prefix: String, #[agent_config] config: Config<EchoConfig>) -> Self {
+                    Self { prefix, config }
+                }
+                fn echo(&self, text: String) -> String {
+                    let config = self.config.get().expect("echo config");
+                    format!("{}{}{}", self.prefix, text.repeat(config.style.repeat as usize), config.mark)
+                }
+            }
+        "#},
+    )
+    .unwrap();
+    let lib_source = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(
+        &lib,
+        format!("{lib_source}\nmod echo_agent;\npub use echo_agent::*;\n"),
+    )
+    .unwrap();
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let manifest_source = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!(
+            "{manifest_source}\n{}",
+            indoc! {"
+                agents:
+                  EchoAgent:
+                    config:
+                      mark: ''
+                      style:
+                        repeat: 1
+            "}
+        ),
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let bridge_root = ctx.cwd_path_join("go-bridge");
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "go",
+            flag::AGENT_TYPE_NAME,
+            "EchoAgent",
+            flag::OUTPUT_DIR,
+            bridge_root.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "go",
+            flag::AGENT_TYPE_NAME,
+            "CounterAgent",
+            flag::OUTPUT_DIR,
+            bridge_root.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client_dir = bridge_root.join("counter-agent-client");
+    assert!(
+        client_dir.join("go.mod").exists(),
+        "generated Go bridge module is missing at {}",
+        client_dir.display()
+    );
+
+    // An ordinary Go program, requiring the generated client the way a user's
+    // would. A replace in a dependency's go.mod is ignored, so the program
+    // points the bridge runtime and core at this checkout itself.
+    let program_dir = ctx.cwd_path_join("go-e2e");
+    std::fs::create_dir_all(&program_dir).unwrap();
+    let sdks = workspace_path().join("sdks/go");
+    std::fs::write(
+        program_dir.join("go.mod"),
+        formatdoc! {r#"
+            module example.com/go-e2e
+
+            go {go}
+
+            require (
+            	golem.local/bridge/counter-agent-client v0.0.0
+            	golem.local/bridge/echo-agent-client v0.0.0
+            	github.com/golemcloud/golem/sdks/go/bridge v0.0.0
+            	github.com/golemcloud/golem/sdks/go/core v0.0.0
+            )
+
+            replace golem.local/bridge/counter-agent-client => {client}
+
+            replace golem.local/bridge/echo-agent-client => {echo}
+
+            replace github.com/golemcloud/golem/sdks/go/bridge => {bridge}
+
+            replace github.com/golemcloud/golem/sdks/go/core => {core}
+            "#,
+            go = versions::build_tool::GO_MIN,
+            client = client_dir.display(),
+            echo = bridge_root.join("echo-agent-client").display(),
+            bridge = sdks.join("bridge").display(),
+            core = sdks.join("core").display(),
+        },
+    )
+    .unwrap();
+    let server_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    std::fs::write(
+        program_dir.join("main.go"),
+        formatdoc! {r#"
+            package main
+
+            import (
+            	"context"
+            	"fmt"
+            	"log"
+
+            	"github.com/golemcloud/golem/sdks/go/bridge"
+            	"github.com/golemcloud/golem/sdks/go/core/values"
+            	client "golem.local/bridge/counter-agent-client"
+            	echo "golem.local/bridge/echo-agent-client"
+            )
+
+            func main() {{
+            	err := bridge.Configure(bridge.Configuration{{
+            		Server:  bridge.Custom("{server_url}", "{token}"),
+            		AppName: "{app_name}",
+            		EnvName: "local",
+            	}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	counter, err := client.GetCounterAgent(client.CounterAgentID{{Name: "go-e2e-counter"}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	ctx := context.Background()
+            	first, err := counter.Increment(ctx)
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	second, err := counter.Increment(ctx)
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	echoes, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	one, err := echoes.Echo(ctx, "a")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	two, err := echoes.Echo(ctx, "b")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	marked, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
+            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{Mark: values.Some("!")}}))
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	three, err := marked.Echo(ctx, "c")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	doubled, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
+            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{StyleRepeat: values.Some[uint8](2)}}))
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	four, err := doubled.Echo(ctx, "d")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s,%s,%s fresh=%t\n",
+            		first, second, one.Value, two.Value, three.Value, four.Value, one.AgentID != two.AgentID)
+            }}
+            "#
+        },
+    )
+    .unwrap();
+
+    let toolchain = golem_cli::app::build::go_toolchain::ensure_go_toolchain(
+        &golem_cli::model::app::ApplicationConfig {
+            offline: false,
+            dev_mode: false,
+            should_colorize: false,
+            enable_wasmtime_fs_cache: false,
+        },
+    )
+    .await
+    .expect("the Golem Go toolchain");
+    let output = std::process::Command::new(&toolchain.go)
+        .args(["run", "."])
+        .current_dir(&program_dir)
+        .env("GOTOOLCHAIN", "local")
+        .env("GOFLAGS", "-mod=mod")
+        .output()
+        .expect("go runs");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "go run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        program_dir.display()
+    );
+    assert!(
+        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b,go:c!,go:dd fresh=true"),
+        "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }
 
@@ -1338,55 +3342,63 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
-    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_multi_modal",
-    //     &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_multi_modal_basic",
-    //     &[r#"[text(url("foo"))]"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text",
-    //     &[r#"inline({data: "foo", text-type: none})"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text_lc",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text_lc",
-    //     &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_binary",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
+    // Multimodal with user-defined element types
+    run_and_assert(
+        &ctx,
+        "fun_multi_modal",
+        &[r#"[Text("foo"), Image([1, 2, 3]), Data(Data { id: 1, name: "foo" })]"#],
+    )
+    .await;
+
+    // Multimodal with the built-in unstructured text / binary element types
+    run_and_assert(
+        &ctx,
+        "fun_multi_modal_basic",
+        &[
+            r#"[Text(Url(Url("https://example.com/foo"))), Binary(Inline(Binary("data:text/plain;base64,Zm9v")))]"#,
+        ],
+    )
+    .await;
+
+    // Unstructured text
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(&ctx, "fun_unstructured_text", &[r#"Inline(Text("foo"))"#]).await;
+
+    // Unstructured text with language restrictions
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text_lc",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text_lc",
+        &[r#"Inline(Text("foo", "en"))"#],
+    )
+    .await;
+
+    // Unstructured binary with mime type restrictions
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_binary",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_binary",
+        &[r#"Inline(Binary("data:text/plain;base64,Zm9v"))"#],
+    )
+    .await;
 }
 
 /// End-to-end test for the Rust guest tool bridge: a provider component
@@ -1400,15 +3412,11 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// generated crate. The deployment covers registering a tool-only component
 /// (the provider exports no agents).
 ///
-/// The invocation currently asserts the worker executor's `golem:tool/host`
-/// sidecar-backend error: through a real deployed invocation, the generated
-/// client is proven to reach the executor's tool invocation host function.
-/// Once the tool runtime is implemented in the worker executor, the invocation
-/// is expected to succeed and return `ok:echo:hello`; flip the trailing
-/// assertions accordingly — only then does this test validate the generated
-/// command path and input encoding against the provider.
+/// The invocation validates the generated command path and input encoding by
+/// calling the deployed provider and asserting its echo result.
 #[test]
-#[timeout("15 minutes")]
+#[tag(agents_guest_bridge)]
+#[timeout("20 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
     let app_name = "tool-bridge";
@@ -1592,22 +3600,367 @@ async fn test_rust_tool_guest_bridge_e2e() {
         ])
         .await;
 
-    // The worker executor's `golem:tool/host` invocation requires a sidecar
-    // backend that this test server does not configure, so the agent method must
-    // return that error, proving the generated client reaches the executor's tool
-    // host. Once the tool runtime lands, replace
-    // this with:
-    //     assert!(outputs.success_or_dump());
-    //     assert!(outputs.stdout_contains("ok:echo:hello"));
-    let invocation_reached_tool_host_stub = outputs
-        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
-    if !invocation_reached_tool_host_stub {
-        outputs.dump();
-    }
+    assert!(outputs.success_or_dump());
     assert!(
-        invocation_reached_tool_host_stub,
-        "expected the tool invocation to fail with the executor's golem:tool/host stub error"
+        outputs.stdout_contains("ok:echo:hello"),
+        "expected the Rust consumer to return the provider's echo result"
     );
+}
+
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("20 minutes")]
+async fn rust_ambient_native_client_executes_through_golem() {
+    let mut ctx = TestContext::new();
+    ctx.enable_native_conformance_tool();
+    ctx.start_server().await;
+
+    fs::create_dir_all(ctx.cwd_path_join("native-client")).unwrap();
+    ctx.cd("native-client");
+    for component_name in [
+        "native-client:consumer",
+        "native-client:unauthorized",
+        "native-client:middleware",
+    ] {
+        let output = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                "rust",
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(output.success_or_dump());
+    }
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {version}
+            app: native-client
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+                tools:
+                  middleware: [native-conformance-audit]
+            components:
+              native-client:consumer:
+                dir: consumer
+                templates: rust
+                dependencies:
+                  tools: [native-conformance]
+              native-client:unauthorized:
+                dir: unauthorized
+                templates: rust
+              native-client:middleware:
+                dir: middleware
+                templates: rust
+            tools:
+              middleware:
+                native-conformance-audit:
+                  component: native-client:middleware
+            agents:
+              NativeConsumer:
+                tools:
+                  native-conformance: {{}}
+              UnauthorizedNativeConsumer:
+                initialCard:
+                  lowerBound:
+                    positive:
+                      - 'filesystem(?agent) @ ?agent : * : /**'
+                      - 'network() @ ?agent : * : *'
+                      - 'env(?agent) @ ?agent : * : *'
+                      - 'oplog(?agent) @ ?agent : * : *'
+                      - 'config(?agent) @ ?agent : * : *'
+                      - 'secret(?env) @ ?agent : * : *'
+                      - 'agent(?env/*/*) @ ?agent : * : *'
+                      - 'environment(?env) @ ?agent : * : *'
+                      - 'component(?component) @ ?agent : * : *'
+                      - 'kv(?env) @ ?agent : * : *.**'
+                      - 'blob(?env) @ ?agent : * : *.**'
+                      - 'rdbms(?env) @ ?agent : * : *.*.*'
+                      - 'card(?account) @ ?agent : * : *'
+                    negative:
+                      - 'tool(?env/*/*) @ ?agent : * : *'
+                  upperBound: {{ positive: [], negative: [] }}
+            bridge:
+              rust:
+                internal:
+                  tools: [native-conformance]
+        "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("middleware/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::schema::{SchemaValue, TypedSchemaValue};
+            use golem_rust::tool::{
+                InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+                ToolInvokeError, UnderlyingTool,
+            };
+            use golem_rust::universal_tool_middleware;
+
+            #[universal_tool_middleware(name = "native-conformance-audit")]
+            async fn audit(
+                tool_name: String,
+                _tool_metadata: Tool,
+                command_path: Vec<String>,
+                input: TypedSchemaValue,
+                stdin: Option<InputStream>,
+                stdout: Option<OutputStream>,
+                stderr: Option<OutputStream>,
+                _principal: Principal,
+                underlying: UnderlyingTool,
+            ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+                let input = if tool_name == "native-conformance"
+                    && command_path == ["middleware".to_string()]
+                {
+                    let (graph, mut value) = input.into_parts();
+                    let SchemaValue::Record { fields } = &mut value else {
+                        panic!("middleware input is a record")
+                    };
+                    let SchemaValue::String(argument) = &mut fields[0] else {
+                        panic!("middleware argument is a string")
+                    };
+                    *argument = format!("middleware({argument})");
+                    TypedSchemaValue::new(graph, value)
+                } else {
+                    input
+                };
+                underlying
+                    .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+                    .await
+            }
+        "#},
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            use native_conformance_tool_guest_client::NativeConformanceClient;
+
+            #[agent_definition]
+            pub trait NativeConsumer {
+                fn new(name: String) -> Self;
+                async fn exercise(&self) -> Vec<String>;
+            }
+
+            struct NativeConsumerImpl;
+
+            #[agent_implementation]
+            impl NativeConsumer for NativeConsumerImpl {
+                fn new(_name: String) -> Self { Self }
+
+                async fn exercise(&self) -> Vec<String> {
+                    let client = NativeConformanceClient::new();
+                    let success = client
+                        .structured("alpha".into(), 7)
+                        .await
+                        .expect("structured native result");
+                    let error = client
+                        .supported_error("expected".into())
+                        .await
+                        .expect_err("declared native error");
+                    let stream = client
+                        .finite_stream("payload".into())
+                        .await
+                        .expect("start finite native stream")
+                        .collect()
+                        .await;
+                    let stream_result = stream.result.expect("finite native stream result");
+                    let stream_stdout = stream.stdout
+                        .expect("collect finite native stdout")
+                        .expect("finite native stream omitted stdout");
+                    let middleware = client
+                        .middleware("input".into())
+                        .await
+                        .expect("native invocation through middleware");
+                    vec![
+                        format!("success:{}:{}:{}", success.value, success.count, success.agent_authorized),
+                        format!("error:{error:?}"),
+                        format!("stream:{}:{}", String::from_utf8(stream_stdout).unwrap(), stream_result.count),
+                        format!("middleware:{middleware}"),
+                    ]
+                }
+            }
+
+        "#},
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("unauthorized/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            use native_conformance_tool_guest_client::NativeConformanceClient;
+
+            #[agent_definition]
+            pub trait UnauthorizedNativeConsumer {
+                fn new(name: String) -> Self;
+                async fn denied(&self) -> String;
+            }
+
+            struct UnauthorizedNativeConsumerImpl;
+
+            #[agent_implementation]
+            impl UnauthorizedNativeConsumer for UnauthorizedNativeConsumerImpl {
+                fn new(_name: String) -> Self { Self }
+
+                async fn denied(&self) -> String {
+                    NativeConformanceClient::new()
+                        .structured("denied".into(), 0)
+                        .await
+                        .expect_err("agent without a tool grant must be rejected")
+                        .to_string()
+                }
+            }
+        "#},
+    )
+    .unwrap();
+
+    let cargo_path = ctx.cwd_path_join("consumer/Cargo.toml");
+    let cargo = fs::read_to_string(&cargo_path).unwrap();
+    fs::write_str(
+        &cargo_path,
+        cargo.replace(
+            "[dependencies]",
+            "[dependencies]\nnative-conformance-tool-guest-client = { path = \"../golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client\" }",
+        ),
+    )
+    .unwrap();
+    let unauthorized_cargo_path = ctx.cwd_path_join("unauthorized/Cargo.toml");
+    let unauthorized_cargo = fs::read_to_string(&unauthorized_cargo_path).unwrap();
+    fs::write_str(
+        &unauthorized_cargo_path,
+        unauthorized_cargo.replace(
+            "[dependencies]",
+            "[dependencies]\nnative-conformance-tool-guest-client = { path = \"../golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client\" }",
+        ),
+    )
+    .unwrap();
+
+    let build = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(build.success_or_dump());
+    assert!(
+        ctx.cwd_path_join(
+            "golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client/Cargo.toml"
+        )
+        .is_file()
+    );
+    assert!(
+        !ctx.cwd_path_join("provider").exists(),
+        "ambient native client must not select a local provider component"
+    );
+
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    let invoke = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "NativeConsumer(\"rust\")",
+            "exercise",
+        ])
+        .await;
+    assert!(invoke.success_or_dump());
+    for expected in [
+        "success:alpha:7:true",
+        "error:Tool(Rejected",
+        "stream:first:payload|second:2",
+        "middleware:leaf(middleware(input))",
+    ] {
+        assert!(
+            invoke.stdout_contains(expected),
+            "missing independent native conformance evidence: {expected}"
+        );
+    }
+    let denied = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "UnauthorizedNativeConsumer(\"rust\")",
+            "denied",
+        ])
+        .await;
+    assert!(denied.success_or_dump());
+    assert!(
+        denied.stdout_contains("permission target Tool")
+            && denied.stdout_contains("is not allowed")
+            && !denied.stdout_contains("Evidence { value: \"denied\""),
+        "the unauthorized agent must return a tool permission denial without native fixture evidence"
+    );
+
+    let generated_path = ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client/src/lib.rs",
+    );
+    let initial_generated = fs::read_to_string(&generated_path).unwrap();
+    assert!(!initial_generated.contains("fn refreshed"));
+
+    ctx.server_process.take().unwrap().kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.add_env_var(
+        golem_native_tool::conformance_fixture::TEST_FIXTURE_ENV,
+        "2",
+    );
+    ctx.start_server().await;
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            use native_conformance_tool_guest_client::NativeConformanceClient;
+
+            #[agent_definition]
+            pub trait NativeConsumer {
+                fn new(name: String) -> Self;
+                async fn refreshed(&self) -> u64;
+            }
+
+            struct NativeConsumerImpl;
+
+            #[agent_implementation]
+            impl NativeConsumer for NativeConsumerImpl {
+                fn new(_name: String) -> Self { Self }
+
+                async fn refreshed(&self) -> u64 {
+                    NativeConformanceClient::new()
+                        .refreshed()
+                        .await
+                        .expect("refreshed native contract")
+                }
+            }
+        "#},
+    )
+    .unwrap();
+    let refreshed_build = ctx
+        .cli([flag::YES, cmd::BUILD, "native-client:consumer"])
+        .await;
+    assert!(refreshed_build.success_or_dump());
+    let refreshed_generated = fs::read_to_string(&generated_path).unwrap();
+    assert!(refreshed_generated.contains("fn refreshed"));
+    assert_ne!(initial_generated, refreshed_generated);
+
+    let refreshed_deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(refreshed_deploy.success_or_dump());
+    let refreshed_invoke = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "NativeConsumer(\"refresh\")",
+            "refreshed",
+        ])
+        .await;
+    assert!(refreshed_invoke.success_or_dump());
+    assert!(refreshed_invoke.stdout_contains("2"));
 }
 
 /// Deploys a single component whose discovered metadata contains both an agent
@@ -1715,6 +4068,309 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
     assert!(outputs.success_or_dump());
 }
 
+/// Starts the server and deploys a component with the tool `raw-output`. Its commands `emit`
+/// and `flood` write to the raw stdout of the tool, and `flood-diagnostics` writes to its raw
+/// stderr. The two flood commands write more than a pipe holds.
+async fn deploy_raw_output_tool(ctx: &mut TestContext) {
+    let app_name = "tool-raw-stdout";
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "tool-raw-stdout:provider",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: tool-raw-stdout
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              tool-raw-stdout:provider:
+                dir: .
+                templates: rust
+                tools:
+                  raw-output: {{}}
+
+            tools:
+              raw-output: {{}}
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::agentic::OutputStream;
+            use golem_rust::{tool_definition, tool_implementation};
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait RawOutput {
+                async fn emit(&self, stdout: OutputStream);
+                fn repeat(&self, text: String, count: u32) -> String;
+                async fn flood(&self, stdout: OutputStream);
+                #[arg(diagnostics, channel = "stderr")]
+                async fn flood_diagnostics(&self, diagnostics: OutputStream);
+            }
+
+            struct RawOutputImpl;
+
+            #[tool_implementation]
+            impl RawOutput for RawOutputImpl {
+                async fn emit(&self, mut stdout: OutputStream) {
+                    stdout.write(vec![0, 0xff, b'R', b'A', b'W']).await.unwrap();
+                }
+
+                fn repeat(&self, text: String, count: u32) -> String {
+                    text.repeat(count as usize)
+                }
+
+                async fn flood(&self, mut stdout: OutputStream) {
+                    write_more_than_a_pipe_holds(&mut stdout).await;
+                }
+
+                async fn flood_diagnostics(&self, mut diagnostics: OutputStream) {
+                    write_more_than_a_pipe_holds(&mut diagnostics).await;
+                }
+            }
+
+            async fn write_more_than_a_pipe_holds(stream: &mut OutputStream) {
+                for _ in 0..64 {
+                    if stream.write(vec![b'x'; 65536]).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn tool_invoke_stdout_contains_only_raw_bytes() {
+    let mut ctx = TestContext::new();
+
+    let failed = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(!failed.success());
+    assert!(failed.stdout().is_empty());
+    assert!(
+        !failed.stderr.is_empty(),
+        "failure diagnostics must reach stderr"
+    );
+
+    deploy_raw_output_tool(&mut ctx).await;
+
+    let help = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--",
+                "repeat",
+                "--help",
+            ],
+            &[],
+        )
+        .await;
+    assert!(help.success(), "{}", String::from_utf8_lossy(&help.stderr));
+    assert!(String::from_utf8_lossy(help.stdout()).contains("repeat"));
+    let repeated = ctx
+        .cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "--idempotency-key",
+                "structured-cli-repeat",
+                "raw-output",
+                "--",
+                "repeat",
+                "a b",
+                "3",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        repeated.success(),
+        "{}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    assert!(String::from_utf8_lossy(repeated.stdout()).contains("a ba ba b"));
+
+    let lookup = ctx
+        .cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "--lookup",
+                "--idempotency-key",
+                "structured-cli-repeat",
+                "raw-output",
+                "--",
+                "repeat",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        lookup.success(),
+        "{}",
+        String::from_utf8_lossy(&lookup.stderr)
+    );
+    assert!(String::from_utf8_lossy(lookup.stdout()).contains("a ba ba b"));
+
+    let output = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        output.success(),
+        "tool invocation failed with code {:?}: {}",
+        output.exit_code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout(), &[0, 0xff, b'R', b'A', b'W']);
+
+    let output = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--output",
+                "raw.bin",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        output.success(),
+        "file-output invocation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(ctx.cwd_path_join("raw.bin")).unwrap(),
+        [0, 0xff, b'R', b'A', b'W']
+    );
+    assert!(
+        !output.stdout().is_empty(),
+        "file mode retains its report on stdout"
+    );
+}
+
+/// The reader of the raw stdout or the raw stderr of `tool invoke` takes the first bytes and
+/// leaves while the tool goes on writing. The end of the process comes from the failed write of
+/// the raw output.
+#[test]
+#[timeout("15 minutes")]
+async fn a_reader_that_leaves_the_raw_output_of_tool_invoke_ends_the_command_with_the_exit_code_of_sigpipe()
+ {
+    let mut ctx = TestContext::new();
+    deploy_raw_output_tool(&mut ctx).await;
+
+    for (raw_stream, command, closed) in [
+        ("--stdout", "flood", ClosedStream::Stdout),
+        ("--stderr", "flood-diagnostics", ClosedStream::Stderr),
+    ] {
+        let output = tokio::time::timeout(
+            Duration::from_secs(90),
+            ctx.cli_closing_output(
+                [
+                    cmd::TOOL,
+                    cmd::INVOKE,
+                    "--component",
+                    "tool-raw-stdout:provider",
+                    "raw-output",
+                    raw_stream,
+                    "--",
+                    command,
+                ],
+                closed,
+                CloseWhen::AfterBytes(16),
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("tool invoke {raw_stream} kept running after the reader had left")
+        });
+        let open_stream = match closed {
+            ClosedStream::Stdout => output.stderr_text(),
+            ClosedStream::Stderr => String::from_utf8_lossy(output.stdout()).into_owned(),
+        };
+        assert_eq!(
+            output.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "tool invoke {raw_stream} after the reader left did not end with the exit code of SIGPIPE: {open_stream}"
+        );
+        assert!(!open_stream.contains("panicked"));
+        assert!(!open_stream.contains("Broken pipe"));
+    }
+}
+
 /// End-to-end test for the Rust guest agent bridge: a provider component
 /// defines a real `CounterAgent`, the app manifest lists it under
 /// `dependencies.agents`, and a consumer component calls it through the
@@ -1726,6 +4382,7 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
 /// linking against the generated crate. The deployment and invocation also prove
 /// the generated guest client reaches the worker executor's Wasm RPC path.
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_rust_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -1891,6 +4548,7 @@ fn add_ts_guest_bridge_source(ctx: &TestContext, package_name: &str, generated_s
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_ts_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2008,6 +4666,7 @@ async fn test_ts_agent_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_ts_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2161,18 +4820,222 @@ async fn test_ts_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub = outputs
-        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
-    if !reached_tool_host_stub {
-        outputs.dump();
-    }
+    assert!(outputs.success_or_dump());
     assert!(
-        reached_tool_host_stub,
-        "expected the TypeScript tool client to reach the executor's golem:tool/host stub"
+        outputs.stdout_contains("ok:echo:hello"),
+        "expected the TypeScript consumer to return the provider's echo result"
+    );
+}
+
+/// A Go component calling an agent in another component through the guest
+/// client `golem build` generates for it. Asserts that the CLI generated the
+/// client where the consumer's go.mod points, and that a call made through it
+/// reaches the provider and comes back.
+///
+/// The consumer calls straight after deploying, while the larger Rust provider
+/// may still be compiling. That call can outlast the executor's RPC idle
+/// window, so this also covers a Go caller being suspended mid-call and resumed
+/// with the result.
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("15 minutes")]
+async fn test_go_agent_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "go-agent-bridge";
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for (template, component_name) in [
+        ("rust", "go-agent-bridge:provider"),
+        ("go", "go-agent-bridge:consumer"),
+    ] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                template,
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    merge_into_manifest(
+        &ctx.cwd_path_join("golem.yaml"),
+        indoc! {r#"
+            components:
+              go-agent-bridge:consumer:
+                dependencies:
+                  agents:
+                    - go-agent-bridge:provider/CounterAgent
+            agents:
+              CounterAgent:
+                config:
+                  step: 1
+        "#},
+    )
+    .unwrap();
+
+    // The provider's counter steps by a configured amount, which the consumer
+    // overrides for one instance through the generated client's typed option.
+    fs::write_str(
+        ctx.cwd_path_join("provider/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::agentic::Config;
+            use golem_rust::{agent_definition, agent_implementation, endpoint, ConfigSchema};
+
+            #[derive(ConfigSchema)]
+            pub struct CounterConfig {
+                pub step: u32,
+            }
+
+            #[agent_definition(mount = "/counters/{name}")]
+            pub trait CounterAgent {
+                fn new(name: String, #[agent_config] config: Config<CounterConfig>) -> Self;
+
+                #[endpoint(post = "/increment")]
+                fn increment(&mut self) -> u32;
+            }
+
+            struct CounterImpl {
+                count: u32,
+                config: Config<CounterConfig>,
+            }
+
+            #[agent_implementation]
+            impl CounterAgent for CounterImpl {
+                fn new(_name: String, #[agent_config] config: Config<CounterConfig>) -> Self {
+                    Self { count: 0, config }
+                }
+
+                fn increment(&mut self) -> u32 {
+                    self.count += self.config.get().expect("counter config").step;
+                    self.count
+                }
+            }
+        "#},
+    )
+    .unwrap();
+
+    // The Go template brings its own CounterAgent, which would collide with the
+    // provider's; the consumer gets an agent of its own instead. The component
+    // directory, and so the Go module path, is whatever `golem new` chose, so
+    // it is read back rather than assumed.
+    let consumer = ctx.cwd_path_join("consumer");
+    let go_mod = consumer.join("go.mod");
+    let module = fs::read_to_string(&go_mod)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .expect("the consumer's go.mod names its module");
+    fs::remove(consumer.join("agents/counter")).unwrap();
+    fs::write_str(
+        consumer.join("agents/consumer/consumer.go"),
+        indoc! {r#"
+            package consumer
+
+            import "github.com/golemcloud/golem/sdks/go/golem"
+
+            type ID struct{ Name string }
+
+            type IncrementProviderIn struct{ ProviderName string }
+
+            var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterConsumerAgent"})
+
+            var IncrementProvider = Agent.Method[IncrementProviderIn, string]("incrementProvider")
+        "#},
+    )
+    .unwrap();
+    fs::write_str(
+        consumer.join("agents/consumer/impl/impl.go"),
+        formatdoc! {r#"
+            package impl
+
+            import (
+            	"fmt"
+
+            	"{module}/agents/consumer"
+
+            	provider "golem.local/bridge/counter-agent-guest-client"
+
+            	"github.com/golemcloud/golem/sdks/go/golem"
+            )
+
+            type state struct{{}}
+
+            var agent = consumer.Agent.Implement(func(consumer.ID) *state {{ return &state{{}} }})
+
+            func init() {{
+            	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
+            		counter := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName}}))
+            		stepped := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName + "-stepped"}},
+            			provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}})))
+            		return fmt.Sprintf("ok:%d:%d", golem.Must(counter.Increment()), golem.Must(stepped.Increment()))
+            	}})
+            }}
+        "#},
+    )
+    .unwrap();
+    let main_go = consumer.join("main.go");
+    fs::write_str(
+        &main_go,
+        fs::read_to_string(&main_go).unwrap().replace(
+            &format!("{module}/agents/counter/impl"),
+            &format!("{module}/agents/consumer/impl"),
+        ),
+    )
+    .unwrap();
+
+    // As in every other SDK, the consumer names the generated client itself.
+    fs::write_str(
+        &go_mod,
+        fs::read_to_string(&go_mod).unwrap()
+            + indoc! {r#"
+
+                require golem.local/bridge/counter-agent-guest-client v0.0.0
+
+                replace golem.local/bridge/counter-agent-guest-client => ../golem-temp/bridge-sdk/go/internal/counter-agent-guest-client
+            "#},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/go/internal/counter-agent-guest-client/client.go")
+            .exists(),
+        "golem build should generate the Go guest client where the consumer's go.mod points"
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let consumer_name = Uuid::new_v4().to_string();
+    let provider_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("CounterConsumerAgent(\"{consumer_name}\")"),
+            "incrementProvider",
+            &format!("\"{provider_name}\""),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("ok:1:5"),
+        "expected the Go consumer to return ok:1:5 through the generated guest client"
     );
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_moonbit_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2309,6 +5172,7 @@ async fn test_moonbit_agent_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_moonbit_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2488,16 +5352,10 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub = outputs.success()
-        && outputs.stdout_contains(
-            "golem:tool/host tool invocation requires the sidecar invocation backend",
-        );
-    if !reached_tool_host_stub {
-        outputs.dump();
-    }
+    assert!(outputs.success_or_dump());
     assert!(
-        reached_tool_host_stub,
-        "expected the MoonBit tool invocation to reach the executor's tool-host stub"
+        outputs.stdout_contains("ok:echo:hello"),
+        "expected the MoonBit consumer to return the provider's echo result"
     );
 }
 
@@ -2557,6 +5415,132 @@ async fn test_ts_counter() {
 }
 
 #[test]
+async fn test_previous_invocation_failed_revert_workflow() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, "failed-revert", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd("failed-revert");
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter-agent.ts"),
+        indoc! { r#"
+            import { z } from 'zod';
+            import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+
+            export const CounterAgent = defineAgent({
+              name: 'CounterAgent',
+              id: { name: z.string() },
+              http: http.mount('/counters/{name}'),
+              methods: {
+                value: method({ input: {}, returns: z.number() }),
+                increment: method({ input: {}, returns: z.number() }),
+                fail: method({ input: {}, returns: z.number() }),
+              },
+            });
+
+            export const CounterAgentImpl = CounterAgent.implement({
+              init: () => ({ count: 0 }),
+              methods: {
+                value() {
+                  return this.count;
+                },
+                increment() {
+                  this.count += 1;
+                  return this.count;
+                },
+                fail() {
+                  console.error('intentional failure stderr');
+                  throw new Error('intentional invocation failure');
+                },
+              },
+            });
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            "retry-policy",
+            "create",
+            "no-retries",
+            "--priority",
+            "100",
+            "--predicate",
+            "true",
+            "--policy",
+            "never",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let agent_id = r#"CounterAgent("quote ' and space")"#;
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, agent_id, "increment"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("1"));
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "fail"]).await;
+    assert!(!outputs.success());
+
+    let outputs = ctx.cli([cmd::AGENT, "resume", agent_id]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("Previous Invocation Failed"));
+    assert!(outputs.stderr_contains("agent revert"));
+
+    let outputs = ctx.cli([cmd::AGENT, "stream", agent_id]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("Previous Invocation Failed"));
+    assert!(outputs.stderr_contains("agent revert"));
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "value"]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains_ordered([
+        "Previous Invocation Failed",
+        "intentional failure stderr",
+        "intentional invocation failure",
+        "To discard the failed invocation",
+        "agent revert",
+        "External side effects",
+    ]));
+    assert!(outputs.stderr_contains("--number-of-invocations 1"));
+    assert!(!outputs.stderr_contains("agent revert --yes"));
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "revert",
+            agent_id,
+            "--number-of-invocations",
+            "1",
+        ])
+        .await;
+    assert!(!outputs.success());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "revert",
+            agent_id,
+            "--number-of-invocations",
+            "1",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "value"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("1"));
+}
+
+#[test]
 async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
     let mut ctx = TestContext::new();
     let app_name = "long-agent-id-rejected";
@@ -2595,7 +5579,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         &component_source_code_main_file,
         indoc! { r#"
             import { z } from 'zod';
-            import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
             export const TargetAgent = defineAgent({
               name: 'TargetAgent',
@@ -2614,8 +5598,6 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               },
             });
 
-            const targetClient = clientFor(TargetAgent);
-
             export const CallerAgent = defineAgent({
               name: 'CallerAgent',
               id: { id: z.string() },
@@ -2628,7 +5610,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               init: ({ id }) => ({ id: id.id }),
               methods: {
                 async callTarget({ targetId }) {
-                  return await targetClient({ id: targetId }).ping();
+                  return await TargetAgent.client.get({ id: targetId }).ping();
                 },
               },
             });
@@ -2848,27 +5830,50 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""foo""#]).await;
 
-    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
-    // // Unstructured text type
-    // run_and_assert(&ctx, "funUnstructuredText", &["url(\"foo\")"]).await;
-    //
-    // // Unstructured binary
-    // run_and_assert(&ctx, "funUnstructuredBinary", &["url(\"foo\")"]).await;
-    //
-    // // Multimodal
-    // run_and_assert(
-    //     &ctx,
-    //     "funMultimodal",
-    //     &["[text(inline({data: \"data\", text-type: none}))]"],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "funMultimodalAdvanced",
-    //     &["[text(\"foo\")]"],
-    // )
-    // .await;
+    // Unstructured text type
+    run_and_assert(
+        &ctx,
+        "funUnstructuredText",
+        &[r#"{tag: "url", value: Url("https://example.com/foo")}"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funUnstructuredText",
+        &[r#"{tag: "inline", value: Text("foo")}"#],
+    )
+    .await;
+
+    // Unstructured binary
+    run_and_assert(
+        &ctx,
+        "funUnstructuredBinary",
+        &[r#"{tag: "url", value: Url("https://example.com/foo")}"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funUnstructuredBinary",
+        &[r#"{tag: "inline", value: Binary("data:application/json;base64,e30")}"#],
+    )
+    .await;
+
+    // Multimodal
+    run_and_assert(
+        &ctx,
+        "funMultimodal",
+        &[r#"[{tag: "text", value: {tag: "inline", value: Text("data")}}, {tag: "binary", value: {tag: "url", value: Url("https://example.com/foo")}}]"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funMultimodalAdvanced",
+        &[r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#],
+    )
+    .await;
 
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""bar""#]).await;
@@ -3241,7 +6246,6 @@ async fn test_naming_extremes() {
         ])
         .await;
     assert!(outputs.success_or_dump());
-
     let outputs = ctx
         .cli([
             cmd::AGENT,
@@ -3617,6 +6621,473 @@ async fn test_agent_list_mode_filter_in_ts_repl() {
     .await;
 }
 
+fn write_update_await_agent(
+    ctx: &TestContext,
+    revision_marker: u64,
+    ping_prefix: &str,
+    reject_snapshot: bool,
+) {
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        formatdoc! { r#"
+            use golem_rust::{{agent_definition, agent_implementation}};
+
+            const REVISION_MARKER: u64 = {revision_marker};
+            const PING_PREFIX: &str = "{ping_prefix}";
+            const REJECT_SNAPSHOT: bool = {reject_snapshot};
+
+            #[agent_definition(snapshotting = "enabled")]
+            pub trait UpdateAwaitAgent {{
+                fn new(id: String) -> Self;
+                fn ping(&self) -> String;
+                fn revision_marker(&self) -> u64;
+                fn wait(&self);
+            }}
+
+            struct UpdateAwaitAgentImpl {{
+                id: String,
+            }}
+
+            #[agent_implementation]
+            impl UpdateAwaitAgent for UpdateAwaitAgentImpl {{
+                fn new(id: String) -> Self {{
+                    Self {{ id }}
+                }}
+
+                fn ping(&self) -> String {{
+                    format!("{{}}:{{}}", PING_PREFIX, self.id)
+                }}
+
+                fn revision_marker(&self) -> u64 {{
+                    REVISION_MARKER
+                }}
+
+                fn wait(&self) {{
+                    std::thread::sleep(std::time::Duration::from_secs(3600));
+                }}
+
+                async fn save_snapshot(&self) -> Result<Vec<u8>, String> {{
+                    Ok(self.id.as_bytes().to_vec())
+                }}
+
+                async fn load_snapshot(
+                    bytes: Vec<u8>,
+                    _context: golem_rust::agentic::SnapshotRestoreContext,
+                ) -> Result<Self, String> {{
+                    if REJECT_SNAPSHOT {{
+                        Err("manual snapshot rejected".to_string())
+                    }} else {{
+                        String::from_utf8(bytes)
+                            .map(|id| Self {{ id }})
+                            .map_err(|error| error.to_string())
+                    }}
+                }}
+            }}
+        "# },
+    )
+    .unwrap();
+}
+
+async fn build_and_deploy_update_await_agent(
+    ctx: &TestContext,
+    component_name: &str,
+    expected_revision: u64,
+    ping_prefix: &str,
+    reject_snapshot: bool,
+) {
+    write_update_await_agent(ctx, expected_revision, ping_prefix, reject_snapshot);
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::GET,
+            component_name,
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let component = outputs
+        .stdout_json::<UpdateAwaitComponentView>()
+        .into_iter()
+        .next()
+        .expect("component get must produce structured output");
+    assert_eq!(component.component_revision, expected_revision);
+}
+
+async fn invoke_update_await_agent(ctx: &TestContext, id: &str, ping_prefix: &str) {
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!(r#"UpdateAwaitAgent("{id}")"#),
+            "ping",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains(format!("{ping_prefix}:{id}")));
+}
+
+async fn get_update_await_metadata(ctx: &TestContext, agent: &str) -> UpdateAwaitAgentMetadata {
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::GET, agent, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    outputs
+        .stdout_json::<UpdateAwaitAgentGetView>()
+        .into_iter()
+        .next()
+        .expect("agent get must produce structured output")
+        .metadata
+}
+
+async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &str) {
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::LIST,
+            "UpdateAwaitAgent",
+            flag::FORMAT,
+            "json",
+            "--max-count",
+            "10",
+            "--precise",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let listed_agent = outputs
+        .stdout_json::<UpdateAwaitAgentListView>()
+        .into_iter()
+        .next()
+        .expect("agent list must produce structured output")
+        .agents
+        .into_iter()
+        .find(|listed| listed.agent_id == agent)
+        .expect("queued agent must be listed");
+    assert_eq!(listed_agent.updates.len(), 1);
+    let pending = &listed_agent.updates[0];
+    assert_eq!(pending.kind, "PendingUpdate");
+    assert_eq!(pending.mode, "manual");
+    assert_eq!(pending.target_revision, 1);
+
+    let outputs = ctx
+        .cli([cmd::AGENT, "oplog", agent, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let entries = outputs.stdout_json::<serde_json::Value>();
+    let queued = entries
+        .iter()
+        .find(|entry| {
+            entry
+                .pointer("/entry/type")
+                .and_then(|value| value.as_str())
+                == Some("PendingAgentInvocation")
+                && entry
+                    .pointer("/entry/invocation/type")
+                    .and_then(|value| value.as_str())
+                    == Some("ManualUpdate")
+                && entry
+                    .pointer("/entry/invocation/targetRevision")
+                    .and_then(|value| value.as_u64())
+                    == Some(1)
+        })
+        .expect("the manual update must still be queued");
+    assert_eq!(pending.pending_update_index, queued["index"].as_u64());
+    // Metadata projects a queued manual invocation as pending before snapshot preparation writes
+    // a PendingUpdate entry. Check that distinction in the oplog, not the metadata projection.
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["entry"]["type"] == "PendingUpdate")
+    );
+}
+
+fn output_contains(outputs: &crate::app::Output, expected: &str) -> bool {
+    outputs.stdout_contains(expected) || outputs.stderr_contains(expected)
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_update_await_correlates_exact_admitted_attempts() {
+    let mut ctx = TestContext::new();
+    let app_name = "agent-update-await-correlation";
+    let component_name = "agent-update-await-correlation:rust-main";
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: {app_name}
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              {app_name}:rust-main:
+                templates: rust
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 0, "stable", false).await;
+    for id in ["queued", "bulk", "automatic"] {
+        invoke_update_await_agent(&ctx, id, "stable").await;
+    }
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 1, "stable", false).await;
+
+    let queued_agent = r#"UpdateAwaitAgent("queued")"#;
+    // Disable-wakeup only suppresses immediate activation; shard recovery can still start queued
+    // work. An interrupted agent stays stopped through recovery as well.
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, queued_agent, "wait", "--trigger"])
+        .await;
+    assert!(outputs.success_or_dump());
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let status = get_update_await_metadata(&ctx, queued_agent).await.status;
+            if status == "Running" || status == "Suspended" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the invocation must start before it can be interrupted");
+    let outputs = ctx.cli([cmd::AGENT, "interrupt", queued_agent]).await;
+    assert!(outputs.success_or_dump());
+    assert_eq!(
+        get_update_await_metadata(&ctx, queued_agent).await.status,
+        "Interrupted"
+    );
+
+    ctx.server_process.take().unwrap().kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "update",
+            queued_agent,
+            "manual",
+            "1",
+            "--disable-wakeup",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert_queued_manual_update_before_pending(&ctx, queued_agent).await;
+
+    let outputs = ctx
+        .cli([cmd::AGENT, "update", queued_agent, "manual", "1", "--await"])
+        .await;
+    assert!(!outputs.success());
+    assert!(output_contains(
+        &outputs,
+        "The same update is already in progress"
+    ));
+
+    let automatic_agent = r#"UpdateAwaitAgent("automatic")"#;
+    invoke_update_await_agent(&ctx, "automatic", "stable").await;
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "update",
+            automatic_agent,
+            "automatic",
+            "1",
+            "--await",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let automatic_attempts_before_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(automatic_attempts_before_bulk, 1);
+
+    let outputs = ctx
+        .cli([
+            "update-agents",
+            "--update-mode",
+            "manual",
+            "--await",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(!outputs.success());
+    let bulk_result = outputs
+        .stdout_json::<UpdateAwaitBulkResult>()
+        .into_iter()
+        .next()
+        .expect("bulk update must produce structured output");
+    let bulk_agent_ids = bulk_result
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"bulk\")"));
+    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"queued\")"));
+    assert!(!bulk_agent_ids.contains("UpdateAwaitAgent(\"automatic\")"));
+    assert_eq!(bulk_agent_ids.len(), 2);
+    assert_eq!(bulk_result.errors.len(), 1);
+    assert_eq!(
+        bulk_result.errors[0].agent_id,
+        "UpdateAwaitAgent(\"queued\")"
+    );
+    assert!(
+        bulk_result.errors[0]
+            .error
+            .contains("The same update is already in progress")
+    );
+    let bulk_agent = r#"UpdateAwaitAgent("bulk")"#;
+    let bulk_metadata = get_update_await_metadata(&ctx, bulk_agent).await;
+    assert!(bulk_metadata.updates.iter().any(|update| {
+        update.kind == "SuccessfulUpdate" && update.target_revision == 1 && update.mode == "manual"
+    }));
+    let automatic_attempts_after_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(
+        automatic_attempts_after_bulk,
+        automatic_attempts_before_bulk
+    );
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 2, "stable", false).await;
+
+    for (agent, mode) in [(bulk_agent, "manual"), (automatic_agent, "automatic")] {
+        let outputs = ctx
+            .cli([cmd::AGENT, "update", agent, mode, "2", "--await"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 3, "changed", true).await;
+
+    for (agent, mode) in [(bulk_agent, "manual"), (automatic_agent, "automatic")] {
+        for expected_failure_count in 1..=2 {
+            let outputs = ctx
+                .cli([cmd::AGENT, "update", agent, mode, "3", "--await"])
+                .await;
+            assert!(!outputs.success());
+
+            let metadata = get_update_await_metadata(&ctx, agent).await;
+            let failures = metadata
+                .updates
+                .iter()
+                .filter(|update| {
+                    update.kind == "FailedUpdate"
+                        && update.target_revision == 3
+                        && update.mode == mode
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(failures.len(), expected_failure_count);
+            let indexes = failures
+                .iter()
+                .map(|failure| {
+                    failure
+                        .pending_update_index
+                        .expect("an admitted update must have an attempt index")
+                })
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(indexes.len(), expected_failure_count);
+            let selected_failure = failures
+                .iter()
+                .max_by_key(|failure| failure.pending_update_index)
+                .unwrap();
+            assert!(
+                output_contains(&outputs, &selected_failure.timestamp),
+                "{mode} update did not report the newly admitted attempt's failure"
+            );
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitComponentView {
+    component_revision: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitAgentGetView {
+    metadata: UpdateAwaitAgentMetadata,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UpdateAwaitAgentListView {
+    agents: Vec<UpdateAwaitListedAgent>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitListedAgent {
+    agent_id: String,
+    updates: Vec<UpdateAwaitRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitAgentMetadata {
+    status: String,
+    updates: Vec<UpdateAwaitRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitRecord {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: String,
+    target_revision: u64,
+    pending_update_index: Option<u64>,
+    mode: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkResult {
+    agents: Vec<UpdateAwaitBulkAgent>,
+    errors: Vec<UpdateAwaitBulkError>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkAgent {
+    agent_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkError {
+    agent_id: String,
+    error: String,
+}
+
 // JSON view of the `agent list` structured output. We only need the `agents`
 // array and the rendered `agentId` field; serde ignores the `outputType`
 // discriminator injected by the CLI's structured-output wrapper.
@@ -3669,4 +7140,192 @@ fn check_agent_types_golden_file(
     mint_file.write_all(formatted_agent_types_json.as_bytes())?;
 
     Ok(())
+}
+
+/// Builds and deploys the Rust template app, invokes `CounterAgent` twice, and returns the agent id.
+async fn deploy_counter_agent_with_invocations(ctx: &mut TestContext, app_name: &str) -> String {
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let agent = format!("CounterAgent(\"{}\")", Uuid::new_v4());
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &agent, "increment"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+    agent
+}
+
+/// The JSON document embedded in a generated oplog viewer page.
+fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
+    let open_tag = "<script id=\"oplog-data\" type=\"application/json\">";
+    let start = html
+        .find(open_tag)
+        .expect("the viewer page must embed its data document")
+        + open_tag.len();
+    let end = start + html[start..].find("</script>").unwrap();
+    serde_json::from_str(&html[start..end]).expect("the embedded document must be valid JSON")
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_oplog_html_viewer() {
+    let mut ctx = TestContext::new();
+    let agent = deploy_counter_agent_with_invocations(&mut ctx, "oplog-html-viewer").await;
+
+    let html_path = ctx.cwd_path_join("viewer/oplog.html");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            &agent,
+            "--html",
+            html_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Generated HTML oplog viewer with"));
+    assert!(
+        !outputs.stdout_contains("CREATE"),
+        "the text dump must not be printed when the page is written"
+    );
+
+    let html = fs::read_to_string(&html_path).unwrap();
+    let document = embedded_oplog_viewer_document(&html);
+    assert_eq!(document["mode"], "static");
+    assert!(
+        document["agentId"]
+            .as_str()
+            .unwrap()
+            .contains("CounterAgent"),
+        "{document}"
+    );
+    let entries = document["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["index"], 1);
+    assert_eq!(entries[0]["entry"]["type"], "Create");
+    assert!(entries.iter().any(|entry| {
+        entry["entry"]["type"] == "AgentInvocationStarted"
+            && entry["entry"]["invocation"]["methodName"] == "increment"
+    }));
+
+    // With a structured format the entries are still streamed on stdout.
+    let json_html_path = ctx.cwd_path_join("viewer/oplog-json.html");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            &agent,
+            flag::FORMAT,
+            "json",
+            "--html",
+            json_html_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let streamed = outputs.stdout_json::<serde_json::Value>();
+    assert_eq!(streamed.len(), entries.len());
+    assert!(json_html_path.is_file());
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_oplog_served_viewer() {
+    let mut ctx = TestContext::new();
+    let agent = deploy_counter_agent_with_invocations(&mut ctx, "oplog-served-viewer").await;
+
+    let (mut server, serving_line) = ctx
+        .cli_process_after_line(
+            [
+                cmd::AGENT,
+                "oplog",
+                &agent,
+                "--serve",
+                "--port",
+                "0",
+                "--no-open",
+            ],
+            "Serving oplog viewer at",
+        )
+        .await;
+    let url = serving_line[serving_line.find("http://").unwrap()..]
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(url.starts_with("http://127.0.0.1:"), "{serving_line}");
+
+    let client = reqwest::Client::new();
+    let get = |path: &str| client.get(format!("{url}{path}")).send();
+
+    let page = get("").await.unwrap();
+    assert!(page.status().is_success());
+    let document = embedded_oplog_viewer_document(&page.text().await.unwrap());
+    assert_eq!(document["mode"], "live");
+    assert!(document["entries"].as_array().unwrap().is_empty());
+    assert!(document["pageSize"].as_u64().unwrap() > 0);
+
+    let first_page: serde_json::Value = get("api/oplog?count=2")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_entries = first_page["entries"].as_array().unwrap();
+    assert_eq!(first_entries.len(), 2);
+    assert_eq!(first_entries[0]["index"], 1);
+    assert_eq!(first_entries[0]["entry"]["type"], "Create");
+    let cursor = &first_page["next"];
+    assert!(
+        cursor.is_object(),
+        "the first page must hand out a cursor: {first_page}"
+    );
+
+    let second_page: serde_json::Value = get(&format!(
+        "api/oplog?from=1&count=2&cursorIndex={}&cursorRevision={}",
+        cursor["nextOplogIndex"], cursor["currentComponentRevision"]
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let second_entries = second_page["entries"].as_array().unwrap();
+    assert_eq!(second_entries[0]["index"], 3);
+
+    let query_page: serde_json::Value = get("api/oplog?query=invoke")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let query_entries = query_page["entries"].as_array().unwrap();
+    assert!(!query_entries.is_empty());
+    assert!(
+        query_entries.iter().all(|entry| {
+            entry["entry"]["type"]
+                .as_str()
+                .unwrap()
+                .contains("Invocation")
+        }),
+        "{query_page}"
+    );
+
+    let metadata: serde_json::Value = get("api/agent").await.unwrap().json().await.unwrap();
+    assert!(metadata["status"].is_string(), "{metadata}");
+    assert!(
+        metadata["lastOplogIndex"].as_u64().unwrap() >= 3,
+        "{metadata}"
+    );
+
+    server.start_kill().unwrap();
+    server.wait().await.unwrap();
 }

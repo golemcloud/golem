@@ -10,7 +10,7 @@ struct CounterAgent {
 ///|
 /// Creates a new counter with the given name
 fn CounterAgent::new(name : String) -> CounterAgent {
-  { name, value: 0 }
+  { name, value: 0, }
 }
 
 ///|
@@ -25,8 +25,21 @@ pub fn CounterAgent::increment(self : Self) -> UInt64 {
 ///|
 /// Returns the current value of the counter
 #derive.endpoint(get="/value")
-pub fn CounterAgent::get_value(self : Self) -> UInt64 {
+pub fn CounterAgent::value(self : Self) -> UInt64 {
   self.value
+}
+
+///|
+#derive.endpoint(post="/add")
+pub fn CounterAgent::add(self : Self, by : UInt64) -> UInt64 {
+  self.value += by
+  self.value
+}
+
+///|
+#derive.endpoint(post="/reset")
+pub fn CounterAgent::reset(self : Self) -> Unit {
+  self.value = 0
 }
 
 ///|

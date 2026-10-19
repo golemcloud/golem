@@ -1,0 +1,174 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package golem
+
+import (
+	"errors"
+	"fmt"
+	"reflect"
+
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+)
+
+// Permission cards.
+//
+// A permission card is delegated authority, received from the host or another
+// call and handed on as a method or tool argument or result. It wraps a host
+// handle: there is nothing to construct, and the host checks every use. A card
+// is affine: sending a card moves it, and the copy that was sent is unusable
+// afterwards, even when the call fails. Card management — deriving, inspecting,
+// installing and revoking cards — is in permissions.go.
+//
+//	type ForwardIn struct{ Card golem.PermissionCard }
+//
+//	var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.PermissionCard {
+//	    return Accept.MustCall(Receiver.Get(ReceiverID{Name: "target"}), AcceptIn{Card: in.Card})
+//	})
+//
+// The card types are not convertible into each other. A receiver decodes a
+// card, from a call or a [TypedValue], as the type its parameter or Go type
+// declares. The host refuses an agent call input or output whose card does
+// not match the declared kind. A
+// [ScopeCard] is not a permission card at all: it cannot be sent, only
+// attached to awaited calls.
+
+// ErrPermissionCardMoved reports a card used after it was handed on.
+var ErrPermissionCardMoved = errors.New("golem: the permission card was moved")
+
+// PermissionCard is a card whose grants name concrete owners and resources.
+type PermissionCard struct{ st *permissionCardState }
+
+// PolymorphicPermissionCard is a card whose grants may leave the owner or the
+// resource id open, to be filled in where it is used.
+type PolymorphicPermissionCard struct{ pst *permissionCardState }
+
+// ScopeCard is a card from [DeriveScope], or the scope card lent to the
+// current invocation, listed by [Wallet]. It is valid only during that
+// invocation, and it cannot be sent, installed or revoked: attach it to
+// awaited calls to lend its grants to the callees.
+type ScopeCard struct{ sst *permissionCardState }
+
+type permissionCardState struct{ h *types.PermissionCard }
+
+// errPermissionCardJSON reports an attempt to serialize a card, or to build
+// one from JSON: a card is a host handle, not data.
+var errPermissionCardJSON = errors.New("golem: a permission card cannot be serialized; it is a host handle, not data")
+
+// MarshalJSON refuses: a card is a host handle, not data.
+func (PermissionCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*PermissionCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
+
+// MarshalJSON refuses: a card is a host handle, not data.
+func (PolymorphicPermissionCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*PolymorphicPermissionCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
+
+// MarshalJSON refuses: a card is a host handle, not data.
+func (ScopeCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*ScopeCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
+
+// MarshalJSON refuses: a card is a host handle, not data.
+func (WalletCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*WalletCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
+
+func (c PermissionCard) cardState() *permissionCardState            { return c.st }
+func (c PermissionCard) polymorphic() bool                          { return false }
+func (c PolymorphicPermissionCard) cardState() *permissionCardState { return c.pst }
+func (c PolymorphicPermissionCard) polymorphic() bool               { return true }
+func (c ScopeCard) cardState() *permissionCardState                 { return c.sst }
+
+// errScopeCardNotSendable is the definition error of a type that holds a
+// [ScopeCard] where a value is sent.
+const errScopeCardNotSendable = "golem.ScopeCard cannot be sent: it is valid only in the invocation that derived it; attach it to an awaited call with WithScopeCard"
+
+// Definition errors of the card-management types that have no schema.
+const (
+	errCardIDNotSendable     = "golem.CardID cannot be sent: it is an opaque identifier with no wire form; compare it within the component that read it"
+	errHolderNotSendable     = "golem.Holder cannot be sent: it has no wire form; send the AgentID, account or application id and build the Holder where it is used"
+	errLifespanNotSendable   = "golem.Lifespan cannot be sent: it has no wire form; send a time.Duration or the ISO-8601 text and build the Lifespan where it is used"
+	errWalletCardNotSendable = "golem.WalletCard cannot be sent: send the PermissionCard from Concrete or the PolymorphicPermissionCard from Template"
+)
+
+// markScopeCardInvalid makes ScopeCard a definition error.
+func markScopeCardInvalid(c *engine.Codec) { markNotSendable(c, errScopeCardNotSendable) }
+
+// markNotSendable makes a type with no schema a definition error. A value
+// encoded through a type that was never validated still fails loudly, so the
+// encode gives back the cards it already moved.
+func markNotSendable(c *engine.Codec, why string) {
+	engine.MarkInvalid(c, "%s", why)
+	c.Encode = func(*engine.ValBuilder, reflect.Value) int32 {
+		panic(&engine.EncodeError{Msg: why})
+	}
+}
+
+// compilePermissionCard lowers a card type to the WIT permission-card type.
+// Encoding moves the card, and gives it back when the encode fails before the
+// host takes the value. Decoding adopts the received card and takes it out of
+// the value, so no second decode of the same value can adopt it again.
+func compilePermissionCard(c *engine.Codec, polymorphic bool) {
+	c.Body = func(*engine.GraphBuilder) types.SchemaTypeBody {
+		return types.MakeSchemaTypeBodyPermissionCardType(types.PermissionCardSpec{Polymorphic: polymorphic})
+	}
+	c.Encode = func(b *engine.ValBuilder, v reflect.Value) int32 {
+		st := v.Interface().(AnyPermissionCard).cardState()
+		if st == nil || st.h == nil {
+			panic(&engine.EncodeError{Msg: ErrPermissionCardMoved.Error()})
+		}
+		h := st.h
+		st.h = nil
+		b.Moved(func() { st.h = h })
+		return b.Push(types.MakeSchemaValueNodePermissionCardHandle(h))
+	}
+	c.Decode = func(d *engine.Decoder, dst reflect.Value, idx int32) error {
+		n, err := d.Node(idx)
+		if err != nil {
+			return err
+		}
+		if n.Tag() != types.SchemaValueNodePermissionCardHandle {
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
+		}
+		h := n.PermissionCardHandle()
+		if h == nil {
+			return ErrPermissionCardTaken
+		}
+		d.Take(idx, types.MakeSchemaValueNodePermissionCardHandle(nil))
+		st := &permissionCardState{h: h}
+		if polymorphic {
+			dst.Set(reflect.ValueOf(PolymorphicPermissionCard{pst: st}))
+		} else {
+			dst.Set(reflect.ValueOf(PermissionCard{st: st}))
+		}
+		return nil
+	}
+}
+
+// releaseCard gives a card handle back to the host. A failed decode of a
+// received value releases the value's cards with it, as nothing else holds
+// them.
+func releaseCard(h *types.PermissionCard) { permissionsHostOps.release(h) }
+
+// ErrPermissionCardTaken reports a value whose permission card already moved
+// out of it, by a decode or a send: the value can no longer be decoded or
+// sent whole.
+var ErrPermissionCardTaken = engine.ErrPermissionCardTaken

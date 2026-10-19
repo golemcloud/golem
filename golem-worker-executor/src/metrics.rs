@@ -86,6 +86,23 @@ const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
     2.5, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0,
 ];
 
+/// Tick-duration buckets for the oplog sweep. They reach past the shared set's one minute, so
+/// ticks against a slow store stay measurable.
+const OPLOG_SWEEP_TICK_BUCKETS: &[f64; 9] =
+    &[0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0];
+
+/// Buckets for the deletes and the prunes of filesystem snapshots. A prune that repacks a large
+/// repository takes minutes, past the shared set's one minute.
+const SNAPSHOT_STORE_BUCKETS: &[f64; 14] = &[
+    0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0,
+];
+
+/// Buckets for the age of a restored filesystem snapshot: from one minute to 30 days.
+const SNAPSHOT_AGE_BUCKETS: &[f64; 13] = &[
+    60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0, 21600.0, 43200.0, 86400.0, 259200.0, 604800.0,
+    1209600.0, 2592000.0,
+];
+
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
 /// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
 /// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
@@ -107,6 +124,28 @@ const MEMORY_SIZE_BUCKETS: &[f64; 16] = &[
     536870912.0,  // 512 MiB
     1073741824.0, // 1 GiB
 ];
+
+/// Declares the enum of the values of a metric label, with the value of each variant and the list
+/// of all variants.
+macro_rules! label_values {
+    ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $label:literal,)+ }) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $name {
+            $($(#[$variant_meta])* $variant,)+
+        }
+
+        impl $name {
+            const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
+            fn label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label,)+
+                }
+            }
+        }
+    };
+}
 
 pub mod component {
     use std::time::Duration;
@@ -297,7 +336,6 @@ pub mod events {
 pub mod workers {
     use golem_common::model::AgentStatus;
     use lazy_static::lazy_static;
-    use prometheus::core::Number;
     use prometheus::*;
     use std::time::Duration;
 
@@ -318,11 +356,6 @@ pub mod workers {
             "worker_eviction_total",
             "Number of workers evicted from memory",
             &["class"]
-        )
-        .unwrap();
-        static ref WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
-            "worker_filesystem_semaphore_available",
-            "Available filesystem semaphore permits (bytes)"
         )
         .unwrap();
         pub static ref WORKER_MEMORY_RESIDENT_COUNT: GaugeVec = register_gauge_vec!(
@@ -429,6 +462,12 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref REPLAY_METADATA_SCAN_ENTRIES_TOTAL: CounterVec = register_counter_vec!(
+            "replay_metadata_scan_entries_total",
+            "Number of oplog entries scanned for recovery metadata when a replay generation starts, by the start of the replayed history (snapshot/initial)",
+            &["start"]
+        )
+        .unwrap();
         static ref AGENT_STATUS_RECOMPUTE_TOTAL: CounterVec = register_counter_vec!(
             "agent_status_recompute_total",
             "Number of agent status recomputes by the baseline used (cache/checkpoint/full)",
@@ -447,11 +486,49 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
-        static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
-            "golem_agent_filesystem_lifecycle_seconds",
-            "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
-            &["operation", "outcome"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "invocation_result_resolution_total",
+            "Invocation-result resolutions by the lookup path and outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_chunks_total",
+            "Physical invocation-result index catch-up chunks completed"
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_entries_total",
+            "Oplog entries processed while catching up the physical invocation-result index"
+        )
+        .unwrap();
+        static ref AGENT_IDENTITY_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "agent_identity_resolution_total",
+            "Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution",
+            &["event"]
+        )
+        .unwrap();
+        static ref STALE_RUNNING_WORKER_TOTAL: CounterVec = register_counter_vec!(
+            "stale_running_worker_total",
+            "Stale recovery-index members removed by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref STATUS_CACHE_PUBLICATION_TOTAL: CounterVec = register_counter_vec!(
+            "status_cache_publication_total",
+            "Status cache publication events by cache and reconciliation path; fallback and eventual reconciliation are separate events",
+            &["cache", "event"]
+        )
+        .unwrap();
+        static ref DERIVED_CACHE_PUBLICATION_FAILED_TOTAL: CounterVec = register_counter_vec!(
+            "derived_cache_publication_failed_total",
+            "Derived-cache publications that failed while atomically applying expiry",
+            &["cache"]
+        )
+        .unwrap();
+        static ref FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL: Counter = register_counter!(
+            "foreign_stream_fingerprint_mismatch_total",
+            "Foreign durable-stream accesses rejected because the current fingerprint differs"
         )
         .unwrap();
     }
@@ -499,6 +576,12 @@ pub mod workers {
             .inc();
     }
 
+    pub fn record_replay_metadata_scan(start: &'static str, entries: u64) {
+        REPLAY_METADATA_SCAN_ENTRIES_TOTAL
+            .with_label_values(&[start])
+            .inc_by(entries as f64);
+    }
+
     pub fn record_agent_status_recompute(source: &'static str) {
         AGENT_STATUS_RECOMPUTE_TOTAL
             .with_label_values(&[source])
@@ -517,14 +600,43 @@ pub mod workers {
             .inc();
     }
 
-    pub fn record_agent_filesystem_lifecycle(
-        operation: &'static str,
-        success: bool,
-        elapsed: Duration,
-    ) {
-        AGENT_FILESYSTEM_LIFECYCLE_SECONDS
-            .with_label_values(&[operation, if success { "success" } else { "failure" }])
-            .observe(elapsed.as_secs_f64());
+    pub fn record_invocation_result_resolution(outcome: &'static str) {
+        INVOCATION_RESULT_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_invocation_result_index_catch_up(entries: usize) {
+        INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
+        INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
+    }
+
+    pub fn record_agent_identity_resolution(outcome: &'static str) {
+        AGENT_IDENTITY_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_stale_running_worker(reason: &'static str) {
+        STALE_RUNNING_WORKER_TOTAL
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    pub fn record_status_cache_publication(cache: &'static str, outcome: &'static str) {
+        STATUS_CACHE_PUBLICATION_TOTAL
+            .with_label_values(&[cache, outcome])
+            .inc();
+    }
+
+    pub fn record_derived_cache_publication_failed(cache: &'static str) {
+        DERIVED_CACHE_PUBLICATION_FAILED_TOTAL
+            .with_label_values(&[cache])
+            .inc();
+    }
+
+    pub fn record_foreign_stream_fingerprint_mismatch() {
+        FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL.inc();
     }
 
     pub fn set_worker_count_by_status(status: &'static str, count: f64) {
@@ -741,18 +853,6 @@ pub mod workers {
         WORKER_EVICTION_TOTAL.with_label_values(&[class]).inc();
     }
 
-    pub fn set_filesystem_semaphore_available(permits: u64) {
-        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.set(permits.into_f64());
-    }
-
-    pub fn dec_filesystem_semaphore_available(permits: u64) {
-        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.sub(permits.into_f64());
-    }
-
-    pub fn inc_filesystem_semaphore_available(permits: u64) {
-        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.add(permits.into_f64());
-    }
-
     pub fn record_worker_kv_cache_value_size(bytes: usize) {
         WORKER_KV_CACHE_VALUE_SIZE_BYTES
             .with_label_values(&[crate::metrics::storage::executor_id()])
@@ -919,6 +1019,7 @@ pub mod scheduler {
             ScheduledAction::CompletePromise { .. } => "complete_promise",
             ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
             ScheduledAction::Invoke { .. } | ScheduledAction::InvokeEphemeral { .. } => "invoke",
+            ScheduledAction::ExpireDurableStreamSession { .. } => "expire_stream_session",
             ScheduledAction::Resume { .. } => "resume",
         }
     }
@@ -927,14 +1028,174 @@ pub mod scheduler {
 pub mod sharding {
     use lazy_static::lazy_static;
     use prometheus::*;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     lazy_static! {
         static ref ASSIGNED_SHARD_COUNT: Gauge =
             register_gauge!("assigned_shard_count", "Current number of assigned shards").unwrap();
+        static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
+            "stale_shard_delivery_total",
+            "Number of shard deliveries dropped for naming a revision older than the last applied",
+            &["delivery"]
+        )
+        .unwrap();
+        static ref SHARD_LEASE_EXPIRY_TIMESTAMP_SECONDS: Gauge = register_gauge!(
+            "shard_lease_expiry_timestamp_seconds",
+            "Unix time at which the shard lease of this executor lapses unless it is renewed"
+        )
+        .unwrap();
+        static ref SHARD_LEASE_RENEWALS_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "shard_lease_renewals_total",
+            "Number of shard lease renewal attempts, by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref SHARD_ADMISSION_REFUSALS_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "shard_admission_refusals_total",
+            "Number of agent admissions refused by the shard assignment, by reason",
+            &["reason"]
+        )
+        .unwrap();
     }
 
     pub fn record_assigned_shard_count(size: usize) {
         ASSIGNED_SHARD_COUNT.set(size as f64);
+    }
+
+    /// The outcome of one shard lease renewal attempt, as the `outcome` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardLeaseRenewalOutcome {
+        /// The shard manager granted a new lease.
+        Granted,
+        /// No assignment is installed yet, so there is no lease to renew.
+        NotRegistered,
+        /// The shard manager did not answer within the RPC deadline.
+        Timeout,
+        /// The shard manager no longer knows this executor, which then re-registers.
+        LeaseNotFound,
+        /// Any other failure of the RPC.
+        Failed,
+    }
+
+    impl ShardLeaseRenewalOutcome {
+        const ALL: [Self; 5] = [
+            Self::Granted,
+            Self::NotRegistered,
+            Self::Timeout,
+            Self::LeaseNotFound,
+            Self::Failed,
+        ];
+
+        fn label(self) -> &'static str {
+            match self {
+                Self::Granted => "granted",
+                Self::NotRegistered => "not_registered",
+                Self::Timeout => "timeout",
+                Self::LeaseNotFound => "lease_not_found",
+                Self::Failed => "failed",
+            }
+        }
+    }
+
+    /// Why the shard assignment refused to admit an agent, as the `reason` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardAdmissionRefusal {
+        /// No assignment is installed yet.
+        NotRegistered,
+        /// The shard lease has lapsed: the self-fence.
+        LeaseLapsed,
+        /// The agent is on a shard this executor does not hold, which is normal during a
+        /// rebalance.
+        NotOwned,
+    }
+
+    impl ShardAdmissionRefusal {
+        const ALL: [Self; 3] = [Self::NotRegistered, Self::LeaseLapsed, Self::NotOwned];
+
+        fn label(self) -> &'static str {
+            match self {
+                Self::NotRegistered => "not_registered",
+                Self::LeaseLapsed => "lease_lapsed",
+                Self::NotOwned => "not_owned",
+            }
+        }
+    }
+
+    /// Exports every renewal outcome and admission refusal at zero, so that a dashboard or an
+    /// alert reads 0 instead of no data before the first one happens.
+    ///
+    /// Called when the executor registers with a shard manager, so that a single-shard executor,
+    /// which has no lease, exports none of the lease metrics.
+    pub fn record_shard_lease_metrics_started() {
+        for outcome in ShardLeaseRenewalOutcome::ALL {
+            SHARD_LEASE_RENEWALS_TOTAL.with_label_values(&[outcome.label()]);
+        }
+        for refusal in ShardAdmissionRefusal::ALL {
+            SHARD_ADMISSION_REFUSALS_TOTAL.with_label_values(&[refusal.label()]);
+        }
+    }
+
+    /// Records the expiry of the held lease as wall-clock time.
+    ///
+    /// Wall-clock time and not the remaining seconds, so that `expiry - time()` keeps counting
+    /// down in Prometheus when the renewal loop stops while the metrics endpoint still answers.
+    pub fn record_shard_lease_expiry(expires_at: Instant) {
+        let remaining = expires_at.saturating_duration_since(Instant::now());
+        let expires_at = (SystemTime::now() + remaining)
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        SHARD_LEASE_EXPIRY_TIMESTAMP_SECONDS.set(expires_at.as_secs_f64());
+    }
+
+    pub fn record_shard_lease_renewal(outcome: ShardLeaseRenewalOutcome) {
+        SHARD_LEASE_RENEWALS_TOTAL
+            .with_label_values(&[outcome.label()])
+            .inc();
+    }
+
+    pub fn record_shard_admission_refusal(refusal: ShardAdmissionRefusal) {
+        SHARD_ADMISSION_REFUSALS_TOTAL
+            .with_label_values(&[refusal.label()])
+            .inc();
+    }
+
+    /// Which of the four shard deliveries a measurement is about, as the `delivery` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardDelivery {
+        Register,
+        Assign,
+        Revoke,
+        Renewal,
+    }
+
+    impl ShardDelivery {
+        fn label(self) -> &'static str {
+            match self {
+                Self::Register => "register",
+                Self::Assign => "assign",
+                Self::Revoke => "revoke",
+                Self::Renewal => "renewal",
+            }
+        }
+    }
+
+    /// A delivery was dropped for arriving older than the last one applied.
+    ///
+    /// One of these is not a fault: a push and a renewal response that cross on the network
+    /// always produce one, and dropping the older is the point of the revision gate. A sustained
+    /// rate is the fault, and a warning per occurrence does not make a rate visible.
+    pub fn record_stale_shard_delivery(delivery: ShardDelivery) {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .inc();
+    }
+
+    /// How many deliveries of `delivery` have been dropped as stale.
+    #[cfg(test)]
+    pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .get()
     }
 }
 
@@ -1134,10 +1395,46 @@ pub mod oplog {
             &["account_id", "environment_id"]
         )
         .unwrap();
+        static ref OPLOG_SWEEP_OUTCOME_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_outcome_total",
+            "Keys the oplog sweep examined, by what it decided about each. One outcome per key, \
+             so the outcomes sum to what a tick decided",
+            &["route", "outcome"]
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TICK_TIME: HistogramVec = register_histogram_vec!(
+            "oplog_sweep_tick_seconds",
+            "Time taken by one oplog sweep tick",
+            &["route"],
+            crate::metrics::OPLOG_SWEEP_TICK_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_truncated_total",
+            "Oplog sweep ticks that hit a budget or their deadline before reaching the end of the namespace",
+            &["route"]
+        )
+        .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
-            "Number of oplog storage operation retries due to transient errors",
+            "Number of oplog storage operation retries due to transient errors or indeterminate writes",
             &["op"]
+        )
+        .unwrap();
+        static ref OPLOG_ARCHIVE_MAINTENANCE_FAILURE_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_archive_maintenance_failure_total",
+            "Number of failed background oplog archive maintenance operations",
+            &["operation"]
+        )
+        .unwrap();
+        static ref OPLOG_EPOCH_FENCE_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_epoch_fence_total",
+            "Oplog operations checked against the shard epoch: `op` is `record` for an open \
+             recording its epoch, `append` for a write and `drop_prefix` for a trim after \
+             archiving, and `archive_record`, `archive_append`, `archive_drop_prefix` and \
+             `archive_delete_empty` for the same on a compressed archive level or a blob level's \
+             manifest; `outcome` is `accepted` or `refused`",
+            &["op", "outcome"]
         )
         .unwrap();
     }
@@ -1156,6 +1453,37 @@ pub mod oplog {
         OPLOG_STORAGE_RETRY_TOTAL
             .with_label_values(&[op_name])
             .inc();
+    }
+
+    pub fn record_archive_maintenance_failure(operation: &'static str) {
+        OPLOG_ARCHIVE_MAINTENANCE_FAILURE_TOTAL
+            .with_label_values(&[operation])
+            .inc();
+    }
+
+    pub fn record_oplog_epoch_fence(op: &'static str, refused: bool) {
+        OPLOG_EPOCH_FENCE_TOTAL
+            .with_label_values(&[op, if refused { "refused" } else { "accepted" }])
+            .inc();
+    }
+
+    pub fn record_oplog_sweep_outcome(route: &str, outcome: &'static str, count: u64) {
+        if count > 0 {
+            OPLOG_SWEEP_OUTCOME_TOTAL
+                .with_label_values(&[route, outcome])
+                .inc_by(count as f64);
+        }
+    }
+
+    pub fn record_oplog_sweep_tick(route: &str, duration: std::time::Duration, truncated: bool) {
+        OPLOG_SWEEP_TICK_TIME
+            .with_label_values(&[route])
+            .observe(duration.as_secs_f64());
+        if truncated {
+            OPLOG_SWEEP_TRUNCATED_TOTAL
+                .with_label_values(&[route])
+                .inc();
+        }
     }
 
     pub fn record_scheduled_archive(duration: std::time::Duration, has_more: bool) {
@@ -1392,7 +1720,7 @@ pub mod durable_stream {
         .unwrap();
         static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
             "golem_durable_stream_journal_lag_events",
-            "Committed source events not yet recorded in the value-only consumer journal",
+            "Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption",
             EVENT_COUNT_BUCKETS.to_vec()
         )
         .unwrap();
@@ -1517,7 +1845,7 @@ pub mod durable_stream {
             record_backpressure();
             record_attempt("resume", "accepted", Some(2));
             record_journal_lag(1);
-            record_attachment_operation("renew", "committed");
+            record_attachment_operation("activate", "committed");
             record_lease_remaining(20_000);
             record_reconciliation("active");
             record_cascade("complete");
@@ -1559,46 +1887,497 @@ pub mod storage {
     pub const STORAGE_TYPE_KV: &str = "kv";
     pub const STORAGE_TYPE_OPLOG: &str = "oplog";
     pub const STORAGE_TYPE_OPLOG_ARCHIVE: &str = "oplog_archive";
-    pub const STORAGE_TYPE_FILESYSTEM: &str = "filesystem";
-
-    use lazy_static::lazy_static;
-    use prometheus::*;
 
     /// Re-exported from [`crate::identity`], which owns the process identity.
     /// Kept here so existing metric-recording call sites can keep using
     /// `crate::metrics::storage::executor_id()`.
     pub use crate::identity::executor_id;
+}
+
+pub mod agent_filesystem {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::time::Duration;
 
     lazy_static! {
-        pub static ref STORAGE_FILESYSTEM_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_storage_filesystem_pool_total_bytes",
-            "Total filesystem storage pool capacity for this executor",
-            &["executor_id"]
+        static ref PRESSURE_RECOVERY_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_pressure_recovery_seconds",
+            "Time of a recovery of free space on the agent filesystem volume after a write failed for space, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
-        pub static ref STORAGE_FILESYSTEM_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_storage_filesystem_pool_used_bytes",
-            "Currently acquired filesystem storage bytes across all workers on this executor",
-            &["executor_id"]
+        static ref PRESSURE_UNLOAD_ATTEMPTS: IntCounterVec = register_int_counter_vec!(
+            "filesystem_pressure_unload_attempts_total",
+            "Unloads of idle agents that a recovery of free space on the agent filesystem volume tried, by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref STORAGE_REFUSALS: IntCounterVec = register_int_counter_vec!(
+            "filesystem_storage_refusals_total",
+            "Agent filesystem calls that failed because no space was left, by cause",
+            &["cause"]
+        )
+        .unwrap();
+        static ref PROJECT_CLEANUP_FAILURES: IntCounterVec = register_int_counter_vec!(
+            "filesystem_project_cleanup_failures_total",
+            "Failed cleanups of managed XFS projects, which stay reserved until a later cleanup, by operation",
+            &["operation"]
+        )
+        .unwrap();
+        static ref PROJECT_STALE_RECLAIMS: IntCounter = register_int_counter!(
+            "filesystem_project_stale_reclaims_total",
+            "Managed XFS projects that a new agent filesystem found left over at its path and cleaned"
         )
         .unwrap();
     }
 
-    pub fn record_filesystem_pool_total(bytes: u64) {
-        STORAGE_FILESYSTEM_POOL_TOTAL_BYTES
-            .with_label_values(&[executor_id()])
-            .set(bytes as f64);
+    label_values! {
+        /// How a recovery of free space ended, as the `outcome` label.
+        PressureRecovery {
+            /// The unloads of idle agents freed enough space, and the write tries again.
+            Recovered => "recovered",
+            /// No idle agent was left to unload before the free space reached the target.
+            TargetNotReached => "target_not_reached",
+            /// The recovery did not end before its deadline.
+            Deadline => "deadline",
+            /// The free space of the volume could not be observed.
+            ObservationFailed => "observation_failed",
+            /// The cleanup of an unloaded agent filesystem failed.
+            CleanupFailed => "cleanup_failed",
+            /// The volume had enough free space, so the failure has another cause.
+            NotUnderPressure => "not_under_pressure",
+            /// The executor is shutting down and has no agents to unload.
+            Unavailable => "unavailable",
+        }
     }
 
-    pub fn record_filesystem_pool_acquired(bytes: u64) {
-        STORAGE_FILESYSTEM_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .add(bytes as f64);
+    label_values! {
+        /// How one unload of an idle agent in a recovery of free space ended, as the `outcome` label.
+        PressureUnload {
+            /// The agent was unloaded and its filesystem cleaned up.
+            Unloaded => "unloaded",
+            /// The agent was no longer an idle candidate when the unload ran, for example because
+            /// it got new work or is being deleted. The recovery goes on with the next candidate.
+            Ineligible => "ineligible",
+            /// The agent was stopped, but the cleanup of its filesystem failed. The recovery stops.
+            CleanupFailed => "cleanup_failed",
+            /// The unload task panicked or was cancelled. The recovery stops.
+            TaskFailed => "task_failed",
+            /// The deadline of the recovery passed before the unload finished. The unload task can
+            /// still finish later.
+            Deadline => "deadline",
+        }
     }
 
-    pub fn record_filesystem_pool_released(bytes: u64) {
-        STORAGE_FILESYSTEM_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .sub(bytes as f64);
+    label_values! {
+        /// Why an agent filesystem call found no space, as the `cause` label.
+        StorageRefusal {
+            /// The agent used up its own quota.
+            AgentQuota => "agent_quota",
+            /// The volume has no space left, and a recovery did not free enough.
+            PhysicalCapacity => "physical_capacity",
+        }
+    }
+
+    label_values! {
+        /// The cleanup of a managed XFS project that failed, as the `operation` label.
+        ProjectCleanup {
+            /// The delete of an agent filesystem.
+            Delete => "delete",
+            /// The fallback cleanup of an agent filesystem that was dropped without a delete.
+            Drop => "drop",
+            /// The cleanup of a project that a new agent filesystem found left over at its path.
+            Stale => "stale",
+        }
+    }
+
+    /// Exports each label value at zero, so that a dashboard or an alert reads 0 instead of no data
+    /// before the first event. Called when the executor opens an XFS volume for the agent
+    /// filesystems. `project_quotas` tells that the volume has managed XFS projects.
+    pub fn record_agent_filesystem_volume_opened(project_quotas: bool) {
+        for outcome in PressureRecovery::ALL {
+            PRESSURE_RECOVERY_SECONDS.with_label_values(&[outcome.label()]);
+        }
+        for outcome in PressureUnload::ALL {
+            PRESSURE_UNLOAD_ATTEMPTS.with_label_values(&[outcome.label()]);
+        }
+        for cause in StorageRefusal::ALL {
+            STORAGE_REFUSALS.with_label_values(&[cause.label()]);
+        }
+        if project_quotas {
+            for operation in ProjectCleanup::ALL {
+                PROJECT_CLEANUP_FAILURES.with_label_values(&[operation.label()]);
+            }
+            lazy_static::initialize(&PROJECT_STALE_RECLAIMS);
+        }
+    }
+
+    pub fn record_pressure_recovery(outcome: PressureRecovery, elapsed: Duration) {
+        PRESSURE_RECOVERY_SECONDS
+            .with_label_values(&[outcome.label()])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_pressure_unload_attempt(outcome: PressureUnload) {
+        PRESSURE_UNLOAD_ATTEMPTS
+            .with_label_values(&[outcome.label()])
+            .inc();
+    }
+
+    pub fn record_storage_refusal(cause: StorageRefusal) {
+        STORAGE_REFUSALS.with_label_values(&[cause.label()]).inc();
+    }
+
+    pub fn record_project_cleanup_failure(operation: ProjectCleanup) {
+        PROJECT_CLEANUP_FAILURES
+            .with_label_values(&[operation.label()])
+            .inc();
+    }
+
+    pub fn record_project_stale_reclaim() {
+        PROJECT_STALE_RECLAIMS.inc();
+    }
+}
+
+pub mod filesystem_snapshots {
+    use super::{SNAPSHOT_AGE_BUCKETS, SNAPSHOT_STORE_BUCKETS};
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::time::Duration;
+
+    lazy_static! {
+        static ref CAPTURE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_capture_seconds",
+            "Time that a capture of an agent filesystem, or a check of its initial files on an executor \
+             without filesystem snapshots, stops the file calls, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOAD_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_upload_seconds",
+            "Time of an upload of a filesystem snapshot, with its retries, by kind and outcome",
+            &["kind", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOADED_BYTES: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_uploaded_bytes_total",
+            "Bytes of the trees of the uploaded filesystem snapshots, by kind",
+            &["kind"]
+        )
+        .unwrap();
+        static ref UPLOADS_IN_PROGRESS: Gauge = register_gauge!(
+            "filesystem_snapshot_uploads_in_progress",
+            "Number of store attempts of uploads of filesystem snapshots that hold a slot now"
+        )
+        .unwrap();
+        static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_restore_seconds",
+            "Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref DROPPED_CONFIRMATIONS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_dropped_confirmations_total",
+            "Uploaded filesystem snapshots that no confirmation record names, by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref LEAKED_CLEANUPS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_leaked_cleanups_total",
+            "Clean-ups of filesystem snapshots that left snapshots in blob storage, by operation",
+            &["operation"]
+        )
+        .unwrap();
+        static ref CLEANUPS_PENDING: Gauge = register_gauge!(
+            "filesystem_snapshot_cleanups_pending",
+            "Number of agents with pending or running clean-up work of filesystem snapshots"
+        )
+        .unwrap();
+        static ref COPY_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_copy_seconds",
+            "Time of a copy of the filesystem snapshots of a fork source, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref STORED_BYTES: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_stored_bytes_total",
+            "Bytes of the repository files that the filesystem snapshot store wrote to blob storage, by source",
+            &["source"]
+        )
+        .unwrap();
+        static ref REMOVED_BYTES: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_removed_bytes_total",
+            "Bytes that the filesystem snapshot store deleted from blob storage, by source",
+            &["source"]
+        )
+        .unwrap();
+        static ref RELEASED_BYTES: IntCounter = register_int_counter!(
+            "filesystem_snapshot_released_bytes_total",
+            "Packed bytes of the deleted filesystem snapshots, which a later prune can remove when no other snapshot uses them"
+        )
+        .unwrap();
+        static ref RESTORED_AGE_SECONDS: Histogram = register_histogram!(
+            "filesystem_snapshot_restored_age_seconds",
+            "Time from the save of a filesystem snapshot to its successful restore",
+            SNAPSHOT_AGE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref SKIPPED: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_skipped_total",
+            "Filesystem snapshots that the admission skipped, by kind and reason",
+            &["kind", "reason"]
+        )
+        .unwrap();
+        static ref DELETE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_delete_seconds",
+            "Time of a delete of filesystem snapshots, with its prune, by operation and outcome",
+            &["operation", "outcome"],
+            SNAPSHOT_STORE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref PRUNE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_prune_seconds",
+            "Time of a prune of a filesystem snapshot repository after a delete, with its check, by outcome",
+            &["outcome"],
+            SNAPSHOT_STORE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref PRUNE_SKIPPED: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_prune_skipped_total",
+            "Deletes of filesystem snapshots after which no prune ran, by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref RETENTION_RUNS: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_retention_runs_total",
+            "Retention runs after a confirmed or committed filesystem snapshot, by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+    }
+
+    label_values! {
+        /// The work that wrote repository files, as the `source` label.
+        StoredSource {
+            /// A save of a snapshot: its packs, its index files and the config of a new repository.
+            Save => "save",
+            /// A prune: the packs that it repacks and the index files that it writes again.
+            Prune => "prune",
+            /// A copy of the repository of a fork source, on the side of the storage.
+            Copy => "copy",
+        }
+    }
+
+    label_values! {
+        /// The work that deleted bytes, as the `source` label.
+        RemovedSource {
+            /// A prune: the packs whose time to stay after their mark is over.
+            Prune => "prune",
+            /// A delete of all snapshots of an agent: the whole repository.
+            DeleteAll => "delete_all",
+        }
+    }
+
+    label_values! {
+        /// Why an admission skipped a snapshot, as the `reason` label.
+        SkipReason {
+            /// An upload of the agent runs now.
+            UploadInFlight => "upload_in_flight",
+            /// The volume of the agent filesystems has less free space than the pressure target.
+            VolumeUnderPressure => "volume_under_pressure",
+            /// A delete of all snapshots of the agent is queued or runs.
+            DeletingAllSnapshots => "deleting_all_snapshots",
+        }
+    }
+
+    label_values! {
+        /// The kind of a delete, as the `operation` label.
+        DeleteOperation {
+            /// A delete of named snapshots: a retention, a superseded snapshot or a queued clean-up.
+            Delete => "delete",
+            /// A delete of all snapshots of an agent.
+            DeleteAll => "delete_all",
+        }
+    }
+
+    label_values! {
+        /// How a delete ended, as the `outcome` label.
+        DeleteOutcome {
+            /// The store deleted the snapshots.
+            Deleted => "deleted",
+            /// A stop or the shutdown ended the wait for the delete.
+            Stopped => "stopped",
+            /// The delete failed, and the snapshots stay in blob storage.
+            Leaked => "leaked",
+        }
+    }
+
+    label_values! {
+        /// How a prune that a delete started ended, as the `outcome` label.
+        PruneOutcome {
+            /// The prune ran and wrote its ledger.
+            Pruned => "pruned",
+            /// The check or the prune failed. The next delete prunes again.
+            Failed => "failed",
+        }
+    }
+
+    label_values! {
+        /// Why a delete ran no prune, as the `reason` label.
+        PruneSkip {
+            /// The repository holds too few freed bytes, or the last prune is too recent.
+            NotDue => "not_due",
+            /// Another delete holds the claim of the prune, or pruned since the check.
+            ClaimedElsewhere => "claimed_elsewhere",
+        }
+    }
+
+    label_values! {
+        /// How a retention run ended, as the `outcome` label.
+        RetentionOutcome {
+            /// The listing of the snapshots failed.
+            ListFailed => "list_failed",
+            /// No snapshot was old enough to delete.
+            NothingToDelete => "nothing_to_delete",
+            /// The store deleted the old snapshots.
+            Deleted => "deleted",
+            /// A stop ended the retention.
+            Stopped => "stopped",
+            /// The delete failed, and the old snapshots stay until the next retention.
+            Leaked => "leaked",
+        }
+    }
+
+    /// Exports each label value of the metrics of the store at zero, so that a dashboard or an
+    /// alert reads 0 instead of no data before the first event. `kinds` are the labels of the
+    /// snapshot kinds. Called when the executor starts a service that keeps filesystem
+    /// snapshots, so an executor without them exports none of these metrics.
+    pub fn record_filesystem_snapshots_started(kinds: &[&'static str]) {
+        for source in StoredSource::ALL {
+            STORED_BYTES.with_label_values(&[source.label()]);
+        }
+        for source in RemovedSource::ALL {
+            REMOVED_BYTES.with_label_values(&[source.label()]);
+        }
+        lazy_static::initialize(&RELEASED_BYTES);
+        lazy_static::initialize(&RESTORED_AGE_SECONDS);
+        for kind in kinds {
+            for reason in SkipReason::ALL {
+                SKIPPED.with_label_values(&[kind, reason.label()]);
+            }
+        }
+        for operation in DeleteOperation::ALL {
+            for outcome in DeleteOutcome::ALL {
+                DELETE_SECONDS.with_label_values(&[operation.label(), outcome.label()]);
+            }
+        }
+        for outcome in PruneOutcome::ALL {
+            PRUNE_SECONDS.with_label_values(&[outcome.label()]);
+        }
+        for reason in PruneSkip::ALL {
+            PRUNE_SKIPPED.with_label_values(&[reason.label()]);
+        }
+        for outcome in RetentionOutcome::ALL {
+            RETENTION_RUNS.with_label_values(&[outcome.label()]);
+        }
+    }
+
+    pub fn record_stored_bytes(source: StoredSource, bytes: u64) {
+        STORED_BYTES
+            .with_label_values(&[source.label()])
+            .inc_by(bytes);
+    }
+
+    pub fn record_removed_bytes(source: RemovedSource, bytes: u64) {
+        REMOVED_BYTES
+            .with_label_values(&[source.label()])
+            .inc_by(bytes);
+    }
+
+    pub fn record_released_bytes(bytes: u64) {
+        RELEASED_BYTES.inc_by(bytes);
+    }
+
+    pub fn record_restored_age(age: Duration) {
+        RESTORED_AGE_SECONDS.observe(age.as_secs_f64());
+    }
+
+    pub fn record_skipped(kind: &'static str, reason: SkipReason) {
+        SKIPPED.with_label_values(&[kind, reason.label()]).inc();
+    }
+
+    pub fn record_delete(operation: DeleteOperation, outcome: DeleteOutcome, elapsed: Duration) {
+        DELETE_SECONDS
+            .with_label_values(&[operation.label(), outcome.label()])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_prune(outcome: PruneOutcome, elapsed: Duration) {
+        PRUNE_SECONDS
+            .with_label_values(&[outcome.label()])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_prune_skipped(reason: PruneSkip) {
+        PRUNE_SKIPPED.with_label_values(&[reason.label()]).inc();
+    }
+
+    pub fn record_retention_run(outcome: RetentionOutcome) {
+        RETENTION_RUNS.with_label_values(&[outcome.label()]).inc();
+    }
+
+    pub fn set_cleanups_pending(agents: usize) {
+        CLEANUPS_PENDING.set(agents as f64);
+    }
+
+    pub fn record_copy(outcome: &'static str, elapsed: Duration) {
+        COPY_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_capture(outcome: &'static str, elapsed: Duration) {
+        CAPTURE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_upload(kind: &'static str, outcome: &'static str, elapsed: Duration) {
+        UPLOAD_SECONDS
+            .with_label_values(&[kind, outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_uploaded_bytes(kind: &'static str, bytes: u64) {
+        UPLOADED_BYTES
+            .with_label_values(&[kind])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn inc_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.inc();
+    }
+
+    pub fn dec_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.dec();
+    }
+
+    pub fn record_restore(outcome: &'static str, elapsed: Duration) {
+        RESTORE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_dropped_confirmation(reason: &'static str) {
+        DROPPED_CONFIRMATIONS.with_label_values(&[reason]).inc();
+    }
+
+    pub fn record_leaked_cleanup(operation: &'static str) {
+        LEAKED_CLEANUPS.with_label_values(&[operation]).inc();
     }
 }

@@ -60,8 +60,11 @@ private[golem] object SchemaRpcCodec {
   def decodeValue(tree: JsSchemaValueTree): SchemaValue =
     SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree))
 
-  def encodeValueAsync(value: SchemaValue): Future[JsSchemaValueTree] =
-    SchemaWireInterop.valueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
+  def encodeValueAsync(value: => SchemaValue): Future[JsSchemaValueTree] =
+    SchemaPayload.encodeValueAsync(value)
+
+  def decodeResultAsync[A](decode: => A): Future[A] =
+    SchemaPayload.decodeResultAsync(decode)
 
   def encodeUByte(v: UByte): SchemaValue = {
     val x = v.value
@@ -225,15 +228,12 @@ private[golem] object SchemaRpcCodec {
       throw new RuntimeException(s"UUID high half ${uuid.highBits} out of range [0, $MaxU64]")
     if (uuid.lowBits < 0 || uuid.lowBits > MaxU64)
       throw new RuntimeException(s"UUID low half ${uuid.lowBits} out of range [0, $MaxU64]")
-    SchemaValue.RecordValue(
-      List(SchemaValue.U64Value((uuid.highBits & MaxU64).toLong), SchemaValue.U64Value((uuid.lowBits & MaxU64).toLong))
-    )
+    SchemaValue.UuidValue(uuid)
   }
 
   def decodeUuidOrThrow(value: SchemaValue): Uuid = value match {
-    case SchemaValue.RecordValue(List(SchemaValue.U64Value(hi), SchemaValue.U64Value(lo))) =>
-      Uuid(BigInt(hi) & MaxU64, BigInt(lo) & MaxU64)
-    case other => throw new RuntimeException(s"Expected a uuid record (two u64 fields), got $other")
+    case SchemaValue.UuidValue(uuid) => uuid
+    case other                       => throw new RuntimeException(s"Expected a uuid value, got $other")
   }
 
   // --- arguments (constructor + method input) -------------------------------
@@ -281,8 +281,15 @@ private[golem] object SchemaRpcCodec {
   /**
    * Encode `value` into a self-contained `typed-schema-value` (graph + value).
    */
-  def encodeTyped[A](value: A)(implicit into: IntoSchema[A]): JsTypedSchemaValue =
-    SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(into.toTyped(value)))
+  def encodeTyped[A](value: A)(implicit into: IntoSchema[A]): JsTypedSchemaValue = {
+    val model = into.toTyped(value)
+    val graph = into.wireGraph
+    val tree  = SchemaWire.schemaValueToWit(model.value)
+    JsTypedSchemaValue(
+      SchemaWireInterop.graphToJs(graph),
+      SchemaWireInterop.valueTreeToJs(tree)
+    )
+  }
 
   /** Decode a `typed-schema-value` back into `A` using `FromSchema[A]`. */
   def decodeTyped[A](typed: JsTypedSchemaValue)(implicit from: FromSchema[A]): Either[String, A] =

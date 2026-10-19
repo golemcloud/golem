@@ -17,6 +17,7 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::native_tool_catalog::NativeToolCatalog;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -35,6 +36,8 @@ use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::model::tool::{
     DeployedRegisteredTool, RegisteredTool, ToolDeploymentState, ToolName,
 };
+use golem_common::model::tool_middleware::RegisteredToolMiddleware;
+use golem_common::schema::AgentTypeKind;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -84,6 +87,7 @@ pub struct DeploymentService {
     environment_service: Arc<EnvironmentService>,
     application_service: Arc<ApplicationService>,
     deployment_repo: Arc<dyn DeploymentRepo>,
+    native_tool_catalog: Arc<NativeToolCatalog>,
 }
 
 impl DeploymentService {
@@ -91,11 +95,13 @@ impl DeploymentService {
         environment_service: Arc<EnvironmentService>,
         application_service: Arc<ApplicationService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
+        native_tool_catalog: Arc<NativeToolCatalog>,
     ) -> Self {
         Self {
             environment_service,
             application_service,
             deployment_repo,
+            native_tool_catalog,
         }
     }
 
@@ -189,11 +195,15 @@ impl DeploymentService {
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
-        let summary: DeploymentPlan = self
+        let mut staged_identity = self
             .deployment_repo
             .get_staged_identity(environment_id.0)
-            .await?
+            .await?;
+        staged_identity.middleware.compatibility_mode = environment.tool_compatibility_mode;
+        let mut summary: DeploymentPlan = staged_identity
             .into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
+
+        summary.ambient_tools = self.native_tool_catalog.plan_entries();
 
         Ok(summary)
     }
@@ -359,9 +369,9 @@ impl DeploymentService {
                     environment.owner_account_email.clone(),
                 )
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(agent_types)
+        Ok(user_invokable_agent_types(agent_types))
     }
 
     pub async fn get_deployment_registered_tool(
@@ -412,6 +422,25 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
+    pub async fn list_deployment_registered_tool_middlewares(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<RegisteredToolMiddleware>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewTools)?;
+        let state: ToolDeploymentState = self
+            .deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
+            .try_into()?;
+        Ok(state.registered_tool_middlewares.into_values().collect())
+    }
+
     pub async fn get_current_tool_deployment_state(
         &self,
         environment_id: EnvironmentId,
@@ -424,14 +453,27 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
-    pub async fn get_latest_tool_deployment_state_by_component_revision(
+    pub async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
+        self.deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
         self.deployment_repo
-            .get_latest_tool_deployment_state_by_component_revision(
+            .get_active_tool_deployment_state_by_component_revision(
                 &environment_id.0,
                 &component_id.0,
                 component_revision.into(),
@@ -576,6 +618,15 @@ impl DeploymentService {
     }
 }
 
+fn user_invokable_agent_types(
+    agent_types: Vec<DeployedRegisteredAgentType>,
+) -> Vec<DeployedRegisteredAgentType> {
+    agent_types
+        .into_iter()
+        .filter(|agent_type| agent_type.agent_type.kind != AgentTypeKind::HttpRouter)
+        .collect()
+}
+
 fn authorize_get_tool_permission(
     auth: &AuthCtx,
     environment: &Environment,
@@ -588,10 +639,15 @@ fn authorize_get_tool_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{
+        AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
+    };
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::owner::EnvironmentOwnerPattern;
     use golem_common::model::card::{EffectiveSurface, EnvironmentResourcePattern, GrantSurface};
     use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
+    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
     use test_r::test;
 
     fn test_environment() -> Environment {
@@ -603,6 +659,7 @@ mod tests {
             name: EnvironmentName::try_from("dev").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId::new(),
@@ -626,6 +683,67 @@ mod tests {
             },
             resource: EnvironmentResourcePattern::Any,
         })
+    }
+
+    fn deployed_agent_type(kind: AgentTypeKind, name: &str) -> DeployedRegisteredAgentType {
+        let account_id = AccountId::new();
+        let account_email = golem_common::model::account::AccountEmail::new("owner@example.com");
+        DeployedRegisteredAgentType {
+            agent_type: AgentTypeSchema {
+                kind,
+                type_name: AgentTypeName(name.to_string()),
+                description: String::new(),
+                source_language: String::new(),
+                schema: SchemaGraph::empty(),
+                constructor: AgentConstructorSchema {
+                    name: None,
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                methods: vec![],
+                dependencies: vec![],
+                mode: AgentMode::Durable,
+                http_mount: None,
+                snapshotting: Snapshotting::Disabled(Empty {}),
+                config: vec![],
+            },
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: "component".to_string(),
+                account_id,
+                account_email,
+            },
+            webhook_prefix_authority_and_path: None,
+        }
+    }
+
+    #[test]
+    fn tooling_corpus_filters_the_public_agent_type_catalog_by_kind() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+        let id = "tooling-router-catalog";
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap();
+        let router = deployed_agent_type(AgentTypeKind::HttpRouter, "Router");
+        let regular = deployed_agent_type(AgentTypeKind::Regular, "Regular");
+        let visible = user_invokable_agent_types(vec![router, regular.clone()]);
+
+        assert_eq!(
+            visible
+                .iter()
+                .any(|agent| agent.agent_type.kind == AgentTypeKind::HttpRouter),
+            case["expect"]["included"].as_bool().unwrap(),
+            "{id}"
+        );
+        assert_eq!(visible, vec![regular], "{id}: regular control");
     }
 
     #[test]

@@ -22,6 +22,7 @@ import golem.schema.wire.SchemaWire
 import zio.test._
 
 import scala.scalajs.js
+import scala.scalajs.js.typedarray.Uint8Array
 
 object OplogEntryRoundtripSpec extends ZIOSpecDefault {
   import OplogApi._
@@ -58,11 +59,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.timestamp.seconds == BigInt(1700000000)
       )
     },
-    test("NoOp from dynamic") {
-      val raw    = wrapEntry("no-op", js.Dynamic.literal(timestamp = ts()))
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(parsed.isInstanceOf[OplogEntry.NoOp])
-    },
     test("Interrupted from dynamic") {
       val raw    = wrapEntry("interrupted", js.Dynamic.literal(timestamp = ts()))
       val parsed = OplogEntry.fromJs(raw)
@@ -72,11 +68,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val raw    = wrapEntry("exited", js.Dynamic.literal(timestamp = ts()))
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(parsed.isInstanceOf[OplogEntry.Exited])
-    },
-    test("BeginAtomicRegion from dynamic") {
-      val raw    = wrapEntry("begin-atomic-region", js.Dynamic.literal(timestamp = ts()))
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(parsed.isInstanceOf[OplogEntry.BeginAtomicRegion])
     },
     test("BeginRemoteWrite from dynamic") {
       val raw    = wrapEntry("begin-remote-write", js.Dynamic.literal(timestamp = ts()))
@@ -88,6 +79,22 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(parsed.isInstanceOf[OplogEntry.Restart])
     },
+    test("Resumed from dynamic") {
+      val raw    = wrapEntry("resumed", js.Dynamic.literal(timestamp = ts()))
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.Resumed],
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
+    test("RecoverySucceeded from dynamic") {
+      val raw    = wrapEntry("recovery-succeeded", js.Dynamic.literal(timestamp = ts()))
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.RecoverySucceeded],
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
     // --- Single-field parameter entries ---
 
     test("Error from dynamic") {
@@ -95,6 +102,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "error",
         js.Dynamic.literal(
           timestamp = ts(),
+          kind = "recovery",
           error = "something failed",
           retryFrom = js.BigInt("5")
         )
@@ -103,22 +111,9 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val e      = parsed.asInstanceOf[OplogEntry.Error]
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Error],
+        e.params.kind == OplogErrorKind.Recovery,
         e.params.error == "something failed",
         e.params.retryFrom == BigInt(5)
-      )
-    },
-    test("EndAtomicRegion from dynamic") {
-      val raw = wrapEntry(
-        "end-atomic-region",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          beginIndex = js.BigInt("10")
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.EndAtomicRegion],
-        parsed.asInstanceOf[OplogEntry.EndAtomicRegion].params.beginIndex == BigInt(10)
       )
     },
     test("EndRemoteWrite from dynamic") {
@@ -161,20 +156,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.CancelPendingInvocation],
         parsed.asInstanceOf[OplogEntry.CancelPendingInvocation].params.idempotencyKey == "idem-123"
-      )
-    },
-    test("FinishSpan from dynamic") {
-      val raw = wrapEntry(
-        "finish-span",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-42"
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.FinishSpan],
-        parsed.asInstanceOf[OplogEntry.FinishSpan].params.spanId == "span-42"
       )
     },
     test("BeginRemoteTransaction from dynamic") {
@@ -256,6 +237,30 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         j.params.jump.end == BigInt(10)
       )
     },
+    test("AgentInvocationStarted preserves the required wallet pin") {
+      val raw = wrapEntry(
+        "agent-invocation-started",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          invocation = js.Dynamic.literal(tag = "save-snapshot"),
+          walletPin = js.Dynamic.literal(
+            walletToken = js.Dynamic.literal(
+              walletIdHash = new Uint8Array(js.Array[Short](1, 2, 255)),
+              generation = js.BigInt("7")
+            ),
+            scopeCardId = js.Dynamic.literal(
+              uuid = js.Dynamic.literal(highBits = js.BigInt("10"), lowBits = js.BigInt("20"))
+            )
+          )
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.AgentInvocationStarted].params
+      assertTrue(
+        parsed.walletPin.walletToken.walletIdHash.toSeq == Seq[Byte](1, 2, -1),
+        parsed.walletPin.walletToken.generation == BigInt(7),
+        parsed.walletPin.scopeCardId.contains(golem.Uuid(BigInt(10), BigInt(20)))
+      )
+    },
     test("SetRetryPolicy from dynamic") {
       val raw = wrapEntry(
         "set-retry-policy",
@@ -301,7 +306,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           timestamp = ts(),
           level = "info",
           context = "main",
-          message = "Agent started"
+          message = "Agent started",
+          traceContext = js.Dynamic.literal(traceId = "trace-1", spanId = "span-1")
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -310,7 +316,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.Log],
         l.params.level == LogLevel.Info,
         l.params.context == "main",
-        l.params.message == "Agent started"
+        l.params.message == "Agent started",
+        l.params.traceContext.contains(LogTraceContext("trace-1", "span-1"))
       )
     },
     test("AgentInvocationFinished with response from dynamic (agent-method result)") {
@@ -372,64 +379,191 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         i.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
       )
     },
-    test("Start durable host-call marker from dynamic") {
+    test("Start durable host-call marker parses span lifecycle data") {
       val raw = wrapEntry(
         "start",
         js.Dynamic.literal(
-          timestamp = ts(),
+          timestamp = ts(1700000001, 100),
           parentStartIndex = js.undefined,
           functionName = "wasi:io/read",
-          invocationId = js.Dynamic.literal(highBits = js.BigInt("1"), lowBits = js.BigInt("2")),
+          invocationId = js.Dynamic.literal(anchor = js.BigInt("1"), ordinal = js.BigInt("2")),
           observationalOwner = js.BigInt("11"),
           request = sampleTypedJs,
-          durableFunctionType = js.Dynamic.literal(tag = "read-remote")
+          durableFunctionType = js.Dynamic.literal(tag = "read-remote"),
+          spanStarted = js.Dynamic.literal(
+            spanId = "span-1",
+            traceId = "trace-1",
+            traceStates = js.Array("vendor=opaque", "sampled=true"),
+            parentSpanId = "parent-1",
+            links = js.Array(
+              js.Dynamic.literal(
+                traceId = "other-trace",
+                spanId = "other-span",
+                traceStates = js.Array("other-vendor=value")
+              )
+            ),
+            startedAt = ts(1700000002, 200),
+            attributes = js.Array(
+              js.Dynamic.literal(
+                key = "operation",
+                value = js.Dynamic.literal(tag = "string", `val` = "read")
+              )
+            ),
+            kind = "client"
+          ),
+          denial = "access denied"
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       val s      = parsed.asInstanceOf[OplogEntry.Start]
+      val span   = s.params.spanStarted.get
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Start],
+        s.params.timestamp == ContextApi.DateTime(BigInt(1700000001), 100),
         s.params.functionName == "wasi:io/read",
-        s.params.invocationId.contains(golem.Uuid(BigInt(1), BigInt(2))),
+        s.params.invocationId.contains(OplogApi.DurableInvocationId(BigInt(1), BigInt(2))),
         s.params.observationalOwner.contains(BigInt(11)),
         s.params.request.isDefined,
-        s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
+        s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote,
+        s.params.denial.contains("access denied"),
+        span.spanId == "span-1",
+        span.traceId == "trace-1",
+        span.traceStates == List("vendor=opaque", "sampled=true"),
+        span.parentSpanId.contains("parent-1"),
+        span.links == List(SpanLink("other-trace", "other-span", List("other-vendor=value"))),
+        span.startedAt == ContextApi.DateTime(BigInt(1700000002), 200),
+        span.attributes == List(ContextApi.Attribute("operation", ContextApi.AttributeValue.StringValue("read"))),
+        span.kind == SpanKind.Client
       )
     },
-    test("End durable host-call marker from dynamic") {
+    test("End durable host-call marker parses span outcome and attributes") {
       val raw = wrapEntry(
         "end",
         js.Dynamic.literal(
-          timestamp = ts(),
+          timestamp = ts(1700000003, 300),
           startIndex = js.BigInt("12"),
           response = js.undefined,
-          forcedCommit = true
+          forcedCommit = true,
+          spanFinished = js.Dynamic.literal(
+            spanId = "span-1",
+            finishedAt = ts(1700000004, 400),
+            outcome = "failed"
+          ),
+          spanAttributes = js.Dynamic.literal(
+            spanId = "span-1",
+            attributes = js.Array(
+              js.Dynamic.literal(
+                key = "error.type",
+                value = js.Dynamic.literal(tag = "string", `val` = "timeout")
+              )
+            )
+          )
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       val e      = parsed.asInstanceOf[OplogEntry.End]
       assertTrue(
         parsed.isInstanceOf[OplogEntry.End],
+        e.params.timestamp == ContextApi.DateTime(BigInt(1700000003), 300),
         e.params.startIndex == BigInt(12),
         e.params.response == None,
-        e.params.forcedCommit
+        e.params.forcedCommit,
+        e.params.spanFinished.contains(
+          SpanFinished("span-1", ContextApi.DateTime(BigInt(1700000004), 400), SpanOutcome.Failed)
+        ),
+        e.params.spanAttributes.contains(
+          SpanAttributes(
+            "span-1",
+            List(ContextApi.Attribute("error.type", ContextApi.AttributeValue.StringValue("timeout")))
+          )
+        )
       )
     },
-    test("Cancelled durable host-call marker from dynamic") {
+    test("Cancelled durable host-call marker parses cancelled span outcome") {
       val raw = wrapEntry(
         "cancelled",
         js.Dynamic.literal(
-          timestamp = ts(),
+          timestamp = ts(1700000005, 500),
           startIndex = js.BigInt("13"),
-          partial = js.undefined
+          partial = sampleTypedJs,
+          spanFinished = js.Dynamic.literal(
+            spanId = "span-2",
+            finishedAt = ts(1700000006, 600),
+            outcome = "cancelled"
+          )
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       val c      = parsed.asInstanceOf[OplogEntry.Cancelled]
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Cancelled],
+        c.params.timestamp == ContextApi.DateTime(BigInt(1700000005), 500),
         c.params.startIndex == BigInt(13),
-        c.params.partial == None
+        c.params.partial.exists(_.value == SchemaValue.S32Value(42)),
+        c.params.spanFinished.contains(
+          SpanFinished("span-2", ContextApi.DateTime(BigInt(1700000006), 600), SpanOutcome.Cancelled)
+        )
+      )
+    },
+    test("Span lifecycle fields are optional on durable host-call markers") {
+      val start = OplogEntry
+        .fromJs(
+          wrapEntry(
+            "start",
+            js.Dynamic.literal(
+              timestamp = ts(),
+              parentStartIndex = js.undefined,
+              functionName = "fn",
+              invocationId = js.undefined,
+              observationalOwner = js.undefined,
+              request = js.undefined,
+              durableFunctionType = js.Dynamic.literal(tag = "read-local"),
+              spanStarted = js.undefined,
+              denial = js.undefined
+            )
+          )
+        )
+        .asInstanceOf[OplogEntry.Start]
+      val end = OplogEntry
+        .fromJs(
+          wrapEntry(
+            "end",
+            js.Dynamic.literal(
+              timestamp = ts(),
+              startIndex = js.BigInt("14"),
+              response = js.undefined,
+              forcedCommit = false,
+              spanFinished = js.undefined,
+              spanAttributes = js.undefined
+            )
+          )
+        )
+        .asInstanceOf[OplogEntry.End]
+      val cancelled = OplogEntry
+        .fromJs(
+          wrapEntry(
+            "cancelled",
+            js.Dynamic.literal(
+              timestamp = ts(),
+              startIndex = js.BigInt("15"),
+              partial = js.undefined,
+              spanFinished = js.undefined
+            )
+          )
+        )
+        .asInstanceOf[OplogEntry.Cancelled]
+      assertTrue(
+        start.params.spanStarted.isEmpty,
+        start.params.denial.isEmpty,
+        end.params.spanFinished.isEmpty,
+        end.params.spanAttributes.isEmpty,
+        cancelled.params.spanFinished.isEmpty,
+        start.params.parentStartIndex.isEmpty,
+        start.params.invocationId.isEmpty,
+        start.params.observationalOwner.isEmpty,
+        start.params.request.isEmpty,
+        end.params.response.isEmpty,
+        cancelled.params.partial.isEmpty
       )
     },
     test("CreateResource from dynamic") {
@@ -519,70 +653,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         r.params.end == BigInt(10)
       )
     },
-    test("StartSpan from dynamic with attributes") {
-      val raw = wrapEntry(
-        "start-span",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-1",
-          parent = "parent-span",
-          linkedContextId = "linked",
-          attributes = js.Array(
-            js.Dynamic.literal(
-              key = "env",
-              value = js.Dynamic.literal(tag = "string", `val` = "prod")
-            )
-          )
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      val s      = parsed.asInstanceOf[OplogEntry.StartSpan]
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.StartSpan],
-        s.params.spanId == "span-1",
-        s.params.parent == Some("parent-span"),
-        s.params.linkedContext == Some("linked"),
-        s.params.attributes.size == 1,
-        s.params.attributes.head.key == "env"
-      )
-    },
-    test("StartSpan from dynamic without optional fields") {
-      val raw = wrapEntry(
-        "start-span",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-2",
-          parent = js.undefined,
-          linkedContextId = js.undefined,
-          attributes = js.Array[js.Any]()
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      val s      = parsed.asInstanceOf[OplogEntry.StartSpan]
-      assertTrue(
-        s.params.parent == None,
-        s.params.linkedContext == None,
-        s.params.attributes.isEmpty
-      )
-    },
-    test("SetSpanAttribute from dynamic") {
-      val raw = wrapEntry(
-        "set-span-attribute",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-1",
-          key = "priority",
-          value = js.Dynamic.literal(tag = "string", `val` = "high")
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      val sa     = parsed.asInstanceOf[OplogEntry.SetSpanAttribute]
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.SetSpanAttribute],
-        sa.params.key == "priority",
-        sa.params.value == ContextApi.AttributeValue.StringValue("high")
-      )
-    },
     test("FailedUpdate with details from dynamic") {
       val raw = wrapEntry(
         "failed-update",
@@ -634,7 +704,11 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           targetRevision = js.BigInt("5"),
           description = js.Dynamic.literal(
             tag = "snapshot-based",
-            `val` = js.Dynamic.literal(payload = snapshotData, mimeType = "application/octet-stream")
+            `val` = js.Dynamic.literal(
+              payload = snapshotData,
+              mimeType = "application/octet-stream",
+              filesystemSnapshot = "u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+            )
           )
         )
       )
@@ -643,8 +717,52 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.PendingUpdate],
         ud.isInstanceOf[UpdateDescription.SnapshotBased],
-        ud.asInstanceOf[UpdateDescription.SnapshotBased].data.toList == List[Byte](1, 2, 3)
+        ud.asInstanceOf[UpdateDescription.SnapshotBased].data.toList == List[Byte](1, 2, 3),
+        ud.asInstanceOf[UpdateDescription.SnapshotBased]
+          .filesystemSnapshot
+          .contains(
+            "u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+          )
       )
+    },
+    test("Snapshot with filesystem snapshot from dynamic") {
+      val snapshotData = new scala.scalajs.js.typedarray.Uint8Array(js.Array[Short](4, 5))
+      val raw          = wrapEntry(
+        "snapshot",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          data = js.Dynamic.literal(data = snapshotData, mimeType = "application/octet-stream"),
+          filesystemSnapshot = "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Snapshot]
+      assertTrue(
+        parsed.data.toList == List[Byte](4, 5),
+        parsed.filesystemSnapshot.contains("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
+      )
+    },
+    test("Snapshot without filesystem snapshot from dynamic") {
+      val snapshotData = new scala.scalajs.js.typedarray.Uint8Array(js.Array[Short](4, 5))
+      val raw          = wrapEntry(
+        "snapshot",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          data = js.Dynamic.literal(data = snapshotData, mimeType = "application/octet-stream")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Snapshot]
+      assertTrue(parsed.filesystemSnapshot.isEmpty)
+    },
+    test("SnapshotConfirmed from dynamic") {
+      val raw = wrapEntry(
+        "snapshot-confirmed",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          filesystemSnapshot = "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.SnapshotConfirmed]
+      assertTrue(parsed.filesystemSnapshot == "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
     },
     test("SuccessfulUpdate from dynamic") {
       val raw = wrapEntry(

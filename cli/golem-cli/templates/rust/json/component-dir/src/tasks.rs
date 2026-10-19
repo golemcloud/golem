@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use golem_rust::{agent_definition, agent_implementation, description, endpoint, prompt, Schema};
+use golem_rust::{Schema, agent_definition, agent_implementation, description, endpoint, prompt};
 
 #[derive(Clone, Schema)]
 pub struct Task {
@@ -16,7 +16,7 @@ pub struct CreateTaskRequest {
 
 #[agent_definition(mount = "/task-agents/{name}", cors = [ "*" ])]
 #[description("An agent managing a named set of tasks")]
-pub trait Tasks {
+pub trait TaskAgent {
     fn new(name: String) -> Self;
 
     #[prompt("Create a new task with the given title")]
@@ -40,7 +40,7 @@ struct TasksImpl {
 }
 
 #[agent_implementation]
-impl Tasks for TasksImpl {
+impl TaskAgent for TasksImpl {
     fn new(name: String) -> Self {
         Self {
             _name: name,

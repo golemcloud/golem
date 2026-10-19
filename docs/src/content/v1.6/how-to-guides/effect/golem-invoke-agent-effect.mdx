@@ -1,0 +1,171 @@
+# Invoking an Effect Golem Agent with `golem agent invoke`
+
+Both `golem` and `golem-cli` can be used — all commands below work with either binary. Effect
+agents use the ordinary Golem CLI; the guest-side typed `Agent.client` API is for calls from
+another agent, not shell invocation.
+
+## Usage
+
+```shell
+golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
+```
+
+This invokes a method on a deployed agent and **waits for the result**. The agent is automatically
+created on first invocation if it does not exist yet. Standard output, error, and log streams from
+the agent are streamed live to the terminal by default.
+
+For an Effect agent definition:
+
+- The agent type name is exactly the `name` passed to `defineAgent`.
+- Constructor arguments follow the declaration order in `id`.
+- The function name is exactly the key declared in `methods`, including its TypeScript casing.
+- Method arguments follow the declaration order in that method's `input`.
+
+Do not translate names to kebab-case or snake_case. For example, a `defineAgent` named `Counter`
+with a `methods` key named `incrementBy` is invoked as:
+
+```shell
+golem agent invoke 'Counter("c1")' incrementBy 5
+```
+
+## Encoding Parameters
+
+Pass one shell argument per user-supplied field in
+the method's `input`, in declaration order.
+Do not pass the SDK client's named input object or a JSON wrapper around all inputs. An
+object-valued field is one parameter:
+
+| Method | Input schema | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: Schema.String }` | `prompt '"hello"'` |
+| `submit` | `input: { request: Schema.Struct({ text: Schema.String }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: Schema.String, quantity: Schema.Number }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+No-input methods take no arguments; `history '{}'` supplies an extra argument.
+
+Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+Effect SDK clients omit explicitly declared `PrincipalSchema` input fields; the host injects
+those fields into handlers. The normal `Principal.Principal` service remains available and
+does not add a caller-supplied input. Load [`golem-http-params-effect`](/v1.6/how-to-guides/effect/golem-http-params-effect) for the caller service example.
+
+TypeScript object field names must be unquoted, not JSON keys.
+For a string parameter, if native literal parsing fails, the CLI uses the argument as raw text.
+Passing `'{"text": "hello"}'` to `prompt` passes that entire JSON text as the string; it does
+not extract `text`.
+
+Custom HTTP endpoints instead use named JSON body inputs, even for one parameter. The `submit`
+input above needs `{"request": {"text": "hello"}}` when `request` is a body input. Inputs bound
+to path/query/header values are not body fields; unstructured text and binary inputs use raw
+bodies. Load [`golem-http-params-effect`](/v1.6/how-to-guides/effect/golem-http-params-effect) for HTTP mapping.
+
+`--format json` selects output formatting, not input encoding. Triggering and scheduling use
+the same positional CLI arguments.
+
+## Output
+
+Effect components report TypeScript as their source language, so text output renders return values
+using TypeScript syntax. Multiple return values are rendered as a TypeScript tuple, for example
+`[1, "ok"]`. Methods returning `void` or no value print `void` in text mode.
+
+For machine-readable output, use `--format json`, `--format yaml`, or `--format toon`. Streaming
+methods emit invocation lifecycle documents in order: `accepted`, `result`, any stream
+`item`/terminal events, and `finished`. Scalar fields accompanying streams are in the `result`
+event's `value`.
+
+In structured CLI formats, invocation output is a sequence of lifecycle documents rather than one
+object or array. Streaming invocation is durable: disconnecting or pressing Ctrl-C detaches the
+current transport without cancelling the invocation. The CLI does not retry automatically. Use
+`--save-session <PATH>` on the initial invocation, then `--resume-session <PATH>` after a detach or
+`--takeover-session <PATH>` to fence an attached transport explicitly.
+
+## Agent ID Format
+
+The agent ID identifies the agent type and its agent id fields:
+
+```
+AgentTypeName(param1, param2, ...)
+```
+
+The agent ID can optionally be prefixed with environment or application paths:
+
+| Format | Description |
+|--------|-------------|
+| `AgentTypeName(params)` | Standalone agent name |
+| `env/AgentTypeName(params)` | Environment-specific |
+| `app/env/AgentTypeName(params)` | Application and environment-specific |
+| `account/app/env/AgentTypeName(params)` | Account, application, and environment-specific |
+
+For agents with no agent id fields, use empty parentheses: `AgentTypeName()`.
+
+## Examples
+
+### Invoke a method with no parameters
+
+```shell
+golem agent invoke 'MyAgent()' getStatus
+```
+
+### Invoke a method with parameters
+
+```shell
+golem agent invoke 'MyAgent("user-123")' processOrder '"order-456"' 42
+```
+
+### Invoke an Effect agent with agent id fields
+
+```shell
+golem agent invoke 'ChatRoom("general")' sendMessage '"Hello, world!"'
+```
+
+### Invoke in a specific environment
+
+```shell
+golem agent invoke 'staging/MyAgent("user-123")' getStatus
+```
+
+## Available Options
+
+| Option | Description |
+|--------|-------------|
+| `-t, --trigger` | Only trigger the invocation without waiting for the result (fire-and-forget) |
+| `-i, --idempotency-key <KEY>` | Set a specific idempotency key; use `"-"` for auto-generated |
+| `--no-stream` | Disable live streaming of agent stdout/stderr/log |
+| `--schedule-at <DATETIME>` | Schedule the invocation at a specific time (requires `--trigger`; ISO 8601 format) |
+
+## Idempotency
+
+Every invocation uses an idempotency key. If not provided, one is generated automatically. The
+same idempotency key guarantees that the invocation is executed at most once, even if the CLI call
+is retried.
+
+```shell
+golem agent invoke -i my-unique-key 'MyAgent()' doWork
+```
+
+## Auto-Deploy
+
+If the agent's component has not been deployed yet and the CLI is run from an application
+directory, `golem agent invoke` will automatically build and deploy the component before invoking.
+
+## Value Syntax
+
+Effect agent IDs, method arguments, and text results use **TypeScript syntax**:
+
+- Field names use `camelCase`
+- Options: raw value or `undefined`
+- Records: `{ fieldOne: 1, fieldTwo: "hello" }`
+- Enums: `"variant-name"`
+- Variants: `{ tag: "variant-name", value: 42 }`
+- Tuples: `[1, "hello"]`
+- Results: `{ ok: value }` / `{ error: value }`
+
+Quote structured values as one shell argument, and quote string literals twice: once as a shell
+argument and once as a TypeScript string literal.
+
+This example assumes `input: { profile: Schema.Struct({ displayName: Schema.String, age: Schema.Number }) }`.
+Pass the profile value, not a `{ profile: ... }` wrapper:
+
+```shell
+golem agent invoke 'MyAgent("user-123")' updateProfile '{ displayName: "Alice", age: 30 }'
+```

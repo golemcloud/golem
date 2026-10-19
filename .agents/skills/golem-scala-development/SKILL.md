@@ -9,7 +9,7 @@ Work from `sdks/scala/` unless a command says repository root. The Scala SDK is 
 
 ## Authoritative build matrix
 
-- JDK 17+, sbt 1.12.x (`project/build.properties` is authoritative)
+- JDK 21+, sbt 1.12.x (`project/build.properties` is authoritative)
 - Scala **3.8.2** for SDK modules and the Mill plugin build
 - Scala **2.12.21** only for sbt 1.x plugin loading and its shared codegen dependency
 - Scala **3.3.7** in the current Mill consumer fixtures; this is fixture configuration, not a general Scala.js limit
@@ -50,7 +50,7 @@ cd sdks/scala
 sbt golemPublishLocal
 ```
 
-For the repository's complete local prerequisite flow (WIT sync, all three guest runtimes, all cross-published modules, and marker caching), use:
+For the repository's complete local prerequisite flow (WIT sync, the guest runtime, all cross-published modules, and marker caching), use:
 
 ```bash
 # Repository root
@@ -66,11 +66,18 @@ The Scala.js core exposes the current schema-based host surface. Useful authorit
 - `HostApi.scala` for typed agent IDs, registry/metadata, oplog, update/fork/revert, promises, and related `golem:api/host@1.5.0` facades;
 - `host/DurabilityApi.scala` for schema-typed synchronous and asynchronous custom durable calls;
 - `runtime/rpc/` and `RpcCodegen.scala` for invocation and mode-aware client signatures;
-- `wit/main.wit` for three Preview 3 guest worlds and current versioned dependencies.
+- `wit/main.wit` for the Preview 3 guest world and current versioned dependencies.
+
+`DurabilityApi.durable` and `durableAsync` support sequential and properly nested custom operations
+only. An async body may await host calls when no unrelated guest work runs during the wait. Do not
+overlap it with other futures or callbacks, including ordinary host calls: sibling effects can
+acquire the wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably
+detected. Await each nested operation; do not detach work. All outstanding work must terminate
+before the body exits, including on failure; a failed Future does not cancel its siblings.
 
 Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
-After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.2, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
+After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.12, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
 
 ## Example and end-to-end work
 

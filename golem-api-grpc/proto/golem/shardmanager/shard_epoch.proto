@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package golem.shardmanager;
+
+import "golem/shardmanager/shard_id.proto";
+
+// One shard and the ownership generation the shard manager last granted for it.
+// The epoch advances only when a shard changes owner, never on a lease renewal,
+// so an executor can assert the set it believes it holds without the assertion
+// racing the manager.
+//
+// A leaf file, deliberately not part of the v1 service file, so that
+// golem/workerexecutor/v1/worker_executor.proto can carry epochs without
+// importing the shard manager service.
+message ShardEpochEntry {
+  ShardId shard_id = 1;
+  uint64 epoch = 2;
+}

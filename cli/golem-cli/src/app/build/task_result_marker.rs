@@ -16,6 +16,7 @@ use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash
 use crate::bridge_gen::BridgeMode;
 use crate::fs;
 use crate::log::log_warn_action;
+use crate::model::app::BridgeSdkTargetSource;
 use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
@@ -43,8 +44,8 @@ pub trait TaskResultMarkerHashSource {
     ///
     /// If id() returns None, then the source will be used as id.
     ///
-    /// Specifying the id is optional, as some tasks are their own identity, like external commands.
-    /// In those cases we can skip calculating values and hashes twice.
+    /// Specifying the id is optional when the complete input identifies the task.
+    /// Tasks that overwrite shared outputs need an identity independent of mutable inputs.
     ///
     /// The main difference between id and source is that it should not include
     /// generic "task properties", only ids for the task. E.g.: the hash_input for rpc linking
@@ -72,6 +73,7 @@ pub struct TaskResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash_input: Option<String>,
 
+    pub cli_version: String,
     pub hash_hex: String,
     pub success: bool,
 }
@@ -125,13 +127,42 @@ impl TaskResultMarkerHashSource for MoonInstallDepsMarkerHash<'_> {
     }
 }
 
+#[derive(Serialize)]
+pub struct GoModDepsMarkerHash<'a> {
+    pub go_module_root: &'a Path,
+    pub go_mod_hash: &'a str,
+    pub go_sum_hash: Option<&'a str>,
+    pub inputs_hash: &'a str,
+}
+
+impl TaskResultMarkerHashSource for GoModDepsMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GoModDepsMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some(format!(
+            "go-mod-deps:{}",
+            self.go_module_root.display()
+        )))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
 impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "ResolvedExternalCommandMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(&(
+            self.build_dir,
+            &self.command.command,
+            &self.command.targets,
+        ))?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -322,11 +353,27 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
 }
 
 pub struct GenerateBridgeSdkMarkerHash<'a> {
-    pub component_name: &'a ComponentName,
+    pub output_dir: &'a Path,
+    pub source: &'a BridgeSdkTargetSource,
+    pub tool_definition: Option<&'a golem_common::schema::tool::Tool>,
     pub target_name: &'a str,
     pub kind: &'static str,
     pub language: &'a GuestLanguage,
     pub bridge_mode: BridgeMode,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateBridgeSdkMarkerHashSource<'a> {
+    source: &'a BridgeSdkTargetSource,
+    tool_definition: Option<&'a golem_common::schema::tool::Tool>,
+    target_name: &'a str,
+    kind: &'static str,
+    language: &'a GuestLanguage,
+    bridge_mode: BridgeMode,
+    rust_config: &'a crate::bridge_gen::rust::RustBridgeGeneratorConfig,
+    generator_version: u32,
 }
 
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
@@ -335,23 +382,49 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(
+            fs::absolute_lexical_path(self.output_dir)?
+                .display()
+                .to_string(),
+        ))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(format!(
-            "componentName={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}",
-            self.component_name,
-            self.target_name,
-            self.kind,
-            self.language.id(),
-            self.bridge_mode.id(),
-        )))
+        Ok(HashFromString(serde_json::to_string(
+            &GenerateBridgeSdkMarkerHashSource {
+                source: self.source,
+                tool_definition: self.tool_definition,
+                target_name: self.target_name,
+                kind: self.kind,
+                language: self.language,
+                bridge_mode: self.bridge_mode,
+                rust_config: &self.rust_config,
+                generator_version: 2,
+            },
+        )?))
     }
 }
 
 pub struct ExtractComponentMetadataMarkerHash<'a> {
     pub component_name: &'a ComponentName,
+}
+
+pub struct OnDemandCommonTemplateMarkerHash<'a> {
+    pub content_hash: &'a str,
+}
+
+impl TaskResultMarkerHashSource for OnDemandCommonTemplateMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "OnDemandCommonTemplateMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some("on-demand-common".to_string()))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(self.content_hash.to_string()))
+    }
 }
 
 impl TaskResultMarkerHashSource for ExtractComponentMetadataMarkerHash<'_> {
@@ -469,7 +542,8 @@ impl TaskResultMarker {
         let previous_result = {
             if marker_file_exists {
                 match serde_json::from_str::<TaskResult>(&fs::read_to_string(&marker_file_path)?) {
-                    Ok(result) => Some(result),
+                    Ok(result) if result.cli_version == crate::version() => Some(result),
+                    Ok(_) => None,
                     Err(err) => {
                         log_warn_action(
                             "Ignoring",
@@ -517,6 +591,7 @@ impl TaskResultMarker {
                 kind: Some(self.kind.to_string()),
                 id: Some(self.id),
                 hash_input: Some(self.hash_input),
+                cli_version: crate::version().to_string(),
                 hash_hex: self.hash_hex,
                 success,
             })?,
@@ -546,29 +621,101 @@ impl TaskResultMarker {
 mod tests {
     use super::*;
     use crate::bridge_gen::BridgeMode;
+    use golem_common::model::diff::Hash;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::tool_release::ToolReleaseId;
     use test_r::test;
+
+    #[test]
+    fn external_build_marker_tracks_shared_output_across_configuration_switches() {
+        let directory = tempfile::tempdir().unwrap();
+        let command = |mapping: &str| -> app_raw::ExternalCommand {
+            serde_json::from_value(serde_json::json!({
+                "command": "npx rollup -c",
+                "targets": ["main.js"],
+                "env": {"GOLEM_NODE_HTTP_ROUTERS": mapping}
+            }))
+            .unwrap()
+        };
+        let a = command("{\"3000\":{\"name\":\"A\",\"mount\":\"/a\"}}");
+        let b = command("{\"3000\":{\"name\":\"B\",\"mount\":\"/b\"}}");
+        let marker = |command| {
+            TaskResultMarker::new(
+                directory.path(),
+                ResolvedExternalCommandMarkerHash {
+                    build_dir: Path::new("component"),
+                    command,
+                },
+            )
+            .unwrap()
+        };
+        assert!(!marker(&a).is_up_to_date());
+        marker(&a).success().unwrap();
+        assert!(marker(&a).is_up_to_date());
+        assert!(!marker(&b).is_up_to_date());
+        marker(&b).success().unwrap();
+        assert!(!marker(&a).is_up_to_date());
+        marker(&a).success().unwrap();
+        assert!(marker(&a).is_up_to_date());
+    }
+
+    #[test]
+    fn task_markers_reject_results_from_another_cli_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let component = ComponentName("app:producer".into());
+        let marker = || {
+            TaskResultMarker::new(
+                dir.path(),
+                ExtractComponentMetadataMarkerHash {
+                    component_name: &component,
+                },
+            )
+            .unwrap()
+        };
+        let initial = marker();
+        let path = initial.marker_file_path.clone();
+        initial.success().unwrap();
+        assert!(marker().is_up_to_date());
+
+        let mut result: TaskResult =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        result.cli_version = format!("{}-other", crate::version());
+        fs::write_str(&path, serde_json::to_string(&result).unwrap()).unwrap();
+
+        let invalidated = marker();
+        assert!(!invalidated.is_up_to_date());
+        invalidated.success().unwrap();
+        assert!(marker().is_up_to_date());
+    }
 
     #[test]
     fn bridge_sdk_marker_hash_source_includes_bridge_mode() {
         let component_name = ComponentName("app:producer".to_string());
+        let source = BridgeSdkTargetSource::local(component_name);
         let agent_type_name = AgentTypeName("AlphaAgent".to_string());
         let language = GuestLanguage::Rust;
 
         let external_source = GenerateBridgeSdkMarkerHash {
-            component_name: &component_name,
+            output_dir: Path::new("bridge/alpha"),
+            source: &source,
+            tool_definition: None,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::External,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();
         let guest_source = GenerateBridgeSdkMarkerHash {
-            component_name: &component_name,
+            output_dir: Path::new("bridge/alpha"),
+            source: &source,
+            tool_definition: None,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::Guest,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();
@@ -582,8 +729,54 @@ mod tests {
         };
 
         assert_ne!(external_source, guest_source);
-        assert!(external_source.contains("bridgeMode=external"));
-        assert!(guest_source.contains("bridgeMode=internal"));
+        let external: serde_json::Value = serde_json::from_str(&external_source).unwrap();
+        let guest: serde_json::Value = serde_json::from_str(&guest_source).unwrap();
+        assert_eq!(external["bridgeMode"], "external");
+        assert_eq!(guest["bridgeMode"], "guest");
+        assert_eq!(external["generatorVersion"], 2);
+    }
+
+    #[test]
+    fn bridge_sdk_marker_hash_source_includes_rust_generator_configuration() {
+        let source = BridgeSdkTargetSource::local(ComponentName("app:producer".to_string()));
+        let language = GuestLanguage::Rust;
+        let marker = |config| {
+            GenerateBridgeSdkMarkerHash {
+                output_dir: Path::new("bridge/alpha"),
+                source: &source,
+                tool_definition: None,
+                target_name: "AlphaAgent",
+                kind: "agent",
+                language: &language,
+                bridge_mode: BridgeMode::External,
+                rust_config: config,
+            }
+            .source()
+            .unwrap()
+        };
+        let default = marker(Default::default());
+        let configured = marker(
+            crate::bridge_gen::rust::RustBridgeGeneratorConfig::from_cli(
+                &[".*=Eq".into()],
+                &["anyhow = \"1\"".into()],
+                Path::new("/work"),
+            )
+            .unwrap(),
+        );
+        let TaskResultMarkerHashSourceKind::HashFromString(default) = default else {
+            panic!("expected bridge marker to hash from string");
+        };
+        let TaskResultMarkerHashSourceKind::HashFromString(configured) = configured else {
+            panic!("expected bridge marker to hash from string");
+        };
+        assert_ne!(default, configured);
+        let configured: serde_json::Value = serde_json::from_str(&configured).unwrap();
+        assert!(configured["rustConfig"].is_object());
+        assert_eq!(configured["rustConfig"]["deriveRules"][0]["pattern"], ".*");
+        assert_eq!(
+            configured["rustConfig"]["dependencies"]["anyhow"]["version"],
+            "1"
+        );
     }
 
     #[test]
@@ -591,32 +784,240 @@ mod tests {
         let marker_dir = tempfile::tempdir().unwrap();
         let language = GuestLanguage::Rust;
         let bridge_mode = BridgeMode::External;
+        let left_source =
+            BridgeSdkTargetSource::local(ComponentName::try_from("app:producer-a").unwrap());
+        let right_source =
+            BridgeSdkTargetSource::local(ComponentName::try_from("app:producer").unwrap());
 
         let left_marker = TaskResultMarker::new(
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
-                component_name: &ComponentName::try_from("app:producer-a").unwrap(),
+                output_dir: Path::new("bridge/left"),
+                source: &left_source,
+                tool_definition: None,
                 target_name: "b",
                 kind: "agent",
                 language: &language,
                 bridge_mode,
+                rust_config: Default::default(),
             },
         )
         .unwrap();
         let right_marker = TaskResultMarker::new(
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
-                component_name: &ComponentName::try_from("app:producer").unwrap(),
+                output_dir: Path::new("bridge/right"),
+                source: &right_source,
+                tool_definition: None,
                 target_name: "a-b",
                 kind: "agent",
                 language: &language,
                 bridge_mode,
+                rust_config: Default::default(),
             },
         )
         .unwrap();
 
         assert_ne!(left_marker.hash_hex, right_marker.hash_hex);
         assert_ne!(left_marker.marker_file_path, right_marker.marker_file_path);
+    }
+
+    #[test]
+    fn mcp_bridge_marker_covers_import_and_projection_identity() {
+        let source = |import_index, digest: &str| BridgeSdkTargetSource::McpImport {
+            import_index,
+            projection_digest: digest.into(),
+            manifest_source: PathBuf::from("golem.yaml"),
+        };
+        let original = bridge_marker_source(&source(2, "first-projection"));
+        assert_ne!(
+            original,
+            bridge_marker_source(&source(2, "changed-projection"))
+        );
+        assert_ne!(
+            original,
+            bridge_marker_source(&source(3, "first-projection"))
+        );
+    }
+
+    #[test]
+    fn remote_release_bridge_marker_covers_release_and_metadata_identity() {
+        let release_id = ToolReleaseId::new();
+        let remote_source = |release_id, metadata_version: &str, metadata: &[u8], source: &[u8]| {
+            BridgeSdkTargetSource::RemoteRelease {
+                release_id,
+                version: "1.2.0".to_string(),
+                metadata_version: metadata_version.to_string(),
+                metadata_digest: Hash::new(blake3::hash(metadata)),
+                source_digest: Hash::new(blake3::hash(source)),
+                manifest_source: PathBuf::from("golem.yaml"),
+            }
+        };
+        let base = remote_source(release_id, "0.1.0", b"metadata-a", b"source-a");
+        let base_marker = bridge_marker_source(&base);
+
+        for changed in [
+            remote_source(ToolReleaseId::new(), "0.1.0", b"metadata-a", b"source-a"),
+            remote_source(release_id, "0.2.0", b"metadata-a", b"source-a"),
+            remote_source(release_id, "0.1.0", b"metadata-b", b"source-a"),
+            remote_source(release_id, "0.1.0", b"metadata-a", b"source-b"),
+        ] {
+            assert_ne!(base_marker, bridge_marker_source(&changed));
+        }
+    }
+
+    #[test]
+    fn ambient_bridge_marker_covers_environment_release_and_metadata_identity() {
+        let environment_id = EnvironmentId::new();
+        let release_id = ToolReleaseId::new();
+        let ambient_source = |environment_id,
+                              release_id,
+                              version: &str,
+                              metadata_version: &str,
+                              metadata: &[u8],
+                              source: &[u8]| {
+            BridgeSdkTargetSource::AmbientNative {
+                environment_id,
+                release_id,
+                version: version.to_string(),
+                metadata_version: metadata_version.to_string(),
+                metadata_digest: Hash::new(blake3::hash(metadata)),
+                source_digest: Hash::new(blake3::hash(source)),
+                manifest_source: PathBuf::from("golem.yaml"),
+            }
+        };
+        let base = ambient_source(
+            environment_id,
+            release_id,
+            "1.0.0",
+            "0.1.0",
+            b"metadata-a",
+            b"source-a",
+        );
+        let base_marker = bridge_marker_source(&base);
+
+        for changed in [
+            ambient_source(
+                EnvironmentId::new(),
+                release_id,
+                "1.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                ToolReleaseId::new(),
+                "1.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "2.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "1.0.0",
+                "0.2.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "1.0.0",
+                "0.1.0",
+                b"metadata-b",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "1.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-b",
+            ),
+        ] {
+            assert_ne!(base_marker, bridge_marker_source(&changed));
+        }
+    }
+
+    #[test]
+    fn bridge_marker_has_one_owner_per_output_across_source_switches() {
+        let marker_dir = tempfile::tempdir().unwrap();
+        let output_dir = marker_dir.path().join("generated/search");
+        let language = GuestLanguage::Rust;
+        let source_a = BridgeSdkTargetSource::McpImport {
+            import_index: 1,
+            projection_digest: "projection-a".into(),
+            manifest_source: PathBuf::from("golem.yaml"),
+        };
+        let source_b = BridgeSdkTargetSource::McpImport {
+            import_index: 2,
+            projection_digest: "projection-b".into(),
+            manifest_source: PathBuf::from("golem.yaml"),
+        };
+        let marker = |source| {
+            TaskResultMarker::new(
+                marker_dir.path(),
+                GenerateBridgeSdkMarkerHash {
+                    output_dir: &output_dir,
+                    source,
+                    tool_definition: None,
+                    target_name: "search",
+                    kind: "tool",
+                    language: &language,
+                    bridge_mode: BridgeMode::Guest,
+                    rust_config: Default::default(),
+                },
+            )
+            .unwrap()
+        };
+
+        let first_a = marker(&source_a);
+        let marker_path = first_a.marker_file_path.clone();
+        assert!(!first_a.is_up_to_date());
+        first_a.success().unwrap();
+
+        let b = marker(&source_b);
+        assert_eq!(b.marker_file_path, marker_path);
+        assert!(!b.is_up_to_date());
+        b.success().unwrap();
+
+        let second_a = marker(&source_a);
+        assert_eq!(second_a.marker_file_path, marker_path);
+        assert!(!second_a.is_up_to_date());
+        second_a.success().unwrap();
+
+        assert!(marker(&source_a).is_up_to_date());
+    }
+
+    fn bridge_marker_source(source: &BridgeSdkTargetSource) -> String {
+        let language = GuestLanguage::Rust;
+        let marker = GenerateBridgeSdkMarkerHash {
+            output_dir: Path::new("bridge/search"),
+            source,
+            tool_definition: None,
+            target_name: "search",
+            kind: "tool",
+            language: &language,
+            bridge_mode: BridgeMode::Guest,
+            rust_config: Default::default(),
+        }
+        .source()
+        .unwrap();
+        let TaskResultMarkerHashSourceKind::HashFromString(marker) = marker else {
+            panic!("expected bridge marker to hash from string");
+        };
+        marker
     }
 
     #[test]

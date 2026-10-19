@@ -1,0 +1,112 @@
+import { Callout } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
+
+# Permissions
+
+Golem decides what each agent may do with **permission cards**. A card lists operations the agent is allowed to perform, such as connecting to a host, reading a directory, revealing a secret, or calling a tool. Golem checks the agent's cards before every such operation, so an agent can do exactly what its cards allow, regardless of what its code, its prompt, or a model's output asks for.
+
+This matters for AI agents because they act on text from users, documents, and web pages, and that text can steer a model. An instruction in a prompt such as "never delete files outside the workspace" is not a security boundary. A card that does not grant delete permission outside the workspace is.
+
+## How a permission check works
+
+Cards are capabilities: unforgeable values that only the Golem runtime can create. The set of cards an agent holds is its **wallet**. When agent code makes an HTTP request, opens a file, reads a secret, or calls another agent or a tool, the Golem host checks the request against the wallet first.
+
+<ThemedImage
+  lightSrc="/images/getting-started/card-check-light.webp"
+  darkSrc="/images/getting-started/card-check-dark.webp"
+  alt="Agent code calls fetch on an external host. The host checks the agent's wallet for a network connect grant covering that host and port. If no card covers it, the request is denied before it leaves the agent and the denial is recorded in the oplog. If a card covers it, the request is sent and the response is recorded."
+  caption="Golem checks the wallet before the operation happens."
+  width={1536}
+  height={1024}
+/>
+
+If no card allows the operation, Golem denies it before it happens and records the denial in the agent's oplog. Each method invocation records which cards it used, so when Golem recovers an agent after a failure, it makes the same permission decisions as the original run. An agent with no cards can compute and return results, but cannot touch files, the network, secrets, other agents, or tools.
+
+Tools act with the calling agent's cards, so a card that limits file deletion also limits a `bash` script that the agent runs through the `bash` tool.
+
+## Grants
+
+Each card contains **grants**. A grant names an operation and the resources it applies to:
+
+```text
+filesystem(?agent) @ ?agent : read : /data/**
+network() @ ?agent : connect : api.openai.com:443
+```
+
+A grant has four parts: `resource-type(owner) @ recipient : operation : target`.
+
+| Part | In the first grant | Meaning |
+|---|---|---|
+| Resource type and owner | `filesystem(?agent)` | The filesystem that belongs to the agent |
+| Recipient | `@ ?agent` | Who may use the grant: the agent holding the card |
+| Operation | `read` | What may be done |
+| Target | `/data/**` | Where: anything under `/data` (`*` matches one path segment, `**` any depth) |
+
+The second grant lets the agent open connections to `api.openai.com` on port 443. `?agent` stands for whichever agent holds the card, so the same grant works for every agent of a type. Similar placeholders exist for the agent's component (`?component`) and environment (`?env`).
+
+A card has two sets of grants. Its **lower bound** lists what the card allows; an operation is allowed if any card in the wallet allows it. Its **upper bound** is a limit on the whole wallet, including cards the agent receives later. Each set can contain negative grants that exclude operations. An upper bound that excludes billing secrets, for example, keeps those secrets out of reach even if another card would allow them.
+
+## Default and explicit permissions
+
+If an agent type does not declare its permissions, Golem gives it a **broad default card** so that a first deployment works without configuration. The default card allows the agent's own files, any network destination, the environment's secrets and storage, and calls to any agent and tool in the environment.
+
+<Callout type="warning">
+  The default card is meant for getting started. Before you run agents that act on untrusted
+  input, declare explicit permissions.
+</Callout>
+
+To declare explicit permissions, give the agent type an `initialCard` in `golem.yaml`. It replaces the default card, so list everything the agent needs:
+
+```yaml
+# golem.yaml (excerpt)
+agents:
+  ReportAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "tool(?component/bash) @ ?agent : invoke : *"
+          - "filesystem(?agent) @ ?agent : read : /workspace/**"
+          - "filesystem(?agent) @ ?agent : delete : /workspace/*"
+          - "network() @ ?agent : connect : api.openai.com:443"
+      upperBound:
+        negative:
+          - "secret(?env) @ ?agent : reveal : billing.*"
+```
+
+This agent may run `bash`, read anything under `/workspace`, delete files directly inside `/workspace`, and connect to one host. It can never reveal secrets whose names start with `billing.`.
+
+## Delegating, expiring, and revoking
+
+Every card comes from an earlier one. An account starts with a **root card**. An account owner can give another account part of its authority with a **permission share**, and each environment has **default cards** for managing it. When you deploy, Golem creates an **initial card** for each agent type, which can never exceed the authority of the person deploying.
+
+At runtime, an agent can derive a narrower card from one it holds and pass it to another agent or a tool, for example read access to one folder for 30 days (written `P30D`). A derived card can only narrow its parent; it can never add permissions. Cards can expire, and revoking a card also revokes every card derived from it. See the [cards reference](/v1.6/develop/cards) for the guest API that every SDK provides.
+
+<ThemedImage
+  lightSrc="/images/getting-started/card-derivation-light.webp"
+  darkSrc="/images/getting-started/card-derivation-dark.webp"
+  alt="An account root card leads to permission shares, environment default cards, and initial cards created at deploy for each agent type. Initial cards must fall within the deployer's authority. An agent derives a narrower card at runtime, and that card can be derived again, narrower still. Revoking a card also revokes every card derived from it."
+  caption="Each derived card is narrower than its parent. Revoking a card revokes everything derived from it."
+  width={1536}
+  height={1024}
+/>
+
+## Secrets
+
+Secrets are passed to agents as opaque handles. An agent can pass a handle to a tool or a Golem integration without seeing the value. To use a secret's value directly, for example to put an API key in an HTTP header, the agent must **reveal** it, which requires a `reveal` permission and is recorded; the revealed value is then ordinary data and appears in the recorded request. A tool binding can prevent a tool from revealing any secret, which keeps API keys away from code generated by a model.
+
+## What permissions do not cover
+
+Permissions decide what an agent may do, not which users may call it. Checking that the signed-in user may access a particular agent is application logic, described in [Artifacts](/v1.6/concepts/artifacts#login).
+
+Permissions limit how much damage an agent can do; they do not judge whether an agent's intentions are good. An agent can still misuse permissions it legitimately holds. For irreversible operations, such as payments or deletions, add an approval step in [tool middleware](/v1.6/concepts/tools#middleware), which the agent cannot bypass.
+
+## Next
+
+[Agent communication](/v1.6/concepts/communication): how agents call each other and wait for people and external events.
+
+Related guides:
+
+- [Cards reference](/v1.6/develop/cards)
+- [Configuration and secrets](/v1.6/develop/config-and-secrets)
+- [Application manifest](/v1.6/app-manifest)
+- [Permissions CLI](/v1.6/cli/permissions)

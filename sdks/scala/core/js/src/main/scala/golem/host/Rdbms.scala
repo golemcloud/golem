@@ -835,10 +835,22 @@ object Rdbms {
     final case class QueryExecutionFailure(message: String) extends DbError
     final case class QueryResponseFailure(message: String)  extends DbError
     final case class Other(message: String)                 extends DbError
+    final case class ResourceLost(message: String)          extends DbError
 
     private[Rdbms] def fromThrowable(t: Throwable): DbError = {
       val msg = if (t.getMessage != null) t.getMessage else t.toString
-      Other(msg)
+      t match {
+        case js.JavaScriptException(value) if value != null && js.typeOf(value) == "object" =>
+          val raw        = value.asInstanceOf[js.Dynamic]
+          val candidates = List(raw, raw.selectDynamic("payload"), raw.selectDynamic("cause"))
+          candidates.find(v =>
+            v != null && js.typeOf(v) == "object" && v.selectDynamic("tag").asInstanceOf[String] == "resource-lost"
+          ) match {
+            case Some(error) => ResourceLost(error.selectDynamic("val").asInstanceOf[String])
+            case None        => Other(msg)
+          }
+        case _ => Other(msg)
+      }
     }
   }
 

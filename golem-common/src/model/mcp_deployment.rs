@@ -30,6 +30,21 @@ impl McpDeployment {
                     )
                 })
                 .collect(),
+            tools: self
+                .tools
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        diff::McpDeploymentToolOptions {
+                            owner_component: v.owner_component.0.clone(),
+                            security_scheme: v.security_scheme.as_ref().map(|s| s.0.clone()),
+                            include: v.include.clone(),
+                            exclude: v.exclude.clone(),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }

@@ -111,14 +111,14 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
         self_: Resource<DbResultStreamEntry>,
-    ) -> anyhow::Result<Vec<DbColumn>> {
+    ) -> anyhow::Result<Result<Vec<DbColumn>, Error>> {
         db_result_stream_durable_get_columns(self, &self_).await
     }
 
     async fn get_next(
         &mut self,
         self_: Resource<DbResultStreamEntry>,
-    ) -> anyhow::Result<Option<Vec<DbRow>>> {
+    ) -> anyhow::Result<Result<Option<Vec<DbRow>>, Error>> {
         db_result_stream_durable_get_next(self, &self_).await
     }
 
@@ -300,6 +300,7 @@ impl From<crate::services::rdbms::RdbmsError> for Error {
                 Self::QueryResponseFailure(v)
             }
             crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
+            crate::services::rdbms::RdbmsError::ResourceLost(v) => Self::ResourceLost(v),
         }
     }
 }

@@ -8,3 +8,8 @@ message AgentId {
   golem.component.ComponentId component_id = 1;
   string name = 2;
 }
+
+enum OwnerKind {
+  COMPONENT_AGENT = 0;
+  EPHEMERAL_EXTERNAL_TOOL = 1;
+}

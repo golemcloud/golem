@@ -87,6 +87,13 @@ declare_structs! {
 
     #[derive(Eq)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct CardManagedByComponentInitial {
+        pub component_id: ComponentId,
+        pub component_revision: ComponentRevision,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct CardManagedByRuntimeDerived {
         pub environment_id: EnvironmentId,
@@ -127,6 +134,8 @@ declare_structs! {
         pub upper_positive: Vec<PermissionPattern>,
         #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_negative: Vec<PermissionPattern>,
+        /// The earliest expiry of the root cards; the scope card stops authorizing then.
+        pub expires_at: Option<DateTime<Utc>>,
     }
 
     #[derive(Eq)]
@@ -184,6 +193,7 @@ declare_unions! {
         EnvironmentDefault(CardManagedByEnvironmentDefault),
         PermissionShare(CardManagedByPermissionShare),
         AgentInitial(CardManagedByAgentInitial),
+        ComponentInitial(CardManagedByComponentInitial),
         RuntimeDerived(CardManagedByRuntimeDerived),
     }
 

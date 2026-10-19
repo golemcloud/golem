@@ -20,6 +20,7 @@ import golem.host.js.tool._
 import golem.tool._
 import golem.tool.wire._
 
+import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 
@@ -43,6 +44,7 @@ object ToolWireInterop {
   def toolMiddlewareToJs(middleware: ToolMiddlewareDescriptor): JsToolMiddleware =
     JsToolMiddleware(
       middleware.name,
+      middleware.version,
       middleware.aliases.toJSArray,
       docToJs(middleware.doc),
       middleware.scope match {
@@ -51,7 +53,8 @@ object ToolWireInterop {
             JsMonomorphicToolMiddlewareScope(toolToJs(presented), expected.map(toolToJs).orUndefined)
           )
         case ToolMiddlewareScope.Universal => JsToolMiddlewareScope.universal
-      }
+      },
+      SchemaWireInterop.graphToJs(golem.schema.wire.SchemaWire.schemaGraphToWit(middleware.parameterSchema))
     )
 
   def toolMiddlewareFromJs(middleware: JsToolMiddleware): ToolMiddlewareDescriptor =
@@ -68,12 +71,15 @@ object ToolWireInterop {
           )
         case "universal" => ToolMiddlewareScope.Universal
         case other       => throw new IllegalArgumentException(s"unknown tool middleware scope tag: $other")
-      }
+      },
+      golem.schema.wire.SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(middleware.parameterSchema)),
+      middleware.version
     )
 
   def toolToJs(t: WitTool): JsTool =
     JsTool(
       t.version,
+      t.requiresFilesystem,
       JsCommandTree(t.commands.nodes.map(commandNodeToJs).toJSArray),
       SchemaWireInterop.graphToJs(t.schema)
     )
@@ -81,6 +87,7 @@ object ToolWireInterop {
   def toolFromJs(j: JsTool): WitTool =
     WitTool(
       j.version,
+      j.requiresFilesystem,
       WitCommandTree(j.commands.nodes.toList.toVector.map(commandNodeFromJs)),
       SchemaWireInterop.graphFromJs(j.schema)
     )
@@ -92,8 +99,19 @@ object ToolWireInterop {
       case WitToolError.InvalidInput(message)    => JsToolError.invalidInput(message)
       case WitToolError.ConstraintViolation(msg) => JsToolError.constraintViolation(msg)
       case WitToolError.InvalidResult(message)   => JsToolError.invalidResult(message)
-      case WitToolError.CustomError(payload)     => JsToolError.customError(SchemaWireInterop.typedToJs(payload))
+      case WitToolError.CustomError(error)       =>
+        JsToolError.customError(error.name, SchemaWireInterop.typedToJs(error.payload))
     }
+
+  def toolErrorToJsAsync(e: WitToolError): Future[JsToolError] = e match {
+    case WitToolError.CustomError(error) =>
+      SchemaWireInterop
+        .typedToJsAsync(error.payload)
+        .map(payload => JsToolError.customError(error.name, payload))(using
+          ExecutionContext.parasitic
+        )
+    case other => Future.successful(toolErrorToJs(other))
+  }
 
   def toolErrorFromJs(j: JsToolError): WitToolError =
     j.tag match {
@@ -104,8 +122,14 @@ object ToolWireInterop {
       case "constraint-violation" => WitToolError.ConstraintViolation(valOf(j).asInstanceOf[String])
       case "invalid-result"       => WitToolError.InvalidResult(valOf(j).asInstanceOf[String])
       case "custom-error"         =>
+        val error = valOf(j)
         WitToolError.CustomError(
-          SchemaWireInterop.typedFromJs(valOf(j).asInstanceOf[golem.host.js.schema.JsTypedSchemaValue])
+          WitCustomToolError(
+            error.selectDynamic("name").asInstanceOf[String],
+            SchemaWireInterop.typedFromJs(
+              error.selectDynamic("payload").asInstanceOf[golem.host.js.schema.JsTypedSchemaValue]
+            )
+          )
         )
       case other => throw new IllegalArgumentException(s"Unknown tool-error tag: $other")
     }
@@ -490,6 +514,7 @@ object ToolWireInterop {
       b.constraints.map(constraintToJs).toJSArray,
       b.stdin.map(streamSpecToJs).orUndefined,
       b.stdout.map(streamSpecToJs).orUndefined,
+      b.stderr.map(streamSpecToJs).orUndefined,
       b.result.map(resultSpecToJs).orUndefined,
       b.errors.map(errorCaseToJs).toJSArray,
       b.annotations.map(annotationsToJs).orUndefined
@@ -503,6 +528,7 @@ object ToolWireInterop {
       j.constraints.toList.map(constraintFromJs),
       j.stdin.toOption.map(streamSpecFromJs),
       j.stdout.toOption.map(streamSpecFromJs),
+      j.stderr.toOption.map(streamSpecFromJs),
       j.result.toOption.map(resultSpecFromJs),
       j.errors.toList.map(errorCaseFromJs),
       j.annotations.toOption.map(annotationsFromJs)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::tool::host::ToolRpc;
+use crate::golem_agentic::golem::tool::host::ToolRpc;
 
 /// SDK-owned ambient tool invocation backend used by generated typed clients.
 ///

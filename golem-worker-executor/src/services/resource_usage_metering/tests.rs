@@ -15,6 +15,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 struct TestClock {
     base: Instant,
     offset_nanos: AtomicU64,
+    sleep_deadline_nanos: AtomicU64,
     changed: tokio::sync::Notify,
 }
 
@@ -23,6 +24,7 @@ impl TestClock {
         Arc::new(Self {
             base,
             offset_nanos: AtomicU64::new(0),
+            sleep_deadline_nanos: AtomicU64::new(u64::MAX),
             changed: tokio::sync::Notify::new(),
         })
     }
@@ -35,6 +37,17 @@ impl TestClock {
         self.changed.notify_waiters();
         tokio::task::yield_now().await;
     }
+
+    async fn wait_for_sleep_until(&self, deadline: Duration) {
+        let deadline_nanos = u64::try_from(deadline.as_nanos()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while self.sleep_deadline_nanos.load(Ordering::Acquire) != deadline_nanos {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 }
 
 impl MeteringClock for TestClock {
@@ -43,9 +56,15 @@ impl MeteringClock for TestClock {
     }
 
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.sleep_deadline_nanos.store(
+            u64::try_from(deadline.duration_since(self.base).as_nanos()).unwrap(),
+            Ordering::Release,
+        );
         Box::pin(async move {
             loop {
                 let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
                 if self.now() >= deadline {
                     return;
                 }
@@ -389,6 +408,7 @@ async fn sampler_uses_immediate_ten_millisecond_and_anchored_hundred_millisecond
     baseline.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(9)).await;
     for _ in 0..10 {
         tokio::task::yield_now().await;
@@ -399,6 +419,7 @@ async fn sampler_uses_immediate_ten_millisecond_and_anchored_hundred_millisecond
     first.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(100)).await;
     clock.set(Duration::from_millis(99)).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     clock.set(Duration::from_millis(100)).await;
@@ -435,6 +456,7 @@ async fn timeout_keeps_single_flight_skips_ticks_and_accepts_late_success() {
     wait_for_calls(&reader, 1).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(10)).await;
     blocked.wait_started().await;
 
@@ -482,6 +504,7 @@ async fn timeout_keeps_single_flight_skips_ticks_and_accepts_late_success() {
     blocked.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(600)).await;
     clock.set(Duration::from_millis(599)).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     clock.set(Duration::from_millis(600)).await;
@@ -515,16 +538,19 @@ async fn failure_backoff_suspends_at_attempt_start_and_recovery_is_prospective()
     wait_for_calls(&reader, 1).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(10)).await;
     wait_for_calls(&reader, 2).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(110)).await;
     clock.set(Duration::from_millis(109)).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     clock.set(Duration::from_millis(110)).await;
     wait_for_calls(&reader, 3).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(200)).await;
     clock.set(Duration::from_millis(210)).await;
     wait_for_calls(&reader, 4).await;
     wait_for_observations_to_finish(&reader).await;
@@ -695,6 +721,7 @@ async fn active_error_completed_during_close_suspends_from_attempt_start() {
     wait_for_calls(&reader, 1).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(10)).await;
     crossing_error.wait_started().await;
 
@@ -795,11 +822,11 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     let now = Instant::now();
     let clock = TestClock::new(now);
     let first_baseline = ObservationGate::pending(authoritative(100));
-    let current_baseline = ObservationGate::ready(authoritative(200));
+    let current_baseline = ObservationGate::pending(authoritative(200));
     let current_final = ObservationGate::ready(authoritative(200));
     let reader = ScriptedUsageReader::new(vec![
         Arc::clone(&first_baseline),
-        current_baseline,
+        Arc::clone(&current_baseline),
         current_final,
     ]);
     let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
@@ -843,6 +870,8 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     let third = open_window(&meter, third_permit).await.unwrap();
     wait_for_active_observation(&third).await;
     wait_for_calls(&reader, 2).await;
+    current_baseline.wait_started().await;
+    current_baseline.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&third).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
@@ -902,4 +931,30 @@ async fn dropped_window_releases_permit() {
     .await
     .unwrap();
     assert!(!held.load(Ordering::Acquire));
+}
+
+#[test]
+fn filesystem_metering_needs_per_agent_accounting() {
+    let metering = |filesystem| ResourceUsageMeteringConfig {
+        filesystem,
+        ..ResourceUsageMeteringConfig::all_enabled()
+    };
+    let accountings = [
+        AgentAccounting::ProjectQuotas,
+        AgentAccounting::Development,
+        AgentAccounting::Unaccounted,
+    ];
+
+    assert_eq!(
+        accountings.map(|accounting| check_filesystem_metering(metering(true), accounting)),
+        [
+            Ok(()),
+            Ok(()),
+            Err("filesystem metering requires XFS storage with project quotas".to_string()),
+        ]
+    );
+    assert_eq!(
+        accountings.map(|accounting| check_filesystem_metering(metering(false), accounting)),
+        [Ok(()), Ok(()), Ok(())]
+    );
 }

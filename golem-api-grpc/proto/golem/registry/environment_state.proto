@@ -6,6 +6,8 @@ import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
 import "golem/component/component_metadata.proto";
 import "golem/common/account_id.proto";
+import "golem/common/hash.proto";
+import "golem/common/uuid.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/agent_secret.proto";
 import "golem/tool/tool.proto";
@@ -29,6 +31,18 @@ message ComponentToolSource {
   string component_name = 3;
 }
 
+message HostToolSource {
+  string host_tool_id = 1;
+  string implementation_version = 2;
+}
+
+message ToolSource {
+  oneof source {
+    ComponentToolSource component = 1;
+    HostToolSource host = 2;
+  }
+}
+
 message RegisteredTool {
   uint64 deployment_revision = 1;
   golem.tool.Tool definition = 2;
@@ -37,11 +51,15 @@ message RegisteredTool {
   golem.common.AccountId owner_account_id = 5;
   string owner_account_email = 6;
   string metadata_version = 7;
+  optional golem.common.UUID tool_release_id = 8;
+  golem.common.Hash metadata_digest = 9;
+  ToolSource tagged_source = 10;
+  map<string, golem.component.ToolBindingInput> component_bindings = 11;
 }
 
 message CompiledToolBinding {
   uint64 deployment_revision = 1;
-  string agent_type_name = 2;
+  reserved 2;
   string tool_name = 3;
   string version = 4;
   golem.common.AccountId account_id = 5;
@@ -52,6 +70,14 @@ message CompiledToolBinding {
   ComponentToolSource source = 10;
   string metadata_version = 11;
   ToolFilesystemAccess filesystem_access = 12;
+  optional golem.common.UUID tool_release_id = 13;
+  golem.common.Hash metadata_digest = 14;
+  ToolSource tagged_source = 15;
+  oneof owner {
+    string agent_type_name = 16;
+    golem.component.ComponentId component_baseline_id = 17;
+  }
+  golem.component.ConfigKeyScope config_keys_readable = 18;
 }
 
 enum ToolFilesystemAccess {
@@ -63,5 +89,35 @@ enum ToolFilesystemAccess {
 message ToolDeploymentState {
   uint64 deployment_revision = 1;
   repeated RegisteredTool registered_tools = 2;
-  repeated CompiledToolBinding agent_tool_bindings = 3;
+  repeated CompiledToolBinding tool_bindings = 3;
+  // BinaryCodec snapshots preserve the complete pinned middleware descriptor, executable source,
+  // per-occurrence policy, compatibility projection, and occurrence order.
+  repeated bytes registered_tool_middlewares = 4;
+  repeated bytes tool_middleware_chains = 5;
+  repeated McpImport mcp_imports = 6;
+  // BinaryCodec snapshot of ToolMiddlewareConfiguration for dynamic tool activation.
+  bytes tool_middleware_configuration = 7;
+}
+
+enum McpInlineCredentialKind {
+  MCP_INLINE_CREDENTIAL_KIND_UNSPECIFIED = 0;
+  MCP_INLINE_CREDENTIAL_KIND_BEARER = 1;
+  MCP_INLINE_CREDENTIAL_KIND_BASIC = 2;
+}
+
+message McpImportAuth {
+  McpInlineCredentialKind kind = 1;
+  golem.common.Hash credential_digest = 2;
+}
+
+message McpImport {
+  string url = 1;
+  optional McpImportAuth auth = 2;
+  optional string security_scheme = 3;
+  optional string prefix = 4;
+  repeated string include = 5;
+  repeated string exclude = 6;
+  optional string version = 7;
+  bool has_include = 8;
+  bool has_exclude = 9;
 }

@@ -17,33 +17,43 @@ pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
 pub mod grpcapi;
+pub mod ingress;
+pub mod invocation_session_token;
 pub mod mcp;
 pub mod metrics;
 pub mod model;
 pub mod path;
+pub mod public_endpoint;
 pub mod service;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
+use crate::ingress::TrustedIngress;
+use crate::mcp::{McpOnlyEndpoint, make_mcp_endpoint};
+use crate::public_endpoint::PublicEndpoint;
 use crate::service::registry_event_subscriber::WorkerServiceRegistryInvalidationHandler;
 use anyhow::{Context, anyhow};
-use golem_common::poem::{CliClientInfoMiddleware, LazyEndpointExt};
+use golem_common::poem::{
+    CliClientInfoMiddleware, LazyEndpointExt, OpenTelemetryMetrics, OpenTelemetryTracing,
+    PrometheusExporter,
+};
+use golem_service_base::body_limit::RequestBodyLimit;
+use golem_service_base::http_server;
 use opentelemetry_sdk::trace::SdkTracer;
-use poem::endpoint::TowerCompatExt;
-use poem::endpoint::{BoxEndpoint, PrometheusExporter};
+use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
-use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
+use poem::middleware::{CookieJarManager, Cors};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
+use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
 #[cfg(test)]
 test_r::enable!();
+
+#[cfg(test)]
+mod transport_test_support;
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -57,6 +67,11 @@ pub struct TrafficReadyEndpoints {
     pub custom_request_port: u16,
     pub mcp_port: u16,
     pub api_endpoint: BoxEndpoint<'static>,
+    /// The endpoint that the custom request port serves: HTTP API and MCP deployments,
+    /// chosen by the request's host. See [`PublicEndpoint`].
+    pub public_endpoint: BoxEndpoint<'static>,
+    /// Decides which peers may set a request's public origin with `X-Forwarded-*` headers.
+    pub trusted_ingress: TrustedIngress,
 }
 
 #[derive(Clone)]
@@ -71,6 +86,7 @@ impl WorkerService {
         config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
+        config.validate_http_limits().map_err(anyhow::Error::msg)?;
         let services: Services = Services::new(&config).await?;
 
         Ok(Self {
@@ -86,15 +102,19 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> anyhow::Result<RunDetails> {
         let registry_service = self.services.registry_service.clone();
+        let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
+                component_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;
@@ -103,7 +123,7 @@ impl WorkerService {
 
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set, tracer.clone()).await?;
-        let custom_request_port = self
+        let (custom_request_port, _) = self
             .start_api_gateway_server(join_set, tracer.clone())
             .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
@@ -128,15 +148,19 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let registry_service = self.services.registry_service.clone();
+        let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
+                component_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;
@@ -144,17 +168,21 @@ impl WorkerService {
         });
 
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let custom_request_port = self
+        let (custom_request_port, public_endpoint) = self
             .start_api_gateway_server(join_set, tracer.clone())
             .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
-        let api_endpoint = api::make_open_api_service(&self.services).boxed();
+        let api_endpoint = api::make_open_api_service(&self.services)
+            .with(self.api_body_limit())
+            .boxed();
 
         Ok(TrafficReadyEndpoints {
             grpc_port,
             api_endpoint,
             mcp_port,
             custom_request_port,
+            public_endpoint: public_endpoint.boxed(),
+            trusted_ingress: self.trusted_ingress(),
         })
     }
 
@@ -162,9 +190,14 @@ impl WorkerService {
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<u16, anyhow::Error> {
-        grpcapi::start_grpc_server(&self.config.grpc, self.services.clone(), join_set)
-            .await
-            .context("gRPC server failed")
+        grpcapi::start_grpc_server(
+            self.config.socket_addr(self.config.grpc.port),
+            &self.config.grpc,
+            self.services.clone(),
+            join_set,
+        )
+        .await
+        .context("gRPC server failed")
     }
 
     async fn start_http_server(
@@ -187,6 +220,7 @@ impl WorkerService {
             .nest("/docs", ui)
             .nest("/specs", spec)
             .nest("/metrics", metrics)
+            .with(self.api_body_limit())
             .with(CookieJarManager::new())
             .with(cors)
             .with(CliClientInfoMiddleware::new())
@@ -194,19 +228,17 @@ impl WorkerService {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });
 
-        let poem_listener =
-            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.port));
-
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor =
+            golem_service_base::net::bind_poem_acceptor(self.config.socket_addr(self.config.port))?;
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
             .expect("socket address")
             .port();
 
+        let http_server_config = self.config.http_server.clone();
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(app)
+                http_server::run(acceptor, app, http_server_config)
                     .await
                     .map_err(|e| e.into())
             }
@@ -216,39 +248,61 @@ impl WorkerService {
         Ok(port)
     }
 
+    fn trusted_ingress(&self) -> TrustedIngress {
+        TrustedIngress::new(&self.config.route_resolver.trusted_ingress_addresses)
+    }
+
+    fn api_body_limit(&self) -> RequestBodyLimit {
+        RequestBodyLimit::new(self.config.body_limits.api)
+    }
+
+    fn mcp_endpoint(&self) -> BoxEndpoint<'static> {
+        make_mcp_endpoint(&self.services, self.config.body_limits.mcp)
+    }
+
     async fn start_api_gateway_server(
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
         tracer: Option<SdkTracer>,
-    ) -> Result<u16, anyhow::Error> {
-        let route = Route::new()
-            .nest("/", custom_api::make_custom_api_endpoint(&self.services))
-            .with(OpenTelemetryMetrics::new())
-            .with_if_lazy(tracer.is_some(), || {
-                OpenTelemetryTracing::new(tracer.unwrap())
-            });
+    ) -> Result<(u16, Arc<BoxEndpoint<'static>>), anyhow::Error> {
+        let public_endpoint = PublicEndpoint::new(
+            self.trusted_ingress(),
+            self.services.route_resolver.clone(),
+            self.services.mcp_capability_lookup.clone(),
+            Route::new()
+                .nest("/", custom_api::make_custom_api_endpoint(&self.services))
+                .boxed(),
+            self.mcp_endpoint(),
+        );
+        let route: Arc<BoxEndpoint<'static>> = Arc::new(
+            public_endpoint
+                .with(OpenTelemetryMetrics::new())
+                .with_if_lazy(tracer.is_some(), || {
+                    OpenTelemetryTracing::new(tracer.unwrap())
+                })
+                .boxed(),
+        );
+        let served_route = route.clone();
 
-        let poem_listener = poem::listener::TcpListener::bind(format!(
-            "0.0.0.0:{}",
-            self.config.custom_request_port
-        ));
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor = golem_service_base::net::bind_poem_acceptor(
+            self.config.socket_addr(self.config.custom_request_port),
+        )?;
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
             .expect("socket address")
             .port();
 
+        let http_server_config = self.config.http_server.clone();
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(route)
+                http_server::run(acceptor, served_route, http_server_config)
                     .await
                     .map_err(|err| anyhow!(err).context("API Gateway server failed"))
             }
             .in_current_span(),
         );
 
-        Ok(port)
+        Ok((port, route))
     }
 
     async fn start_mcp_server(
@@ -256,69 +310,29 @@ impl WorkerService {
         join_set: &mut JoinSet<anyhow::Result<()>>,
         tracer: Option<SdkTracer>,
     ) -> anyhow::Result<u16> {
-        let poem_listener =
-            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.mcp_port));
-
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor = golem_service_base::net::bind_poem_acceptor(
+            self.config.socket_addr(self.config.mcp_port),
+        )?;
 
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
             .expect("socket address")
             .port();
 
-        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
-        let mcp_capability_lookup_for_auth = mcp_capability_lookup.clone();
-        let identity_provider = self.services.identity_provider.clone();
-        let identity_provider_for_auth = identity_provider.clone();
+        let route = McpOnlyEndpoint::new(
+            self.trusted_ingress(),
+            self.services.mcp_capability_lookup.clone(),
+            self.mcp_endpoint(),
+        )
+        .with(OpenTelemetryMetrics::new())
+        .with_if_lazy(tracer.is_some(), || {
+            OpenTelemetryTracing::new(tracer.unwrap())
+        });
 
-        let worker_service = self.services.worker_service.clone();
-
-        let service = StreamableHttpService::new(
-            move || {
-                Ok(GolemAgentMcpServer::new(
-                    mcp_capability_lookup.clone(),
-                    worker_service.clone(),
-                ))
-            },
-            LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
-        );
-
-        let oauth_routes = oauth_proxy_routes(
-            mcp_capability_lookup_for_auth.clone(),
-            identity_provider.clone(),
-            self.services.session_store.clone(),
-        );
-
-        let mcp_with_auth = service.compat().with(McpBearerAuth::new(
-            mcp_capability_lookup_for_auth,
-            identity_provider_for_auth,
-        ));
-
-        // OAuth routes use .at() so they take priority over .nest("/mcp", ...)
-        let route = oauth_routes
-            .nest("/mcp", mcp_with_auth)
-            .with(
-                Cors::new()
-                    .allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"])
-                    .allow_headers(vec![
-                        "Content-Type",
-                        "Authorization",
-                        "Mcp-Session-Id",
-                        "Accept",
-                        "Last-Event-ID",
-                    ])
-                    .expose_headers(vec!["Mcp-Session-Id"]),
-            )
-            .with(OpenTelemetryMetrics::new())
-            .with_if_lazy(tracer.is_some(), || {
-                OpenTelemetryTracing::new(tracer.unwrap())
-            });
-
+        let http_server_config = self.config.http_server.clone();
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(route)
+                http_server::run(acceptor, route, http_server_config)
                     .await
                     .map_err(|err| anyhow!(err).context("MCP server gateway failed"))
             }

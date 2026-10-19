@@ -14,26 +14,26 @@
 
 use super::class::*;
 use super::owner::*;
-use super::recipient::RecipientPattern;
+use super::recipient::{RecipientOwnerContext, RecipientPattern};
 use super::{
     Card, CardId, DelegationSurface, EffectiveSurface, PermissionPattern, PolymorphicCard,
     PolymorphicPermissionPattern, ScopeCard, StoredCard,
 };
 use crate::model::account::AccountEmail;
-use crate::model::agent::AgentTypeName;
 use crate::model::application::ApplicationName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct AgentPermissionMonomorphizationContext {
     pub account: AccountEmail,
     pub application: ApplicationName,
     pub environment: EnvironmentName,
     pub component: ComponentName,
     pub agent_name: String,
-    pub agent_type: AgentTypeName,
+    pub owner: RecipientOwnerContext,
 }
 
 pub fn agent_effective_surface_from_wallet<'a>(
@@ -90,12 +90,22 @@ fn monomorphize_wallet_cards<'a>(
 }
 
 fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> RecipientPattern {
-    RecipientPattern::Agent {
-        account: context.account.clone(),
-        application: context.application.clone(),
-        environment: context.environment.clone(),
-        component: context.component.clone(),
-        agent_type: context.agent_type.clone(),
+    match &context.owner {
+        RecipientOwnerContext::AgentType(agent_type) => RecipientPattern::Agent {
+            account: context.account.clone(),
+            application: context.application.clone(),
+            environment: context.environment.clone(),
+            component: context.component.clone(),
+            agent_type: agent_type.clone(),
+        },
+        RecipientOwnerContext::ComponentExternalToolOwner => {
+            RecipientPattern::ComponentExternalToolOwner {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+            }
+        }
     }
 }
 
@@ -130,7 +140,7 @@ fn monomorphize_polymorphic_card_for_agent(
     Card {
         card_id: card.card_id,
         parent_ids: card.parent_ids.clone(),
-        lower_positive: resolve_permissions_for_agent_context(&card.lower_positive, context),
+        lower_positive: resolve_lower_positives_for_agent_context(&card.lower_positive, context),
         lower_negative: resolve_permissions_for_agent_context(&card.lower_negative, context),
         upper_positive: resolve_permissions_for_agent_context(&card.upper_positive, context),
         upper_negative: resolve_permissions_for_agent_context(&card.upper_negative, context),
@@ -160,6 +170,26 @@ pub(crate) fn resolve_permissions_for_agent_context(
 ) -> Vec<PermissionPattern> {
     permissions
         .iter()
+        .map(|permission| monomorphize_permission(permission, context))
+        .collect()
+}
+
+/// Resolves a template's lower-bound grants for one holder.
+///
+/// Slots name the holder that uses a grant, so a template resolved for a holder contributes only
+/// the positive grants addressed to that holder. The template's denials and ceilings for other
+/// holders are resolved for this holder too, so they cannot be relied on to bound grants passed on
+/// to those holders; dropping such grants keeps derivation and installation within what the
+/// template grants. The holder's own surface is unaffected, because it only uses grants addressed
+/// to the holder. Ceilings and denials are kept, because they can only narrow.
+fn resolve_lower_positives_for_agent_context(
+    permissions: &[PolymorphicPermissionPattern],
+    context: &AgentPermissionMonomorphizationContext,
+) -> Vec<PermissionPattern> {
+    let holder = agent_recipient_pattern(context);
+    permissions
+        .iter()
+        .filter(|permission| permission.recipient().subsumes(&holder))
         .map(|permission| monomorphize_permission(permission, context))
         .collect()
 }
@@ -201,10 +231,22 @@ fn monomorphize_permission(
         PolymorphicPermissionPattern::AccountPlugin(p) => {
             mono_permission!(AccountPlugin, p, context)
         }
+        PolymorphicPermissionPattern::AccountToolRelease(p) => {
+            mono_permission!(AccountToolRelease, p, context)
+        }
+        PolymorphicPermissionPattern::AccountToolMiddlewareRelease(p) => {
+            mono_permission!(AccountToolMiddlewareRelease, p, context)
+        }
         PolymorphicPermissionPattern::Application(p) => mono_permission!(Application, p, context),
         PolymorphicPermissionPattern::Environment(p) => mono_permission!(Environment, p, context),
         PolymorphicPermissionPattern::EnvironmentPluginGrant(p) => {
             mono_permission!(EnvironmentPluginGrant, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentToolGrant(p) => {
+            mono_permission!(EnvironmentToolGrant, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentToolMiddlewareGrant(p) => {
+            mono_permission!(EnvironmentToolMiddlewareGrant, p, context)
         }
         PolymorphicPermissionPattern::EnvironmentDomainRegistration(p) => {
             mono_permission!(EnvironmentDomainRegistration, p, context)
@@ -661,8 +703,28 @@ mod tests {
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
             agent_name: "Cart(alice)".to_string(),
-            agent_type: AgentTypeName("Cart".to_string()),
+            owner: RecipientOwnerContext::AgentType(AgentTypeName("Cart".to_string())),
         }
+    }
+
+    #[test]
+    fn component_baseline_context_has_distinct_permission_holder() {
+        let mut baseline = context();
+        baseline.owner = RecipientOwnerContext::ComponentExternalToolOwner;
+
+        assert_eq!(
+            agent_recipient_pattern(&baseline),
+            RecipientPattern::ComponentExternalToolOwner {
+                account: baseline.account.clone(),
+                application: baseline.application.clone(),
+                environment: baseline.environment.clone(),
+                component: baseline.component.clone(),
+            }
+        );
+        assert_ne!(
+            agent_recipient_pattern(&baseline),
+            agent_recipient_pattern(&context())
+        );
     }
 
     fn environment_view_target(owner: &str) -> PermissionTarget {
@@ -720,6 +782,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: vec![grant],
             upper_negative: Vec::new(),
+            expires_at: None,
         };
 
         let without_scope = agent_effective_surface_from_wallet(&context, std::iter::empty());
@@ -770,6 +833,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: vec![scope_ceiling],
             upper_negative: Vec::new(),
+            expires_at: None,
         };
         let request = agent_target(
             "owner@example.com/shop/prod/cart-svc/Cart(alice)",
@@ -935,7 +999,10 @@ mod tests {
             application: context.application.clone(),
             environment: context.environment.clone(),
             component: context.component.clone(),
-            agent_type: context.agent_type.clone(),
+            agent_type: match &context.owner {
+                RecipientOwnerContext::AgentType(agent_type) => agent_type.clone(),
+                RecipientOwnerContext::ComponentExternalToolOwner => unreachable!(),
+            },
         };
         let card = PolymorphicCard {
             card_id: CardId::new(),

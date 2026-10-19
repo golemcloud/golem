@@ -1,11 +1,11 @@
 ---
 name: sdk-development
-description: "Working on the Rust, TypeScript, or MoonBit SDKs in sdks/. Use when modifying SDK code, adding SDK features, or testing SDK changes with the main Golem platform."
+description: "Working on the Rust, TypeScript, or MoonBit SDKs in sdks/. Use when modifying SDK code, adding SDK features, releasing an SDK, or testing SDK changes with the main Golem platform."
 ---
 
 # SDK Development
 
-The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` does not build them). Each SDK has its own build system and conventions.
+The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` does not build them). Each SDK has its own build system and conventions. The Scala SDK has `golem-scala-development` and the Go SDK has `golem-go-development`.
 
 ## Rust SDK (`sdks/rust/`)
 
@@ -16,13 +16,14 @@ The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` 
   are defined by the root-workspace `golem-schema-derive` crate, not by `golem-rust-macro`.
 - `golem-rust-macro` — Procedural macros: `#[agent_definition]`, `#[agent_implementation]`,
   `#[tool_definition]`, `#[golem_operation]`, and the `MultimodalSchema`, `ConfigSchema`,
-  `AllowedLanguages`, `AllowedMimeTypes`, and `ToolError` derives.
+  `AllowedLanguages`, `AllowedMimeTypes`, and `ToolError` derives. This crate lives in the root
+  workspace, alongside `golem-tool-metadata` and `golem-native-tool`.
 
 ### Building
 
 ```shell
-cd sdks/rust
-cargo build -p golem-rust
+# From the repository root
+cargo build --manifest-path sdks/rust/Cargo.toml -p golem-rust
 cargo build -p golem-rust-macro
 ```
 
@@ -119,7 +120,7 @@ The package build refreshes `dist/index.mjs`; `build-agent-template` then embeds
 
 ```shell
 # From repository root
-cargo make build-cli-test-bins-non-ci
+cargo make build-cli-test-bins
 (cd sdks/ts && npx pnpm run build && npx pnpm run build-agent-template)
 # Build the specific test components required by <affected-filter>.
 cargo-test-r run --package golem-cli --test integration <affected-filter> -- --report-time --nocapture

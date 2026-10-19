@@ -33,6 +33,7 @@ pub mod schema;
 #[cfg(not(feature = "full"))]
 pub mod model {
     pub use crate::base_model::*;
+    pub mod invocation_session_public;
 }
 
 #[cfg(feature = "full")]
@@ -134,13 +135,50 @@ pub trait IntoAnyhow {
     fn into_anyhow(self) -> anyhow::Error;
 }
 
-pub fn grpc_uri(host: &String, port: u16, tls: bool) -> Uri {
+/// Builds the URI of a gRPC endpoint. `host` is a DNS name, an IPv4 address, or an IPv6 address
+/// with or without brackets.
+pub fn grpc_uri(host: &str, port: u16, tls: bool) -> Uri {
     let scheme = if tls { "https" } else { "http" };
+    let authority = if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
 
     Uri::builder()
         .scheme(scheme)
-        .authority(format!("{}:{}", host, port).as_str())
+        .authority(authority.as_str())
         .path_and_query("/")
         .build()
         .expect("Failed to build URI")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grpc_uri;
+    use test_r::test;
+
+    #[test]
+    fn grpc_uri_formats_hosts() {
+        assert_eq!(
+            grpc_uri("localhost", 9090, false).to_string(),
+            "http://localhost:9090/"
+        );
+        assert_eq!(
+            grpc_uri("10.0.0.1", 9090, true).to_string(),
+            "https://10.0.0.1:9090/"
+        );
+        assert_eq!(
+            grpc_uri("::1", 9090, false).to_string(),
+            "http://[::1]:9090/"
+        );
+        assert_eq!(
+            grpc_uri("fdaa:0:1:a7b::2", 9090, false).to_string(),
+            "http://[fdaa:0:1:a7b::2]:9090/"
+        );
+        assert_eq!(
+            grpc_uri("[::1]", 9090, false).to_string(),
+            "http://[::1]:9090/"
+        );
+    }
 }

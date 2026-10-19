@@ -1,0 +1,74 @@
+# Making Outgoing HTTP Requests (MoonBit)
+
+Use the SDK's async Preview 3 HTTP wrapper. Preview 2 HTTP resources, pollables and blocking
+stream reads are not supported.
+
+## Setup and API
+
+Add the package alias to `moon.pkg`:
+
+```moonbit
+import {
+  "golemcloud/golem_sdk/http" @http,
+}
+```
+
+Construct an `@http.Request` with its generated accessors and pass it to `@http.send`.
+The exact SDK wrapper signature is:
+
+```moonbit
+async fn send(request : @http.Request) -> Result[@http.Response, @http.ErrorCode] {
+  @http.send(request)
+}
+```
+
+Read the installed SDK's `http` package declarations for request constructors and body accessors
+rather than translating Preview 2 examples. Request and response bodies are async byte streams.
+Consume the full response stream before decoding JSON. Use `moonbitlang/core/encoding/utf8` for
+text bodies; `String::to_bytes()` encodes UTF-16LE, not HTTP UTF-8.
+
+## Host retries and recovery
+
+Completed HTTP calls replay recorded outcomes. Recovery repairs an eligible incomplete call at
+its own `Start`, preserving completed neighboring calls. Host transport, status-code and
+response-body resumption retries remain enabled; no application wrapper is needed.
+
+HTTP 4xx and 5xx responses are not transport errors. To retry selected statuses, define a policy
+whose predicate explicitly references `status-code` under `retryPolicyDefaults / <environment>`:
+
+```yaml
+http-5xx-retry:
+  priority: 20
+  predicate:
+    propIn: { property: "status-code", values: [500, 502, 503, 504] }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
+
+The host returns the final response after retries. A catch-all policy does not opt into HTTP
+status retries. See [`golem-retry-policies-moonbit`](/v1.6/how-to-guides/moonbit/golem-retry-policies-moonbit) for policy configuration.
+
+Remote writes are eligible for retry; there is no guest idempotence-mode switch. Make writes
+duplicate-safe at the peer. Exactly-once processing requires the remote peer to enforce a stable
+idempotency key. A lost response does not prove the remote operation failed. Do not predicate retry
+policies on `is-idempotent`; the host no longer supplies that property.
+
+For retry decisions based on decoded content, use ordinary guest control flow or a manual saga.
+Compensate successful steps before the next attempt; new calls append to history instead of
+deleting earlier attempts. A deterministic guest trap does not retry a completed HTTP call.
+
+## Calling Golem HTTP endpoints
+
+Structured body parameters use a JSON object whose keys match method parameter names. Include
+only parameters not bound to path, query or headers. A single object input named `payload` needs
+`{"payload": {"name": "Widget", "count": 5}}`, not the bare inner object. Unstructured text and
+binary inputs consume the raw body without this wrapper.
+
+Use `application/json` for structured bodies, `text/plain` for raw UTF-8 text, and the appropriate
+MIME type for raw binary. Load [`golem-http-params-moonbit`](/v1.6/how-to-guides/moonbit/golem-http-params-moonbit) for the endpoint restrictions and the
+separate CLI positional/native-literal rules; do not reuse the HTTP wrapper for CLI arguments.

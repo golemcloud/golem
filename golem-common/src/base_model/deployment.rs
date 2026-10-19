@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent::AgentTypeName;
 use super::agent_secret::AgentSecretPath;
 use super::component::{ComponentId, ComponentName, ComponentRevision};
 use super::deploy_validation_warning::DeployValidationWarning;
@@ -20,7 +21,13 @@ use super::domain_registration::Domain;
 use super::environment::EnvironmentId;
 use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use super::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
+use super::mcp_import::McpImportDeployment;
 use super::quota::ResourceDefinitionCreation;
+use super::tool::{RemoteToolDeployment, ToolBindingInput, ToolName};
+use super::tool_middleware::{
+    RemoteToolMiddlewareDeployment, ToolMiddlewareInstallation, ToolMiddlewareName,
+};
+use crate::schema::tool::compatibility::ToolCompatibilityMode;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use derive_more::Display;
 
@@ -32,6 +39,12 @@ declare_revision!(CurrentDeploymentRevision);
 declare_transparent_newtypes! {
     #[derive(Display, PartialOrd, Eq, Ord)]
     pub struct DeploymentVersion(pub String);
+
+    #[derive(Display, PartialOrd, Eq, Ord)]
+    pub struct ToolVersion(pub String);
+
+    #[derive(Display, PartialOrd, Eq, Ord)]
+    pub struct ToolMetadataVersion(pub String);
 }
 
 impl From<String> for DeploymentVersion {
@@ -97,6 +110,32 @@ declare_structs! {
         pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
+        pub publish_tools: Vec<ToolName>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub remote_tools: Vec<RemoteToolDeployment>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub mcp_imports: Vec<McpImportDeployment>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub publish_tool_middlewares: Vec<ToolMiddlewareName>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub remote_tool_middlewares: Vec<RemoteToolMiddlewareDeployment>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+        /// Middleware-only bindings retained for tools whose implementation is discovered dynamically.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub environment_tool_middleware_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+        /// Agent-specific middleware-only bindings retained for dynamically discovered tools.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub agent_tool_middleware_bindings: std::collections::BTreeMap<AgentTypeName, std::collections::BTreeMap<ToolName, ToolBindingInput>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
         pub replace_incompatible_agent_secrets: bool,
     }
 
@@ -112,6 +151,21 @@ declare_structs! {
         pub components: Vec<DeploymentPlanComponentEntry>,
         pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>,
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
+        pub mcp_imports: Vec<DeploymentPlanMcpImportEntry>,
+        pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
+        pub published_tools: Vec<ToolName>,
+        pub remote_tool_middlewares: Vec<DeploymentPlanRemoteToolMiddlewareEntry>,
+        pub published_tool_middlewares: Vec<ToolMiddlewareName>,
+        pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+        pub tool_compatibility_mode: ToolCompatibilityMode,
+        pub environment_tool_middleware_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+        pub agent_tool_middleware_bindings: std::collections::BTreeMap<AgentTypeName, std::collections::BTreeMap<ToolName, ToolBindingInput>>,
+        /// Registry-owned ambient tools available for the proposed deployment.
+        ///
+        /// Applications cannot declare ambient tools and do not need grants to use them. These
+        /// entries are not staged and therefore do not contribute to the deployment hash or diff;
+        /// selected releases and their effective bindings are represented in `remote_tools`.
+        pub ambient_tools: Vec<DeploymentPlanAmbientToolEntry>,
     }
 
     /// Summary of all entities tracked by the deployment
@@ -121,6 +175,15 @@ declare_structs! {
         pub components: Vec<DeploymentPlanComponentEntry>,
         pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>,
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
+        pub mcp_imports: Vec<DeploymentPlanMcpImportEntry>,
+        pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
+        pub published_tools: Vec<ToolName>,
+        pub remote_tool_middlewares: Vec<DeploymentPlanRemoteToolMiddlewareEntry>,
+        pub published_tool_middlewares: Vec<ToolMiddlewareName>,
+        pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+        pub tool_compatibility_mode: ToolCompatibilityMode,
+        pub environment_tool_middleware_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+        pub agent_tool_middleware_bindings: std::collections::BTreeMap<AgentTypeName, std::collections::BTreeMap<ToolName, ToolBindingInput>>,
     }
 
     pub struct DeploymentPlanComponentEntry {
@@ -143,4 +206,33 @@ declare_structs! {
         pub domain: Domain,
         pub hash: Hash,
     }
+
+    pub struct DeploymentPlanMcpImportEntry {
+        pub index: u32,
+        pub hash: Hash,
+    }
+
+    pub struct DeploymentPlanRemoteToolEntry {
+        pub name: ToolName,
+        pub hash: Hash,
+    }
+    pub struct DeploymentPlanRemoteToolMiddlewareEntry {
+        pub name: ToolMiddlewareName,
+        pub hash: Hash,
+    }
+
+    pub struct DeploymentPlanAmbientToolEntry {
+        pub release_id: crate::model::tool_release::ToolReleaseId,
+        pub name: ToolName,
+        pub version: ToolVersion,
+        pub source_digest: Hash,
+        pub owner_account_id: crate::model::account::AccountId,
+        pub owner_account_email: crate::model::account::AccountEmail,
+        pub metadata_version: ToolMetadataVersion,
+        pub metadata_digest: Hash,
+        pub definition: crate::schema::tool::Tool,
+        pub provision: crate::model::tool::ToolProvisionConfig,
+        pub environment_binding: crate::model::tool::ToolBindingInput,
+    }
+
 }

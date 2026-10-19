@@ -14,19 +14,31 @@
 
 mod config;
 mod results;
+pub mod storage_metrics;
+#[cfg(test)]
+mod tests;
 
-pub use config::{BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, RunConfig};
+pub use config::{
+    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, ChaosAction, ChaosScenarioArg,
+    DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg, DensityPromiseTopologyArg,
+    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
+    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
+    DensitySnapshottingArg, RunConfig,
+};
 pub use results::{
-    BenchmarkResult, BenchmarkRunResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuiteResult,
-    ResultKey,
+    BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,
+    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata,
 };
 
 use crate::config::benchmark::TestMode;
 use async_trait::async_trait;
+use futures::FutureExt;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tracing::{Instrument, Level, info};
 
@@ -63,12 +75,25 @@ impl BenchmarkRecorder {
     pub fn durations(&self) -> HashMap<ResultKey, Vec<Duration>> {
         self.state.lock().unwrap().durations.clone()
     }
+
+    /// Records one failed attempt belonging to the measurement `key`. Failures
+    /// are aggregated into the benchmark result next to the durations, so a
+    /// run that needed retries is visible in the report and in the results
+    /// JSON instead of only in the logs.
+    pub fn failure(&self, key: &ResultKey, message: impl Into<String>) {
+        self.state.lock().unwrap().failure(key, message.into());
+    }
+
+    pub fn failures(&self) -> HashMap<ResultKey, Vec<String>> {
+        self.state.lock().unwrap().failures.clone()
+    }
 }
 
 #[derive(Debug)]
 pub struct BenchmarkRecorderState {
     durations: HashMap<ResultKey, Vec<Duration>>,
     counts: HashMap<ResultKey, Vec<u64>>,
+    failures: HashMap<ResultKey, Vec<String>>,
 }
 
 impl Default for BenchmarkRecorderState {
@@ -82,6 +107,7 @@ impl BenchmarkRecorderState {
         Self {
             durations: HashMap::new(),
             counts: HashMap::new(),
+            failures: HashMap::new(),
         }
     }
 
@@ -92,10 +118,89 @@ impl BenchmarkRecorderState {
     pub fn duration(&mut self, key: &ResultKey, value: Duration) {
         self.durations.entry(key.clone()).or_default().push(value);
     }
+
+    pub fn failure(&mut self, key: &ResultKey, message: String) {
+        self.failures.entry(key.clone()).or_default().push(message);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkError {
+    pub phase: ResultKey,
+    pub message: String,
+}
+
+impl BenchmarkError {
+    pub fn new(phase: impl AsRef<str>, message: impl ToString) -> Self {
+        Self {
+            phase: ResultKey::primary(phase),
+            message: message.to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for BenchmarkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.phase, self.message)
+    }
+}
+
+impl std::error::Error for BenchmarkError {}
+
+pub type BenchmarkResultValue<T = ()> = Result<T, BenchmarkError>;
+
+/// The default deadline of one measured iteration, for `--run-deadline-secs`.
+pub const DEFAULT_RUN_DEADLINE_SECS: u64 = 600;
+
+static RUN_DEADLINE: OnceLock<Duration> = OnceLock::new();
+
+/// Sets the deadline of the `run` phase of every iteration. The first call wins. A cloud
+/// throughput iteration at size 250 and length 10000 takes more than the default: it makes
+/// 25000 calls for each of six implementations, about 760s on Golem 1.5 on golem-dev.
+pub fn set_run_deadline(deadline: Duration) {
+    let _ = RUN_DEADLINE.set(deadline);
+}
+
+fn run_deadline() -> Duration {
+    RUN_DEADLINE
+        .get()
+        .copied()
+        .unwrap_or(Duration::from_secs(DEFAULT_RUN_DEADLINE_SECS))
+}
+
+async fn phase<T>(
+    recorder: &BenchmarkRecorder,
+    name: &str,
+    deadline: Duration,
+    future: impl Future<Output = BenchmarkResultValue<T>>,
+) -> Option<T> {
+    let result = match tokio::time::timeout(deadline, AssertUnwindSafe(future).catch_unwind()).await
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(panic)) => Err(BenchmarkError::new(
+            name,
+            panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("benchmark phase panicked"),
+        )),
+        Err(_) => Err(BenchmarkError::new(
+            name,
+            format!("deadline exceeded ({deadline:?})"),
+        )),
+    };
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            recorder.failure(&error.phase, error.message);
+            None
+        }
+    }
 }
 
 #[async_trait]
-pub trait Benchmark: Send + Sync + 'static {
+pub trait Benchmark: Send + Sync + Sized + 'static {
     type BenchmarkContext: Send + Sync + 'static;
     type IterationContext: Send + Sync + 'static;
 
@@ -108,35 +213,37 @@ pub trait Benchmark: Send + Sync + 'static {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext;
+    ) -> BenchmarkResultValue<Self::BenchmarkContext>;
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext);
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue;
 
-    async fn create(mode: &TestMode, config: RunConfig) -> Self;
+    async fn create(mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self>;
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext;
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext>;
 
     async fn warmup(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
-    );
+    ) -> BenchmarkResultValue;
 
     async fn run(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    );
+    ) -> BenchmarkResultValue;
 
     async fn cleanup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    );
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue;
 }
 
 #[async_trait]
@@ -153,11 +260,15 @@ pub trait BenchmarkApi {
         verbosity: Level,
         item: &BenchmarkSuiteItem,
         primary_only: bool,
+        retain_details: bool,
+        retain_selected_zero_counts: bool,
         otlp: bool,
     ) -> BenchmarkResult {
         let mut results = Self::run_benchmark_internal(mode, verbosity, item, otlp).await;
-        results.drop_zero_counts();
-        results.drop_details();
+        results.drop_zero_counts(retain_selected_zero_counts);
+        if !retain_details {
+            results.drop_details();
+        }
         if primary_only {
             results.primary_only();
         }
@@ -185,10 +296,19 @@ async fn run_benchmark<B: Benchmark>(
     let _enter = span.enter();
     info!("Starting benchmark iterations {}", B::name());
 
-    let benchmark = B::create(mode, config.clone())
-        .instrument(span.clone())
-        .await;
     let mut aggregated_results = BenchmarkRunResult::new(config.clone());
+    let recorder = BenchmarkRecorder::new();
+    let Some(benchmark) = phase(
+        &recorder,
+        "create",
+        Duration::from_secs(300),
+        B::create(mode, config.clone()),
+    )
+    .await
+    else {
+        aggregated_results.add(recorder);
+        return aggregated_results;
+    };
 
     for iteration in 0..iterations {
         let span = tracing::info_span!(
@@ -200,30 +320,40 @@ async fn run_benchmark<B: Benchmark>(
         let _enter = span.enter();
         info!("Starting iteration");
 
-        let context = benchmark
-            .setup_iteration(benchmark_context)
-            .instrument(span.clone())
-            .await;
-
-        info!("Starting warmup");
-        benchmark
-            .warmup(benchmark_context, &context)
-            .instrument(span.clone())
-            .await;
-        info!("Finished warmup");
-
-        info!("Starting benchmark");
         let recorder = BenchmarkRecorder::new();
-        benchmark
-            .run(benchmark_context, &context, recorder.clone())
-            .instrument(span.clone())
+        if let Some(context) = phase(
+            &recorder,
+            "setup",
+            Duration::from_secs(300),
+            benchmark.setup_iteration(benchmark_context, recorder.clone()),
+        )
+        .await
+        {
+            if phase(
+                &recorder,
+                "warmup",
+                Duration::from_secs(300),
+                benchmark.warmup(benchmark_context, &context),
+            )
+            .await
+            .is_some()
+            {
+                phase(
+                    &recorder,
+                    "run",
+                    run_deadline(),
+                    benchmark.run(benchmark_context, &context, recorder.clone()),
+                )
+                .await;
+            }
+            phase(
+                &recorder,
+                "cleanup-iteration",
+                Duration::from_secs(120),
+                benchmark.cleanup_iteration(benchmark_context, context, recorder.clone()),
+            )
             .await;
-        info!("Finished benchmark");
-
-        benchmark
-            .cleanup_iteration(benchmark_context, context)
-            .instrument(span.clone())
-            .await;
+        }
         aggregated_results.add(recorder);
 
         info!("Finished iteration");
@@ -264,15 +394,28 @@ impl<B: Benchmark> BenchmarkApi for B {
             let _enter = span.enter();
 
             info!("Creating benchmark context");
-            let context = B::create_benchmark_context(
-                mode,
-                verbosity,
-                cluster_size,
-                item.disable_compilation_cache.unwrap_or_default(),
-                otlp,
+            let recorder = BenchmarkRecorder::new();
+            let context = phase(
+                &recorder,
+                "setup-context",
+                Duration::from_secs(300),
+                B::create_benchmark_context(
+                    mode,
+                    verbosity,
+                    cluster_size,
+                    item.disable_compilation_cache.unwrap_or_default(),
+                    otlp,
+                ),
             )
-            .instrument(span.clone())
             .await;
+            let Some(context) = context else {
+                for config in runs {
+                    let mut result = BenchmarkRunResult::new(config.clone());
+                    result.add(recorder.clone());
+                    results.push(result);
+                }
+                continue;
+            };
 
             for config in runs {
                 current_run += 1;
@@ -292,7 +435,16 @@ impl<B: Benchmark> BenchmarkApi for B {
             }
 
             info!("Stopping benchmark context");
-            B::cleanup(context).instrument(span.clone()).await;
+            phase(
+                &recorder,
+                "cleanup-context",
+                Duration::from_secs(120),
+                B::cleanup(context),
+            )
+            .await;
+            if let Some(result) = results.last_mut() {
+                result.add(recorder);
+            }
         }
 
         BenchmarkResult {

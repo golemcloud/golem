@@ -15,26 +15,43 @@
 #[cfg(test)]
 test_r::enable!();
 
-#[cfg(all(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-compile_error!(
-    "`export_golem_agentic` and `export_golem_tool_middleware` cannot be enabled together; use `export_golem_agentic_tool_middleware`"
-);
-
 pub use uuid::Uuid;
 pub use wasip3;
 
+pub mod http;
+
+#[doc(hidden)]
+#[cfg(feature = "export_golem_agentic")]
+pub fn __link_golem_component_exports() {
+    #[cfg(target_arch = "wasm32")]
+    agentic::exports::raw::link();
+}
+
+/// Export the unified Golem guest world without registering an agent, tool, or middleware.
+#[macro_export]
+#[cfg(feature = "export_golem_agentic")]
+macro_rules! export_golem_component {
+    () => {
+        $crate::ctor::__support::ctor_parse!(
+            #[ctor]
+            fn __golem_link_component_exports() {
+                $crate::__link_golem_component_exports();
+            }
+        );
+    };
+}
+
 pub use golem_schema;
 pub use golem_schema::schema;
+pub use golem_schema::schema::wit::direct::{FromWire, IntoWire, WireSchema};
 pub use golem_schema::schema::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema,
     SchemaFingerprintError, SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue, schema_fingerprint_v1,
 };
-pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
+#[cfg(feature = "macro")]
+pub use golem_schema::schema::{FromWire, IntoWire, WireSchema};
+pub use golem_schema::{AgentId, ComponentId, EnvironmentId, PromiseId};
 
 pub fn encode_schema_graph(
     graph: &SchemaGraph,
@@ -70,6 +87,12 @@ pub fn encode_typed_schema_value(
     value: &TypedSchemaValue,
 ) -> Result<schema::wit::wire::TypedSchemaValue, schema::wit::EncodeError> {
     schema::wit::encode_typed(value)
+}
+
+pub async fn encode_typed_schema_value_async(
+    value: &TypedSchemaValue,
+) -> Result<schema::wit::wire::TypedSchemaValue, schema::wit::EncodeError> {
+    schema::wit::encode_typed_async(value).await
 }
 
 pub fn decode_typed_schema_value(
@@ -153,17 +176,17 @@ pub mod bindings {
         }
 
         pub mod agent {
-            pub use crate::raw_bindings::golem::agent::{common, host};
+            pub use crate::raw_bindings::golem::agent::{common, durable_streams, host};
         }
 
         pub mod permissions {
-            pub use crate::raw_bindings::golem::permissions::{
+            pub(crate) use crate::raw_bindings::golem::permissions::{
                 derive, inspect, kernel_introspection, revoke, types, wallet,
             };
         }
 
         pub mod tool {
-            pub use crate::raw_bindings::golem::tool::host;
+            pub use crate::raw_bindings::golem::tool::{host, streams};
             pub use crate::schema::tool::wit::wire as common;
         }
 
@@ -197,6 +220,12 @@ pub mod load_snapshot {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -240,6 +269,12 @@ pub mod save_snapshot {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -257,13 +292,7 @@ pub mod save_snapshot {
     pub use __export_golem_rust_save_snapshot_impl as export_save_snapshot;
 }
 
-#[cfg(all(
-    any(
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    ),
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub mod golem_agentic {
     use wit_bindgen::generate;
 
@@ -274,6 +303,7 @@ pub mod golem_agentic {
             "export:golem:agent/guest@2.0.0#initialize",
             "export:golem:agent/guest@2.0.0#invoke",
             "export:golem:tool/guest@0.1.0#invoke",
+            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
         ],
         generate_all,
         generate_unused_types: true,
@@ -293,6 +323,12 @@ pub mod golem_agentic {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -310,94 +346,13 @@ pub mod golem_agentic {
 
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
+#[cfg(feature = "export_golem_agentic")]
+pub(crate) use golem_agentic::golem::tool::underlying as tool_underlying_bindings;
 
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-pub mod golem_tool_middleware {
-    use wit_bindgen::generate;
-
-    generate!({
-        path: "wit",
-        world: "golem-tool-middleware",
-        async: [
-            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
-        ],
-        generate_all,
-        generate_unused_types: true,
-        pub_export_macro: true,
-        with: {
-            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "golem:agent/common@2.0.0": crate::golem_agentic::golem::agent::common,
-            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
-        }
-    });
-
-    pub use __export_golem_tool_middleware_impl as export_golem_tool_middleware;
-}
-
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-pub mod golem_agentic_tool_middleware {
-    use wit_bindgen::generate;
-
-    generate!({
-        path: "wit",
-        world: "golem-agentic-tool-middleware",
-        async: [
-            "export:golem:agent/guest@2.0.0#initialize",
-            "export:golem:agent/guest@2.0.0#invoke",
-            "export:golem:tool/guest@0.1.0#invoke",
-            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
-        ],
-        generate_all,
-        generate_unused_types: true,
-        pub_export_macro: true,
-        with: {
-            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
-            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
-            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
-
-            "golem:api/host@1.5.0": crate::bindings::golem::api::host,
-            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
-            "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
-            "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
-            "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
-            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
-            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
-            "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
-            "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
-            "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
-            "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
-            "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
-            "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
-            "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
-            "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-            "wasi:config/store@0.2.0-draft": crate::bindings::wasi::config::store,
-        }
-    });
-
-    pub use __export_golem_agentic_tool_middleware_impl as export_golem_agentic_tool_middleware;
-}
-
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-pub use golem_agentic_tool_middleware as golem_agentic;
-
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub use ctor;
 
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub use async_trait;
 
 #[cfg(feature = "export_golem_agentic")]
@@ -435,6 +390,12 @@ pub mod oplog_processor {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -452,11 +413,11 @@ pub mod oplog_processor {
     pub use __export_golem_rust_oplog_processor_impl as export_oplog_processor;
 }
 
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub mod agentic;
+
+#[cfg(feature = "export_golem_agentic")]
+pub use agentic::reflection::*;
 
 #[cfg(feature = "durability")]
 pub mod durability;
@@ -467,23 +428,20 @@ mod json;
 #[cfg(feature = "json")]
 pub use json::*;
 
-mod checkpoint;
+#[cfg(feature = "json")]
+pub mod durable_streams;
+
+pub mod permissions;
 pub mod quota;
 pub mod secrets;
 pub mod tool;
 mod transaction;
 
-use std::future::Future;
-
-use bindings::golem::api::host::{
-    self as host_api, get_idempotence_mode, mark_begin_operation, mark_end_operation,
-    set_idempotence_mode,
-};
+use bindings::golem::api::host as host_api;
 
 pub type OplogIndex = u64;
 
 pub mod websocket;
-pub use checkpoint::*;
 pub use quota::*;
 pub use secrets::*;
 pub mod retry;
@@ -557,7 +515,9 @@ fn host_environment_id_to_schema(value: host_api::EnvironmentId) -> EnvironmentI
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum UpdateMode {
     Automatic,
     SnapshotBased,
@@ -581,7 +541,9 @@ impl From<UpdateMode> for host_api::UpdateMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum FilterComparator {
     Equal,
     NotEqual,
@@ -617,7 +579,9 @@ impl From<FilterComparator> for host_api::FilterComparator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum StringFilterComparator {
     Equal,
     NotEqual,
@@ -650,7 +614,9 @@ impl From<StringFilterComparator> for host_api::StringFilterComparator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum AgentStatus {
     Running,
     Idle,
@@ -689,7 +655,7 @@ impl From<AgentStatus> for host_api::AgentStatus {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentNameFilter {
     pub comparator: StringFilterComparator,
     pub value: String,
@@ -713,7 +679,7 @@ impl From<AgentNameFilter> for host_api::AgentNameFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentStatusFilter {
     pub comparator: FilterComparator,
     pub value: AgentStatus,
@@ -737,7 +703,7 @@ impl From<AgentStatusFilter> for host_api::AgentStatusFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentVersionFilter {
     pub comparator: FilterComparator,
     pub value: u64,
@@ -761,7 +727,7 @@ impl From<AgentVersionFilter> for host_api::AgentVersionFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentCreatedAtFilter {
     pub comparator: FilterComparator,
     pub value: u64,
@@ -785,7 +751,7 @@ impl From<AgentCreatedAtFilter> for host_api::AgentCreatedAtFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentEnvFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
@@ -812,7 +778,7 @@ impl From<AgentEnvFilter> for host_api::AgentEnvFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentConfigVarsFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
@@ -839,7 +805,7 @@ impl From<AgentConfigVarsFilter> for host_api::AgentConfigVarsFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum AgentPropertyFilter {
     Name(AgentNameFilter),
     Status(AgentStatusFilter),
@@ -875,7 +841,7 @@ impl From<AgentPropertyFilter> for host_api::AgentPropertyFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentAllFilter {
     pub filters: Vec<AgentPropertyFilter>,
 }
@@ -896,7 +862,7 @@ impl From<AgentAllFilter> for host_api::AgentAllFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentAnyFilter {
     pub filters: Vec<AgentAllFilter>,
 }
@@ -917,7 +883,7 @@ impl From<AgentAnyFilter> for host_api::AgentAnyFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
     pub args: Vec<String>,
@@ -984,12 +950,12 @@ impl GetAgents {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct ForkDetails {
     pub forked_phantom_id: Uuid,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum ForkResult {
     Original(ForkDetails),
     Forked(ForkDetails),
@@ -1038,18 +1004,15 @@ pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
     host_api::complete_promise(&schema_promise_id_to_wire(promise_id), data)
 }
 
-pub fn get_oplog_index() -> OplogIndex {
-    host_api::get_oplog_index()
-}
-
-pub fn set_oplog_index(oplog_idx: OplogIndex) {
-    host_api::set_oplog_index(oplog_idx)
-}
-
 pub fn oplog_commit(replicas: u8) {
     host_api::oplog_commit(replicas)
 }
 
+/// Read full self metadata. Requires view permission on the running agent,
+/// admitted by the effective permission card and permitted by `initialCard`.
+/// Stored environment and configuration fields are not filtered by the per-key
+/// permissions used for WASI reads. Pure initialization does not call this API.
+/// Permission denials and backend failures remain typed `AgentOperationError`s.
 pub fn get_self_metadata() -> Result<AgentMetadata, AgentOperationError> {
     host_api::get_self_metadata().map(Into::into)
 }
@@ -1105,132 +1068,9 @@ pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     promise.get().await
 }
 
-pub struct IdempotenceModeGuard {
-    original: bool,
-}
-
-impl Drop for IdempotenceModeGuard {
-    fn drop(&mut self) {
-        set_idempotence_mode(self.original);
-    }
-}
-
-/// Temporarily sets the idempotence mode to the given value.
-///
-/// When the returned guard is dropped, the original idempotence mode is restored.
-#[must_use]
-pub fn use_idempotence_mode(mode: bool) -> IdempotenceModeGuard {
-    let original = get_idempotence_mode();
-    set_idempotence_mode(mode);
-    IdempotenceModeGuard { original }
-}
-
-/// Executes the given function with the idempotence mode set to the given value.
-pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
-    let _guard = use_idempotence_mode(mode);
-    f()
-}
-
-/// Executes the given async function with the idempotence mode set to the given value.
-pub async fn with_idempotence_mode_async<R, F: Future<Output = R>>(
-    mode: bool,
-    f: impl FnOnce() -> F,
-) -> R {
-    let _guard = use_idempotence_mode(mode);
-    f().await
-}
-
 /// Generates an idempotency key. This operation will never be replayed —
 /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
 /// to introduce idempotence.
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(host_api::generate_idempotency_key())
-}
-
-pub struct AtomicOperationGuard {
-    begin: OplogIndex,
-}
-
-impl Drop for AtomicOperationGuard {
-    fn drop(&mut self) {
-        // If we're unwinding from a panic, leave the atomic region open so the
-        // worker recovery + replay-time fallback in `mark_begin_operation`
-        // re-executes the block from the begin marker. WASM panics are wasm
-        // traps, so the executor will recover the worker.
-        if !std::thread::panicking() {
-            mark_end_operation(self.begin);
-        }
-    }
-}
-
-/// Marks a block as an atomic operation
-///
-/// When the returned guard is dropped, the operation gets committed —
-/// unless the current thread is panicking, in which case the region is left
-/// open so worker recovery re-executes the block.
-#[must_use]
-pub fn mark_atomic_operation() -> AtomicOperationGuard {
-    let begin = mark_begin_operation();
-    AtomicOperationGuard { begin }
-}
-
-/// Executes the given function as an atomic operation.
-///
-/// On panic the region is left open and the worker recovers + re-executes
-/// the block. Use [`atomically_result`] when the body returns a `Result` so
-/// that error returns also force a trap rather than silently committing the
-/// region.
-pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
-    let _guard = mark_atomic_operation();
-    f()
-}
-
-/// Executes the given async function as an atomic operation.
-///
-/// On panic the region is left open and the worker recovers + re-executes
-/// the block.
-pub async fn atomically_async<T, F: Future<Output = T>>(f: impl FnOnce() -> F) -> T {
-    let _guard = mark_atomic_operation();
-    f().await
-}
-
-/// Executes the given fallible function as an atomic operation.
-///
-/// On `Ok` the region is committed.
-/// On `Err` the SDK calls the host `trap` function, which surfaces as an
-/// uncatchable wasm trap so the failure cannot be observed by user code.
-/// The atomic region is intentionally left open so the existing replay-time
-/// fallback in `mark_begin_operation` deletes the partial inner side effects
-/// and re-executes the block.
-pub fn atomically_result<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E>
-where
-    E: core::fmt::Display,
-{
-    let guard = mark_atomic_operation();
-    match f() {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            // Skip the Drop closing the region — the trap is the terminator.
-            core::mem::forget(guard);
-            host_api::trap(&format!("atomic block failed: {e}"));
-            unreachable!("trap host call must not return")
-        }
-    }
-}
-
-/// Async version of [`atomically_result`].
-pub async fn atomically_result_async<T, E, F>(f: impl FnOnce() -> F) -> Result<T, E>
-where
-    E: core::fmt::Display,
-    F: Future<Output = Result<T, E>>,
-{
-    let guard = mark_atomic_operation();
-    match f().await {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            core::mem::forget(guard);
-            host_api::trap(&format!("atomic block failed: {e}"));
-            unreachable!("trap host call must not return")
-        }
-    }
 }

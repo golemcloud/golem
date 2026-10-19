@@ -1,13 +1,16 @@
-use crate::Tracing;
 use crate::app::{
-    TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
-    extracted_component_metadata_path_hash, flag, pattern, placeholder_component_wasm,
-    seed_extracted_metadata, seed_extraction_marker,
+    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, check_component_metadata, cmd,
+    copy_placeholder_wasm, extracted_component_metadata_path_hash, extracted_metadata_json, flag,
+    pattern, placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
+    seed_full_extracted_metadata,
 };
+use crate::{Tracing, workspace_path};
 
 use golem_cli::fs;
 use golem_cli::model::language::GuestLanguage;
+use golem_cli::sdk_overrides::sdk_overrides;
 use golem_cli::versions;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::schema::SchemaType;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::{
@@ -25,6 +28,44 @@ use toml_edit::{DocumentMut, value};
 inherit_test_dep!(Tracing);
 
 #[test]
+#[timeout("2m")]
+async fn local_server_lease_renewals_without_otlp_do_not_warn(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("lease-renewals-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var(
+        "GOLEM_LOG_FILTER",
+        "info,golem_shard_manager::sharding::shard_management=debug",
+    );
+    ctx.start_server().await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
+    loop {
+        let logs = fs::read_to_string(&server_log).unwrap();
+        assert!(
+            !logs.contains("can not set parent trace_id to span"),
+            "{logs}"
+        );
+        assert!(!logs.contains("LayerNotFound"), "{logs}");
+        if logs.matches("Renewing shard lease").count() >= 3 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "did not observe three lease renewals: {logs}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn write_extracted_agent_types(
+    path: impl AsRef<Path>,
+    json: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    fs::write_str(path, extracted_metadata_json(json.as_ref()))
+}
+
+#[test]
 async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli(cmd::NO_ARGS).await;
@@ -32,6 +73,353 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     assert!(outputs.stderr_contains(pattern::HELP_USAGE));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
+}
+
+#[test]
+#[timeout("2m")]
+async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("runtime-metrics-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var("GOLEM_LOG_FILTER", "info");
+    ctx.start_server().await;
+
+    let metrics_url = format!("http://localhost:{}/metrics", ctx.router_port());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let metrics = reqwest::get(&metrics_url)
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        if metrics.lines().any(|line| {
+            line.strip_prefix("tokio_workers_count ")
+                .and_then(|value| value.parse::<f64>().ok())
+                .is_some_and(|value| value > 0.0)
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "local server metrics did not contain tokio_workers_count"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        !fs::read_to_string(server_log)
+            .unwrap()
+            .contains("Failed to install tokio runtime metrics recorder")
+    );
+}
+
+enum Closed {
+    Stdout,
+    Stderr,
+}
+
+async fn exit_code_with_closed(
+    ctx: &TestContext,
+    closed: Closed,
+    args: &[&str],
+) -> (Option<i32>, String) {
+    let outputs = match closed {
+        Closed::Stdout => ctx.cli_with_broken_stdout(args.iter().copied()).await,
+        Closed::Stderr => ctx.cli_with_broken_stderr(args.iter().copied()).await,
+    };
+    (outputs.exit_code(), outputs.stderr_text())
+}
+
+async fn assert_the_server_keeps_running_without_a_reader(closed: ClosedStream) {
+    let mut ctx = TestContext::new();
+    ctx.server_closed_stream = Some(closed);
+    ctx.start_server().await;
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let server = ctx.server_process.as_mut().unwrap();
+    assert!(
+        server.try_wait().unwrap().is_none(),
+        "the server ended after the reader of one of its outputs had gone"
+    );
+}
+
+/// Runs a shell pipeline in a pseudo-terminal that is in canonical mode with echo, and asserts
+/// that its first command ends with the exit code of SIGPIPE and that `stty -a` shows a terminal
+/// in canonical mode with echo afterwards. When `wait_for` is given, the file is created once
+/// the text has appeared on the terminal.
+#[cfg(unix)]
+async fn assert_terminal_is_usable_after_closed_stdout(
+    ctx: &TestContext,
+    pipeline: String,
+    wait_for: Option<(&'static str, std::path::PathBuf)>,
+) {
+    let working_dir = ctx.working_dir.clone();
+    let (exit, output) = tokio::task::spawn_blocking(move || {
+        let script =
+            format!("stty icanon echo; {pipeline}; echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a");
+        let mut command = std::process::Command::new("bash");
+        command
+            .current_dir(working_dir)
+            .env("TERM", "xterm-256color")
+            .args(["-c", &script]);
+        use expectrl::Expect;
+        let mut session = expectrl::Session::spawn(command).expect("failed to spawn bash");
+        session.set_expect_timeout(Some(Duration::from_secs(60)));
+        if let Some((text, file)) = wait_for {
+            session
+                .expect(text)
+                .unwrap_or_else(|error| panic!("'{text}' did not appear: {error}"));
+            std::fs::write(file, "").unwrap();
+        }
+        let exit = session
+            .expect(expectrl::Regex("EXIT=[0-9]+"))
+            .expect("the CLI did not end")
+            .as_bytes()
+            .to_vec();
+        let rest = session.expect(expectrl::Eof).expect("no end of output");
+        (
+            String::from_utf8_lossy(&exit).to_string(),
+            String::from_utf8_lossy(rest.as_bytes()).to_string(),
+        )
+    })
+    .await
+    .unwrap();
+
+    println!("{exit}\n{output}");
+    assert!(exit.ends_with("EXIT=141"), "{exit}");
+    let flags: Vec<&str> = output.split_whitespace().collect();
+    assert!(
+        flags.contains(&"icanon"),
+        "the terminal is not in canonical mode after the CLI ended"
+    );
+    assert!(
+        flags.contains(&"echo"),
+        "the terminal does not echo after the CLI ended"
+    );
+}
+
+/// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
+/// stdout leaves.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let leave = ctx.cwd_path_join("reader-leaves");
+
+    // The reader of stdout stays until the prompt has appeared.
+    let pipeline = format!(
+        "'{golem_cli}' --config-dir '{config_dir}' profile new \
+         | {{ while [ ! -e '{leave}' ]; do sleep 0.2; done; }}",
+        leave = leave.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(
+        &ctx,
+        pipeline,
+        Some(("create a new profile interactively", leave)),
+    )
+    .await;
+}
+
+/// The reader of stdout takes the terminal before the CLI starts, as a pager does: it sets raw
+/// mode, and it puts the terminal back before it leaves. The CLI opens no prompt, so the terminal
+/// must stay as the reader left it.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_stay_as_the_reader_of_stdout_left_them(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let raw_mode_set = ctx.cwd_path_join("raw-mode-set");
+
+    // The CLI starts once the terminal is in raw mode. The reader takes the first byte of the
+    // output, so the CLI runs when the reader puts the terminal back and leaves. The rest of the
+    // output does not fit into the pipe, so the CLI ends at a failed write.
+    let pipeline = format!(
+        "{{ while [ ! -e '{raw_mode_set}' ]; do sleep 0.1; done; \
+            '{golem_cli}' --config-dir '{config_dir}' completion bash; }} \
+         | {{ stty raw -echo < /dev/tty; touch '{raw_mode_set}'; head -c 1 > /dev/null; \
+              stty sane < /dev/tty; }}",
+        raw_mode_set = raw_mode_set.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(&ctx, pipeline, None).await;
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stdout).await;
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stderr_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stderr).await;
+}
+
+#[test]
+async fn a_verbose_command_ends_with_the_exit_code_of_sigpipe_when_the_reader_of_stderr_has_gone(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    // The command writes only to stdout, but its diagnostics go to stderr.
+    let (code, stderr) =
+        exit_code_with_closed(&ctx, Closed::Stderr, &["-vvv", cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(CLOSED_OUTPUT_EXIT), "{stderr}");
+}
+
+#[test]
+async fn a_command_whose_stdout_has_no_reader_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // The reader is gone before the command starts: the watch or the first write to stdout ends it.
+    // `build` prints its failure line, and `new` its missing input, to stdout in text format.
+    for args in [
+        &[cmd::BUILD][..],
+        &[flag::YES, cmd::NEW][..],
+        &["--help"][..],
+        &[cmd::COMPLETION, "bash"][..],
+    ] {
+        let (code, stderr) = exit_code_with_closed(&ctx, Closed::Stdout, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stdout: {stderr}"
+        );
+        assert!(!stderr.contains("panicked"));
+        assert!(!stderr.contains("Broken pipe"));
+    }
+}
+
+#[test]
+async fn a_command_that_writes_to_a_closed_stderr_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // `build` prints the hint about the missing manifest to stderr.
+    for args in [
+        &["--no-such-flag", cmd::NEW][..],
+        &[flag::YES, cmd::NEW][..],
+        &[cmd::BUILD][..],
+    ] {
+        let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stderr"
+        );
+    }
+}
+
+#[test]
+async fn a_command_that_does_not_write_to_the_closed_stream_keeps_its_own_exit_code(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // A usage error of clap goes to stderr only, and a command line that does not parse starts no
+    // watch of stdout.
+    let (code, _) =
+        exit_code_with_closed(&ctx, Closed::Stdout, &["--no-such-flag", cmd::NEW]).await;
+    assert_eq!(code, Some(2), "a usage error with a closed stdout");
+
+    // The completion script goes to stdout only.
+    let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, &[cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(0), "completion with a closed stderr");
+}
+
+/// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
+/// command help go to stderr with exit code 2.
+#[test]
+async fn app_new_without_input_in_non_interactive_mode_shows_help_on_stderr(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("APPLICATION_PATH must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(outputs.stderr_contains("Available languages"));
+    assert!(!outputs.stdout_contains("APPLICATION_PATH must be specified"));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains("Available languages"));
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW, "test-app-no-template"]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("at least one template must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+
+    // With structured output formats stdout stays clean
+    let outputs = ctx.cli([flag::YES, flag::FORMAT, "json", cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert_eq!(outputs.stdout().count(), 0);
+}
+
+/// `profile new` without a name starts an interactive wizard; in non-interactive mode that is a
+/// usage error reported like clap does, with or without `--yes`. The same goes for
+/// `--auth static` without a token.
+#[test]
+async fn profile_new_without_input_in_non_interactive_mode_shows_help_on_stderr(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    for args in [
+        vec![cmd::PROFILE, cmd::NEW],
+        vec![flag::YES, cmd::PROFILE, cmd::NEW],
+    ] {
+        let outputs = ctx.cli(args).await;
+        assert_eq!(outputs.exit_code(), Some(2));
+        assert!(outputs.stderr_contains("NAME must be specified"));
+        assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+        assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    }
+
+    let outputs = ctx
+        .cli([cmd::PROFILE, cmd::NEW, "my-profile", "--auth", "static"])
+        .await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("--auth static requires --static-token"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+
+    // Creating and then re-creating the same profile is refused
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("already exists"));
 }
 
 #[test]
@@ -132,6 +520,415 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
 }
 
 #[test]
+async fn app_new_with_failing_template_plan_leaves_single_component_app_unchanged(
+    _tracing: &Tracing,
+) {
+    let app_name = "test-app-failing-plan";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // An edited skill file cannot be merged with the template's, so the template plan for a
+    // second component fails after the layout upgrade is planned.
+    let skill = ctx.cwd_path_join(".agents/skills/golem-new-project/SKILL.md");
+    let edited = format!("{}\nedited\n", fs::read_to_string(&skill).unwrap());
+    fs::write_str(&skill, edited).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Already existing non-mergeable files"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_with_overlapping_layout_upgrades_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-two-flat";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Two components in the flat layout: promoting both would move the same root files.
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: JsonValue =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["components"][format!("{app_name}:ts-other")] =
+        serde_json::json!({ "dir": "", "templates": "ts" });
+    fs::write_str(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-third"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Overlapping move paths in plan"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_with_missing_layout_upgrade_source_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-missing-source";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The layout upgrade moves `src` first and `tsconfig.json` after it, so a missing
+    // `tsconfig.json` must fail the validation before `src` moves.
+    std::fs::remove_file(ctx.cwd_path_join("tsconfig.json")).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Source path does not exist"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_adds_template_to_component_without_dir_in_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-no-dir";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains("    dir: \"\"\n"));
+    fs::write_str(&manifest_path, manifest.replace("    dir: \"\"\n", "")).unwrap();
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    assert!(ctx.cwd_path_join("src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join(",").exists());
+}
+
+#[test]
+async fn app_new_adds_template_to_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`.
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    std::fs::rename(
+        ctx.cwd_path_join("tsconfig.json"),
+        ctx.cwd_path_join("sub/tsconfig.json"),
+    )
+    .unwrap();
+    let component_entry = format!("  {app_name}:ts-main:\n    templates: ts\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:ts-main:\n    dir: \"\"\n    templates: ts\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(ctx.cwd_path_join("sub/src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+}
+
+#[test]
+async fn app_new_adds_template_to_scala_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-scala-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`. The
+    // component sbt file stays at the application root, points to `sub` and has a custom
+    // dependency.
+    let component_sbt_name = "test_app_scala_included_scala_main.sbt";
+    let component_sbt = ctx.cwd_path_join(component_sbt_name);
+    let custom_dependency =
+        "libraryDependencies += \"org.example\" % \"custom-library\" % \"1.0\",";
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(".in(file(\"\"))"), "{sbt}");
+    fs::write_str(
+        &component_sbt,
+        sbt.replace(".in(file(\"\"))", ".in(file(\"sub\"))")
+            .replace(
+                "    name := ",
+                &format!("    {custom_dependency}\n    name := "),
+            ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    let component_entry = format!("  {app_name}:scala-main:\n    templates: scala\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:scala-main:\n    dir: \"\"\n    templates: scala\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(!ctx.cwd_path_join("sub").join(component_sbt_name).exists());
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(custom_dependency), "{sbt}");
+    assert!(sbt.contains(".in(file(\"sub\"))"), "{sbt}");
+    assert!(ctx.cwd_path_join("sub/src/main/scala").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+}
+
+#[test]
+async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_tracing: &Tracing) {
+    let app_name = "test-app-scala-merge";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let component_sbt = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension().is_some_and(|ext| ext == "sbt")
+                && path.file_name().is_some_and(|name| name != "build.sbt")
+        })
+        .expect("component sbt file");
+
+    let append = |path: &Path, line: &str| {
+        let contents = format!("{}{line}\n", fs::read_to_string(path).unwrap());
+        fs::write_str(path, contents).unwrap();
+    };
+    append(&component_sbt, "// customized component");
+    let build_sbt = ctx.cwd_path_join("build.sbt");
+    let multiline_scala_version = fs::read_to_string(&build_sbt).unwrap().replace(
+        "ThisBuild / scalaVersion := ",
+        "ThisBuild / scalaVersion :=\n  ",
+    );
+    fs::write_str(&build_sbt, multiline_scala_version).unwrap();
+    append(&build_sbt, "ThisBuild / organization := \"customized\"");
+    append(
+        &ctx.cwd_path_join("project/plugins.sbt"),
+        "addSbtPlugin(\"org.scalameta\" % \"sbt-scalafmt\" % \"2.5.2\")",
+    );
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let component_sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(component_sbt.contains("// customized component"));
+    assert!(component_sbt.contains(".in(file(\"scala-main\"))"));
+    let build_sbt = fs::read_to_string(&build_sbt).unwrap();
+    assert!(build_sbt.contains("ThisBuild / organization := \"customized\""));
+    assert_eq!(build_sbt.matches("scalaVersion").count(), 1, "{build_sbt}");
+    assert!(
+        build_sbt.starts_with("ThisBuild / scalaVersion := \""),
+        "{build_sbt}"
+    );
+    assert_eq!(build_sbt.lines().count(), 2, "{build_sbt}");
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("project/plugins.sbt"))
+            .unwrap()
+            .contains("sbt-scalafmt")
+    );
+    assert!(ctx.cwd_path_join("scala-main/src").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
+}
+
+#[test]
+async fn app_new_with_unrecognized_scala_setting_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-scala-unrecognized";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // The merge cannot replace a template-owned setting in a form that it does not recognize.
+    fs::write_str(
+        ctx.cwd_path_join("build.sbt"),
+        "inThisBuild(Seq(scalaVersion := \"3.3.0\"))\n",
+    )
+    .unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("cannot merge `scalaVersion`"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+fn snapshot_dir(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != "golem-temp")
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let rel_path = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let contents = entry
+                .file_type()
+                .is_file()
+                .then(|| std::fs::read(entry.path()).unwrap());
+            (rel_path, contents)
+        })
+        .collect()
+}
+
+#[test]
 async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let producer_wasm = placeholder_component_wasm(&ctx);
@@ -151,11 +948,14 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
     );
     fs::write_str(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
-        fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+        extracted_metadata_json(
+            &fs::read_to_string(
+                crate::crate_path().join(
+                    "test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json",
+                ),
+            )
+            .unwrap(),
+        ),
     )
     .unwrap();
     let consumer_final_wasm_hash =
@@ -167,7 +967,11 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -242,18 +1046,25 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
         format!("app:producer-{producer_final_wasm_hash}.json");
     fs::write_str(
         ctx.cwd_path_join("producer-agent-types.json"),
-        fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+        extracted_metadata_json(
+            &fs::read_to_string(
+                crate::crate_path().join(
+                    "test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json",
+                ),
+            )
+            .unwrap(),
+        ),
     )
     .unwrap();
     let consumer_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::create_dir_all(ctx.cwd_path_join("golem-temp/extracted-component-metadata")).unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
@@ -550,15 +1361,16 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
         .unwrap(),
     )
     .unwrap();
-    let metadata = serde_json::json!({
-        "agentTypes": agent_types,
-        "tools": [echo_tool()]
-    });
+    let metadata = ExtractedComponentMetadata {
+        agent_types: serde_json::from_value(agent_types).unwrap(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
 
     let extracted_component_metadata_dir =
         ctx.cwd_path_join("golem-temp/extracted-component-metadata");
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
+    seed_full_extracted_metadata(
         &ctx,
         "app:producer",
         &producer_final_wasm,
@@ -573,7 +1385,11 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -653,15 +1469,16 @@ async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge
         .unwrap(),
     )
     .unwrap();
-    let metadata = serde_json::json!({
-        "agentTypes": agent_types,
-        "tools": [echo_tool()]
-    });
+    let metadata = ExtractedComponentMetadata {
+        agent_types: serde_json::from_value(agent_types).unwrap(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
 
     let extracted_component_metadata_dir =
         ctx.cwd_path_join("golem-temp/extracted-component-metadata");
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
+    seed_full_extracted_metadata(
         &ctx,
         "app:producer",
         &producer_final_wasm,
@@ -676,7 +1493,11 @@ async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -748,6 +1569,7 @@ fn echo_tool() -> Tool {
     };
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![golem_common::schema::tool::CommandNode {
                 name: "echo".to_string(),
@@ -773,6 +1595,7 @@ fn echo_tool() -> Tool {
                     constraints: vec![],
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: Some(ToolResultSpec {
                         type_: SchemaType::string(),
                         doc: doc("result"),
@@ -789,6 +1612,80 @@ fn echo_tool() -> Tool {
         },
         schema: SchemaGraph::empty(),
     }
+}
+
+#[test]
+#[timeout("2m")]
+async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let component_wasm =
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
+    let final_wasm = ctx.cwd_path_join("tools-final.wasm");
+    let manifest = formatdoc! {r#"
+        manifestVersion: {MANIFEST_VERSION}
+
+        app: tool-publication-only-plan
+
+        environments:
+          local:
+            server: local
+
+        components:
+          app:tools:
+            componentWasm: {component_wasm}
+            outputWasm: tools-final.wasm
+
+        tools:
+          echo:
+            component: app:tools
+    "#, MANIFEST_VERSION = versions::sdk::MANIFEST, component_wasm = component_wasm.display()};
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    fs::write_str(&manifest_path, &manifest).unwrap();
+
+    let build = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
+        .await;
+    assert!(build.success_or_dump());
+    let metadata = ExtractedComponentMetadata {
+        agent_types: Vec::new(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
+    seed_full_extracted_metadata(
+        &ctx,
+        "app:tools",
+        &final_wasm,
+        &serde_json::to_string(&metadata).unwrap(),
+    );
+    seed_extraction_marker(&ctx, "app:tools");
+
+    let initial_deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(initial_deploy.success_or_dump());
+
+    let publication_manifest = manifest.replace(
+        "components:\n",
+        "toolReleases:\n  local:\n    echo: {}\n\ncomponents:\n",
+    );
+    fs::write_str(&manifest_path, publication_manifest).unwrap();
+
+    let plan = ctx.cli([cmd::DEPLOY, "--plan"]).await;
+    assert!(plan.success_or_dump());
+    assert!(
+        plan.stdout_contains(
+            "staging area with current deployment (tool publications excluded): SAME"
+        ) || plan.stderr_contains(
+            "staging area with current deployment (tool publications excluded): SAME"
+        )
+    );
+    assert!(
+        plan.stdout_contains("Tool publication plan:")
+            || plan.stderr_contains("Tool publication plan:")
+    );
+    assert!(
+        plan.stdout_contains("publish echo@1.0.0") || plan.stderr_contains("publish echo@1.0.0")
+    );
 }
 
 #[test]
@@ -842,7 +1739,11 @@ async fn dependency_and_explicit_guest_bridge_default_output_dedupe_with_matcher
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -924,7 +1825,11 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -1021,7 +1926,11 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -1663,7 +2572,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("producer-agent-types.json"),
         producer_agent_types,
     )
@@ -1672,7 +2581,11 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -1730,7 +2643,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
 }
 
 #[test]
-#[timeout("300s")]
+#[timeout("900s")]
 async fn selected_dependency_guest_bridge_reextracts_rebuilt_provider_metadata(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "stale-metadata-repro";
@@ -2102,7 +3015,7 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir
             .join(format!("app:producer-{producer_final_wasm_hash}.json")),
         producer_agent_types,
@@ -2112,7 +3025,11 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -2291,7 +3208,7 @@ async fn selected_unresolved_dependency_does_not_build_unrelated_component_with_
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
     let unrelated_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:unrelated", &unrelated_final_wasm);
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir
             .join(format!("app:unrelated-{unrelated_final_wasm_hash}.json")),
         "[]",
@@ -2390,7 +3307,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
     let base_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:base", &base_final_wasm);
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         base_agent_types,
     )
@@ -2398,7 +3315,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
     let middle_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:middle", &middle_final_wasm);
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         middle_agent_types,
     )
@@ -2407,7 +3324,11 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:base", "app:middle", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -2587,7 +3508,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2604,7 +3525,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -2721,7 +3642,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2738,7 +3659,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -2873,7 +3794,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2890,7 +3811,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -3036,7 +3957,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:rust-producer-{rust_producer_final_wasm_hash}.json"
         )),
@@ -3053,7 +3974,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:ts-producer-{ts_producer_final_wasm_hash}.json"
         )),
@@ -3071,7 +3992,11 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
 
     fs::create_dir_all(ctx.cwd_path_join("rust-consumer")).unwrap();
     fs::create_dir_all(ctx.cwd_path_join("ts-consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     let rust_consumer_final_wasm = ctx.cwd_path_join("rust-consumer/rust-consumer-final.wasm");
     let rust_consumer_final_wasm_hash = extracted_component_metadata_path_hash(
         &ctx,
@@ -3208,7 +4133,11 @@ async fn selected_typed_dependency_guest_bridge_does_not_build_unselected_compon
         "not wasm",
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
     let consumer_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
@@ -3422,7 +4351,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -3438,7 +4367,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
     )
     .unwrap();
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -3447,12 +4376,16 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
         seed_extraction_marker(&ctx, component_name);
     }
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         &middle_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
     let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
     let consumer_final_wasm_hash =
@@ -3554,7 +4487,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -3568,13 +4501,13 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:middle-{middle_final_wasm_hash}.json")),
         &middle_agent_types,
     )
     .unwrap();
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         middle_agent_types,
     )
@@ -3779,17 +4712,21 @@ async fn selected_dependency_guest_bridge_does_not_expand_explicit_guest_bridge_
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("provider-agent-types.json"),
         provider_agent_types,
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("unrelated-agent-types.json"),
         unrelated_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:provider", "app:unrelated", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -3908,12 +4845,16 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("provider-agent-types.json"),
         provider_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:provider", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -4275,7 +5216,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4292,7 +5233,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
     .unwrap();
     let base_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:base-{base_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&base_extracted_component_metadata),
         &base_agent_types,
     )
@@ -4445,7 +5386,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4460,7 +5401,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("base-agent-types.json"),
         &base_agent_types,
     )
@@ -4593,7 +5534,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4608,7 +5549,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("base-agent-types.json"),
         &base_agent_types,
     )
@@ -4732,7 +5673,7 @@ async fn custom_build_env_guest_bridge_path_waits_for_guest_bridge_sdks(_tracing
     let producer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
         fs::read_to_string(
             crate::crate_path()
@@ -4886,7 +5827,7 @@ async fn dependency_guest_bridge_build_targets_do_not_make_component_require_gue
     let producer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
         fs::read_to_string(
             crate::crate_path()
@@ -5663,7 +6604,11 @@ async fn rust_no_build_producer_generates_guest_bridge_before_consumer_build(_tr
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -5806,7 +6751,11 @@ async fn custom_unknown_language_build_consumer_waits_for_custom_guest_bridge_ou
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -5937,7 +6886,11 @@ async fn rust_template_no_build_producer_generates_guest_bridge_before_consumer_
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -6227,7 +7180,7 @@ async fn guest_bridge_output_dir_overlap_with_default_external_dir_is_rejected_b
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -6555,7 +7508,7 @@ async fn post_build_guest_bridge_scan_rejects_duplicate_agent_output_dir(_tracin
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &bar_agent_types,
     )
@@ -7004,7 +7957,7 @@ async fn guest_and_repl_bridge_output_dir_overlap_with_different_agent_is_reject
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:repl-source-{repl_source_final_wasm_hash}.json"
         )),
@@ -7109,7 +8062,7 @@ async fn guest_and_build_produced_repl_bridge_output_dir_overlap_with_different_
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -7318,7 +8271,7 @@ async fn guest_and_build_produced_external_bridge_output_dir_overlap_is_rejected
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -7592,26 +8545,15 @@ async fn build_check(_tracing: &Tracing) {
         .parse()
         .unwrap();
     cargo_toml["dependencies"] = toml_edit::Item::Table(toml_edit::Table::default());
-    cargo_toml["dependencies"]["golem-rust"] =
-        toml_edit::value(toml_edit::InlineTable::from_iter([
-            (
-                "path",
-                toml_edit::Value::from(
-                    "/Users/noise64/workspace/golem-alt-00/sdks/rust/golem-rust",
-                ),
-            ),
-            (
-                "features",
-                toml_edit::Value::Array({
-                    let mut features = toml_edit::Array::default();
-                    features.push("export_golem_agentic");
-                    features
-                }),
-            ),
-        ]));
+    // The check does not infer a component's export role, so retain the SDK defaults and agent feature.
+    cargo_toml["dependencies"]["golem-rust"] = sdk_overrides()
+        .unwrap()
+        .golem_rust_dependency()
+        .as_toml_item(&["default", "export_golem_agentic"])
+        .unwrap();
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
-    // Phase 3: wipe dependencies completely and verify check restores everything needed.
+    // Phase 3: remove other dependencies and verify check restores everything needed.
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
     assert!(
@@ -7697,10 +8639,11 @@ async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
-    assert!(outputs.stdout_contains("Available languages:"));
+    // Missing template is a usage error, so the help (with the languages) goes to stderr
+    assert!(outputs.stderr_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
-        .filter(|language| !outputs.stdout_contains(format!("- {language}")))
+        .filter(|language| !outputs.stderr_contains(format!("- {language}")))
         .collect::<Vec<_>>();
 
     assert!(
@@ -7714,6 +8657,7 @@ async fn app_new_language_hints(_tracing: &Tracing) {
 async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
     for (app_name, language) in [
         ("test-app-embedded-skills-ts", "ts"),
+        ("test-app-embedded-skills-effect", "effect"),
         ("test-app-embedded-skills-rust", "rust"),
         ("test-app-embedded-skills-scala", "scala"),
     ] {
@@ -7730,6 +8674,30 @@ async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
                 .exists(),
             "missing embedded bootstrap skill for {language}",
         );
+
+        if language == "ts" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "missing TypeScript npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "Effect npm-package skill leaked into TypeScript template",
+            );
+        } else if language == "effect" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "missing Effect npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "TypeScript npm-package skill leaked into Effect template",
+            );
+        }
 
         let claude_link = ctx.cwd_path_join(".claude");
         assert!(
@@ -7850,7 +8818,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
-                    complex:\s*.*
+                    complex\?:\s*.*
                 \)
                 .*
                 CounterAgent\.get\(name:\s*string\)
@@ -7861,7 +8829,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
-                    complex:\s*.*
+                    complex\?:\s*.*
                 \)
             )
             .*"#
@@ -8328,6 +9296,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: first
+                apiKey: stable
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8347,6 +9316,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.string()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({
@@ -8375,6 +9345,8 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
+    // apiKey keeps its compatible type and value, so its default must not be resolved,
+    // not even when the incompatible secret gets replaced.
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {
@@ -8398,6 +9370,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: 42
+                apiKey: "{{{{ GOLEM_TEST_RESET_UNSET_API_KEY }}}}"
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8417,6 +9390,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.number()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({

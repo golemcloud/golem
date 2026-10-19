@@ -12,6 +12,7 @@ pub(all) struct ToolMiddlewareCommandInfo {
   success_type : ParamType
   error_type : ParamType
   has_stdout : Bool
+  has_stderr : Bool
 } derive(Debug, Eq)
 
 ///|
@@ -44,8 +45,10 @@ pub(all) enum ToolMiddlewareScopeInfo {
 pub(all) struct ToolMiddlewareInfo {
   source_name : String
   name : String
+  version : String
   aliases : Array[String]
   description : String
+  parameter_type : ParamType?
   scope : ToolMiddlewareScopeInfo
 } derive(Debug, Eq)
 
@@ -53,10 +56,12 @@ pub(all) struct ToolMiddlewareInfo {
 priv struct MonomorphicMiddlewareDecl {
   source_name : String
   name : String
+  version : String
   aliases : Array[String]
   description : String
   presented : String
   expected : String
+  parameter_type : ParamType?
 }
 
 ///|
@@ -117,11 +122,13 @@ fn parse_middleware_metadata(
   annotation : String,
   owner : String,
   monomorphic : Bool,
-) -> (String, Array[String], String?, String?) raise ToolMiddlewareParseError {
+) -> (String, String, Array[String], String?, String?, ParamType?) raise ToolMiddlewareParseError {
   let mut name : String? = None
+  let mut version : String? = None
   let aliases : Array[String] = []
   let mut presented : String? = None
   let mut expected : String? = None
+  let mut parameter_type : ParamType? = None
   for prop in props {
     match prop_string(prop) {
       Some((None, value)) =>
@@ -131,6 +138,12 @@ fn parse_middleware_metadata(
           middleware_fail("Duplicate middleware name on " + owner)
         }
       Some((Some("tool_alias" | "alias"), value)) => aliases.push(value)
+      Some((Some("version"), value)) =>
+        if version is None {
+          version = Some(value)
+        } else {
+          middleware_fail("Duplicate middleware version on " + owner)
+        }
       Some((Some("presented"), value)) if monomorphic =>
         if presented is None {
           presented = Some(value)
@@ -142,6 +155,12 @@ fn parse_middleware_metadata(
           expected = Some(value)
         } else {
           middleware_fail("Duplicate expected tool on " + owner)
+        }
+      Some((Some("parameters"), value)) =>
+        if parameter_type is None {
+          parameter_type = Some(Simple(value))
+        } else {
+          middleware_fail("Duplicate middleware parameters type on " + owner)
         }
       _ =>
         middleware_fail(
@@ -164,7 +183,14 @@ fn parse_middleware_metadata(
     }
     seen[alias_name] = ()
   }
-  (name, aliases, presented, expected)
+  (
+    name,
+    version.unwrap_or("0.0.0"),
+    aliases,
+    presented,
+    expected,
+    parameter_type,
+  )
 }
 
 ///|
@@ -353,7 +379,14 @@ fn projected_middleware_param(
       }
     Hidden(InputStream) | LabelledHidden(InputStream) =>
       Some(Simple("@toolMiddleware.MiddlewareStdin"))
-    Hidden(OutputStream) | LabelledHidden(OutputStream) => None
+    OptionalHidden(InputStream) | LabelledOptionalHidden(InputStream) =>
+      Some(Optional(Simple("@toolMiddleware.MiddlewareStdin")))
+    Hidden(OutputStream | ErrorStream)
+    | LabelledHidden(OutputStream | ErrorStream)
+    | OptionalHidden(OutputStream | ErrorStream)
+    | LabelledOptionalHidden(OutputStream | ErrorStream) => None
+    OptionalHidden(Principal) | LabelledOptionalHidden(Principal) =>
+      abort("principal cannot be optional")
   }
 }
 
@@ -372,7 +405,10 @@ fn middleware_param_identities(
   parameter : ToolParamType,
 ) -> Array[String] {
   match parameter {
-    Hidden(_) | LabelledHidden(_) => [source_name]
+    Hidden(_)
+    | LabelledHidden(_)
+    | OptionalHidden(_)
+    | LabelledOptionalHidden(_) => [source_name]
     Public(_) | LabelledPublic(_) | QuestionOptionalPublic(_) => {
       let info = command.args
         .iter()
@@ -413,10 +449,17 @@ fn append_projected_params(
             ToolMiddlewareParamSource::CanonicalInput(identities[0])
           Hidden(InputStream) | LabelledHidden(InputStream) =>
             ToolMiddlewareParamSource::Stdin
+          OptionalHidden(InputStream) | LabelledOptionalHidden(InputStream) =>
+            ToolMiddlewareParamSource::Stdin
           Hidden(Principal) | LabelledHidden(Principal) =>
             ToolMiddlewareParamSource::Principal
-          Hidden(OutputStream) | LabelledHidden(OutputStream) =>
+          Hidden(OutputStream | ErrorStream)
+          | LabelledHidden(OutputStream | ErrorStream)
+          | OptionalHidden(OutputStream | ErrorStream)
+          | LabelledOptionalHidden(OutputStream | ErrorStream) =>
             abort("output streams are not middleware handler parameters")
+          OptionalHidden(Principal) | LabelledOptionalHidden(Principal) =>
+            abort("principal cannot be optional")
         }
         result.push({ source_name: pair.0, type_, identities, source, })
         for identity in identities {
@@ -482,11 +525,19 @@ fn middleware_success_type(command : ToolCommandInfo) -> ParamType {
   let has_stdout = command.params.any(pair => {
     pair.1 == Hidden(OutputStream) || pair.1 == LabelledHidden(OutputStream)
   })
-  if has_stdout {
+  let has_stderr = command.params.any(pair => {
+    pair.1 == Hidden(ErrorStream) || pair.1 == LabelledHidden(ErrorStream)
+  })
+  let output_type = if has_stdout && has_stderr {
+    Simple("@toolMiddleware.ToolOutputStreams")
+  } else {
+    middleware_output_stream_type()
+  }
+  if has_stdout || has_stderr {
     if value == Simple("Unit") {
-      middleware_output_stream_type()
+      output_type
     } else {
-      Tuple([value, middleware_output_stream_type()])
+      Tuple([value, output_type])
     }
   } else {
     value
@@ -532,6 +583,9 @@ fn add_middleware_surface(
   let has_stdout = command.params.any(pair => {
     pair.1 == Hidden(OutputStream) || pair.1 == LabelledHidden(OutputStream)
   })
+  let has_stderr = command.params.any(pair => {
+    pair.1 == Hidden(ErrorStream) || pair.1 == LabelledHidden(ErrorStream)
+  })
   surfaces.push({
     command_path,
     handler_name,
@@ -540,6 +594,7 @@ fn add_middleware_surface(
     success_type: middleware_success_type(command),
     error_type: middleware_error_type(command),
     has_stdout,
+    has_stderr,
   })
 }
 
@@ -708,6 +763,9 @@ fn validate_handler_signature(
   let expected : Array[(String, ParamType)] = [
     ("underlying", Simple(middleware.expected + "Underlying")),
   ]
+  if middleware.parameter_type is Some(parameter_type) {
+    expected.insert(0, ("parameters", parameter_type))
+  }
   for pair in surface.params {
     expected.push(pair)
   }
@@ -821,6 +879,7 @@ fn expected_universal_return_type() -> ParamType {
 fn validate_universal_handler(
   decl : @syntax.FunDecl,
   middleware_name : String,
+  parameter_type : ParamType?,
 ) -> Unit raise ToolMiddlewareParseError {
   let owner = "universal tool middleware '" + middleware_name + "'"
   if decl.type_name is Some(_) {
@@ -839,6 +898,9 @@ fn validate_universal_handler(
     ("invocation", Simple("@toolMiddleware.RawToolInvocation")),
     ("underlying", Simple("@toolMiddleware.UnderlyingTool")),
   ]
+  if parameter_type is Some(parameter_type) {
+    expected.insert(0, ("parameters", parameter_type))
+  }
   if params != expected {
     middleware_fail(
       owner +
@@ -960,7 +1022,7 @@ pub fn parse_tool_middlewares(
                     "' must be empty",
                   )
               }
-              let (name, aliases, presented, expected) = parse_middleware_metadata(
+              let (name, version, aliases, presented, expected, parameter_type) = parse_middleware_metadata(
                 middleware_props(attr, "tool_middleware").unwrap(),
                 "tool_middleware",
                 "middleware " + decl.tycon,
@@ -977,10 +1039,12 @@ pub fn parse_tool_middlewares(
               monomorphic.push({
                 source_name: decl.tycon,
                 name,
+                version,
                 aliases,
                 description: tool_doc(decl.doc),
                 presented,
                 expected: expected.unwrap_or(presented),
+                parameter_type,
               })
             }
             _ => ()
@@ -1010,7 +1074,7 @@ pub fn parse_tool_middlewares(
                   "#derive.universal_tool_middleware must annotate an async free function",
                 )
               }
-              let (name, aliases, presented, expected) = parse_middleware_metadata(
+              let (name, version, aliases, presented, expected, parameter_type) = parse_middleware_metadata(
                 middleware_props(attr, "universal_tool_middleware").unwrap(),
                 "universal_tool_middleware",
                 "function " + fun_decl.name.name,
@@ -1018,12 +1082,14 @@ pub fn parse_tool_middlewares(
               )
               ignore(presented)
               ignore(expected)
-              validate_universal_handler(fun_decl, name)
+              validate_universal_handler(fun_decl, name, parameter_type)
               result.push({
                 source_name: fun_decl.name.name,
                 name,
+                version,
                 aliases,
                 description: tool_doc(fun_decl.doc),
+                parameter_type,
                 scope: Universal({ handler_name: fun_decl.name.name, }),
               })
             }
@@ -1052,8 +1118,10 @@ pub fn parse_tool_middlewares(
     result.push({
       source_name: middleware.source_name,
       name: middleware.name,
+      version: middleware.version,
       aliases: middleware.aliases,
       description: middleware.description,
+      parameter_type: middleware.parameter_type,
       scope: Monomorphic({ presented, expected, handlers, underlying_methods, }),
     })
   }

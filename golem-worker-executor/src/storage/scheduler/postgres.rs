@@ -19,8 +19,8 @@ use super::{
 use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
+use golem_common::serialization::deserialize;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -74,10 +74,8 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         shard_id: ShardId,
-        action: &ScheduledAction,
+        action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
-        let action = serialize(action)?;
-
         let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
             "INSERT INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, shard_id, action) VALUES ($1, $2, $2, $3, $4) ON CONFLICT (schedule_id) DO NOTHING;",
@@ -114,18 +112,14 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         limit: u32,
         lease_ttl: Duration,
     ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
-        if limit == 0 || assignment.shard_ids.is_empty() {
+        if limit == 0 || assignment.is_empty() {
             return Ok(Vec::new());
         }
 
         let now_ms = datetime_to_millis(now);
         let lease_owner = Uuid::now_v7();
         let lease_until_ms = datetime_to_millis(now + lease_ttl);
-        let shard_ids: Vec<i64> = assignment
-            .shard_ids
-            .iter()
-            .map(|shard| shard.value())
-            .collect();
+        let shard_ids: Vec<i64> = assignment.shard_ids().map(|shard| shard.value()).collect();
 
         let query = sqlx::query_as::<_, ScheduledActionRow>(
             r#"
@@ -181,15 +175,11 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         now: DateTime<Utc>,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
-        if assignment.shard_ids.is_empty() {
+        if assignment.is_empty() {
             return Ok(0);
         }
 
-        let shard_ids: Vec<i64> = assignment
-            .shard_ids
-            .iter()
-            .map(|shard| shard.value())
-            .collect();
+        let shard_ids: Vec<i64> = assignment.shard_ids().map(|shard| shard.value()).collect();
         let query = sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM scheduled_actions WHERE shard_id = ANY($1) AND due_at_ms <= $2;",
         )

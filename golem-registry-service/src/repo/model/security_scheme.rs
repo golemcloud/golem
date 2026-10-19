@@ -19,7 +19,8 @@ use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
-    CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
+    CustomProvider, Provider, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName,
+    SecuritySchemeRevision,
 };
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
@@ -64,6 +65,7 @@ pub struct SecuritySchemeRevisionRecord {
     pub scopes: String,
     pub custom_provider_name: Option<String>,
     pub custom_issuer_url: Option<String>,
+    pub login_config: String,
 
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
@@ -77,6 +79,7 @@ impl SecuritySchemeRevisionRecord {
         client_secret: String,
         redirect_url: &RedirectUrl,
         scopes: &[Scope],
+        login: &SecuritySchemeLogin,
         actor: AccountId,
     ) -> Self {
         let redirect_url: String = serde_json::to_string(&redirect_url).unwrap();
@@ -102,6 +105,7 @@ impl SecuritySchemeRevisionRecord {
             scopes,
             custom_provider_name,
             custom_issuer_url,
+            login_config: serde_json::to_string(login).unwrap(),
             audit: DeletableRevisionAuditFields::new(actor.0),
         }
     }
@@ -130,6 +134,7 @@ impl SecuritySchemeRevisionRecord {
             scopes,
             custom_provider_name,
             custom_issuer_url,
+            login_config: serde_json::to_string(&value.login).unwrap(),
             audit,
         }
     }
@@ -179,6 +184,8 @@ impl TryFrom<SecuritySchemeExtRevisionRecord> for SecurityScheme {
         };
         let client_id = ClientId::new(value.revision.client_id);
         let client_secret = ClientSecret::new(value.revision.client_secret);
+        let login = serde_json::from_str(&value.revision.login_config)
+            .map_err(|e| anyhow::Error::from(e).context("Failed parsing login_config"))?;
 
         Ok(Self {
             id: SecuritySchemeId(value.revision.security_scheme_id),
@@ -190,6 +197,7 @@ impl TryFrom<SecuritySchemeExtRevisionRecord> for SecurityScheme {
             client_secret,
             redirect_url,
             scopes,
+            login,
         })
     }
 }

@@ -167,6 +167,14 @@ impl From<&str> for AccountEmail {
     }
 }
 
+impl std::str::FromStr for AccountEmail {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(value))
+    }
+}
+
 #[cfg(feature = "full")]
 impl poem_openapi::types::ParseFromJSON for AccountEmail {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {

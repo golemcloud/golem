@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk_example1/golem_tool_middleware_examples"
 
 import {
+  "golemcloud/golem_sdk/tool",
   "golemcloud/golem_sdk/tool-core",
   "golemcloud/golem_sdk/tool-middleware",
 }
@@ -11,17 +12,53 @@ pub async fn audit(@tool-middleware.RawToolInvocation, @tool-middleware.Underlyi
 
 pub fn cabi_realloc(Int, Int, Int, Int) -> Int
 
+pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
+
 pub fn wasmExportAsyncInvokeToolMiddleware(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
+
+pub fn wasmExportDiscoverAgentTypes() -> Int
+
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
 
 pub fn wasmExportDiscoverToolMiddlewares() -> Int
 
 pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int) -> Unit
 
+pub fn wasmExportDiscoverTools() -> Int
+
+pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
+
+pub fn wasmExportGetDefinition() -> Int
+
+pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+
+pub fn wasmExportGetTool(Int, Int) -> Int
+
 pub fn wasmExportGetToolMiddleware(Int, Int) -> Int
 
 pub fn wasmExportGetToolMiddlewarePostReturn(Int) -> Unit
 
+pub fn wasmExportGetToolPostReturn(Int) -> Unit
+
+pub fn wasmExportInitialize(Int) -> Int
+
+pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
+
+pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
+
 pub fn wasmExportInvokeToolMiddleware(Int) -> Int
+
+pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportSave() -> Int
 
 // Errors
 
@@ -35,21 +72,47 @@ pub async fn MessagePolicy::send(MessagesUnderlying, String) -> Result[String, @
 type Messages
 pub fn Messages::send(String) -> String
 
+pub(all) struct MessagesClient {
+  client : @tool.ToolClient
+}
+pub fn MessagesClient::drop(Self) -> Unit
+pub fn MessagesClient::new() -> Self
+pub fn MessagesClient::new_for(String) -> Self
+pub async fn MessagesClient::send(Self, String) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
+
 pub struct MessagesUnderlying {
   // private fields
 }
 pub async fn MessagesUnderlying::send(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn MessagesUnderlying::start_send(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[String, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 
 type PublicFiles
 pub fn PublicFiles::read(String) -> String
 
+pub(all) struct PublicFilesClient {
+  client : @tool.ToolClient
+}
+pub fn PublicFilesClient::drop(Self) -> Unit
+pub fn PublicFilesClient::new() -> Self
+pub fn PublicFilesClient::new_for(String) -> Self
+pub async fn PublicFilesClient::read(Self, String) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
+
 type Storage
 pub fn Storage::fetch(String) -> String
+
+pub(all) struct StorageClient {
+  client : @tool.ToolClient
+}
+pub fn StorageClient::drop(Self) -> Unit
+pub async fn StorageClient::fetch(Self, String) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
+pub fn StorageClient::new() -> Self
+pub fn StorageClient::new_for(String) -> Self
 
 pub struct StorageUnderlying {
   // private fields
 }
 pub async fn StorageUnderlying::fetch(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn StorageUnderlying::start_fetch(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[String, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 
 // Type aliases
 

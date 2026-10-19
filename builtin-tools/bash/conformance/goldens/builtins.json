@@ -1,0 +1,878 @@
+{
+ "cases": {
+  "builtin: alias -p and missing alias": {
+   "script": "6747b40ddb23e812",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "alias x='ls -l'\nstatus=1\n"
+   }
+  },
+  "builtin: alias expands on a later line": {
+   "script": "07b2f1645ca9ac7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello there\n"
+   }
+  },
+  "builtin: alias listing and unalias": {
+   "script": "362d44161400058e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unalias: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "alias a='echo a'\nalias b='echo b'\nalias b='echo b'\nstatus=1\n"
+   }
+  },
+  "builtin: alias needs expand_aliases": {
+   "script": "0855b8d75a75367b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "builtin: alias on the same line does not expand": {
+   "script": "a666cd9e7488917b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "builtin: break with a bad count": {
+   "script": "bf53895c1dc4c755",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: builtin runs the builtin": {
+   "script": "9231ffba228d29e7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: builtin: nosuch: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "fn\ny\nfn\n"
+   }
+  },
+  "builtin: caller inside a function": {
+   "script": "fe75d5a63eae2067",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: caller outside a function": {
+   "script": "44272bf04b5bfa1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: colon true false": {
+   "script": "c00f7f1f2fc2f4a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n0\n1\n"
+   }
+  },
+  "builtin: command -v and -V": {
+   "script": "0eb8d42767d9c6aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\ncd\necho\nf is a function\n"
+   }
+  },
+  "builtin: command bypasses functions": {
+   "script": "24da0a5c9663412c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fn\nfound\ndirect\n"
+   }
+  },
+  "builtin: compgen variables": {
+   "script": "fb0eccdcccc10343",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "myvar1\nmyvar2\n"
+   }
+  },
+  "builtin: compgen word lists": {
+   "script": "d6b5a572986ffaba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha\nalps\nstatus=1\n"
+   }
+  },
+  "builtin: continue and break levels": {
+   "script": "4cc6a7299913abe4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a\n2a\nend\n"
+   }
+  },
+  "builtin: continue outside a loop": {
+   "script": "9cd4b7c519f16ade",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: only meaningful in a `for', `while', or `until' loop\nbash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "status=0\nstatus=0\n"
+   }
+  },
+  "builtin: declare -f and -F": {
+   "script": "33f1e56b840225e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -f f\ndeclare -f g\nf () \n{ \n    echo body\n}\n"
+   }
+  },
+  "builtin: declare -g inside a function": {
+   "script": "6e4610e0343a845b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[global] [unset]\n"
+   }
+  },
+  "builtin: declare -i evaluates": {
+   "script": "b4fa788cddda7255",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "14\n15\n0\n"
+   }
+  },
+  "builtin: declare -l and -u": {
+   "script": "fde772961f0153ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello HELLO\nagain\n"
+   }
+  },
+  "builtin: declare -p forms": {
+   "script": "4761053621251418",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -i n=\"5\"\ndeclare -a a=([0]=\"1\" [1]=\"2\")\ndeclare -A m=([k]=\"v\" )\ndeclare -r r=\"1\"\ndeclare -x e=\"2\"\n"
+   }
+  },
+  "builtin: disown a job": {
+   "script": "5f59fbcb5c619e61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "builtin: disown with no job": {
+   "script": "cdf0fbf85cf0c4e9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: disown: %5: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: echo options": {
+   "script": "7394fb3a62c081ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no-newline\na\tbAA\nraw\\t\n-- -n\n"
+   }
+  },
+  "builtin: enable lists and disables": {
+   "script": "0560c059a9ca5a8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\nback\n"
+   }
+  },
+  "builtin: eval builds commands": {
+   "script": "0a6f5d4a5c2003ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi there\n3\n"
+   }
+  },
+  "builtin: eval status and exit": {
+   "script": "577814a933bf2a24",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: eval syntax error": {
+   "script": "e475f30d8aec469d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "builtin: exec a command ends the script": {
+   "script": "c7ec50cf5b927fde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\nreplaced\n"
+   }
+  },
+  "builtin: exec with no command keeps going": {
+   "script": "f1acb47be7417533",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kept\n"
+   }
+  },
+  "builtin: exit status wraps": {
+   "script": "f291ed615afe5fd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n255\n"
+   }
+  },
+  "builtin: file tests on an empty path": {
+   "script": "278db1d7d3c53d33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\nd\nf\n"
+   }
+  },
+  "builtin: getopts basic": {
+   "script": "0d7760c7ad078fbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a \nb val\nc \nrest=rest\n"
+   }
+  },
+  "builtin: getopts clustered and attached": {
+   "script": "2cc4525925b1c63f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a \nb val\nc \nOPTIND=3\n"
+   }
+  },
+  "builtin: getopts in a function": {
+   "script": "28a8d1fc89864025",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=1\nn=2\n"
+   }
+  },
+  "builtin: getopts missing argument": {
+   "script": "f911509d08672bd4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: option requires an argument -- b\n"
+   },
+   "stdout": {
+    "text": "got ?\n"
+   }
+  },
+  "builtin: getopts silent mode": {
+   "script": "5ddf81f01b45a85a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "? x\n: b\n"
+   }
+  },
+  "builtin: getopts stops at --": {
+   "script": "e9efe5782f895f27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n-b\n"
+   }
+  },
+  "builtin: getopts unknown option": {
+   "script": "ba967ee0164e3582",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- x\n"
+   },
+   "stdout": {
+    "text": "got ?\nstatus=0\n"
+   }
+  },
+  "builtin: hash with no path": {
+   "script": "cb17c7937dfd3616",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hash: hash table empty\nstatus=0\nstatus=0\n"
+   }
+  },
+  "builtin: jobs listing forms": {
+   "script": "583e2e1606069344",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n1\n"
+   }
+  },
+  "builtin: kill -l": {
+   "script": "ea47905e6892e30b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: 999: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "TERM\n15\nstatus=1\n"
+   }
+  },
+  "builtin: let arithmetic and status": {
+   "script": "a9c16ec305fee269",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 7\nstatus=1\n2\n"
+   }
+  },
+  "builtin: local -": {
+   "script": "6d7c2c5caa67a62d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*\nnoglob         \toff\n"
+   }
+  },
+  "builtin: local outside a function": {
+   "script": "8d958d4bba482359",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: can only be used in a function\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: local scoping is dynamic": {
+   "script": "d58ce0299099a360",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer\nglobal\n"
+   }
+  },
+  "builtin: mapfile with a delimiter": {
+   "script": "cf0c799590ad2447",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a][b][c]\n"
+   }
+  },
+  "builtin: popd on an empty stack": {
+   "script": "f0a18cc556456f0d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: popd: directory stack empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: printf -v": {
+   "script": "0641165f8a1c1230",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "00042|ab  |\nx\n"
+   }
+  },
+  "builtin: printf errors": {
+   "script": "db3736db74def1e8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: printf: 1.5: invalid number\nbash: line 1: printf: `%z': missing format character\n"
+   },
+   "stdout": {
+    "text": "1\nstatus=1\nstatus=1\n"
+   }
+  },
+  "builtin: printf reuses its format": {
+   "script": "146350d58f6b8295",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a=1\nb=2\nc=\nx\ty\na\\ b\nit\\'s\n"
+   }
+  },
+  "builtin: pushd popd dirs": {
+   "script": "47db65400204267e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/b /tmp/a /tmp\n/tmp/b /tmp/a /tmp\n/tmp/a\n/tmp\n/tmp\n"
+   }
+  },
+  "builtin: pushd to a missing directory": {
+   "script": "80e395f463e64316",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pushd: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: read -a -d -n -N": {
+   "script": "0c922485bb99a957",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 z\nab\nabc\n[a\nb]\n"
+   }
+  },
+  "builtin: read -p to stderr": {
+   "script": "e90f2cd2d31e823e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "builtin: read -r and backslashes": {
+   "script": "58cdc3d646dc52ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\na\\b\n"
+   }
+  },
+  "builtin: read -u from a descriptor": {
+   "script": "e5c2280fed9ad634",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from3\n"
+   }
+  },
+  "builtin: read at EOF": {
+   "script": "97c29f54257d082f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 v=last\nstatus=1\n"
+   }
+  },
+  "builtin: read splits on IFS": {
+   "script": "cf1d40abdba7b868",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a][b][c d]\n[a][b:c]\n"
+   }
+  },
+  "builtin: readarray options": {
+   "script": "119dc8d28f0701ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([0]=\"b\" [1]=\"c\")\n6 a\n"
+   }
+  },
+  "builtin: readonly -p": {
+   "script": "e0ee200e1fa963e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -r a=\"1\"\ndeclare -r b\n"
+   }
+  },
+  "builtin: readonly blocks assignment": {
+   "script": "5010c90d93f18e9c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "builtin: return outside a function": {
+   "script": "34124aaa91ca463f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "builtin: return statuses": {
+   "script": "7e44d0e42295f108",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n1\n44\n"
+   }
+  },
+  "builtin: set +o round trip": {
+   "script": "29ff0f054723d228",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set -o errexit\nset -o nounset\n"
+   }
+  },
+  "builtin: set -- and positional count": {
+   "script": "2567f95a70e7ba38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n[a b]\n[c]\n0\n"
+   }
+  },
+  "builtin: set -o listing": {
+   "script": "ee3c6a7ee6762a53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "errexit        \toff\nnoglob         \toff\nnounset        \toff\npipefail       \toff\n"
+   }
+  },
+  "builtin: set with a bad option": {
+   "script": "076a578f89c1cf14",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: nosuchoption: invalid option name\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "builtin: shift counts": {
+   "script": "2a897cfc86dba1fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b c d\nd\nstatus=1 d\n"
+   }
+  },
+  "builtin: shopt query forms": {
+   "script": "bfefc875f48d8753",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnullglob            \ton\nshopt -s nullglob\nstatus=1\n"
+   }
+  },
+  "builtin: shopt unknown option": {
+   "script": "0243b01b1093c6a4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shopt: nosuchopt: invalid shell option name\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: source a file with arguments": {
+   "script": "ca87df3764de3bc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sourced a 2\nset\nsourced  0\n"
+   }
+  },
+  "builtin: source a missing file": {
+   "script": "b395196856727a2b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nosuch.sh: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "builtin: source return status": {
+   "script": "169ee0f943e3d2a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "builtin: test combined and negated": {
+   "script": "12f599f4e194fa01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "absent\nand\nor\ngroup\n"
+   }
+  },
+  "builtin: test file operators": {
+   "script": "b3c615d838a6e903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e:ef\ns:efs\nd:ed\nl:efsL\nnope:\n"
+   }
+  },
+  "builtin: test newer and older": {
+   "script": "72e24c5c5cd4f783",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nt\not\nef\n"
+   }
+  },
+  "builtin: test numeric operators": {
+   "script": "ed5bebf761387eb7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: x: integer expected\n"
+   },
+   "stdout": {
+    "text": "ok\nstatus=2\n"
+   }
+  },
+  "builtin: test string operators": {
+   "script": "16cb5ede177a249e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z\nn\neq\nne\nlt\ngt\n"
+   }
+  },
+  "builtin: test syntax errors": {
+   "script": "e9a48ef8365cd253",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: 1: unary operator expected\nbash: line 1: [: b: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\nstatus=2\nstatus=1\n"
+   }
+  },
+  "builtin: times": {
+   "script": "91b09feb2487345c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "builtin: type -t forms": {
+   "script": "f2af6dec149c46d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "function\nbuiltin\nkeyword\nstatus=1\n"
+   }
+  },
+  "builtin: type output": {
+   "script": "6a72d2ecbd58333a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cd is a shell builtin\nif is a shell keyword\nf is a function\nf () \n{ \n    echo x\n}\n"
+   }
+  },
+  "builtin: typeset is declare": {
+   "script": "5c206becc466c16a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\ndeclare -i t=\"2\"\n"
+   }
+  },
+  "builtin: unset an array element": {
+   "script": "8583d589e383b82d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 0 2\n"
+   }
+  },
+  "builtin: unset variables and functions": {
+   "script": "92c5e30aa84cc498",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\nstatus=127\nstatus=0\n"
+   }
+  },
+  "builtin: while read loop": {
+   "script": "46ab2c8f0877d0b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a1\nb2\nc3\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

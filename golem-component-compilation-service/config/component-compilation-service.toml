@@ -1,5 +1,5 @@
 ## Generated from default config
-http_host = "0.0.0.0"
+bind_address = "0.0.0.0"
 http_port = 8084
 runtime_metrics_sampling_interval = "5s"
 
@@ -11,7 +11,14 @@ root = "../data/blob_storage"
 
 [compile_worker]
 connect_timeout = "10s"
+connection_pool_size = 4
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
+queue_capacity = 100
+upload_queue_capacity = 100
 
 [compile_worker.retries_on_unavailable]
 max_attempts = 3
@@ -101,7 +108,7 @@ without_time = false
 
 
 ## Generated from example config: with s3 blob storage and disabled compiled component service
-# http_host = "0.0.0.0"
+# bind_address = "0.0.0.0"
 # http_port = 8084
 # runtime_metrics_sampling_interval = "5s"
 #
@@ -113,7 +120,9 @@ without_time = false
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
 # custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
@@ -127,7 +136,14 @@ without_time = false
 #
 # [compile_worker]
 # connect_timeout = "10s"
+# connection_pool_size = 4
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_connection_age = "1m"
 # max_message_size = 33554432
+# queue_capacity = 100
+# upload_queue_capacity = 100
 #
 # [compile_worker.retries_on_unavailable]
 # max_attempts = 3

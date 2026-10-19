@@ -1,0 +1,104 @@
+# Operating Durable Stream Sessions
+
+This page covers service configuration, storage planning, and recovery for streaming agent invocations. A lost client connection or a service restart does not by itself cancel an invocation; stream progress is durable.
+
+For client operations, use [Exposing Durable Streams over HTTP](/v1.6/invoke/making-custom-apis/durable-streams) or [CLI streaming methods](/v1.6/invoke/cli#streaming-methods). For agent code that reads or writes a stream hosted by another service, see [External Durable Streams](/v1.6/develop/durable-streams).
+
+## Executor configuration
+
+Worker executors expose stream limits and recovery settings under `[durable_stream]`:
+
+```toml
+[durable_stream]
+external_batch_max_size = "8388608 B"
+lease_ttl = "1m"
+reconciliation_interval = "30s"
+reconciliation_batch_size = 256
+abandoned_prepare_after = "5m"
+
+[limits]
+live_stream_event_broadcast_capacity = 32
+```
+
+- `external_batch_max_size` limits one complete external Durable Streams read or append payload. It must be non-zero and defaults to 8 MiB.
+- `lease_ttl` and `abandoned_prepare_after` are fixed in protocol v1. They apply to prepared cross-agent attachments; active attachments do not expire or require renewal.
+- `reconciliation_interval` is the non-zero delay before retrying unfinished or failed recovery, not a periodic check of healthy attachments.
+- `reconciliation_batch_size` must be non-zero.
+- `live_stream_event_broadcast_capacity` sets the per-reader live buffer and must be between 1 and 1024 events.
+
+Other protocol-v1 limits are fixed: 16 MiB per logical value item, 1 MiB per packed-byte batch, 1024 streams per session, 256 newly discovered streams per value, recursive traversal depth 128, and 16 live readers per stream. A limit failure terminates or rejects the affected stream operation rather than silently truncating data.
+
+## Gateway configuration
+
+The worker service owns public HTTP request sizing, polling, admission, and fork limits:
+
+```toml
+[durable_streams]
+long_poll_timeout = "30s"
+max_append_body_bytes = 1048576
+
+[durable_streams.load]
+max_concurrent_readers_per_stream = 16
+max_concurrent_readers_per_node = 4096
+max_catch_up_requests_per_second_per_stream = 100
+max_append_requests_per_second_per_stream = 100
+
+[durable_streams.forks]
+max_forks_per_session = 128
+max_forks_per_second = 4
+max_copied_bytes = 67108864
+```
+
+| Setting | Scope and effect |
+| --- | --- |
+| `long_poll_timeout` | Maximum wait for one public long-poll request; an empty timeout returns `204`. |
+| `max_append_body_bytes` | Maximum HTTP append or fork-initialization body. Oversize returns `413`. JSON appends also have a fixed 4096-message limit. |
+| `load.max_concurrent_readers_per_stream` | Live long-poll/SSE readers admitted for one route and stream on one worker-service node. A route may override it from 1 through 16. |
+| `load.max_concurrent_readers_per_node` | Shared live-reader ceiling for the complete worker-service node. A route cannot override it. |
+| `load.max_catch_up_requests_per_second_per_stream` | Catch-up requests admitted per canonical stream on each node, in one-second windows. Routes resolving to the same stream share this budget. |
+| `load.max_append_requests_per_second_per_stream` | Append requests admitted for one route and stream on one node. A route may override it with a positive value. |
+| `forks.max_forks_per_session` | Durable source-session fork count; exhaustion returns `409`. |
+| `forks.max_forks_per_second` | Per-agent durable fork admission rate; exhaustion returns `429`. Zero disables admission with `409`. |
+| `forks.max_copied_bytes` | Maximum copied oplog prefix for one fork; exhaustion returns `413`. |
+
+Route overrides and gateway counters are local admission controls, not cluster-wide quotas. Two deployed routes that resolve to the same canonical stream have separate per-route reader and append accounting, but share the canonical stream's catch-up budget; every route also shares the node-wide reader ceiling. A request rejected by a route or node budget returns `429` with `Retry-After: 1`. Executor routing or shard unavailability returns `503` with `Retry-After`.
+
+Append admission runs before storage access, including for closed or deleted slots. An exhausted budget therefore returns `429` before checking those states. Appends do not consume the catch-up read budget.
+
+Fork count, rate, and copy-byte enforcement is durable and executor-side even though the values are supplied by worker-service configuration. See [Forking Durable Streams](/v1.6/invoke/making-custom-apis/durable-streams/forks) for client behavior and [Customizing Durable Stream Routes](/v1.6/invoke/making-custom-apis#customizing-durable-stream-routes) for route overrides.
+
+## Retained history and capacity
+
+Stream deletion, session cancellation, and expiry do not remove durable history. Golem has no configurable stream-retention horizon. Stream data, consumer progress, producer state, and deletion records remain until the owning agent data is deleted under the normal agent lifecycle.
+
+Plan storage for long-lived, high-volume streams and their forks. Each fork retains a copy of the logical prefix and adds independent continuation history. Deleting a stream URL or allowing a session to expire does not reclaim that storage. See [deletion](/v1.6/invoke/making-custom-apis/durable-streams#deleting-a-stream-url) and [expiry](/v1.6/invoke/making-custom-apis/durable-streams#expiry) for their effects on client access.
+
+## Diagnose stream failures
+
+Use the [durable stream metrics](/v1.6/operate/metrics#durable-stream-sessions), [gateway metrics](/v1.6/operate/metrics#worker-service), and [OTLP summaries](/v1.6/operate/metrics#otlp-plugin) to distinguish recovery, slow consumers, and admission failures.
+
+The `durable_stream.attachment.*` and `durable_stream.resume_attempt` OTLP spans carry attachment, stream, attempt, and epoch identifiers, but no stream values or credentials. See [Logs](/v1.6/operate/logs) for service tracing configuration and [Observability](/v1.6/develop/observability) for OTLP export.
+
+### Disconnected clients and slow readers
+
+1. Check producer operations for replay no-ops. Replays after a lost response are expected and must not create additional logical items.
+2. Check catch-up distance and consumer journal lag for readers recovering recorded history. Sustained live-reader backpressure indicates a slow attached reader.
+3. Reconnect a detached CLI client using its [saved checkpoint](/v1.6/invoke/cli#session-checkpoints-and-resume). Use takeover only when intentionally fencing a still-attached client. The CLI does not retry automatically.
+
+### Attachment recovery
+
+Cross-agent streams keep producer history available while a consumer needs it for replay or resume. A prepared attachment has a deadline, but expiry alone does not prove that the consumer disappeared. Active attachments remain valid without renewal; low prepared-lease headroom is not an active-reader timeout.
+
+Recovery runs when a producer loads, after committed session changes or stream terminals, and before deletion. Only unfinished or failed work gets a timed retry. Increasing `reconciliation_interval` changes that retry delay; waiting for a periodic check of healthy attachments will not resolve a dependency.
+
+### Blocked agent deletion
+
+Golem refuses to delete a producer while a consumer may still need its history. A blocked deletion reports the dependent attachment, stream, epoch, consumer identity, and consumer incarnation fingerprint.
+
+1. Confirm that producer and consumer use durable agent mode and that their current incarnation fingerprints match the diagnostics.
+2. Let the consumer durably record the stream terminal, or confirm that the dependent consumer was deleted or recreated.
+3. Retry deletion. Deletion itself reconciles dependencies. Investigate `probe_error`, `journal_error`, or `write_error` reconciliation outcomes before taking further action.
+
+Cascade deletion can make unread source data unavailable to a consumer. It records progress durably, so retrying resumes the operation rather than starting over.
+
+Never force-delete the oplog, edit stream-related entries, or use fork/revert to bypass a dependency check. Stream identities, offsets, and recovery evidence depend on the committed history.

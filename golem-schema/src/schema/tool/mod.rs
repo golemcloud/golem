@@ -39,7 +39,12 @@ use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 use serde::{Deserialize, Serialize};
 
+pub mod argv;
 pub mod canonical;
+pub mod compatibility;
+pub mod constraints;
+mod process_exit_status;
+pub use process_exit_status::ProcessExitStatus;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;
@@ -96,6 +101,7 @@ impl CommandIndex {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Tool {
     pub version: String,
+    pub requires_filesystem: bool,
     pub commands: CommandTree,
     /// Named-type registry shared by this tool's commands. Typed positions in
     /// the command tree may reference these definitions via
@@ -114,6 +120,69 @@ impl Tool {
     pub fn name(&self) -> Option<&str> {
         self.commands.nodes.first().map(|node| node.name.as_str())
     }
+}
+
+/// Metadata describing a tool middleware component.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct ToolMiddleware {
+    pub name: String,
+    pub version: String,
+    pub aliases: Vec<String>,
+    pub doc: Doc,
+    pub scope: ToolMiddlewareScope,
+    pub parameter_schema: SchemaGraph,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum ToolMiddlewareScope {
+    Monomorphic(Box<MonomorphicToolMiddlewareScope>),
+    Universal,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct MonomorphicToolMiddlewareScope {
+    pub presented: Tool,
+    pub expected: Option<Tool>,
 }
 
 /// Flattened command hierarchy. Always non-empty; the root command is at index 0.
@@ -202,6 +271,7 @@ pub struct CommandBody {
     pub constraints: Vec<Constraint>,
     pub stdin: Option<StreamSpec>,
     pub stdout: Option<StreamSpec>,
+    pub stderr: Option<StreamSpec>,
     pub result: Option<ResultSpec>,
     pub errors: Vec<ErrorCase>,
     pub annotations: Option<CommandAnnotations>,
@@ -301,7 +371,9 @@ pub struct TailPositional {
     pub item_type: SchemaType,
     pub min: u32,
     pub max: Option<u32>,
-    /// Token required before tail items (e.g. `--` for `git log -- <paths>`).
+    /// Token required before tail items (e.g. `--` for `git log -- <paths>`). The argument parser
+    /// lets a verbatim `--` tail start without it when the command has no fixed positionals and
+    /// no subcommands.
     pub separator: Option<String>,
     /// If true, tokens after `separator` are not flag-parsed.
     pub verbatim: bool,

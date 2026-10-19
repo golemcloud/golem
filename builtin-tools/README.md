@@ -1,0 +1,294 @@
+# Built-in tools
+
+Built-in tools and middlewares are component sources built from this repository and provisioned
+at registry startup. Development uses local WASMs prepared by
+`cargo make ensure-builtin-artifacts`. Tagged releases publish immutable assets in
+[`golemcloud/golem-builtins`](https://github.com/golemcloud/golem-builtins).
+`BUILTIN_EXPORTS` in `golem-registry-service/src/services/builtin_tool_provisioner.rs` is the
+production export inventory; `builtin-artifacts.json` lists build tasks, source inputs, and outputs.
+The generated `builtin-artifacts.release.json` pins release versions and SHA-256 values.
+Server configuration is only for deployment-specific cache placement and source overrides;
+it does not duplicate the production release catalog.
+
+The filesystem component is implemented in Rust under `builtin-tools/filesystem-tools/`. The same
+component provides the `read-file`, `write-file`, `edit-file`, `ls`, and `grep` tools and the
+universal `path-policy` middleware.
+
+Audit, output-redaction, persistent-rate-limit, and human-approval middleware are test-only
+fixtures under `test-components/`, not built-in exports. They are not published or provisioned as
+built-ins and are not intended for production reuse.
+
+The JavaScript and TypeScript tools are implemented under `builtin-tools/js-ts-tools/`. The
+`javascript-tools` component provides `node`, `npm`, and `npx`; the `typescript-tools` component
+provides `tsc`. `node` provides JavaScript execution through Golem's QuickJS-based Node-compatible
+runtime. The upstream npm and tsc executable graphs are Rollup-bundled and embedded in their
+components; they do not provision an npm or TypeScript package tree into the invoking agent.
+TypeScript's standard-library declarations and npm's manual pages are embedded as private read-only
+data. Both components must use the `optimized` TypeScript preset so Wizer pre-initializes their
+provider state.
+
+## Adding a component-implemented built-in export
+
+The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
+`builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
+read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
+access. The source exports `web-fetch@0.1.3`; its new immutable component release awaits
+authorized publication. The artifact lock still pins the previous release. Its timeout,
+response-size, and redirect limits are optional invocation arguments, not
+deployment configuration. HTML is returned as decoded source unless the invocation enables
+conversion to readable text.
+
+The Bash tool is implemented under `builtin-tools/bash/` and built with the release preset of
+`builtin-tools/bash/golem.yaml` into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
+provides the `bash` tool; see [its contract and examples](bash/README.md).
+
+The Python tool source is implemented under `builtin-tools/python/` and built into
+`builtin-tools/python.wasm` with `cargo make build-python-tool`. It embeds RustPython and its
+frozen standard library, streams invocation I/O, and uses the explicitly granted owner
+filesystem. See [its CLI contract and limitations](python/README.md). Its descriptor and artifact
+pin use the same registry provisioning path as the other built-ins. The new releases remain
+unpublished during team review; CI artifact downloads stay red until publication.
+
+The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
+`init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
+plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
+The source exports `git@0.1.15`; its new immutable component release awaits authorized
+publication. The artifact lock still pins the previous release.
+All network commands inject the component's WASI HTTP adapter; they do not use sockets.
+Called from a shell, commands start in the shell's current directory; other callers start at `/`
+unless they pass `--cwd`. Repeated `-C` options resolve from that starting directory in order.
+
+Remote configuration includes separate fetch/push URLs and refspecs, branch upstreams,
+`remote.pushDefault`, `push.default`, and applicable pull/fetch/merge settings. Credentials use an
+invocation-scoped opaque `authentication` secret with `{origin, username?, password?, bearer?,
+headers?}`; `origin` is the HTTP(S) origin authorized to receive those credentials. They are not
+stored in repository config. Redirects to another origin do not forward credentials. SSH,
+`git://`, subprocess credential helpers, interactive prompts, editors, hooks, signing, submodules,
+linked worktrees, stash, reset/clean, revision-expression syntax, and pathspec magic are unsupported.
+
+Clone/fetch support configured refspecs, branch selection, shallow history, tags and pruning.
+Each selected ref is fetched through the released library into a disposable repository. Reachable
+objects and shallow boundaries are validated and objects are imported before application refs and
+`FETCH_HEAD` are published. This copies the existing object database and may issue several fetch
+requests instead of one native Git exchange. A changed advertised ref fails without publication.
+An empty remote's unborn default branch is not discoverable with this released API: the clone uses
+`master` without an upstream rather than learning the remote's unborn branch. Servers that do not
+support sideband upload-pack can stall in the released parser; there is no guaranteed fail-fast
+error or parser-level cancellation. Unsolicited shallow lines without a depth request are ignored.
+
+Push supports one ref, renamed destinations, deletion, explicit force, and force-with-lease.
+Multi-ref selections, matching push and `--atomic` fail explicitly before sending; they are not
+emulated by a sequence of pushes. `--tags` and `--all` work only when selecting at most one ref.
+Qualified destinations fail closed if the released library resolves a different, nested ref.
+Deletion requires an existing local HEAD. Separate configured push URLs are contacted sequentially
+and are not atomic with each other. A lease uses its explicit expected OID
+or the existing mapped tracking ref; it never fetches to refresh that expectation. A server may
+accept a push before its response is lost: that error is ambiguous and must be reconciled with
+remote state, not blindly retried. No exactly-once guarantee is made for an external Git server.
+Successful single-ref status is required before local tracking/upstream writes, but released
+receive-pack parsing tolerates some duplicate, truncated or trailing status records. An invalid
+unfinished response can remain pending until the server closes it; strict report validation and
+fail-fast cleanup are not claimed. The released parser requires `side-band-64k` receive-pack
+status. A server that returns protocol-valid plain report-status can accept the push before the
+tool reports a parsing error. Reconcile that uncertain outcome with remote state before retrying.
+
+Pull resolves the upstream, fetches, and selects the explicit/configured ff, merge, or rebase
+strategy. Conflicted merges can be resolved with `add` and `commit` or `merge --continue`, or
+aborted with `merge --abort`. Linear rebase persists actual commit replay and supports
+`--continue`, `--skip`, and `--abort`. Rename-sensitive merges, multiple merge bases, octopus
+merges and replay of merge commits fail explicitly. A rename-sensitive replay can stop after rebase
+has installed the upstream tree; use `rebase --abort` to restore the original branch. Nonconflicting
+dirty changes are preserved; overlapping changes are rejected rather than overwritten.
+Text merge uses the released JavaScript `diff3` algorithm, not Git's merge algorithm. Rebase does
+not filter patch-equivalent commits using Git patch IDs: whitespace-equivalent upstream changes
+can stop with conflicts where native Git drops the commit. A non-empty commit whose replay leaves
+the tree unchanged is still dropped; originally empty commits are preserved. Conflict resolution
+and abort remain available in these cases.
+Checkout of paths after `--` restores from the index. Branch checkout rejects local changes it
+would overwrite. Diff output and computation have explicit limits and fail instead of truncating.
+
+Executable-file modes cannot currently be persisted across separate TypeScript runtime instances.
+Git operations fail closed when a `100755` entry is observable rather than silently changing it.
+Relative symlinks are supported. File-to-directory checkout transitions are also rejected because
+the pinned library cannot apply them safely.
+
+HTTP transfers use `wasm-rquickjs` 0.4.11's upstream Node HTTP unfinished-response cleanup fix,
+without an SDK generator patch. Golem records response data and EOF at actual guest-read
+consumption through Wasmtime's existing read observer, rather than at producer readiness.
+The real transfer tests cover authenticated pack transfer, replay of a completed clone,
+restart during a partial download, active cancellation and connection disposal, subsequent tool
+usability, and a push/clone roundtrip. A cancelled partial download publishes no application refs.
+An accepted push with a lost response returns an uncertain-outcome error without retransmission;
+replaying that completed error also performs no second push. These checks are not an exactly-once
+guarantee for an external Git server or comprehensive parity with native Git.
+
+### Git differential test prerequisites
+
+`cargo make prepare-git-differential-tests` builds the checksum-pinned native Git reference with
+HTTP support. On Debian/Ubuntu, install `build-essential`, `libcurl4-openssl-dev`, `libssl-dev`,
+`libexpat1-dev`, and `zlib1g-dev` first. Node.js and `tar` with xz support are also required.
+Do not disable curl to bypass missing headers: the differential suite uses Git's HTTP transport.
+The `git-network-probe` fixture imports the tool's source files, so its npm install also installs
+the sibling tool's locked dependencies before bundling; a warm tool `node_modules` is not required.
+
+## Adding a component-implemented built-in tool
+
+1. Add a standalone tool component source and build it through its Golem application manifest. Do
+   not invoke its language compiler directly.
+2. Add its logical artifact ID to `BuiltinExportDescriptor`; keep export metadata in the descriptor
+   and add the component name, output path, build task, and transitive inputs to
+   `builtin-artifacts.json`.
+3. Set `component_name`, `export_name`, `release_version`, and `kind` to the artifact's exported
+   metadata. Provisioning validates these values before writing anything.
+4. Add an independent build task and include it in `build-builtin-tools`. Validate the generated
+   WASM and run the registry provisioning tests.
+5. Verify `cargo make ensure-builtin-artifacts` and local provisioning. Development changes need
+   no publication. Follow [the release procedure](../BUILTIN_ARTIFACTS.md) for tagged releases.
+   Generated WASMs and release manifests are never committed.
+
+Provisioning is idempotent for identical bytes and an identical exact version. A published system
+release is protected and immutable. Every byte-changing component publication requires a new
+artifact version; a changed export definition or implementation also requires a new tool or
+middleware version. Unchanged published export coordinates remain attached to their original
+component revision. New component artifacts start at `0.0.1`. Until an artifact defines a separate
+compatibility policy, increment its patch version for every byte-changing publication. Artifact
+versions do not determine the versions of the tools or middlewares exported by the component.
+
+Component-implemented built-ins are grantable registry releases, not ambient tools. A consuming
+manifest must select each exact tool release under `tools.<name>.release` and each middleware
+release under `tools.middleware.<name>.release`. Native tools compiled into the host use separate
+registry/executor startup inventories and are ambient, so they have no top-level release
+declaration. See `golem-native-tool/README.md` for that path.
+
+The default tools are the exception: the CLI selects, grants and binds them for every deployment.
+An environment chooses them with `tools.defaults`: all of them by default, `[]` for none, or a
+list of names. `bash` is the only one; see `bash/README.md`.
+The list is `DEFAULT_TOOLS` in `golem-common/src/base_model/tool.rs`. An entry there must name a
+release that `BUILTIN_EXPORTS` provisions, at the same version.
+
+For example, this selects the built-in `read-file` release and makes it available to an agent:
+
+```yaml
+manifestVersion: 1.6.0
+
+app: filesystem-reader
+
+components:
+  example:filesystem-reader:
+    templates: rust
+    dir: .
+
+tools:
+  read-file:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: read-file
+      version: 0.4.0
+  middleware:
+    path-policy:
+      release:
+        account: builtin-tool-owner@golem.cloud
+        name: path-policy
+        version: 0.1.0
+
+environments:
+  local:
+    tools:
+      middleware:
+        - name: path-policy
+          version: 0.1.0
+          parameters:
+            base: /workspace
+            allowed_roots:
+              - path: project
+                operations: [read]
+          filesystemAccess: allowed
+
+agents:
+  FileReader:
+    tools:
+      read-file:
+        filesystemAccess: allowed
+```
+
+This assumes the component exports the `FileReader` agent and that its files are rooted under
+`/workspace`. The policy resolves relative invocation paths and relative allowed roots against
+`base`. Each root independently grants `read`, `write`, and/or `delete`; `read-file` and `ls` use
+`read`, `grep` uses `read`, `write-file` and `edit-file` use `write`, and `delete-file` uses
+`delete`. Unknown tool names pass through unchanged. Recognized filesystem tool names are accepted
+only at their root command and must have a string `path` argument.
+
+Both filesystem grants are intentional. The agent's `read-file` binding needs
+`filesystemAccess: allowed` so the leaf tool can read the owner filesystem. The `path-policy`
+middleware occurrence independently needs `filesystemAccess: allowed` so it can inspect existing
+path components and reject symbolic links. Without the middleware grant, protected calls fail
+closed with `path-policy-denied` before leaf dispatch because the policy cannot inspect the owner
+filesystem root.
+
+`ls` and `grep` intentionally discover paths below their explicit root argument. A middleware that
+allows such a call authorizes inspection of the selected subtree; include/exclude globs select
+results but are not an authorization boundary. The tools never follow symbolic links.
+
+The middleware normalizes `.` and `..` components without allowing traversal above the owner root,
+checks containment by path components, rejects backslashes and NUL bytes, and rejects any existing
+symbolic-link component, including a dangling final link. A write below a nonexistent suffix is
+allowed only when its nearest existing ancestor is link-free and the normalized target remains
+inside a write-enabled root. Allowed calls receive the normalized absolute path; denied calls
+return `path-policy-denied` before invoking the wrapped tool.
+
+This is argument-level policy for the named filesystem tools, not a filesystem sandbox. It does
+not restrict arbitrary filesystem behavior inside a wrapped tool and does not prevent another
+component with its own filesystem capability from accessing paths directly.
+This assumes the component exports the `FileReader` agent. The built-in filesystem tools require
+filesystem access but provision no files of their own. This example explicitly grants
+`filesystemAccess: allowed` on the agent binding; if it is omitted and no grant is inherited,
+deployment fails with an error requesting that permission. This fails closed rather than exposing
+the agent's filesystem.
+
+The Git tool uses the same exact-release selection and explicit filesystem grant:
+
+```yaml
+tools:
+  git:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: git
+      version: 0.1.15
+
+agents:
+  CodingAgent:
+    tools:
+      git:
+        filesystemAccess: allowed
+```
+
+Examples of the supported command surface include `git -C workspace status --short`,
+`git -C workspace diff --cached -- src/main.ts`, `git -C workspace add -- src/main.ts`,
+`git -C workspace commit -m "Fix validation"`, and
+`git -C workspace checkout -b fix-validation`. Repeated `-C` values are applied in order. Because
+the shared tool command model requires canonical long names, short-only Git options also have
+descriptive long forms such as `--working-directory` and `--new-branch`; inherited `-C` is accepted
+after a subcommand as well as before it.
+
+Git starts in the directory given by `--cwd`, and the first `-C` resolves from there. A shell
+supplies it: in a Bash script or a `golem ssh` session, `cd workspace` followed by
+`git status --short` works without `-C`, because the option declares the `PWD` variable. Any other
+caller starts at `/` unless it passes `--cwd`, and a caller that builds the input record directly
+sets its `cwd` field.
+
+The `web-fetch` release is selected and bound in the same way, but requires no filesystem grant:
+
+```yaml
+tools:
+  web-fetch:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: web-fetch
+      version: 0.1.3
+
+agents:
+  ResearchAgent:
+    tools:
+      web-fetch: {}
+```

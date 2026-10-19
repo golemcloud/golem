@@ -641,7 +641,7 @@ function gitFixture(): ExtendedToolType {
 
 describe('extended tool WIT encoding', () => {
   it('builds canonical tool metadata through the public surface', () => {
-    const definition = toolDefinition('grep')
+    const definition = toolDefinition('grep', { requiresFilesystem: true })
       .version('2.0.0')
       .doc({ summary: 'Search files', description: 'Search files for patterns.' })
       .aliases('egrep')
@@ -696,6 +696,7 @@ describe('extended tool WIT encoding', () => {
 
     const encoded = encodeTool(getExtendedToolDefinition(definition));
     expect(encoded.version).toBe('2.0.0');
+    expect(encoded.requiresFilesystem).toBe(true);
     expect(encoded.commands.nodes.map((node) => node.name)).toEqual(['grep', 'replace']);
     expect(encoded.commands.nodes[0]).toMatchObject({
       aliases: ['egrep'],

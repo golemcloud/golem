@@ -6,13 +6,13 @@
 
 export const meta = {
   description:
-    "Founded in 2023, Golem Cloud builds the durable agent runtime — an open-source platform for stateful, fault-tolerant AI agents and workflows.",
+    "Founded in 2023, Golem Cloud builds the durable runtime for agents, their tools, and their artifacts — open source (BUSL‑1.1 → Apache‑2.0), for stateful, fault-tolerant AI agents and workflows.",
 };
 
 export const hero = {
   eyebrow: "About",
   title: "Golem Cloud",
-  lead: "Golem makes durable agents the default. State survives crashes. Tools execute exactly once. Policies are runtime guarantees, not application code.",
+  lead: "Golem makes durable agents the default — with the tools and artifacts they need. State survives crashes. Tools execute exactly once. Policies are runtime guarantees, not application code.",
 };
 
 export interface Founder {
@@ -45,17 +45,20 @@ export const sections: AboutSection[] = [
 
     <p>
       As the Golem team tirelessly worked on improving usability, John recognized that the key strengths of 
-      Golem &mdash; transparent durable execution, entity-orientation, formally-verified and cheap 
-      sandboxing &mdash; all made Golem an incredibly compelling package to developers building agentic
+      Golem &mdash; transparent durable execution, entity-orientation, and cheap, capability-based
+      WebAssembly sandboxing &mdash; all made Golem an incredibly compelling package to developers building agentic
       applications. So in May 2025, Golem began specializing for AI applications, leaving the broader 
       durable execution market to well-established and mature solutions like Temporal.
     </p>
 
     <p>
-      Today, the Golem runtime is open-source under BUSL-1.1, transitioning to Apache 2. The Cloud service 
-      remains in Developer
-      Preview; paid general availability with formal SLAs and data-retention guarantees is planned for
-      Q3 2026.
+      In October 2026, Golem 1.6 completed that pivot: agents, their tools, and their artifacts on one
+      runtime &mdash; enough to run a full coding agent entirely in Golem.
+    </p>
+
+    <p>
+      Today, the Golem runtime is open source under BUSL‑1.1, transitioning to Apache 2.0. Golem Cloud
+      is in Developer Preview, with paid plans launching in the coming weeks.
     </p>`,
   },
   {
@@ -83,7 +86,7 @@ export const sections: AboutSection[] = [
     heading: "The team",
     bodyHtml: `<p>
       We're a small, globally distributed team building Golem in the open. The runtime is written
-      primarily in Rust; the SDKs span TypeScript, Rust, Scala, and MoonBit; and contributions come
+      primarily in Rust; the SDKs span TypeScript, Effect, Rust, Go, Scala, and MoonBit; and contributions come
       from developers across more than a dozen countries through <a
         href="https://github.com/golemcloud/golem"
         target="_blank"

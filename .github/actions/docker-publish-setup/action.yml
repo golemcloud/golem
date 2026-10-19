@@ -7,6 +7,10 @@ inputs:
   dockerhub-password:
     description: 'Docker Hub password'
     required: true
+  artifact-pattern:
+    description: 'Pattern of the artifacts that hold the executables to put in the images; empty for images without executables'
+    required: false
+    default: 'docker-targets-build-*'
 runs:
   using: 'composite'
   steps:
@@ -17,12 +21,14 @@ runs:
       shell: bash
       run: echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
     - name: Download Targets
+      if: inputs.artifact-pattern != ''
       uses: actions/download-artifact@v8
       with:
-        pattern: docker-targets-build-*
+        pattern: ${{ inputs.artifact-pattern }}
         path: target
         merge-multiple: true
     - name: Extract Targets
+      if: inputs.artifact-pattern != ''
       shell: bash
       run: |
         ls -R target

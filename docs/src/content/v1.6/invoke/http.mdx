@@ -1,0 +1,132 @@
+import { Callout } from "nextra/components"
+
+# Invoke through the REST API
+
+The Golem REST API has endpoints for invoking agent methods and native tools. See the [Agent REST API reference](/v1.6/rest-api/agent) for every field.
+These endpoints are direct, low-level APIs: arguments and results travel in the REST wire form described below. To expose agents to the world, define [custom HTTP APIs](/v1.6/invoke/making-custom-apis), or call them from a program through a [bridge library](/v1.6/invoke/bridge-libraries), which builds these requests for you.
+
+## Invoke an agent
+
+```
+POST /v1/agents/invoke-agent
+```
+
+The request body selects the agent by its application, environment, agent type and constructor parameters, and names the method to call:
+
+```json
+{
+  "appName": "my-app",
+  "envName": "local",
+  "agentTypeName": "CounterAgent",
+  "parameters": {"kind": "record", "value": {"fields": [{"kind": "string", "value": "my-counter"}]}},
+  "methodName": "increment",
+  "methodParameters": {"kind": "record", "value": {"fields": [{"kind": "u32", "value": 5}]}},
+  "mode": "await"
+}
+```
+
+- `parameters` are the constructor parameters and `methodParameters` the method parameters, each a record of the parameter values in declaration order.
+- `mode` is `await` to wait for the method to finish, or `schedule` to enqueue the invocation and return at once. With `schedule`, `scheduleAt` (an RFC 3339 date-time) delays the invocation.
+- `idempotencyKey` (or the `Idempotency-Key` header) identifies the invocation. Golem runs an invocation with the same key once. Without a key, Golem generates one.
+- `phantomId` selects a phantom agent instance, and `config` overrides local agent configuration.
+
+The response carries the `agentId`, the `idempotencyKey` and, for `await`, the `result`: the method's result together with its schema graph.
+
+## Implicit agent creation
+
+If the agent does not exist, the invocation creates it.
+
+## Cancel a pending invocation
+
+Golem runs the invocations of one agent in sequence, so an invocation that has not started yet can be cancelled, identified by its idempotency key:
+
+```
+DELETE /v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}
+```
+
+## Invoke a native tool
+
+```
+POST /v1/agents/invoke-tool
+```
+
+Select exactly one tool owner:
+
+- `agentId`: an existing agent, expressed as an object with `componentId` and `agentId` fields. The tool runs with that agent's state and bindings.
+- `componentId`: a deployed component's UUID. Golem creates a fresh ephemeral owner using the component's baseline bindings. It runs component initializers but does not construct an agent.
+
+The tool must be bound to the selected owner. Declaring a tool implementation alone does not authorize invocation. Both endpoints require a bearer token and the permissions for the requested operation.
+
+For example, suppose the bound `search` tool has a `query` command with a required `query` string positional argument and a `limit` option of type `u32` with a default. It has no other inputs or inherited options. Replace the component UUID below with your deployed component's ID:
+
+```json
+{
+  "appName": "my-app",
+  "envName": "local",
+  "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+  "toolName": "search",
+  "commandPath": ["query"],
+  "input": {
+    "graph": {
+      "root": {
+        "kind": "record",
+        "value": {
+          "fields": [
+            {"name": "query", "body": {"kind": "string", "value": {}}},
+            {"name": "limit", "body": {"kind": "u32", "value": {}}}
+          ]
+        }
+      }
+    },
+    "value": {
+      "kind": "record",
+      "value": {
+        "fields": [
+          {"kind": "string", "value": "durable streams"},
+          {"kind": "u32", "value": 10}
+        ]
+      }
+    }
+  },
+  "mode": "await"
+}
+```
+
+### Describe the tool and encode its input
+
+Use `POST /v1/agents/describe-tool` with `appName`, `envName`, `toolName`, and the same owner selector to get the effective deployed definition, including middleware. `commandPath` selects subcommands without the tool name; use `[]` for the root command.
+
+Unlike agent method parameters, a tool's `input` contains both a schema `graph` and a `value`. The input is one flat record: inherited global options and flags come first, followed by positional arguments, the tail positional list, command options, and command flags. Preserve declaration order within each group. The graph must include any referenced type definitions.
+
+Supply all fields, including defaults and absent optional values. An optional scalar option without a default uses an `option` value, even when supplied. A command with no inputs still needs a typed empty record for `await` or `schedule`. Do not send CLI argument strings or a plain JSON object such as `{"query": "durable streams", "limit": 10}`.
+
+### Invocation modes and results
+
+- `await` waits for the tool to complete.
+- `schedule` enqueues the invocation and returns without waiting. Set `scheduleAt` to an RFC 3339 date-time to delay it.
+- `lookup` observes an existing invocation without starting it. Supply its `idempotencyKey` and the same owner, tool, and command path, but omit `input` and `scheduleAt`.
+
+Use `idempotencyKey` or the `Idempotency-Key` header to identify the invocation. The response carries `agentId` and `idempotencyKey`. A completed tool result has `type: "Success"` with an optional typed `result`, or `type: "Failure"` with an `error`. Check this discriminator: a tool failure is not necessarily an HTTP error. A scheduled or pending invocation can have no result yet.
+
+This endpoint does not attach byte stdin, stdout, or stderr. Use the [streaming invocation protocol](/v1.6/stream-session-public-protocol-v1) for those streams, or the [CLI](/v1.6/invoke/cli#byte-streams-and-invocation-controls).
+
+## The REST wire form
+
+Every value is a JSON object with a `kind` and a `value`:
+
+| Kind | Example |
+|------|---------|
+| `bool`, `u8` … `u32`, `s8` … `s32`, `f32`, `f64` | `{"kind": "u32", "value": 5}` |
+| `u64`, `s64` | `{"kind": "s64", "value": "9007199254740993"}` (a string, so no precision is lost) |
+| NaN and the infinities | `{"kind": "f64", "value": {"$float": "nan"}}`, with `positive-infinity` and `negative-infinity` |
+| `string` | `{"kind": "string", "value": "Golem"}` |
+| `record` | `{"kind": "record", "value": {"fields": [{"kind": "u8", "value": 1}, {"kind": "string", "value": "x"}]}}` |
+| `variant` | `{"kind": "variant", "value": {"case": 2, "payload": {"kind": "string", "value": "payload"}}}` |
+| `map` | `{"kind": "map", "value": {"entries": [[{"kind": "string", "value": "key"}, {"kind": "u8", "value": 1}]]}}` |
+| `result` | `{"kind": "result", "value": {"tag": "err", "value": {"kind": "string", "value": "failed"}}}` |
+
+<Callout type="info">
+    The file `test-data/rest-wire-form/v1.json` in the Golem repository lists a wire-form example of every kind, and the values that must be rejected.
+</Callout>
+
+For agent methods, the agent type's metadata supplies the parameter and result schemas. Read it with `golem agent-type get`, or through the REST API. Tool inputs and typed results carry their schema in the `graph` field alongside the encoded `value`.

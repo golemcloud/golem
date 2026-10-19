@@ -27,7 +27,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-mark-read-only-ts` | Marking methods `readOnly` for a side-effect-free guarantee and result caching |
 | `golem-add-config-ts` | Adding typed configuration to a TypeScript agent |
 | `golem-add-secret-ts` | Adding secrets (`s.secret`, `Secret<T>`) to TypeScript agents |
-| `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) with `clientFor` |
+| `golem-call-another-agent-ts` | Calling another agent and awaiting the result over RPC through a definition client |
+| `golem-agent-reflection` | Choosing reflection levels and identity lookup behavior |
+| `golem-agent-reflection-ts` | Discovering and calling agents through runtime reflection |
 | `golem-call-from-external-ts` | Calling agents from external Node.js apps using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result (`.trigger`) |
 | `golem-parallel-workers-ts` | Fan out work to multiple parallel agents and collect results |
@@ -36,7 +38,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
 | `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
-| `golem-atomic-block-ts` | Atomic blocks and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -48,6 +49,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-custom-snapshot-ts` | Enabling snapshotting and custom snapshot save/load functions |
 | `golem-retry-policies-ts` | Configuring semantic retry policies |
 | `golem-quota-ts` | Adding resource quotas (rate limiting, capacity, concurrency) |
+| `golem-permission-card-ts` | Managing permission cards: wallet, derive, inspect, revoke, install, and scope cards on RPC calls |
 | `golem-add-postgres-ts` | Connecting to PostgreSQL with `golem:rdbms/postgres` |
 | `golem-add-mysql-ts` | Connecting to MySQL with `golem:rdbms/mysql` |
 | `golem-add-ignite-ts` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` |
@@ -100,9 +102,9 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 ## Durability & Automatic Retries
 
-Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `while` retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter) applies when no user-defined policy matches.
+Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retried transparently: outgoing HTTP requests (`fetch`), RPC calls between agents, database / storage calls (`golem:rdbms/*`, keyvalue, blobstore), and thrown errors at the top of a handler (the worker is restarted and the invocation is replayed from the oplog, previously-recorded side effects skipped).
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 
@@ -254,15 +256,13 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-`clientFor(Def)` returns a factory; call it with an id record to get a typed proxy, or use `factory.newPhantom(id)` to create a phantom and return `{ client, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
+Every agent definition exposes a `.client` factory. Use `.get(id)` for a durable agent, `.getPhantom(id, phantomId)` for a known phantom, or `.newPhantom(id)` to create a phantom and return `{ client, agentId, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
 
 ```typescript
-import { clientFor } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
-const counter = clientFor(Counter);
-const next = await counter({ name: 'c1' }).add({ by: 5 });
-counter({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
+const next = await Counter.client.get({ name: 'c1' }).add({ by: 5 });
+Counter.client.get({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
 ```
 
 ## Snapshotting
@@ -273,17 +273,24 @@ Opt in with the `snapshotting` option on `defineAgent`. Give it `{ policy, state
 snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 5 } },
 ```
 
-Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. A bare policy without `state` falls back to reflective JSON serialization of the whole state. For full control over the bytes, supply a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it). See `golem-custom-snapshot-ts`.
+Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. An enabled policy without `state` needs a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it); without the block, the registration of the agent fails. With `state`, a `snapshot` block with both functions gives full control over the bytes. See `golem-custom-snapshot-ts`.
 
 ## Durability Primitives
 
 Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
-- `atomically(fn)` — run a region that commits on success and rolls back + retries on a thrown error.
-- `checkpoint()` — `cp.runOrRevert(() => Result.ok/err(...))` returns the ok value or reverts (uncatchable) the invocation.
 - `durable(spec, request, body)` — run a non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy.
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.
+
+**Custom durability is sequential-only.** `durable` supports properly nested calls and an async
+body that awaits host calls when no unrelated guest work runs during the wait. Do not overlap it
+with other promises or callbacks, including ordinary host calls: sibling effects can acquire the
+wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably detected.
+Await each nested operation; do not detach work. Stop and join outstanding work before the body
+exits, including on failure. `Promise.all` rejection does not join surviving siblings, and joining
+at the end does not make concurrent custom operations supported. Ordinary built-in durability is
+not subject to this restriction when no custom operation is active.
 
 ## Available Libraries
 

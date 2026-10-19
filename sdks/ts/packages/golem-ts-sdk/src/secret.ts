@@ -18,10 +18,10 @@
 // and `toJSON()` throws so the handle can never be accidentally serialized into
 // a log line or a snapshot.
 
-import { getConfigValue } from 'golem:agent/host@2.0.0';
-import { reveal } from 'golem:secrets/reveal@0.1.0';
-import { SchemaValue, schemaGraphToWit, schemaValueFromWit } from './internal/schema-model';
-import type { ConfigDeclaration } from './config';
+import type { Secret as RawSecret } from 'golem:core/types@2.0.0';
+
+type SecretHandleProvider = <R>(use: (handle: RawSecret) => R) => R;
+const handleProviders = new WeakMap<Secret<unknown>, SecretHandleProvider>();
 
 /**
  * A lazy, log-safe handle over a `secret<inner>` config field. Obtained from
@@ -35,7 +35,12 @@ import type { ConfigDeclaration } from './config';
  *   the whole config object) can never leak the plaintext.
  */
 export class Secret<T> {
-  constructor(private readonly declaration: ConfigDeclaration) {}
+  constructor(
+    private readonly read: () => T,
+    withHandle?: SecretHandleProvider,
+  ) {
+    if (withHandle !== undefined) handleProviders.set(this, withHandle);
+  }
 
   /**
    * Reveal and decode the current plaintext value.
@@ -48,18 +53,7 @@ export class Secret<T> {
    * plain Node), so it is exercised at invocation time, never at import time.
    */
   get(): T {
-    const d = this.declaration;
-    const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
-    const sv = schemaValueFromWit(tree);
-    if (sv.tag !== 'secret') {
-      throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
-    }
-    const handle = (sv as Extract<SchemaValue, { tag: 'secret' }>).handle;
-    const revealedTree = handle.withHandle((raw) => reveal(raw, schemaGraphToWit(d.codec.graph)));
-    if (revealedTree === undefined) {
-      throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
-    }
-    return d.codec.fromValue(schemaValueFromWit(revealedTree)) as T;
+    return this.read();
   }
 
   /** Refuse serialization so secrets never leak through logs / JSON / snapshots. */
@@ -68,4 +62,13 @@ export class Secret<T> {
       'Secret values are not serializable; call .get() to read the plaintext (and avoid logging it)',
     );
   }
+}
+
+export function withConfigSecretHandle<R>(
+  secret: Secret<unknown>,
+  use: (handle: RawSecret) => R,
+): R {
+  const provider = handleProviders.get(secret);
+  if (provider === undefined) throw new TypeError('Invalid config Secret');
+  return provider(use);
 }

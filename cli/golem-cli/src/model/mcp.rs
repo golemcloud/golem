@@ -13,14 +13,277 @@
 // limitations under the License.
 
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::ComponentName;
+use golem_common::model::tool::ToolName;
 use std::collections::BTreeMap;
+
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
+use crate::model::text_format::{FieldsBuilder, MessageWithFields, format_message_highlight};
+use serde_derive::Serialize;
+use std::fmt::{Debug, Formatter};
 
 #[derive(Clone, Debug)]
 pub struct McpDeploymentDeployProperties {
     pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+    pub tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpDeploymentToolOptions {
+    pub owner_component: ComponentName,
+    pub security_scheme: Option<String>,
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
+}
+
+impl McpDeploymentToolOptions {
+    pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentToolOptions {
+        golem_common::model::diff::McpDeploymentToolOptions {
+            owner_component: self.owner_component.0.clone(),
+            security_scheme: self.security_scheme.clone(),
+            include: self.include.clone(),
+            exclude: self.exclude.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct McpImportToolsView(pub McpImportTools);
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportTools {
+    pub environment_id: uuid::Uuid,
+    pub deployment_revision: u64,
+    pub import: Option<String>,
+    pub protocol_version: String,
+    pub tools: Vec<golem_client::model::McpImportedTool>,
+    pub diagnostics: Vec<golem_client::model::McpImportDiagnostic>,
+}
+
+impl From<(golem_client::model::McpImportTools, Option<String>)> for McpImportTools {
+    fn from((value, import): (golem_client::model::McpImportTools, Option<String>)) -> Self {
+        Self {
+            environment_id: value.environment_id,
+            deployment_revision: value.deployment_revision,
+            import,
+            protocol_version: value.protocol_version,
+            tools: value.tools,
+            diagnostics: value.diagnostics,
+        }
+    }
+}
+
+impl StructuredOutput for McpImportToolsView {
+    const KIND: &'static str = "api.mcp-import.tools";
+}
+
+impl Masked for McpImportToolsView {}
+
+impl MessageWithFields for McpImportToolsView {
+    fn message(&self) -> String {
+        "MCP import tools (before native and earlier-import precedence)".into()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields
+            .field("Environment ID", &self.0.environment_id)
+            .field("Deployment revision", &self.0.deployment_revision)
+            .field(
+                "Import",
+                &self.0.import.as_deref().unwrap_or("Unnamed MCP import"),
+            )
+            .field("Protocol version", &self.0.protocol_version)
+            .field(
+                "Tools",
+                &self
+                    .0
+                    .tools
+                    .iter()
+                    .filter_map(|tool| tool.definition.name())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        for diagnostic in &self.0.diagnostics {
+            fields.field(
+                "Warning",
+                &format!("{}: {}", diagnostic.upstream_name, diagnostic.reason),
+            );
+        }
+        fields.build()
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportAuthorization {
+    pub authorization_url: String,
+    pub import: Option<String>,
+    pub deployment_revision: Option<u64>,
+}
+
+impl From<(golem_client::model::McpImportAuthorization, Option<String>)>
+    for McpImportAuthorization
+{
+    fn from(
+        (value, import): (golem_client::model::McpImportAuthorization, Option<String>),
+    ) -> Self {
+        Self {
+            authorization_url: value.authorization_url,
+            import,
+            deployment_revision: Some(value.deployment_revision),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportOAuthStatus {
+    pub environment_id: uuid::Uuid,
+    pub import: Option<String>,
+    pub deployment_revision: Option<u64>,
+    pub security_scheme: String,
+    pub status: String,
+}
+
+impl From<(golem_client::model::McpImportOAuthStatus, Option<String>)> for McpImportOAuthStatus {
+    fn from((value, import): (golem_client::model::McpImportOAuthStatus, Option<String>)) -> Self {
+        Self {
+            environment_id: value.environment_id,
+            import,
+            deployment_revision: Some(value.deployment_revision),
+            security_scheme: value.security_scheme,
+            status: value.status,
+        }
+    }
+}
+
+impl McpImportOAuthStatus {
+    pub fn declared(
+        value: golem_client::model::DeclaredMcpImportOAuthStatus,
+        import: Option<String>,
+    ) -> Self {
+        Self {
+            environment_id: value.environment_id,
+            import,
+            deployment_revision: None,
+            security_scheme: value.security_scheme,
+            status: value.status,
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct McpImportAuthorizeView(pub McpImportAuthorization);
+
+impl Debug for McpImportAuthorizeView {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("McpImportAuthorizeView([REDACTED])")
+    }
+}
+
+impl Masked for McpImportAuthorizeView {}
+
+impl MessageWithFields for McpImportAuthorizeView {
+    fn message(&self) -> String {
+        "MCP import authorization started".into()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        let target = self
+            .0
+            .deployment_revision
+            .map(|revision| format!("--revision {revision}"))
+            .unwrap_or_else(|| "--manifest".into());
+        fields
+            .field("Authorization URL", &self.0.authorization_url)
+            .field(
+                "Complete with",
+                &format!(
+                    "golem api mcp-import complete {} {target} '<callback-url>'",
+                    shlex::try_quote(self.0.import.as_deref().unwrap_or("<import-url>"))
+                        .expect("validated import name or placeholder")
+                ),
+            );
+        if self.0.import.is_none() {
+            fields.field(
+                "Import",
+                &"Unnamed MCP import; replace <import-url> with the original exact URL",
+            );
+        }
+        fields.build()
+    }
+}
+
+impl StructuredOutput for McpImportAuthorizeView {
+    const KIND: &'static str = "api.mcp-import.authorize";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct McpImportCompleteView(pub McpImportOAuthStatus);
+
+impl StructuredOutput for McpImportCompleteView {
+    const KIND: &'static str = "api.mcp-import.complete";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct McpImportStatusView(pub McpImportOAuthStatus);
+
+impl StructuredOutput for McpImportStatusView {
+    const KIND: &'static str = "api.mcp-import.status";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct McpImportDisconnectView(pub McpImportOAuthStatus);
+
+impl StructuredOutput for McpImportDisconnectView {
+    const KIND: &'static str = "api.mcp-import.disconnect";
+}
+
+macro_rules! mcp_import_status_view {
+    ($name:ident, $message:literal) => {
+        impl Masked for $name {}
+
+        impl MessageWithFields for $name {
+            fn message(&self) -> String {
+                $message.into()
+            }
+
+            fn fields(&self) -> Vec<(String, String)> {
+                let mut fields = FieldsBuilder::new();
+                fields
+                    .field("Environment ID", &self.0.environment_id)
+                    .field(
+                        "Target",
+                        &self
+                            .0
+                            .deployment_revision
+                            .map(|revision| format!("Deployment {revision}"))
+                            .unwrap_or_else(|| "Manifest declaration".into()),
+                    )
+                    .field(
+                        "Import",
+                        &self.0.import.as_deref().unwrap_or("Unnamed MCP import"),
+                    )
+                    .field("Security scheme", &self.0.security_scheme)
+                    .fmt_field("Status", &self.0.status, format_message_highlight);
+                fields.build()
+            }
+        }
+    };
+}
+
+mcp_import_status_view!(McpImportCompleteView, "MCP import authorization completed");
+mcp_import_status_view!(McpImportStatusView, "MCP import authorization status");
+mcp_import_status_view!(
+    McpImportDisconnectView,
+    "MCP import authorization disconnected"
+);
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct McpDeploymentAgentOptions {
     pub security_scheme: Option<String>,
 }
@@ -29,6 +292,45 @@ impl McpDeploymentAgentOptions {
     pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentAgentOptions {
         golem_common::model::diff::McpDeploymentAgentOptions {
             security_scheme: self.security_scheme.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn mcp_authorize_completion_command_preserves_target() {
+        for (revision, expected) in [(None, "--manifest"), (Some(42), "--revision 42")] {
+            let view = McpImportAuthorizeView(McpImportAuthorization {
+                authorization_url: "https://provider.example/authorize?state=private".into(),
+                import: Some("catalog".into()),
+                deployment_revision: revision,
+            });
+            let fields = view.fields();
+            assert_eq!(
+                fields[1].1,
+                format!("golem api mcp-import complete catalog {expected} '<callback-url>'")
+            );
+            assert!(!format!("{view:?}").contains("private"));
+            let value = serde_json::to_value(&view).unwrap();
+            assert_eq!(value["deploymentRevision"], serde_json::json!(revision));
+            assert_eq!(value["import"], "catalog");
+            assert!(value.get("importIndex").is_none());
+            let url_view = McpImportAuthorizeView(McpImportAuthorization {
+                authorization_url: "https://provider.example/authorize".into(),
+                import: None,
+                deployment_revision: revision,
+            });
+            let tokens = shlex::split(&url_view.fields()[1].1).unwrap();
+            assert_eq!(tokens[4], "<import-url>");
+            assert_eq!(
+                serde_json::to_value(&url_view).unwrap()["import"],
+                serde_json::Value::Null
+            );
+            assert!(url_view.fields()[2].1.contains("original exact URL"));
         }
     }
 }

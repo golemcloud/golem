@@ -18,7 +18,7 @@ Snapshotting solves two distinct problems:
 
 ## Enabling Snapshotting
 
-Snapshotting must be enabled via the `snapshotting` attribute on `#[agent_definition]`. Without it, no snapshot exports are generated:
+Snapshotting must be enabled via the `snapshotting` attribute on `#[agent_definition]`. Without it, snapshotting is disabled:
 
 ```rust
 #[agent_definition(mount = "/counters/{name}", snapshotting = "every(1)")]
@@ -41,6 +41,8 @@ The `snapshotting` attribute accepts these values:
 | `"every(N)"` | `snapshotting = "every(1)"` | Snapshot every N successful function calls (use `"every(1)"` for every invocation) |
 | `"periodic(duration)"` | `snapshotting = "periodic(30s)"` | Snapshot at most once per time interval (uses `humantime` durations) |
 
+Snapshots are for durable agents only. An ephemeral agent takes no snapshots, and the SDK refuses an ephemeral agent definition whose `snapshotting` value is not disabled, with an error that names the agent.
+
 ```rust
 #[agent_definition(mount = "/periodic/{name}", snapshotting = "periodic(30s)")]
 pub trait PeriodicAgent { ... }
@@ -51,7 +53,7 @@ pub trait BatchAgent { ... }
 
 ## Automatic Snapshotting (Default)
 
-If the agent's struct implements `serde::Serialize` and `serde::de::DeserializeOwned`, the SDK automatically provides JSON-based snapshotting — no custom code needed. The `#[agent_implementation]` macro detects `Serialize`/`DeserializeOwned` on the agent type and auto-generates snapshot handlers.
+When snapshotting is enabled and the implementation has no custom `save_snapshot`/`load_snapshot`, the SDK provides JSON-based snapshotting — no custom code needed. The agent struct must then implement `serde::Serialize` and `serde::de::DeserializeOwned`; otherwise the build fails. The macros generate the snapshot handlers.
 
 ```rust
 use serde::{Serialize, Deserialize};
@@ -122,12 +124,24 @@ impl CounterWithSnapshotAgent for CounterImpl {
         self.count
     }
 
-    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
         let arr: [u8; 4] = bytes
             .try_into()
             .map_err(|_| "Expected a 4-byte long snapshot")?;
-        self.count = u32::from_be_bytes(arr);
-        Ok(())
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|error| error.to_string())?;
+        let name: String = parameters
+            .take()
+            .map_err(|error| error.to_string())?;
+        parameters.finish().map_err(|error| error.to_string())?;
+
+        Ok(Self {
+            _name: name,
+            count: u32::from_be_bytes(arr),
+        })
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -141,9 +155,11 @@ impl CounterWithSnapshotAgent for CounterImpl {
 - **Both `save_snapshot` and `load_snapshot` must be implemented together**, or neither. The macro enforces this at compile time.
 - When custom implementations are present, automatic serde-based snapshotting is bypassed.
 - `save_snapshot` returns `Result<Vec<u8>, String>` — the bytes are the snapshot payload.
-- `load_snapshot` receives `Vec<u8>` and returns `Result<(), String>` — it must restore the agent's state from the bytes.
+- `load_snapshot` is an associated restoration factory. It receives `Vec<u8>` and `SnapshotRestoreContext`, then returns a complete `Self` in `Result<Self, String>`.
+- Restoration does not call `new`. Use the context's `parameters`, `principal`, `agent_type`, and `phantom_id` fields to reconstruct identity-dependent state. Agent config can be read through `Config::<T>::new().get()` while restoring.
+- `parameters` is a `SchemaValueTree`. Pass it to `DirectAgentInput::new`, call `take::<T>()` once for each constructor parameter in declaration order, then call `finish()` to reject extra values and incomplete wire data. Each method returns a `WireError` on malformed input.
 - Both methods are `async` — they can perform asynchronous operations during serialization/deserialization.
-- Returning `Err` from `load_snapshot` causes the update to fail and the agent reverts to the old version.
+- Returning `Err` from `load_snapshot` rejects the incomplete instance. A manual update fails and remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay. During an automatic update, the update fails, and the agent stays on its source revision: with `UPDATE_SNAPSHOT_INCOMPATIBLE` when the update selected an automatic snapshot, else with `UPDATE_REPLAY_FAILED`. Without a pending update, when the snapshot of the last successful update does not load, the start of the agent fails.
 
 ## Method Signatures
 
@@ -151,16 +167,35 @@ impl CounterWithSnapshotAgent for CounterImpl {
 // Save: serialize the agent's current state to bytes
 async fn save_snapshot(&self) -> Result<Vec<u8>, String>
 
-// Load: restore the agent's state from previously saved bytes
-async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String>
+// Load: construct a complete agent from previously saved bytes and restore context
+async fn load_snapshot(
+    bytes: Vec<u8>,
+    context: SnapshotRestoreContext,
+) -> Result<Self, String>
 ```
+
+## Restoration Is Read-Only
+
+`load_snapshot` is a specially supported SDK lifecycle operation, not an agent method. Golem runs it in read-only mode and does not write anything it does to the oplog. Decoding, local computation, fresh randomness, config reads, and other permitted reads can be used to build the returned value. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
+
+Do not initialize an ordinary instance and mutate it after loading. Construct and return the complete restored `Self`; the SDK installs it only after the factory succeeds.
+
+## Agent Files
+
+A snapshot holds only the agent's in-memory state: the serde form of the agent, or the bytes that `save_snapshot` returns. It does not hold the files that the agent wrote.
+
+- On an executor with filesystem snapshots, Golem captures the agent's files at the same point as the snapshot and restores them before `load_snapshot` runs, so `load_snapshot` can read them. The snapshot and the files form one restore point.
+- Do not write files in `save_snapshot` or `load_snapshot`, and do not copy file contents into the snapshot to keep them. Golem does not run `save_snapshot` again in a replay, and `load_snapshot` runs in read-only mode.
+- On an executor without filesystem snapshots, Golem takes a snapshot only while the agent's files are its initial files. After the agent changes its files, Golem takes no automatic snapshot: a start uses an older restore point or replays the full oplog, which writes the files again without data loss. A snapshot-based manual update fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`.
+
+Filesystem snapshots are off by default on standalone executors and on local servers, except `golem server run` on macOS. See [Agent files and snapshots](https://learn.golem.cloud/next/develop/snapshotting#agent-files-and-snapshots).
 
 ## Best Practices
 
 1. **Prefer automatic (serde) snapshotting** unless you need a compact binary format or cross-version migration logic.
 2. **Keep snapshots small** — large snapshots impact recovery and update time.
 3. **Version your snapshot format** — include a version byte or tag so `load_snapshot` can handle snapshots from older versions.
-4. **Test round-trips** — verify that `save_snapshot` → `load_snapshot` produces equivalent state.
+4. **Test round-trips** — verify that `save_snapshot` → `load_snapshot` produces equivalent state without calling `new`.
 5. **Handle migration** — when the state schema changes between versions, `load_snapshot` in the new version should be able to parse snapshots from the old version.
 
 ## Project Template
@@ -168,5 +203,5 @@ async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String>
 A ready-made project with snapshotting can be created using:
 
 ```shell
-golem new --yes --language rust --template snapshotting my-project
+golem new --yes --template rust/snapshotting my-project
 ```

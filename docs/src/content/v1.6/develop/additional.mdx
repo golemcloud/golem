@@ -1,0 +1,1061 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Additional Runtime APIs
+
+### Generate an idempotency key
+
+Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
+
+It is guaranteed that this idempotency key will always be the same (per occurrence) even if the agent is restarted due to a crash.
+
+To generate an idempotency key:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+```typescript
+import { generateIdempotencyKey } from "@golemcloud/golem-ts-sdk";
+
+const key = generateIdempotencyKey();
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+import { Durability } from "@golemcloud/effect-golem"
+
+const key = Effect.gen(function* () {
+  return yield* Durability.generateIdempotencyKey
+})
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```rust
+use golem_rust::generate_idempotency_key;
+
+let key = generate_idempotency_key();
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```scala
+import golem.HostApi
+
+val key = HostApi.generateIdempotencyKey()
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```moonbit
+let key = @api.generate_idempotency_key()
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```go
+import "github.com/golemcloud/golem/sdks/go/golem/durability"
+
+key := durability.GenerateIdempotencyKey()
+```
+    </Tabs.Tab>
+</Tabs>
+
+### Get agent metadata
+
+It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    ```typescript
+    /**
+     * Metadata about an agent
+     */
+    export type AgentMetadata = {
+      /** The agent ID, consists of the component ID, agent type and agent parameters */
+      agentId: AgentId;
+      /** Command line arguments seen by the agent */
+      args: string[];
+      /** Environment variables seen by the agent */
+      env: [string, string][];
+      /** Configuration variables seen by the agent */
+      config: [string, string][];
+      /** The current agent status */
+      status: AgentStatus;
+      /** The component revision the agent is running with */
+      componentRevision: bigint;
+      /** The agent's current retry count */
+      retryCount: bigint;
+      /** The environment the agent belongs to */
+      environmentId: EnvironmentId;
+    };
+    ```
+
+    There are two exported functions to query agent metadata:
+
+    - `getSelfMetadata()` returns the metadata for the current agent
+    - `getAgentMetadata(agentId: AgentId)` returns the metadata for a specific agent given by its `AgentId`, or `undefined` if it does not exist
+
+    </Tabs.Tab>
+    <Tabs.Tab>
+    The SDK exports this metadata shape as `Agents.AgentMetadata`:
+
+    ```typescript
+    import type { Agents } from "@golemcloud/effect-golem"
+
+    /** Metadata about an agent */
+    export type AgentMetadata = {
+      /** The agent ID, consists of the component ID, agent type and agent parameters */
+      agentId: Agents.AgentId;
+      /** Command line arguments seen by the agent */
+      args: string[];
+      /** Environment variables seen by the agent */
+      env: [string, string][];
+      /** Configuration variables seen by the agent */
+      config: [string, string][];
+      /** The current agent status */
+      status: Agents.AgentStatus;
+      /** The component revision the agent is running with */
+      componentRevision: bigint;
+      /** The agent's current retry count */
+      retryCount: bigint;
+      /** The environment the agent belongs to */
+      environmentId: Agents.EnvironmentId;
+    };
+    ```
+
+    There are two exported operations to query agent metadata:
+
+    - `Agents.getSelfMetadata` is an Effect that returns the metadata for the current agent
+    - `Agents.getAgentMetadata(agentId: Agents.AgentId)` returns an Effect containing the metadata for a specific agent, or `undefined` if it does not exist
+
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```rust
+    /// Metadata about an agent
+    pub struct AgentMetadata {
+      /// The agent ID, consists of the component ID, agent type and agent parameters
+      pub agent_id: AgentId,
+      /// Command line arguments seen by the agent
+      pub args: Vec<String>,
+      /// Environment variables seen by the agent
+      pub env: Vec<(String, String)>,
+      /// Configuration variables seen by the agent
+      pub config: Vec<(String, String)>,
+      /// The current agent status
+      pub status: AgentStatus,
+      /// The component revision the agent is running with
+      pub component_revision: u64,
+      /// The agent's current retry count
+      pub retry_count: u64,
+      /// The environment the agent belongs to
+      pub environment_id: EnvironmentId,
+    }
+    ```
+
+    There are two exported functions to query agent metadata:
+
+    - `get_self_metadata()` returns `Result<AgentMetadata, AgentOperationError>` for the current agent
+    - `get_agent_metadata(agent_id: &AgentId)` returns `Some(AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
+
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```scala
+    import golem.HostApi
+    import golem.host.js.JsEnvironmentId
+
+    final case class AgentMetadata(
+      agentId: HostApi.AgentIdLiteral,
+      args: List[String],
+      env: Map[String, String],
+      config: Map[String, String],
+      status: HostApi.AgentStatus,
+      componentRevision: BigInt,
+      retryCount: BigInt,
+      agentType: String,
+      agentName: String,
+      componentId: HostApi.ComponentIdLiteral,
+      environmentId: JsEnvironmentId
+    )
+    ```
+
+    There are two exported functions to query agent metadata:
+
+    - `HostApi.getSelfMetadata()` returns the metadata for the current agent
+    - `HostApi.getAgentMetadata(agentId: HostApi.AgentIdLiteral)` returns `Some(HostApi.AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
+
+    </Tabs.Tab>
+    <Tabs.Tab>
+    Assuming the `golemcloud/golem_sdk/api` package is imported as `@api` and `golemcloud/golem_sdk/interface/golem/core/types` is imported as `@rpcTypes`:
+
+    ```moonbit
+    /// Metadata about an agent
+    pub(all) struct AgentMetadata {
+      agent_id : @rpcTypes.AgentId
+      args : Array[String]
+      env : Array[(String, String)]
+      config : Array[(String, String)]
+      status : @api.AgentStatus
+      component_revision : UInt64
+      retry_count : UInt64
+      environment_id : @api.EnvironmentId
+    }
+    ```
+
+    There are two exported functions to query agent metadata:
+
+    - `@api.get_self_metadata()` returns the metadata for the current agent
+    - `@api.get_agent_metadata(agent_id : @rpcTypes.AgentId)` returns `Some(@api.AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
+
+    </Tabs.Tab>
+
+
+    <Tabs.Tab>
+    ```go
+    // AgentMetadata describes an agent as the host sees it.
+    type AgentMetadata struct {
+      // The agent ID, consists of the component ID and the agent id string (agent type and agent parameters)
+      AgentID           AgentID
+      // Command line arguments seen by the agent
+      Args              []string
+      // Environment variables seen by the agent
+      Env               map[string]string
+      // Configuration variables seen by the agent
+      Config            map[string]string
+      // The current agent status
+      Status            AgentStatus
+      // The component revision the agent is running with
+      ComponentRevision uint64
+      // The agent's current retry count
+      RetryCount        uint64
+      // The environment the agent belongs to
+      EnvironmentID     UUID
+    }
+    ```
+
+    There are two exported functions in the `golem` package to query agent metadata:
+
+    - `golem.GetSelfMetadata()` returns `(golem.AgentMetadata, error)` for the current agent; `golem.MustGetSelfMetadata()` panics on failure instead
+    - `golem.GetAgentMetadata(id golem.AgentID)` returns the metadata for a specific agent given by its `AgentID`, and `false` if it does not exist
+
+    </Tabs.Tab>
+</Tabs>
+
+### Enumerate agents
+
+Agent enumeration is a feature of Golem available both through the public HTTP API and using the SDK.
+
+<Callout type="warning">
+    Enumerating agents of a component is a slow operation and should not be used as part of the application logic.
+</Callout>
+
+The following example demonstrates how to use the agent enumeration API:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+```typescript
+import {
+  ComponentId,
+  GetAgents,
+  AgentAnyFilter,
+  AgentMetadata,
+  AgentStatusFilter,
+} from "@golemcloud/golem-ts-sdk"
+
+const filter: AgentAnyFilter = {
+  filters: [
+    {
+      filters: [
+        {
+          tag: "status",
+          val: {
+            comparator: "equal",
+            value: "idle",
+          } satisfies AgentStatusFilter,
+        },
+      ],
+    },
+  ],
+}
+
+declare const componentId: ComponentId
+const agents: AgentMetadata[] = []
+const getter = new GetAgents(componentId, filter, true)
+
+let batch: AgentMetadata[] | undefined
+while ((batch = getter.getNext()) !== undefined) {
+  agents.push(...batch)
+}
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```typescript
+import { Stream } from "effect"
+import { Agents } from "@golemcloud/effect-golem"
+
+const enumerateAgents = (componentId: Agents.ComponentId) =>
+  Agents.getAgents({ componentId, precise: true }).pipe(Stream.runCollect)
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```rust
+use golem_rust::{
+    AgentAllFilter, AgentAnyFilter, AgentMetadata, AgentPropertyFilter, AgentStatus,
+    AgentStatusFilter, ComponentId, FilterComparator, GetAgents,
+};
+
+let component_id: ComponentId = /* ... */;
+
+let filter = AgentAnyFilter {
+    filters: vec![AgentAllFilter {
+        filters: vec![AgentPropertyFilter::Status(AgentStatusFilter {
+            comparator: FilterComparator::Equal,
+            value: AgentStatus::Idle,
+        })],
+    }],
+};
+
+let getter = GetAgents::new(component_id, Some(&filter), true);
+
+let mut agents: Vec<AgentMetadata> = vec![];
+
+while let Some(batch) = getter.get_next()? {
+    agents.extend(batch);
+}
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```scala
+import golem.HostApi
+
+val filter: HostApi.AgentAnyFilter = HostApi.AgentAnyFilter(
+  List(
+    HostApi.AgentAllFilter(
+      List(
+        HostApi.AgentPropertyFilter.status(
+          HostApi.AgentStatusFilter(HostApi.FilterComparator.Equal, HostApi.AgentStatus.Idle)
+        )
+      )
+    )
+  )
+)
+
+val componentId: HostApi.ComponentIdLiteral = ???
+val handle = HostApi.getAgents(componentId, Some(filter), precise = true)
+
+var agents: List[HostApi.AgentMetadata] = Nil
+var batch = HostApi.nextAgentBatch(handle)
+
+while (batch.isDefined) {
+  agents = agents ++ batch.get
+  batch = HostApi.nextAgentBatch(handle)
+}
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Assuming the `golemcloud/golem_sdk/api` package is imported as `@api` and `golemcloud/golem_sdk/interface/golem/core/types` is imported as `@rpcTypes`:
+
+```moonbit
+let filter : @api.AgentAnyFilter = @api.AgentAnyFilter::{
+  filters: [
+    @api.AgentAllFilter::{
+      filters: [
+        @api.AgentPropertyFilter::Status(@api.AgentStatusFilter::{
+          comparator: @api.FilterComparator::EQUAL,
+          value: @api.AgentStatus::IDLE,
+        }),
+      ],
+    },
+  ],
+}
+
+let component_id : @rpcTypes.ComponentId = abort("provide a component ID")
+let agents : Array[@api.AgentMetadata] = []
+let pager = @api.get_agents(component_id, Some(filter), true)
+defer pager.drop()
+
+while true {
+  match pager.next_page() {
+    Some(batch) => agents.append(batch)
+    None => break
+  }
+}
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+var componentID golem.UUID = /* ... */
+
+var agents []golem.AgentMetadata
+for md, err := range golem.GetAgents(componentID, golem.GetAgentsOptions{
+	Filter:  golem.AgentStatusFilter(golem.FilterEqual, golem.AgentStatusIdle),
+	Precise: true,
+}) {
+	if err != nil {
+		return err
+	}
+	agents = append(agents, md)
+}
+```
+
+`golem.GetAgents` fetches the pages as the loop advances. Filters are combined with their `And` and `Or` methods; `golem.MustGetAgents` is the variant panicking on a failing page.
+    </Tabs.Tab>
+</Tabs>
+
+The `precise` parameter or option enables precise mode. In this mode, Golem calculates the latest metadata for each returned agent; otherwise, it uses only the last cached values.
+
+### Update an agent
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
+
+```typescript
+import {
+  getSelfMetadata,
+  updateAgent,
+  type AgentId,
+  type ComponentRevision,
+} from "@golemcloud/golem-ts-sdk"
+
+const agentId: AgentId = getSelfMetadata().agentId
+
+const targetRevision: ComponentRevision = 1n
+
+updateAgent(agentId, targetRevision, "automatic")
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To update an agent from Effect TypeScript, pass the target revision and mode to `Agents.updateAgent`:
+
+```typescript
+import { Effect } from "effect"
+import { Agents } from "@golemcloud/effect-golem"
+
+const updateSelf = Effect.gen(function* () {
+  const metadata = yield* Agents.getSelfMetadata
+  yield* Agents.updateAgent({
+    agentId: metadata.agentId,
+    targetRevision: 1n,
+    mode: "automatic",
+  })
+})
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `update_agent` function:
+
+```rust
+use golem_rust::{get_self_metadata, update_agent, UpdateMode};
+
+let agent_id = get_self_metadata()?.agent_id;
+let target_component_revision = 1u64;
+
+update_agent(&agent_id, target_component_revision, UpdateMode::Automatic)?;
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
+
+```scala
+import golem.HostApi
+
+val agentId = HostApi.getSelfMetadata().agentId
+val targetRevision = BigInt(1)
+
+HostApi.updateAgent(agentId, targetRevision, HostApi.UpdateMode.Automatic)
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `update_agent` function. Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`:
+
+```moonbit
+let agent_id = @api.get_self_metadata().agent_id
+let target_revision : UInt64 = 1
+
+@api.update_agent(agent_id, target_revision, @api.UpdateMode::AUTOMATIC)
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `golem.UpdateAgent` function:
+
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+agentID := golem.MustGetSelfMetadata().AgentID
+var targetRevision uint64 = 1
+
+if err := golem.UpdateAgent(agentID, targetRevision, golem.UpdateModeAutomatic); err != nil {
+	return err
+}
+```
+    </Tabs.Tab>
+</Tabs>
+
+To learn more about updating agents, see the Agent Update section of the [agents page](/v1.6/concepts/agents).
+
+### Oplog search and query
+Golem provides APIs to read and search an agent's persisted oplog.
+
+Each oplog entry describes a recorded operation or lifecycle event. You can either read all entries or supply a search expression to return only matching entries.
+
+Results are paginated. Read successive batches until the query returns no more entries. For CLI usage, see [Observability](/v1.6/develop/observability).
+
+### Invocation context
+
+Golem associates an **invocation context** with each invocation, which contains various information depending on how the exported function was called. This context gets inherited when making further invocations via agent-to-agent communication, and it is also possible to define custom **spans** and associate custom **attributes** to it.
+
+The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+The TypeScript SDK does not currently expose invocation-context inspection or custom span creation through its public API. See [Observability](/v1.6/develop/observability) for logs and trace export.
+
+</Tabs.Tab>
+
+    <Tabs.Tab>
+Effect TypeScript installs a Golem-backed tracer automatically. Use `Tracing.currentContext` for an immutable snapshot of the host context and normal Effect spans for custom work:
+
+```typescript
+import { Effect } from "effect"
+import { Tracing } from "@golemcloud/effect-golem"
+
+const operation = Effect.gen(function* () {
+  const context = yield* Tracing.currentContext
+  return context.traceId
+}).pipe(Effect.withSpan("my-operation"))
+```
+
+Use `Tracing.traceContextHeaders`, `withForwardedHeaders`, and `withInvocationParent` for explicit propagation.
+
+These Effects are intended to run inside an Effect agent handler, where the dispatcher installs the required host services.
+</Tabs.Tab>
+
+    <Tabs.Tab>
+To get the current invocation context, use the `current_context` host function, imported from `golem_rust::bindings::golem::api::context`:
+
+```rust
+/**
+ * Invocation context support
+ */
+pub fn current_context() -> InvocationContext;
+```
+
+The `InvocationContext` resource exposes various methods for querying attributes of the invocation context:
+
+| method | description |
+| ------ | ----------- |
+| `trace_id` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `span_id` | Returns the span ID associated with the context |
+| `parent` | Returns the parent invocation context, if any |
+| `get_attribute` | Gets an attribute from the current span by key, or searches the full parent chain when `inherited` is `true` |
+| `get_attributes` | Gets all attributes from the current span, or the merged attribute set from the full parent chain when `inherited` is `true` |
+| `get_attribute_chain` | Gets all values of a given attribute from the current and parent contexts |
+| `get_attribute_chains` | Get all attributes and their previous values |
+| `trace_context_headers` | Gets the W3C Trace Context headers associated with the current invocation context |
+
+Custom attributes can only be set on **custom spans**. First start a new span using `start_span`
+
+```rust
+/**
+ * Starts a new `span` with the given name, as a child of the current invocation context
+ */
+pub fn start_span(name: &str) -> Span
+```
+
+and then use the `Span` class's methods:
+
+| method | description |
+| ------ | ----------- |
+| `started_at` | Returns the timestamp when the span was started |
+| `set_attribute` | Sets an attribute on the span |
+| `set_attributes` | Sets multiple attributes on the span |
+| `finish` | Ends the current span |
+
+If `finish` is not explicitly called on the span, it is going to be finished when the `Span` value is dropped.
+
+</Tabs.Tab>
+
+    <Tabs.Tab>
+To get the current invocation context, use the `currentContext` host function, imported from `golem.host.ContextApi`:
+
+```scala
+import golem.host.ContextApi
+
+def currentContext(): ContextApi.InvocationContext
+```
+
+The `InvocationContext` itself is a **class** with various methods for querying attributes of the invocation context:
+
+| method | description |
+| ------ | ----------- |
+| `traceId` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `spanId` | Returns the span ID associated with the context |
+| `parent` | Returns the parent invocation context, if any |
+| `getAttribute` | Gets an attribute from the current span by key, or searches the full parent chain when `inherited` is `true` |
+| `getAttributes` | Gets all attributes from the current span, or the merged attribute set from the full parent chain when `inherited` is `true` |
+| `getAttributeChain` | Gets all values of a given attribute from the current and parent contexts |
+| `getAttributeChains` | Get all attributes and their previous values |
+| `traceContextHeaders` | Gets the W3C Trace Context headers associated with the current invocation context |
+
+Custom attributes can only be set on **custom spans**. First start a new span using `startSpan`
+
+```scala
+import golem.host.ContextApi
+
+def startSpan(name: String): ContextApi.Span
+```
+
+and then use the `Span` class's methods:
+
+| method | description |
+| ------ | ----------- |
+| `startedAt` | Returns the timestamp when the span was started |
+| `setAttribute` | Sets an attribute on the span |
+| `setAttributes` | Sets multiple attributes on the span |
+| `finish` | Ends the current span |
+
+If `finish` is not explicitly called on the span, it is going to be finished when the runtime drops the span object.
+
+</Tabs.Tab>
+
+    <Tabs.Tab>
+Import `golemcloud/golem_sdk/context` as `@context` and call `current_context`:
+
+```moonbit
+let context = @context.current_context()
+let trace_id = context.trace_id()
+```
+
+The returned `Context` exposes these methods:
+
+| method | description |
+| ------ | ----------- |
+| `trace_id` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `span_id` | Returns the span ID associated with the context |
+| `parent` | Returns the parent invocation context, if any |
+| `get_attribute` | Gets an attribute by key, searching the full parent chain |
+| `get_current_attribute` | Gets an attribute from the current span only |
+| `attributes` | Gets the merged attributes from the full parent chain |
+| `current_attributes` | Gets attributes from the current span only |
+| `attribute_chain` | Gets all values of a given attribute from the current and parent contexts |
+| `attribute_chains` | Gets all attributes and their previous values |
+| `trace_context_headers` | Gets the W3C Trace Context headers associated with the current invocation context |
+
+Use `with_span` to create a custom span and finish it automatically:
+
+```moonbit
+@context.with_span("charge", fn(span) {
+  span.set_attribute("operation", "charge")
+})
+```
+
+For manual lifecycle management, `@context.start_span(name)` returns a `Span` with these methods:
+
+| method | description |
+| ------ | ----------- |
+| `started_at` | Returns the timestamp when the span was started |
+| `set_attribute` | Sets an attribute on the span |
+| `set_attributes` | Sets multiple attributes on the span |
+| `finish` | Ends the current span |
+
+Call `finish` when the work ends, preferably with `defer`. Do not call it inside `with_span`, which finishes the span for you.
+
+</Tabs.Tab>
+
+
+    <Tabs.Tab>
+The `github.com/golemcloud/golem/sdks/go/golem/invocation` package reads the invocation context and starts custom spans. `invocation.CurrentContext()` returns a snapshot of the context:
+
+| method | description |
+| ------ | ----------- |
+| `TraceID` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `SpanID` | Returns the span ID associated with the context |
+| `Parent` | Returns the parent invocation context, if any |
+| `Attribute` | Gets an attribute from the current span by key, or searches the full parent chain when `inherited` is `true` |
+| `Attributes` | Gets all attributes from the current span, or the merged attribute set from the full parent chain when `inherited` is `true` |
+| `AttributeChain` | Gets all values of a given attribute from the current and parent contexts |
+| `AttributeChains` | Get all attributes and their previous values |
+| `TraceContextHeaders` | Gets the W3C Trace Context headers associated with the current invocation context, as an `http.Header` |
+
+Custom attributes can only be set on **custom spans**. Start one with `invocation.StartSpan`, set attributes on it with `SetAttribute` or `SetAttributes`, and end it with `Finish`; `StartedAt` returns when it started:
+
+```go
+span := invocation.StartSpan("charge")
+defer span.Finish()
+span.SetAttribute("order", orderID)
+
+ctx := invocation.CurrentContext()
+slog.Info("charging", "trace", ctx.TraceID())
+```
+
+A span that is never finished ends when it is garbage collected.
+</Tabs.Tab>
+</Tabs>
+
+The custom spans are pushed onto the invocation context stack, so whenever an RPC call or HTTP call is made, their parent span(s) will include the user-defined custom spans as well as the rest of the invocation context.
+
+To export traces, logs, and metrics to an external system, see the [Observability](/v1.6/develop/observability) page for setting up the OpenTelemetry plugin.
+
+### Key-value store
+
+Although Golem agents can store their state completely in their own memory, they can also store key-value pairs in Golem-managed storage.
+
+This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. Storage is shared across agents and components within the same environment.
+
+Use a small value for shared settings. A missing key is distinct from a storage failure; do not turn every failure into a default value. The examples below write and read one greeting. Separate calls do not form a transaction.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+Use `openBucket` to open a bucket. Opening is asynchronous; the bucket's methods are synchronous and work with `Uint8Array` values. A missing key returns `undefined`; storage failures throw.
+
+```typescript
+import { openBucket } from "@golemcloud/golem-ts-sdk"
+
+async function greeting(): Promise<Uint8Array | undefined> {
+  const bucket = await openBucket("shared")
+  bucket.set("greeting", new TextEncoder().encode("hello"))
+  return bucket.get("greeting")
+}
+```
+
+        | Method | Result |
+        | ------ | ------ |
+        | `get(key)` | The stored bytes, or `undefined` when the key does not exist |
+        | `set(key, value)` | Creates or replaces a value |
+        | `delete(key)` | Deletes a key, if present |
+        | `exists(key)` | Whether a key exists |
+        | `getMany(keys)` | One value or `undefined` for each key |
+        | `setMany(entries)` | Stores several key-value pairs |
+        | `deleteMany(keys)` | Deletes several keys |
+        | `keys()` | All keys in the bucket |
+
+        `bucket.forSchema(schema)` provides the same operations with schema-validated values instead of bytes.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Use `KeyValue.openBucket` inside `Effect.scoped` to open a bucket. Its methods return effects with byte values. A missing key returns `Option.none()`; storage failures use the error channel.
+
+        ```typescript
+        import { Effect } from "effect"
+        import { KeyValue } from "@golemcloud/effect-golem"
+
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const bucket = yield* KeyValue.openBucket("shared")
+            yield* bucket.set("greeting", new TextEncoder().encode("hello"))
+            return yield* bucket.get("greeting")
+          }),
+        )
+        ```
+
+| API | Result |
+| --- | ------ |
+| `get(key)` / `set(key, bytes)` | Reads or writes a value |
+| `delete(key)` / `exists(key)` | Deletes a key or checks whether it exists |
+| `getMany(keys)` | One optional value for each key |
+| `setMany(entries)` / `deleteMany(keys)` | Writes or deletes several keys |
+| `keys` | All keys in the bucket |
+
+`bucket.forSchema(schema)` provides schema-validated values instead of bytes.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Use `Bucket::open_bucket` to open a bucket. The `eventual` module provides single-key operations; `eventual_batch` provides batch operations. Storage failures return `Err`; a missing key returns `Ok(None)`.
+
+```rust
+use golem_rust::bindings::wasi::keyvalue::{
+    eventual,
+    types::{Bucket, OutgoingValue},
+};
+
+fn greeting() -> Result<Option<Vec<u8>>, String> {
+    let bucket = Bucket::open_bucket("shared")
+        .map_err(|e| format!("{e:?}"))?;
+    let outgoing = OutgoingValue::new_outgoing_value();
+    outgoing.outgoing_value_write_body_sync(b"hello")
+        .map_err(|e| format!("{e:?}"))?;
+    eventual::set(&bucket, "greeting", &outgoing)
+        .map_err(|e| format!("{e:?}"))?;
+    let value = eventual::get(&bucket, "greeting")
+        .map_err(|e| format!("{e:?}"))?;
+    value.map(|value| {
+        value.incoming_value_consume_sync().map_err(|e| format!("{e:?}"))
+    }).transpose()
+}
+```
+
+| Operation | API |
+| --------- | --- |
+| Read / write | `eventual::get` / `eventual::set` |
+| Delete / check existence | `eventual::delete` / `eventual::exists` |
+| Read / write several keys | `eventual_batch::get_many` / `eventual_batch::set_many` |
+| Delete several keys / list keys | `eventual_batch::delete_many` / `eventual_batch::keys` |
+
+For small values, use `outgoing_value_write_body_sync` and `incoming_value_consume_sync` as above. The corresponding async methods work with byte streams. Rust releases the bucket and value handles when they leave scope.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Use `KeyValue.Bucket.open` to open a bucket. Its synchronous methods work with `Array[Byte]`; a missing key returns `None`, while storage failures throw.
+
+```scala
+import golem.wasi.KeyValue
+
+def greeting(): Option[Array[Byte]] = {
+  val bucket = KeyValue.Bucket.open("shared")
+  bucket.set("greeting", "hello".getBytes("UTF-8"))
+  bucket.get("greeting")
+}
+```
+
+| Method | Result |
+| ------ | ------ |
+| `get(key)` / `set(key, bytes)` | Reads or writes a value |
+| `delete(key)` / `exists(key)` | Deletes a key or checks whether it exists |
+| `getMany(keys)` | One optional value for each key |
+| `deleteMany(keys)` | Deletes several keys |
+| `keys()` | All keys in the bucket |
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Import `golemcloud/golem_sdk/interface/wasi/keyvalue/eventual`, `golemcloud/golem_sdk/interface/wasi/keyvalue/types`, and `golemcloud/golem_sdk/interface/wasi/keyvalue/wasi-keyvalue-error` as `@eventual`, `@types`, and `@wasiKeyvalueError`. Open the bucket with `@types.Bucket::open_bucket`. A missing key returns `Ok(None)`; storage failures return `Err`.
+
+```moonbit
+fn greeting() -> Result[FixedArray[Byte]?, @wasiKeyvalueError.Error_] {
+  let bucket = match @types.Bucket::open_bucket("shared") {
+    Ok(bucket) => bucket
+    Err(error) => return Err(error)
+  }
+  defer bucket.drop()
+  let outgoing = @types.OutgoingValue::new_outgoing_value()
+  defer outgoing.drop()
+  match outgoing.outgoing_value_write_body_sync([104, 101, 108, 108, 111]) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  match @eventual.set(bucket, "greeting", outgoing) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  match @eventual.get(bucket, "greeting") {
+    Err(error) => Err(error)
+    Ok(None) => Ok(None)
+    Ok(Some(value)) => {
+      defer value.drop()
+      value.incoming_value_consume_sync().map(bytes => Some(bytes))
+    }
+  }
+}
+```
+
+| Operation | API |
+| --------- | --- |
+| Read / write | `@eventual.get` / `@eventual.set` |
+| Delete / check existence | `@eventual.delete` / `@eventual.exists` |
+| Read / write several keys | `get_many` / `set_many` in the `eventual-batch` package |
+| Delete several keys / list keys | `delete_many` / `keys` in the `eventual-batch` package |
+
+Use the synchronous byte helpers for small values, as above. Release each acquired bucket and value handle with `defer`, including on failure.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        Use `github.com/golemcloud/golem/sdks/go/golem/keyvalue` to access the key-value store from Go. A missing key is not an error. The operations return no error: the host fails one only on a denied permission or on a storage failure it has already retried, and such a failure panics and fails the invocation.
+
+        ```go
+        import "github.com/golemcloud/golem/sdks/go/golem/keyvalue"
+
+        func greeting() ([]byte, bool) {
+            bucket := keyvalue.OpenBucket("shared")
+            defer bucket.Close()
+            bucket.Set("greeting", []byte("hello"))
+            return bucket.Get("greeting")
+        }
+        ```
+
+| Method | Result |
+| ------ | ------ |
+| `Get(key)` / `Set(key, bytes)` | Reads or writes a value; `Get` also returns whether it exists |
+| `Delete(key)` / `Exists(key)` | Deletes a key or checks whether it exists |
+| `GetMany(keys)` | A map containing the keys that exist |
+| `SetMany(entries)` / `DeleteMany(keys)` | Writes or deletes several keys |
+| `Keys()` | All keys in the bucket |
+
+Use `defer bucket.Close()` to release the handle. Closing the bucket does not delete its values.
+    </Tabs.Tab>
+</Tabs>
+
+### Blob store
+
+The blob store provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. Storage is shared across agents and components within the same environment.
+
+Read a bounded range instead of loading a large object into memory. Each example below opens the existing `documents` container and reads the first five bytes of `hello.txt`, which must contain at least five bytes. Start and end offsets are inclusive. Releasing a handle does not delete the stored data.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+Use `getContainer` to open an existing container or `getOrCreateContainer` to open or create one. Container operations return promises with `Uint8Array` values; storage failures reject the promise.
+
+```typescript
+import { getContainer } from "@golemcloud/golem-ts-sdk"
+
+async function documentPrefix(): Promise<Uint8Array> {
+  const container = await getContainer("documents")
+  return await container.getData("hello.txt", 0n, 4n)
+}
+```
+
+        | Method | Result |
+        | ------ | ------ |
+        | `getData(name, start?, end?)` | Object bytes as a `Uint8Array`; optional offsets are inclusive |
+        | `writeData(name, bytes)` | Creates or replaces an object from a `Uint8Array` |
+        | `listObjects()` | An array of object names |
+        | `has(name)` | Whether an object exists |
+        | `delete(name)` | Deletes an object, if present |
+        | `deleteMany(names)` | Deletes several objects |
+        | `objectInfo(name)` | Object metadata, including its size |
+        | `info()` | Container metadata |
+        | `clear()` | Deletes all objects in the container |
+
+The SDK also exports `containerExists`, `deleteContainer`, `copyObject`, and `moveObject`. Copy and move locations have the shape `{ container: string, object: string }`. Use `container.forSchema(schema)` for schema-validated object values instead of bytes.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Use `Blobstore.getContainer` inside `Effect.scoped` to open a container, or `getOrCreateContainer` to open or create one. Container operations return effects with byte values; failures use the error channel.
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Blobstore } from "@golemcloud/effect-golem"
+
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const container = yield* Blobstore.getContainer("documents")
+            return yield* container.getData("hello.txt", { start: 0n, end: 4n })
+          }),
+        )
+        ```
+
+| API | Result |
+| --- | ------ |
+| `getData(name, range?)` / `writeData(name, bytes)` | Reads or writes object bytes; a range has inclusive `bigint` offsets |
+| `hasObject(name)` / `objectInfo(name)` | Object existence or metadata |
+| `listObjects` | A stream of object names |
+| `deleteObject(name)` / `deleteObjects(names)` | Deletes one or several objects |
+| `info` / `clear` | Container metadata or deletion of all its objects |
+
+Use `Effect.scoped` for the container's lifetime. `container.forSchema(schema)` provides schema-validated object values. Module functions also provide container existence checks, deletion, and object copy/move operations.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Use `blobstore::get_container` to open a container or `create_container` to create one. Operations return `Result`; storage failures return `Err`.
+
+```rust
+use golem_rust::bindings::wasi::blobstore::blobstore;
+
+fn document_prefix() -> Result<Vec<u8>, String> {
+    let container = blobstore::get_container("documents")?;
+    let value = container.get_data("hello.txt", 0, 4)?;
+    value.incoming_value_consume_sync()
+}
+```
+
+| Method | Result |
+| ------ | ------ |
+| `get_data(name, start, end)` | A value handle for an inclusive byte range |
+| `write_data(name, &outgoing)` | Creates or replaces an object from an `OutgoingValue` |
+| `has_object(name)` / `object_info(name)` | Object existence or metadata |
+| `list_objects()` | A stream of object names |
+| `delete_object(name)` / `delete_objects(names)` | Deletes one or several objects |
+| `info()` / `clear()` | Container metadata or deletion of all its objects |
+
+Consume an incoming value synchronously as bytes, as above, or asynchronously as a byte stream. For writes, attach a byte stream with `outgoing_value_write_body` and drive its writer to completion. Rust releases the handles when they leave scope. The `blobstore` module also provides container existence checks, deletion, and object copy/move operations.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Use `Blobstore.getContainer` to open a container or `createContainer` to create one. Reads and writes use `Array[Byte]`; storage failures throw.
+
+```scala
+import golem.wasi.Blobstore
+
+def documentPrefix(): Array[Byte] = {
+  val container = Blobstore.getContainer("documents")
+  container.getData("hello.txt", 0L, 4L)
+}
+```
+
+| Method | Result |
+| ------ | ------ |
+| `getData(name, start, end)` / `writeData(name, bytes)` | Reads an inclusive byte range or writes an object |
+| `hasObject(name)` / `objectInfo(name)` | Object existence or metadata |
+| `listObjects()` | A `Future[List[String]]` of object names |
+| `deleteObject(name)` / `deleteObjects(names)` | Deletes one or several objects |
+| `info()` / `clear()` | Container metadata or deletion of all its objects |
+
+The `Blobstore` object also provides container existence checks, deletion, and object copy/move operations.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Import `golemcloud/golem_sdk/interface/wasi/blobstore/blobstore` as `@blobstore`. Use `get_container` to open a container or `create_container` to create one. Storage failures return `Err`.
+
+```moonbit
+fn document_prefix() -> Result[FixedArray[Byte], String] {
+  let container = match @blobstore.get_container("documents") {
+    Ok(container) => container
+    Err(error) => return Err(error)
+  }
+  defer container.drop()
+  let value = match container.get_data("hello.txt", 0UL, 4UL) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  defer value.drop()
+  value.incoming_value_consume_sync()
+}
+```
+
+| Method | Result |
+| ------ | ------ |
+| `get_data(name, start, end)` | A value handle for an inclusive byte range |
+| `write_data(name, outgoing)` | Creates or replaces an object from an outgoing value |
+| `has_object(name)` / `object_info(name)` | Object existence or metadata |
+| `list_objects()` | A stream of object names |
+| `delete_object(name)` / `delete_objects(names)` | Deletes one or several objects |
+| `info()` / `clear()` | Container metadata or deletion of all its objects |
+
+Release container and value handles with `defer`, including on failure. Incoming values provide synchronous byte reads and asynchronous stream reads. To write, import `golemcloud/golem_sdk/interface/wasi/blobstore/types` as `@types`, create an `OutgoingValue`, and attach a byte stream with `outgoing_value_write_body`. The `@blobstore` package also provides container existence checks, deletion, and object copy/move operations.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+Use `blobstore.GetContainer` to open a container or `GetOrCreateContainer` to open or create one. Reads and writes use `[]byte`; storage failures return an error.
+
+```go
+import "github.com/golemcloud/golem/sdks/go/golem/blobstore"
+
+func documentPrefix() ([]byte, error) {
+    container, err := blobstore.GetContainer("documents")
+    if err != nil {
+        return nil, err
+    }
+    defer container.Close()
+    return container.GetRange("hello.txt", 0, 4)
+}
+```
+
+| Method | Result |
+| ------ | ------ |
+| `GetData(name)` / `GetRange(name, start, end)` | Whole-object bytes with a `found` flag, or an inclusive byte range |
+| `WriteData(name, bytes)` | Creates or replaces an object |
+| `HasObject(name)` / `ObjectInfo(name)` | Object existence or metadata |
+| `ListObjects()` | An array of object names |
+| `DeleteObject(name)` / `DeleteObjects(names)` | Deletes one or several objects |
+| `Info()` / `Clear()` | Container metadata or deletion of all its objects |
+
+Use `defer container.Close()` to release the handle. The package also provides container existence checks, deletion, and object copy/move operations.
+    </Tabs.Tab>
+</Tabs>

@@ -32,14 +32,12 @@ These Node.js-compatible modules can be imported:
 | Module | Description |
 |--------|-------------|
 | `node:buffer` | Buffer API |
+| `node:child_process` | Constrained in-runtime JavaScript execution; no host processes or general shell |
 | `node:crypto` | Hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509, etc. |
-| `node:dgram` | UDP sockets |
-| `node:dns` | DNS resolution |
 | `node:events` | EventEmitter |
 | `node:fs`, `node:fs/promises` | Comprehensive filesystem API (read, write, stat, mkdir, readdir, etc.) |
-| `node:http`, `node:https` | HTTP client and server |
+| `node:http`, `node:https` | HTTP client; socket-free servers through custom HTTP routers (see below) |
 | `node:module` | Module utilities |
-| `node:net` | TCP sockets and servers |
 | `node:os` | OS information |
 | `node:path` | Path manipulation |
 | `node:perf_hooks` | Performance measurement |
@@ -62,16 +60,44 @@ These Node.js-compatible modules can be imported:
 
 These modules exist for compatibility but will throw or no-op when used:
 
-- `node:child_process`
 - `node:cluster`
 - `node:http2`
 - `node:inspector`
 - `node:tls`
 - `node:worker_threads`
 
+## Unsupported Network Modules
+
+Golem does not support `node:net`, `node:dgram` and `node:dns`. The modules load, but the worker executor refuses WASI sockets by default, so every TCP connect, UDP send, bind and DNS lookup fails. Only an operator can turn WASI sockets on, with the executor setting `agent_sockets.enabled`.
+
+Do not use these modules, or npm packages that open raw TCP connections through them (for example `pg`, `mysql2` or `ioredis`). Use these instead:
+
+- `fetch` or the `node:http` / `node:https` client for HTTP requests
+- the Golem WebSocket API for WebSocket connections
+- `golem:rdbms` for PostgreSQL and MySQL
+
+Socket-backed servers (`net.createServer`, or `http.createServer` with a port `listen()`) do not work. To serve HTTP with an `http.createServer` request listener, mount the server as a custom HTTP router with `nodeHttpHandler` from `@golemcloud/golem-ts-sdk/http-router`.
+
 ## npm Package Compatibility
 
 Additional npm packages can be installed with `npm install` (TypeScript) or added as Scala.js-compatible dependencies (Scala). Most packages targeting browsers or using the Node.js APIs listed above will work. Packages that depend on native C/C++ bindings or JVM-specific APIs will **not** work.
+
+The runtime's `node:child_process` adapter can run JavaScript targets, supported Node shebang files,
+and npm's simple `node <script>` command form. It cannot create host processes, run a general shell,
+or execute native binaries. Unsupported commands fail explicitly.
+
+## Fresh JavaScript Execution
+
+`wasm-rquickjs:execution` runs asynchronous JavaScript jobs in fresh QuickJS runtimes for both
+TypeScript and Scala agents. Use `startJavaScript` for live output and cancellation, or
+`runJavaScript` for collected output. TypeScript agent templates additionally transform entry files
+ending in `.ts`, `.mts`, or `.cts` at runtime, and accept inline TypeScript with
+`language: 'typescript'`. The Scala runtime does not include this TypeScript transformation. The
+transformation transpiles syntax but does not type-check or read `tsconfig.json`.
+
+Each job receives an explicit environment allowlist and fresh globals, process state, timers, and
+module caches. Jobs still share the component filesystem and host capabilities, so this is not a
+security sandbox. Always provide a positive timeout for untrusted or potentially CPU-bound code.
 
 ## File I/O
 
@@ -131,7 +157,7 @@ node_modules/@golemcloud/golem-ts-sdk/dist/index.d.mts
 ```
 
 Grep there (and in the `dist/host/` and `dist/lib/` subdirectories under the same package) when
-you need the exact signature of a helper such as `withIdempotenceMode`, `atomically`,
+you need the exact signature of a helper such as `durable`,
 `withRetryPolicy`, `Duration`, `Predicate`, `Policy`, `NamedPolicy`, etc. The shipped
 `dist/index.mjs` is a single-line minified bundle and is **not** a useful reference; always read
 the `.d.mts` instead.

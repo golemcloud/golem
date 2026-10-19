@@ -19,7 +19,7 @@ use crate::durable_host::{
     SnapshotBoundaryBlocker,
 };
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
 use crate::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
     FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
@@ -50,7 +50,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, NoAdditionalDeps, worker_enumeration};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
     FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
@@ -62,19 +62,18 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
-use golem_common::model::invocation_context::{
-    self, AttributeValue, InvocationContextStack, SpanId,
+use golem_common::model::entity::{
+    EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
+use golem_common::model::invocation_context::{self, InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
-    TimestampedUpdateDescription,
+    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, OplogEntry,
+    SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
-    OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -464,7 +463,7 @@ impl StatusManagement for Context {
 impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        invocation: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
@@ -479,7 +478,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision {
+    ) -> InvocationFailureDecision {
         self.durable_ctx
             .on_invocation_failure(full_function_name, trap_type)
             .await
@@ -498,14 +497,6 @@ impl InvocationHooks for Context {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
-    }
-
-    fn current_in_atomic_region(&self) -> bool {
-        self.durable_ctx.current_in_atomic_region()
-    }
-
-    fn current_atomic_region_had_side_effects(&self) -> bool {
-        self.durable_ctx.current_atomic_region_had_side_effects()
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {
@@ -654,11 +645,10 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-    ) {
+        failed_update: OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_failed(target_revision, details)
+            .on_worker_update_failed(failed_update)
             .await
     }
 
@@ -667,9 +657,15 @@ impl UpdateManagement for Context {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    ) {
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+                snapshot_assisted_details,
+            )
             .await
     }
 }
@@ -681,13 +677,6 @@ impl FileSystemReading for Context {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 
@@ -703,6 +692,20 @@ impl HostWasmRpc for Context {
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
             .new(agent_type_name, constructor, phantom_id, config)
+            .await
+    }
+
+    async fn create(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx
+            .create(agent_type_name, constructor, phantom_id, config)
             .await
     }
 
@@ -807,6 +810,15 @@ impl AgentHost for Context {
         AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
     }
 
+    async fn get_agent_type_by_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<
+        Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
+    > {
+        AgentHost::get_agent_type_by_agent_id(&mut self.durable_ctx, agent_id).await
+    }
+
     async fn make_agent_id(
         &mut self,
         agent_type_name: String,
@@ -873,49 +885,11 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
 
 #[async_trait]
 impl InvocationContextManagement for Context {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_span(initial_attributes, activate)
-            .await
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &invocation_context::SpanId,
-        initial_attributes: &[(String, invocation_context::AttributeValue)],
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_child_span(parent, initial_attributes)
-            .await
-    }
-
     fn remove_span(
         &mut self,
         span_id: &invocation_context::SpanId,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)
-    }
-
-    async fn finish_span(
-        &mut self,
-        span_id: &invocation_context::SpanId,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.finish_span(span_id).await
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx
-            .set_span_attribute(span_id, key, value)
-            .await
     }
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
@@ -932,7 +906,7 @@ impl WorkerCtx for Context {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -951,6 +925,7 @@ impl WorkerCtx for Context {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        _native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -966,13 +941,14 @@ impl WorkerCtx for Context {
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<crate::worker::instance::OwnerExecution>,
         owner_resources: Arc<crate::worker::instance::OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
@@ -983,7 +959,7 @@ impl WorkerCtx for Context {
         let account_resource_limits = owner_resources.resource_limits();
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id.clone(),
-            agent_id,
+            owner_context,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -1020,10 +996,13 @@ impl WorkerCtx for Context {
             account_resource_limits.per_invocation_http_call_limit(),
             account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,
+            entity_execution_mode,
             owner_execution,
             owner_resources,
+            None,
+            None,
             filesystem_capability,
-            executable_component,
+            executable,
             entity_activation,
         )
         .await?;
@@ -1032,10 +1011,6 @@ impl WorkerCtx for Context {
 
     fn as_wasi_view(&mut self) -> impl WasiView {
         self.durable_ctx.as_wasi_view()
-    }
-
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
-        self.durable_ctx.as_wasi_http_view()
     }
 
     fn get_public_state(&self) -> &Self::PublicState {
@@ -1058,6 +1033,10 @@ impl WorkerCtx for Context {
         self.durable_ctx.parsed_agent_id()
     }
 
+    fn owner_context(&self) -> &ResolvedOwnerContext {
+        self.durable_ctx.owner_context()
+    }
+
     fn agent_mode(&self) -> AgentMode {
         self.durable_ctx.agent_mode()
     }
@@ -1068,6 +1047,10 @@ impl WorkerCtx for Context {
 
     fn created_by_email(&self) -> &AccountEmail {
         self.durable_ctx.created_by_email()
+    }
+
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn component_metadata(&self) -> &Component {

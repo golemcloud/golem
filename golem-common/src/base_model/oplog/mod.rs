@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod attachment;
 pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
@@ -20,11 +21,10 @@ use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
 use crate::model::account::AccountId;
@@ -43,12 +43,11 @@ use uuid::Uuid;
 mod raw_imports {
     pub use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     pub use crate::base_model::invocation_context::TraceId;
-    pub use crate::model::invocation_context::AttributeValue;
+
     pub use crate::model::oplog::payload;
-    pub use crate::model::oplog::raw_types::AttributeMap;
+
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
-    pub use crate::model::worker::UntypedAgentConfigEntry;
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
     pub use crate::resource_runtime::ResourceTypeId;
 
@@ -80,23 +79,11 @@ oplog_entry! {
         wit_raw_type: "raw-create-parameters"
         wit_public_type: "create-parameters"
         raw {
-            agent_id: AgentId,
-            agent_mode: AgentMode,
-            component_revision: ComponentRevision,
-            env: Vec<(String, String)>,
-            environment_id: EnvironmentId,
-            created_by: AccountId,
-            parent: Option<AgentId>,
-            component_size: u64,
-            initial_total_linear_memory_size: u64,
-            initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
-            local_agent_config: Vec<UntypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>,
-            /// Per-instance fingerprint, unique across recreations of the same agent ID.
-            instance_id: Uuid
+            parameters: Box<CreateParameters>
         }
         public {
             agent_id: AgentId,
+            owner_kind: crate::base_model::agent::OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: BTreeMap<String, String>,
@@ -123,6 +110,9 @@ oplog_entry! {
     /// for ordinary replayable calls.
     /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
     /// host-level request payload (batched-write, future transaction scopes).
+    /// `denial` is the reason the host denied the call before it ran. A denied call never runs
+    /// its operation: its `End` holds the denied response, and recovery of a `Start` without a
+    /// terminal completes it with that response.
     Start {
         hint: false
         wit_raw_type: "raw-start-parameters"
@@ -130,18 +120,22 @@ oplog_entry! {
         raw {
             parent_start_index: Option<OplogIndex>,
             function_name: payload::host_functions::HostFunctionName,
-            invocation_id: Option<Uuid>,
+            invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
+            span_started: Option<Box<SpanStarted>>,
+            denial: Option<String>,
         }
         public {
             parent_start_index: Option<OplogIndex>,
             function_name: String,
-            invocation_id: Option<Uuid>,
+            invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
+            span_started: Option<PublicSpanStarted>,
+            denial: Option<String>,
         }
     },
     /// Marks the successful completion of a durable host call (or scope) started by the
@@ -159,11 +153,15 @@ oplog_entry! {
             start_index: OplogIndex,
             response: Option<payload::OplogPayload<payload::HostResponse>>,
             forced_commit: bool,
+            span_finished: Option<SpanFinished>,
+            span_attributes: Option<SpanAttributes>,
         }
         public {
             start_index: OplogIndex,
             response: Option<TypedSchemaValue>,
             forced_commit: bool,
+            span_finished: Option<PublicSpanFinished>,
+            span_attributes: Option<PublicSpanAttributes>,
         }
     },
     /// Marks that a durable host call started by the `Start` at `start_index` was
@@ -178,14 +176,16 @@ oplog_entry! {
         raw {
             start_index: OplogIndex,
             partial: Option<payload::OplogPayload<payload::HostResponse>>,
+            span_finished: Option<SpanFinished>,
         }
         public {
             start_index: OplogIndex,
             partial: Option<TypedSchemaValue>,
+            span_finished: Option<PublicSpanFinished>,
         }
     },
     /// The agent has been invoked
-    #[desert(evolution(FieldAdded("wallet_pin", None::<InvocationWalletPin>)))]
+    #[desert(evolution())]
     AgentInvocationStarted {
         hint: false
         wit_raw_type: "raw-agent-invocation-started-parameters"
@@ -196,11 +196,11 @@ oplog_entry! {
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
-            wallet_pin: Option<InvocationWalletPin>,
+            wallet_pin: Box<InvocationWalletPin>,
         }
         public {
             invocation: PublicAgentInvocation,
-            wallet_pin: Option<PublicInvocationWalletPin>,
+            wallet_pin: PublicInvocationWalletPin,
         }
     },
     /// The agent has completed an invocation
@@ -235,30 +235,26 @@ oplog_entry! {
         wit_raw_type: "raw-error-parameters"
         wit_public_type: "error-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            kind: OplogErrorKind,
             error: AgentError,
-            /// Points to the oplog index where the retry should start from. Normally this can be just the
-            /// current oplog index (after the last persisted side-effect). When failing in an atomic region
-            /// or batched remote writes, this should point to the start of the region.
+            /// Points to the oplog index where the retry should start from.
             /// When counting the number of retries for a specific error, the error entries are grouped by this index.
             retry_from: OplogIndex,
-            /// Whether the error occurred inside an active atomic region that has already performed side effects.
-            /// This affects retry decisions for deterministic traps.
-            inside_atomic_region: bool,
             /// Optional semantic retry state. When present, this allows exact reconstruction
             /// of semantic retry policies without count-based replay.
             retry_policy_state: Option<RetryPolicyState>,
         }
         public {
+            kind: OplogErrorKind,
             error: String,
             retry_from: OplogIndex,
-            inside_atomic_region: bool,
             retry_policy_state: Option<PublicRetryPolicyState>,
         }
     },
-    /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
-    /// more predictable.
-    NoOp {
-        hint: false
+    /// A previously failed startup or replay completed successfully.
+    RecoverySucceeded {
+        hint: true
         wit_raw_type: "timestamp"
         wit_public_type: "timestamp"
         raw {}
@@ -269,10 +265,11 @@ oplog_entry! {
     /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
     /// ignore all recorded operations in between.
     Jump {
-        hint: false
+        hint: true
         wit_raw_type: "jump-parameters"
         wit_public_type: "jump-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             jump: OplogRegion,
         }
         public {
@@ -295,29 +292,6 @@ oplog_entry! {
         wit_public_type: "timestamp"
         raw {}
         public {}
-    },
-    /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-    /// recovery except if there is a corresponding `EndAtomicRegion` entry.
-    BeginAtomicRegion {
-        hint: false
-        wit_raw_type: "timestamp"
-        wit_public_type: "timestamp"
-        raw {}
-        public {}
-    },
-    /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-    /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-    /// compaction.
-    EndAtomicRegion {
-        hint: false
-        wit_raw_type: "end-atomic-region-parameters"
-        wit_public_type: "end-atomic-region-parameters"
-        raw {
-            begin_index: OplogIndex,
-        }
-        public {
-            begin_index: OplogIndex,
-        }
     },
     /// An invocation request arrived while the worker was busy
     PendingAgentInvocation {
@@ -345,10 +319,12 @@ oplog_entry! {
         wit_public_type: "pending-update-parameters"
         raw {
             description: UpdateDescription,
+            update_attempt_index: Option<OplogIndex>,
         }
         public {
             target_revision: ComponentRevision,
             description: PublicUpdateDescription,
+            update_attempt_index: OplogIndex,
         }
     },
     /// An update was successfully applied
@@ -361,11 +337,13 @@ oplog_entry! {
             new_component_size: u64,
             new_total_linear_memory_size: Option<u64>,
             new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+            snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
         }
         public {
             target_revision: ComponentRevision,
             new_component_size: u64,
             new_active_plugins: BTreeSet<PluginInstallationDescription>,
+            snapshot_assisted_details: Option<PublicSnapshotAssistedUpdateDetails>,
         }
     },
     /// An update failed to be applied
@@ -376,10 +354,15 @@ oplog_entry! {
         raw {
             target_revision: ComponentRevision,
             details: Option<String>,
+            snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+            update_attempt_index: Option<OplogIndex>,
+            snapshot_fault: Option<SnapshotFault>,
         }
         public {
             target_revision: ComponentRevision,
             details: Option<String>,
+            snapshot_assisted_details: Option<PublicFailedSnapshotAssistedUpdateDetails>,
+            update_attempt_index: Option<OplogIndex>,
         }
     },
     /// Increased total linear memory size
@@ -400,6 +383,7 @@ oplog_entry! {
         wit_raw_type: "raw-create-resource-parameters"
         wit_public_type: "create-resource-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             id: AgentResourceId,
             resource_type_id: ResourceTypeId,
         }
@@ -415,6 +399,7 @@ oplog_entry! {
         wit_raw_type: "raw-drop-resource-parameters"
         wit_public_type: "drop-resource-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             id: AgentResourceId,
             resource_type_id: ResourceTypeId,
         }
@@ -434,15 +419,25 @@ oplog_entry! {
             level: LogLevel,
             context: String,
             message: String,
+            trace_context: Option<LogTraceContext>,
         }
         public {
             level: LogLevel,
             context: String,
             message: String,
+            trace_context: Option<LogTraceContext>,
         }
     },
     /// Marks the point where the worker was restarted from clean initial state
     Restart {
+        hint: true
+        wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
+        raw {}
+        public {}
+    },
+    /// Marks that an unfinished durable invocation was admitted to resume
+    Resumed {
         hint: true
         wit_raw_type: "timestamp"
         wit_public_type: "timestamp"
@@ -497,66 +492,15 @@ oplog_entry! {
             idempotency_key: IdempotencyKey,
         }
     },
-    /// Starts a new span in the invocation context
-    StartSpan {
-        hint: false
-        wit_raw_type: "start-span-parameters"
-        wit_public_type: "start-span-parameters"
-        raw {
-            parent_start_index: Option<OplogIndex>,
-            span_id: SpanId,
-            parent: Option<SpanId>,
-            linked_context_id: Option<SpanId>,
-            attributes: AttributeMap,
-        }
-        public {
-            span_id: SpanId,
-            parent_id: Option<SpanId>,
-            linked_context: Option<SpanId>,
-            attributes: Vec<PublicAttribute>,
-        }
-    },
-    /// Finishes an open span in the invocation context
-    FinishSpan {
-        hint: false
-        wit_raw_type: "finish-span-parameters"
-        wit_public_type: "finish-span-parameters"
-        raw {
-            parent_start_index: Option<OplogIndex>,
-            span_id: SpanId,
-        }
-        public {
-            span_id: SpanId,
-        }
-    },
-    /// Set an attribute on an open span in the invocation contex
-    SetSpanAttribute {
-        hint: false
-        wit_raw_type: "set-span-attribute-parameters"
-        wit_public_type: "set-span-attribute-parameters"
-        raw {
-            parent_start_index: Option<OplogIndex>,
-            span_id: SpanId,
-            key: String,
-            value: AttributeValue,
-        }
-        public {
-            span_id: SpanId,
-            key: String,
-            value: PublicAttributeValue,
-        }
-    },
     /// Marks the beginning of a remote transaction
     BeginRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "raw-begin-remote-transaction-parameters"
         wit_public_type: "begin-remote-transaction-parameters"
         raw {
             transaction_id: TransactionId,
-            /// BeginRemoteTransaction entries need to be repeated on retries, because they may need a new
-            /// transaction_id. The `begin_index` field always points to the original, first entry. This makes
-            /// error grouping work. When None, this is the original begin entry.
-            original_begin_index: Option<OplogIndex>,
+            /// The transaction scope Start that owns this marker.
+            original_begin_index: OplogIndex,
         }
         public {
             transaction_id: TransactionId
@@ -564,7 +508,7 @@ oplog_entry! {
     },
     /// Marks the point before a remote transaction is committed
     PreCommitRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -576,7 +520,7 @@ oplog_entry! {
     },
     /// Marks the point before a remote transaction is rolled back
     PreRollbackRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -588,7 +532,7 @@ oplog_entry! {
     },
     /// Marks the point after a remote transaction is committed
     CommittedRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -600,7 +544,7 @@ oplog_entry! {
     },
     /// Marks the point after a remote transaction is rolled back
     RolledBackRemoteTransaction {
-        hint: false
+        hint: true
         wit_raw_type: "remote-transaction-parameters"
         wit_public_type: "remote-transaction-parameters"
         raw {
@@ -611,7 +555,7 @@ oplog_entry! {
         }
     },
     /// A snapshot of the agent's state
-    #[desert(evolution(FieldAdded("wallet_generation", 0_u64)))]
+    #[desert(evolution())]
     Snapshot {
         hint: true
         wit_raw_type: "raw-snapshot-parameters"
@@ -621,9 +565,15 @@ oplog_entry! {
             mime_type: String,
             active_cards: Vec<StoredCard>,
             wallet_generation: u64,
+            /// The filesystem snapshot that the executor captured with this application
+            /// snapshot. `None` means that the executor made no filesystem capture. The
+            /// filesystem snapshot is usable only after a `SnapshotConfirmed` entry with the
+            /// same name.
+            filesystem_snapshot: Option<FilesystemSnapshotName>,
         }
         public {
-            data: PublicSnapshotData
+            data: PublicSnapshotData,
+            filesystem_snapshot: Option<String>,
         }
     },
     /// Checkpoint for oplog processor plugin delivery tracking
@@ -652,7 +602,8 @@ oplog_entry! {
         wit_raw_type: "set-retry-policy-parameters"
         wit_public_type: "set-retry-policy-parameters"
         raw {
-            policy: NamedRetryPolicy,
+            entity_parent_start_index: Option<OplogIndex>,
+            policy: Box<NamedRetryPolicy>,
         }
         public {
             policy: PublicNamedRetryPolicy,
@@ -664,6 +615,7 @@ oplog_entry! {
         wit_raw_type: "remove-retry-policy-parameters"
         wit_public_type: "remove-retry-policy-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             name: String,
         }
         public {
@@ -676,27 +628,29 @@ oplog_entry! {
         wit_raw_type: "raw-card-event-queued-parameters"
         wit_public_type: "card-event-queued-parameters"
         raw {
-            event: QueuedCardEvent,
+            entity_parent_start_index: Option<OplogIndex>,
+            event: Box<QueuedCardEvent>,
         }
         public {
             event: PublicQueuedCardEvent,
         }
     },
     /// Records successful installation of a permission card into the agent wallet.
-    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
+    #[desert(evolution())]
     CardInstalled {
         hint: true
         wit_raw_type: "raw-card-installed-parameters"
         wit_public_type: "card-installed-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             queued_event_index: Option<OplogIndex>,
-            card: StoredCard,
-            wallet_generation: Option<u64>,
+            card: Box<StoredCard>,
+            wallet_generation: u64,
         }
         public {
             queued_event_index: Option<OplogIndex>,
             card_id: CardId,
-            wallet_generation: Option<u64>,
+            wallet_generation: u64,
         }
     },
     /// Records failed installation of a permission card into the agent wallet.
@@ -705,6 +659,7 @@ oplog_entry! {
         wit_raw_type: "card-install-failed-parameters"
         wit_public_type: "card-install-failed-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             queued_event_index: OplogIndex,
             card_id: CardId,
             reason: CardInstallFailure,
@@ -716,77 +671,76 @@ oplog_entry! {
         }
     },
     /// Records that a permission card used by the agent has been revoked.
-    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
+    #[desert(evolution())]
     CardRevoked {
         hint: true
         wit_raw_type: "card-revoked-parameters"
         wit_public_type: "card-revoked-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             queued_event_index: OplogIndex,
             card_id: CardId,
-            wallet_generation: Option<u64>,
+            wallet_generation: u64,
         }
         public {
             queued_event_index: OplogIndex,
             card_id: CardId,
-            wallet_generation: Option<u64>,
+            wallet_generation: u64,
         }
     },
     /// Records that a permission card used by the agent has expired.
-    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
+    #[desert(evolution())]
     CardExpired {
         hint: true
         wit_raw_type: "card-expired-parameters"
         wit_public_type: "card-expired-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             card_id: CardId,
-            wallet_generation: Option<u64>,
+            wallet_generation: u64,
         }
         public {
             card_id: CardId,
-            wallet_generation: Option<u64>,
+            wallet_generation: u64,
         }
     },
     /// Records a permission card derived by the running agent.
-    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
+    #[desert(evolution())]
     CardDerived {
         hint: true
         wit_raw_type: "raw-card-derived-parameters"
         wit_public_type: "card-derived-parameters"
         raw {
-            card: StoredCard,
-            wallet_generation: Option<u64>,
+            entity_parent_start_index: Option<OplogIndex>,
+            card: Box<StoredCard>,
+            wallet_generation: u64,
         }
         public {
             card_id: CardId,
             parent_ids: Vec<CardId>,
-            wallet_generation: Option<u64>,
+            wallet_generation: u64,
         }
     },
     /// Records a source wallet's durable permission-card transfer intent.
     ///
-    /// This entry is written only to the source agent's oplog. `source_holder` is absent only for
-    /// legacy entries written before source ownership was captured; the owning oplog identifies
-    /// the source in that case. `source_wallet_generation`, when present, is the source wallet's
-    /// new generation after recording the pending transfer.
+    /// This entry is written only to the source agent's oplog. `source_wallet_generation` is the
+    /// source wallet's new generation after recording the pending transfer.
     /// A concrete source card leaves the source wallet at this point, while a polymorphic source
     /// remains so that the target can receive a monomorphic child. Retry identity and payload are
     /// pinned by the preceding queued transfer event. No entry may advance another wallet's
     /// generation.
-    #[desert(evolution(
-        FieldAdded("source_holder", None::<CardHolder>),
-        FieldAdded("source_wallet_generation", None::<u64>)
-    ))]
+    #[desert(evolution())]
     CardTransferStarted {
         hint: true
         wit_raw_type: "raw-card-transfer-started-parameters"
         wit_public_type: "card-transfer-started-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             transfer_id: Uuid,
             card_id: CardId,
-            source_holder: Option<CardHolder>,
+            source_holder: CardHolder,
             target_holder: CardHolder,
-            source_wallet_generation: Option<u64>,
+            source_wallet_generation: u64,
         }
         public {
             /// Identifies a transfer intent recorded by its source agent.
@@ -794,64 +748,59 @@ oplog_entry! {
             card_id: CardId,
             target_holder: PublicCardHolder,
             /// New generation of the source wallet that owns this oplog entry.
-            source_wallet_generation: Option<u64>,
+            source_wallet_generation: u64,
         }
     },
     /// Records a target wallet's durable admission of a transferred permission card.
     ///
-    /// This entry is written only to the target agent's oplog. `source_card_id` is absent only for
-    /// legacy entries written before source identity was captured. `target_wallet_generation`,
-    /// when present, is the target wallet's new generation after admission. No entry may advance
-    /// another wallet's generation.
-    #[desert(evolution(
-        FieldAdded("source_card_id", None::<CardId>),
-        FieldAdded("target_wallet_generation", None::<u64>)
-    ))]
+    /// This entry is written only to the target agent's oplog. `target_wallet_generation` is the
+    /// target wallet's new generation after admission. No entry may advance another wallet's
+    /// generation.
+    #[desert(evolution())]
     CardTransferred {
         hint: true
         wit_raw_type: "raw-card-transferred-parameters"
         wit_public_type: "card-transferred-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             transfer_id: Uuid,
-            source_card_id: Option<CardId>,
+            source_card_id: CardId,
             installed_card_id: CardId,
             target_holder: CardHolder,
-            card: StoredCard,
-            target_wallet_generation: Option<u64>,
+            card: Box<StoredCard>,
+            target_wallet_generation: u64,
         }
         public {
             /// Identifies a target admission recorded by the target agent.
             transfer_id: Uuid,
-            /// Source card identity, absent only on legacy entries.
-            source_card_id: Option<CardId>,
+            /// Source card identity.
+            source_card_id: CardId,
             installed_card_id: CardId,
             target_holder: PublicCardHolder,
             /// New generation of the target wallet that owns this oplog entry.
-            target_wallet_generation: Option<u64>,
+            target_wallet_generation: u64,
         }
     },
     /// Records an atomic revocation of a permission-card DAG subtree.
     ///
     /// `affected_wallets` describes cascade impact but does not authorize this entry to mutate
-    /// those wallets. `local_wallet_generation`, when present, is the new generation of the wallet
-    /// owning this oplog. Each other affected agent records its own local entry.
-    #[desert(evolution(
-        FieldRemoved("generation_bumps"),
-        FieldAdded("local_wallet_generation", None::<u64>)
-    ))]
+    /// those wallets. `local_wallet_generation` is the new generation of the wallet owning this
+    /// oplog. Each other affected agent records its own local entry.
+    #[desert(evolution())]
     CardRevokedCascade {
         hint: true
         wit_raw_type: "raw-card-revoked-cascade-parameters"
         wit_public_type: "card-revoked-cascade-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             revoked_card_ids: Vec<CardId>,
             affected_wallets: Vec<CardHolder>,
-            local_wallet_generation: Option<u64>,
+            local_wallet_generation: u64,
         }
         public {
             revoked_card_ids: Vec<CardId>,
             /// New generation of the wallet that owns this oplog entry.
-            local_wallet_generation: Option<u64>,
+            local_wallet_generation: u64,
         }
     },
     /// Records the source wallet's durable receipt of a target admission.
@@ -864,6 +813,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-transfer-confirmed-parameters"
         wit_public_type: "card-transfer-confirmed-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             transfer_id: Uuid,
             source_card_id: CardId,
             installed_card_id: CardId,
@@ -901,13 +851,48 @@ oplog_entry! {
             payload: TypedSchemaValue,
         }
     },
+    /// A consumed tool attachment read. Metadata remains inline so reconstruction can
+    /// index read boundaries without downloading bytes. Only an original data observation
+    /// owns a payload; re-observations refer to their original observation instead.
+    /// Guest observations reserve their replay boundary despite being hint entries.
+    ToolAttachmentRead {
+        hint: true
+        wit_raw_type: "raw-tool-attachment-read-parameters"
+        wit_public_type: "tool-attachment-read-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            observation: Box<attachment::ToolAttachmentReadObservation>,
+            payload: Option<payload::OplogPayload<Vec<u8>>>,
+        }
+        public {
+            observation: TypedSchemaValue,
+            payload: Option<Vec<u8>>,
+        }
+    },
+    /// An effective tool attachment control transition with no byte payload.
+    ToolAttachmentControl {
+        hint: true
+        wit_raw_type: "raw-tool-attachment-control-parameters"
+        wit_public_type: "tool-attachment-control-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            attachment: attachment::ToolAttachmentId,
+            transition: attachment::ToolAttachmentControl,
+        }
+        public {
+            attachment: TypedSchemaValue,
+            transition: TypedSchemaValue,
+        }
+    },
     /// Registers a durable stream before its handle can be observed.
     StreamRegistered {
         hint: true
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamRegisteredRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamRegisteredRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -919,7 +904,9 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamItemsRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamItemsRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -931,7 +918,9 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamEndRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamEndRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -943,7 +932,9 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamCancelRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamCancelRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -956,7 +947,9 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamSessionRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamSessionRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -1001,6 +994,20 @@ oplog_entry! {
         }
         public {
             start_index: OplogIndex,
+        }
+    },
+    /// Records that the store holds the filesystem snapshot with the given name. The `Snapshot`
+    /// entry that carries the same name is usable as a replay baseline from this point. The
+    /// position of this entry in the oplog carries no other meaning.
+    SnapshotConfirmed {
+        hint: true
+        wit_raw_type: "snapshot-confirmed-parameters"
+        wit_public_type: "snapshot-confirmed-parameters"
+        raw {
+            filesystem_snapshot: FilesystemSnapshotName,
+        }
+        public {
+            filesystem_snapshot: String,
         }
     }
 }

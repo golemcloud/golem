@@ -233,21 +233,21 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
             match base_type {
                 DbColumnType::Enumeration(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        try_match!(v, DbValue::Enumeration(r))
+                        try_match!(v, DbValue::Enumeration(r) => r)
                             .map_err(|_| get_unexpected_value_error(&base_type))
                     })?;
                     setter.try_set_value(PgEnums(values))
                 }
                 DbColumnType::Composite(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        try_match!(v, DbValue::Composite(r))
+                        try_match!(v, DbValue::Composite(r) => r)
                             .map_err(|_| get_unexpected_value_error(&base_type))
                     })?;
                     setter.try_set_value(PgComposites(values))
                 }
                 DbColumnType::Domain(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        try_match!(v, DbValue::Domain(r))
+                        try_match!(v, DbValue::Domain(r) => r)
                             .map(|domain| *domain)
                             .map_err(|_| get_unexpected_value_error(&base_type))
                     })?;
@@ -274,44 +274,56 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
 ) -> Result<(), String> {
     match column_type {
         DbColumnType::Boolean => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Boolean(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Boolean(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Character => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Character(r))
+            try_match!(v, DbValue::Character(r) => r)
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int2 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Int2(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Int2(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int4 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Int4(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Int4(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int8 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Int8(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Int8(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Float4 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Float4(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Float4(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Float8 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Float8(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Float8(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Numeric => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Numeric(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Numeric(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Text => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Text(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Text(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Varchar => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Varchar(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Varchar(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Bpchar => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Bpchar(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Bpchar(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Bytea => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Bytea(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Bytea(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Uuid => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Uuid(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Uuid(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Json => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Json(v) = v {
@@ -346,18 +358,20 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             }
         }),
         DbColumnType::Timestamptz => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Timestamptz(r))
+            try_match!(v, DbValue::Timestamptz(r) => r)
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Timestamp => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Timestamp(r))
+            try_match!(v, DbValue::Timestamp(r) => r)
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Date => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Date(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Date(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Time => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Time(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Time(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Timetz => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Timetz(v) = v {
@@ -374,19 +388,23 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             }
         }),
         DbColumnType::Inet => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Inet(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Inet(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Cidr => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Cidr(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Cidr(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Macaddr => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Macaddr(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Macaddr(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Bit => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Bit(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Bit(r) => r).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Varbit => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Varbit(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Varbit(r) => r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int4range => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Int4range(v) = v {
@@ -473,15 +491,15 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             }
         }),
         DbColumnType::Enumeration(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Enumeration(r))
+            try_match!(v, DbValue::Enumeration(r) => r)
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Composite(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Composite(r))
+            try_match!(v, DbValue::Composite(r) => r)
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Domain(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Domain(r))
+            try_match!(v, DbValue::Domain(r) => r)
                 .map(|r| *r)
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),

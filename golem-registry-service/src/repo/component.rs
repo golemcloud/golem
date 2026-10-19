@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::card::DbCardRepo;
+use crate::repo::environment::DbEnvironmentRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{
@@ -24,13 +25,15 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAgentInitial};
+use golem_common::model::card::{
+    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial,
+};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::Blob;
-use golem_service_base::repo::{PoolLabelledTransaction, RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::fmt::Debug;
@@ -365,33 +368,6 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
-impl DbComponentRepo<PostgresPool> {
-    async fn lock_live_environment(
-        tx: &mut PoolLabelledTransaction<PostgresPool>,
-        environment_id: Uuid,
-    ) -> Result<(), ComponentRepoError> {
-        let environment = tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    UPDATE environments
-                    SET environment_id = environment_id
-                    WHERE environment_id = $1
-                        AND deleted_at IS NULL
-                    RETURNING environment_id
-                "#})
-                .bind(environment_id),
-            )
-            .await?;
-
-        if environment.is_none() {
-            return Err(ComponentRepoError::ConcurrentModification);
-        }
-
-        Ok(())
-    }
-}
-
-#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn create(
@@ -427,7 +403,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
 
         self.with_tx_err("create", |tx| {
             async move {
-                Self::lock_live_environment(tx, environment_id).await?;
+                if !DbEnvironmentRepo::<PostgresPool>::lock_in_tx(tx, environment_id).await? {
+                    return Err(ComponentRepoError::ConcurrentModification);
+                }
 
                 tx.execute(
                     sqlx::query(indoc! { r#"
@@ -484,7 +462,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .ok_or(ComponentRepoError::ConcurrentModification)?
                     .try_get::<Uuid, _>("environment_id")
                     .map_err(RepoError::from)?;
-                Self::lock_live_environment(tx, environment_id).await?;
+                if !DbEnvironmentRepo::<PostgresPool>::lock_in_tx(tx, environment_id).await? {
+                    return Err(ComponentRepoError::ConcurrentModification);
+                }
 
                 for card in cards_to_create {
                     DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
@@ -531,6 +511,51 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         let deleted_cards = self
             .with_tx_err("delete", |tx| {
                 async move {
+                    let environment_id = tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT environment_id
+                                FROM components
+                                WHERE component_id = $1
+                                    AND deleted_at IS NULL
+                            "#})
+                            .bind(component_id),
+                        )
+                        .await?
+                        .ok_or(ComponentRepoError::ConcurrentModification)?
+                        .try_get::<Uuid, _>("environment_id")
+                        .map_err(RepoError::from)?;
+                    if !DbEnvironmentRepo::<PostgresPool>::lock_in_tx(tx, environment_id).await? {
+                        return Err(ComponentRepoError::ConcurrentModification);
+                    }
+
+                    let source_reference = tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT component_id
+                                FROM tool_releases
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
+                                FROM tool_middleware_releases
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
+                                FROM deployment_component_revisions
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
+                                FROM deployment_registered_tools
+                                WHERE component_id = $1
+                                LIMIT 1
+                            "#})
+                            .bind(component_id),
+                        )
+                        .await?;
+                    if source_reference.is_some() {
+                        return Err(ComponentRepoError::ComponentSourceInUse);
+                    }
+
                     let active_revisions: Vec<ComponentRevisionRecord> = tx
                         .fetch_all_as(
                             sqlx::query_as(indoc! { r#"
@@ -558,6 +583,19 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     let mut card_roots = Vec::new();
                     for revision in active_revisions {
                         let component_revision = revision.revision_id.try_into()?;
+                        let component_card_id = revision
+                            .metadata
+                            .value()
+                            .component_provision_config()
+                            .initial_permissions
+                            .card_id;
+                        card_roots.push((
+                            component_card_id,
+                            CardManagedBy::ComponentInitial(CardManagedByComponentInitial {
+                                component_id: ComponentId(component_id),
+                                component_revision,
+                            }),
+                        ));
                         for (agent_type, config) in revision
                             .metadata
                             .value()
@@ -565,11 +603,12 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                             .iter()
                         {
                             let card_id = config.initial_permissions.card_id;
-                            let managed_by = CardManagedByAgentInitial {
-                                component_id: ComponentId(component_id),
-                                component_revision,
-                                agent_type: agent_type.clone(),
-                            };
+                            let managed_by =
+                                CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                                    component_id: ComponentId(component_id),
+                                    component_revision,
+                                    agent_type: agent_type.clone(),
+                                });
                             if !card_roots.contains(&(card_id, managed_by.clone())) {
                                 card_roots.push((card_id, managed_by));
                             }
@@ -617,12 +656,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                             .as_ref()
                             .and_then(|record| record.managed_by.as_ref())
                             .is_some_and(|managed_by| {
-                                let CardManagedBy::AgentInitial(actual) = managed_by.value() else {
-                                    return false;
-                                };
                                 card_roots[root_index..next_root_index]
                                     .iter()
-                                    .any(|(_, expected)| actual == expected)
+                                    .any(|(_, expected)| managed_by.value() == expected)
                             });
 
                         if managed_by_matches {
@@ -660,6 +696,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM components c
@@ -732,6 +769,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM current_deployments cd
@@ -830,6 +868,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM distinct_revs dr
@@ -878,6 +917,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            er.name AS environment_name,
                            er.revision_id AS environment_revision_id,
                            er.compatibility_check AS environment_compatibility_check,
+                           er.tool_compatibility_mode AS environment_tool_compatibility_mode,
                            er.version_check AS environment_version_check,
                            er.security_overrides AS environment_security_overrides
                     FROM components c
@@ -960,6 +1000,15 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
 
         let mut result = Vec::new();
         for revision in revisions {
+            let component_card_id = revision
+                .metadata
+                .value()
+                .component_provision_config()
+                .initial_permissions
+                .card_id;
+            if !result.contains(&component_card_id) {
+                result.push(component_card_id);
+            }
             for config in revision
                 .metadata
                 .into_value()
@@ -1113,6 +1162,12 @@ fn remap_agent_initial_card_records(
                             agent_type,
                         },
                     ))),
+                    CardManagedBy::ComponentInitial(_) => Some(Blob::new(
+                        CardManagedBy::ComponentInitial(CardManagedByComponentInitial {
+                            component_id,
+                            component_revision,
+                        }),
+                    )),
                     other => Some(Blob::new(other)),
                 };
             }

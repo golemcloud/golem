@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "effect-fixture-guest-client": [
+        "../golem-temp/bridge-sdk/ts/internal/effect-fixture-guest-client/effect-fixture-guest-client.ts"
+      ],
+      "effect-rich-fixture-guest-client": [
+        "../golem-temp/bridge-sdk/ts/internal/effect-rich-fixture-guest-client/effect-rich-fixture-guest-client.ts"
+      ],
+      "effect-snapshot-fixture-guest-client": [
+        "../golem-temp/bridge-sdk/ts/internal/effect-snapshot-fixture-guest-client/effect-snapshot-fixture-guest-client.ts"
+      ],
+      "effect-cross-streaming-tool-guest-client": [
+        "../golem-temp/bridge-sdk/ts/internal/effect-cross-streaming-tool-guest-client/effect-cross-streaming-tool-guest-client.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "../golem-temp/bridge-sdk/ts/internal/effect-fixture-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/ts/internal/effect-rich-fixture-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/ts/internal/effect-snapshot-fixture-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/ts/internal/effect-cross-streaming-tool-guest-client/*.ts"
+  ]
+}

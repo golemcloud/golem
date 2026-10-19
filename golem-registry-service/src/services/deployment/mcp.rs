@@ -71,12 +71,14 @@ impl DeployedMcpService {
                     {
                         compiled_mcp.security_scheme = Some(SecuritySchemeDetails {
                             id: scheme.id,
+                            revision: scheme.revision,
                             name: scheme.name,
                             provider_type: scheme.provider_type,
                             client_id: scheme.client_id,
                             client_secret: scheme.client_secret,
                             redirect_url: scheme.redirect_url,
                             scopes: scheme.scopes,
+                            login: scheme.login,
                         });
                     }
                 }

@@ -171,6 +171,7 @@ fn emit_schema_type(typ: &SchemaType) -> String {
             "{SCHEMA}.SchemaTypeBody.UrlType({})",
             url_restrictions(restrictions)
         ),
+        Uuid { .. } => format!("{SCHEMA}.SchemaTypeBody.UuidType"),
         Datetime { .. } => format!("{SCHEMA}.SchemaTypeBody.DatetimeType"),
         Duration { .. } => format!("{SCHEMA}.SchemaTypeBody.DurationType"),
         Quantity { spec, .. } => format!(

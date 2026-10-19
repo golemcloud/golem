@@ -23,7 +23,7 @@ Component/Agent Presets (config overrides)
 
 When you run `golem deploy`, the CLI:
 
-1. Selects an **environment** from the manifest (via `--local`, `--cloud`, `-e <name>`, or the `default: true` environment)
+1. Selects an **environment** from the manifest (via `--local`, `--cloud`, `-E <name>`, or the `default: true` environment)
 2. Resolves **connection settings** — either from the environment's `server:` field, or falls back to the active CLI **profile**
 3. Activates **presets** listed in the environment's `componentPresets:` field, merging their overrides into the resolved configuration
 
@@ -61,7 +61,7 @@ prompts for one (masked). A token cannot be combined with `--auth oauth2`.
 ### Global flags
 
 ```shell
-golem --profile my-staging deploy          # Use a specific profile for this command
+golem -E staging deploy                    # Use a named manifest environment for this command
 golem -L deploy                            # Shortcut: use "local" environment/profile
 golem -C deploy                            # Shortcut: use "cloud" environment/profile
 ```
@@ -74,7 +74,7 @@ golem -C deploy                            # Shortcut: use "cloud" environment/p
 | `custom_worker_url` | Golem Worker service URL (defaults to `custom_url`) |
 | `allow_insecure` | Accept invalid TLS certificates |
 | `auth` | Authentication — `staticToken` or OAuth2 |
-| `config.default_format` | Default CLI output format (`text` or `json`) |
+| `config.default_format` | Default CLI output format (`text`, `json`, `pretty-json`, `yaml`, `pretty-yaml`, or `toon`) |
 
 ## App Environments
 
@@ -87,7 +87,7 @@ For deployment `subdomain` fields, the environment's `server` controls expansion
 ```yaml
 environments:
   local:
-    default: true                    # Selected when no -e flag is given
+    default: true                    # Selected when no -E flag is given
     server: local                    # Use built-in local server
     componentPresets: local          # Activate the "local" preset
   cloud:
@@ -138,9 +138,12 @@ environments:
     cli:
       format: json                   # Default output format
       autoConfirm: true              # Auto-answer "yes" to prompts
-      redeployAgents: true           # Equivalent to --reset on deploy
-      reset: true                    # Reset all state on deploy
+      redeployAgents: true           # Delete/recreate agents; agent state is lost
 ```
+
+`reset: true` is equivalent to `--reset`: it deletes existing agents for the deployed components
+after deployment, losing their state, and enables incompatibility-replacement fallbacks. The
+environment itself is retained. It takes precedence over `redeployAgents` when both are configured.
 
 ### Deployment options (`deployment:`)
 
@@ -160,8 +163,8 @@ environments:
 |------|--------|
 | `-L` / `--local` | Select the `local` environment (or `local` profile if no manifest) |
 | `-C` / `--cloud` | Select the `cloud` environment (or `cloud` profile if no manifest) |
-| `-e <name>` | Select a named environment from the manifest |
-| *(none)* | Use the `default: true` environment, or fall back to active profile |
+| `-E <name>` | Select a named environment from the manifest |
+| *(none)* | Use the explicitly default environment, otherwise the first declared manifest environment |
 
 ### Managing environments
 
@@ -238,7 +241,7 @@ componentTemplates:
       RUST_LOG: info
     presets:
       local:
-        default: true                # Used when no preset is explicitly selected
+        default: true                # Fallback when no selected preset name matches
         env:
           GOLEM_ENV: local
       cloud:
@@ -252,10 +255,10 @@ components:
     presets:
       local:
         build:
-          - command: cargo build --target wasm32-wasip1
+          - command: cargo build --target wasm32-wasip2
       release:
         build:
-          - command: cargo build --target wasm32-wasip1 --release
+          - command: cargo build --target wasm32-wasip2 --release
 
 agents:
   MyAgent:
@@ -297,7 +300,35 @@ Presets **cannot** override structural fields like `dir` or `templates`.
    golem deploy --yes -P debug,verbose
    ```
 
-3. **Default preset**: One preset per component/agent/template can be marked `default: true` — it is used when no preset is explicitly selected by environment or CLI flag.
+3. **Default preset**: A component, agent, or template with custom presets always applies at least one custom preset. If no preset name selected by the environment or CLI matches that component, agent, or template, it applies its default custom preset. One custom preset can be marked `default: true`. If none is marked, the first custom preset in declaration order is the default, even if it is the only custom preset. This fallback is resolved independently for each component, agent, and template.
+
+Presets named `app-env:<environment-name>` are environment presets, not custom presets. They apply only for the matching environment and do not participate in default selection.
+
+### Keeping presets opt-in
+
+A single custom preset is not opt-in: it becomes the default and applies even without `-P` or `componentPresets`. To keep an override opt-in, add an empty custom preset marked `default: true`:
+
+```yaml
+components:
+  my-app:service:
+    presets:
+      standard:
+        default: true
+      debug:
+        env:
+          RUST_LOG: debug
+```
+
+The `standard` preset adds no overrides. The `debug` preset applies only when selected by `componentPresets: debug` in the environment or by `-P debug` on the CLI:
+
+```shell
+# Empty default if no matching environment selection
+golem deploy --yes
+# Enables the debug overrides
+golem deploy --yes -P debug
+```
+
+Use the same empty-default pattern under a template's or agent's `presets` to keep its other presets opt-in. It also works for a preset that installs an optional plugin, such as OTLP: put the plugin in the opt-in preset and leave the default preset empty.
 
 > **Naming guideline**: Avoid using the same name for an environment and a preset (e.g. both called `local`). Although they are separate concepts, sharing names makes the manifest harder to read and reason about. Prefer distinct preset names such as `dev`, `debug`, `release`, or `optimized` that describe what the preset *does*, rather than mirroring the environment name.
 

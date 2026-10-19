@@ -64,9 +64,17 @@ macro_rules! oplog_entry {
             }
 
             pub fn rounded(self) -> Self {
-                 match self {
+                 let mut result = match self {
                     $(Self::$case { timestamp, $( $field ),* } => Self::$case { timestamp: timestamp.rounded(), $( $field ),* }),*
+                 };
+                 match &mut result {
+                    Self::Start { span_started: Some(span), .. } => span.started_at = span.started_at.rounded(),
+                    Self::End { span_finished, .. } | Self::Cancelled { span_finished, .. } => {
+                        if let Some(span) = span_finished { span.finished_at = span.finished_at.rounded(); }
+                    }
+                    _ => {}
                  }
+                 result
             }
         }
 
@@ -100,6 +108,21 @@ macro_rules! oplog_entry {
                     public_oplog_entry::$params_name
                 }
             )),*
+        }
+
+        impl PublicOplogEntry {
+            /// The type of the entry, the value of the `type` field of its serialized form.
+            pub fn entry_type(&self) -> &'static str {
+                match self {
+                    $(Self::$case(_) => stringify!($case)),*
+                }
+            }
+
+            pub fn timestamp(&self) -> Timestamp {
+                match self {
+                    $(Self::$case(params) => params.timestamp),*
+                }
+            }
         }
     }
 }
@@ -185,7 +208,7 @@ macro_rules! oplog_payload {
 
 #[macro_export]
 macro_rules! host_payload_pairs {
-    ( $( ($typename:ident => $iface:literal, $func:literal, $reqtype:ident, $resptype:ident) ),* $(,)? ) => {
+    ( $( ($typename:ident => $iface:literal, $func:literal, $reqtype:ident, $resptype:ident $(, denied = $denied:path)?) ),* $(,)? ) => {
         $(
             ident_mash::mash! {
                 inner_req = "HostRequest" + $reqtype &
@@ -201,7 +224,21 @@ macro_rules! host_payload_pairs {
                     const FQFN: &'static str = concat!($iface, "::", $func);
 
                     const HOST_FUNCTION_NAME: HostFunctionName = HostFunctionName::$typename;
+
+                    $(
+                        fn denied_response(request: &Self::Req, denial: &str) -> Option<Self::Resp> {
+                            Some($denied(request, denial))
+                        }
+                    )?
                 }
+
+                $(
+                    impl $crate::model::oplog::payload::DeniablePair for $typename {
+                        fn denied(request: &Self::Req, denial: &str) -> Self::Resp {
+                            $denied(request, denial)
+                        }
+                    }
+                )?
             }
         )*
 

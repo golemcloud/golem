@@ -1,5 +1,5 @@
 use middleware_definition::{PublicEchoMiddleware, PublicEchoUnderlying, PublicError};
-use sdk::{tool_middleware, tool::ToolInvokeError};
+use sdk::{tool::ToolInvokeError, tool_middleware};
 use std::marker::PhantomData;
 
 struct Policy<T>(PhantomData<T>);
@@ -14,7 +14,7 @@ impl<T> Policy<T> {
 impl<T> PublicEchoMiddleware for Policy<T> {
     async fn echo(
         &self,
-        underlying: &mut PublicEchoUnderlying,
+        underlying: &PublicEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<PublicError>> {
         underlying.echo(value).await

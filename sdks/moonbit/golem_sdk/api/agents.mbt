@@ -56,6 +56,11 @@ pub fn resolve_agent_id_strict(
 
 ///|
 /// Get the current agent's metadata.
+/// Requires self-view in the effective permission card, within the initialCard
+/// upper bound. Do not call during pure initialization. Stored environment and
+/// configuration fields are returned in full, without per-key WASI filtering.
+/// Snapshot restoration instead reads GOLEM_AGENT_ID through WASI and
+/// requires separate environment-read permission.
 pub fn get_self_metadata() -> AgentMetadata {
   @raw.get_self_metadata().unwrap()
 }

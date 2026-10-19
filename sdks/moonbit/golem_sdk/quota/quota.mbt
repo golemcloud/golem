@@ -174,6 +174,26 @@ pub impl @schema.FromSchema for QuotaToken with fn from_value(v) {
 }
 
 ///|
+pub impl @schema.FromWire for QuotaToken with fn read_wire(reader, index) {
+  { handle: @schema.FromWire::read_wire(reader, index), }
+}
+
+///|
+pub impl @schema.IntoWire for QuotaToken with fn append_wire(self, encoder) {
+  @schema.IntoWire::append_wire(self.handle, encoder)
+}
+
+///|
+pub impl @schema.IntoWire for QuotaToken with fn release_wire(self, releaser) {
+  @schema.IntoWire::release_wire(self.handle, releaser)
+}
+
+///|
+pub impl @schema.WireSchema for QuotaToken with fn append_wire_type(encoder) {
+  encoder.push(@types.QuotaTokenType({ resource_name: None, }))
+}
+
+///|
 /// Reserve `amount` units, run `f` to perform work, then commit actual usage.
 ///
 /// `f` receives the reservation and returns `(used, value)` where `used` is

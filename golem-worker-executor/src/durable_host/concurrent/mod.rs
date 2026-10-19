@@ -36,10 +36,9 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
-    OplogPayload, ScopeScanState, host_functions::HostFunctionName,
+    DeniablePair, DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry,
+    OplogIndex, OplogPayload, host_functions::HostFunctionName,
 };
-use golem_common::model::regions::OplogRegion;
 use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -52,22 +51,23 @@ use crate::durable_host::durability::{
     ClassifiedHostError, CustomBeginLifecycle, CustomInvocationContext, CustomInvocationScope,
     DurabilityHost, DurableCallTrapContext, DurableCallTrapError, DurableExecutionState,
     HostFailureKind, InFunctionRetryController, InFunctionRetryHost, InternalRetryResult,
-    TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
-    try_trigger_host_trap_retry,
+    SemanticTrapRetryOverride, TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
+    semantic_trap_retry_override_error, try_trigger_host_trap_retry,
 };
-use crate::durable_host::replay_state::{
-    OplogEntryLookupResult, ReplayState, ScopeStartClaimOutcome,
-};
+use crate::durable_host::durable_session::DroppedDurableInput;
+use crate::durable_host::replay_state::{ReplayState, ReplayToLiveRole};
 use crate::durable_host::{
-    AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState,
+    BeginReplayToLive, DurableWorkerCtx, FinishReplayToLive, PendingReplayToLive,
+    PublicDurableWorkerState,
 };
-use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
+use crate::services::{HasShutdownToken, HasWorker};
+use crate::workerctx::WorkerCtx;
 use std::fmt::Display;
 
 mod access;
 mod call;
+mod context;
 mod delivery;
 mod demand_stream;
 mod drop_events;
@@ -78,17 +78,19 @@ pub(super) use super::call_coordinator::{
     lock_synchronized_card_event_boundary_access, process_pending_replay_events_access,
 };
 pub(crate) use super::call_coordinator::{
-    agent_auth_ctx_at_serialized_access, authorize_live_permissions_at_serialized_access,
-    try_agent_auth_ctx_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, try_agent_auth_ctx_at_serialized_access,
 };
+pub(in crate::durable_host) use access::prepare_access_terminal_effect;
 use access::*;
 pub use call::*;
 #[cfg(test)]
-use call::{
-    BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost, unregistered_atomic_lease,
-};
+use call::{BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost};
+pub(in crate::durable_host) use context::AccessorContext;
+pub(crate) use context::{DurableAccess, DurableContext, SharedDurableContext};
 pub use delivery::*;
 pub(crate) use demand_stream::*;
+#[cfg(test)]
+pub(crate) use drop_events::tests::cleanup_recorder;
 pub use drop_events::*;
 pub use replay::*;
 

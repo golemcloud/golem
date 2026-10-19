@@ -1,0 +1,1462 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::Tracing;
+use futures::poll;
+use golem_common::model::agent::{AgentMode, AgentPrincipal, Principal};
+use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+use golem_common::model::durable_stream::*;
+use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::{
+    AgentId, AgentInvocationPayload, AgentInvocationResult, IdempotencyKey, OwnedAgentId, Timestamp,
+};
+use golem_common::{agent_id, data_value};
+use golem_schema::schema::SchemaFingerprintV1;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::storage::blob::agent_path_segment;
+use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::model::LookupResult;
+use golem_worker_executor::services::oplog::OplogOps;
+use golem_worker_executor::services::{
+    HasActiveAgents, HasOplog, HasOplogService, HasRpc, HasWorkerService, UsesAllDeps,
+};
+use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+use golem_worker_executor::storage::keyvalue::fault_injecting::{
+    FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+};
+use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::{
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerCtx,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
+};
+use std::sync::Arc;
+use std::time::Duration;
+use test_r::{inherit_test_dep, test, timeout};
+
+inherit_test_dep!(Tracing);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+
+const CACHE_TTL: Duration = Duration::from_millis(50);
+
+async fn setup(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    component: &PrecompiledComponent,
+) -> anyhow::Result<(
+    TestWorkerExecutor,
+    Arc<Worker<TestWorkerCtx>>,
+    KeyValueStorageFaults,
+)> {
+    setup_with_retry_interval(last_unique_id, deps, component, Duration::from_millis(50)).await
+}
+
+async fn setup_with_retry_interval(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    component: &PrecompiledComponent,
+    retry_interval: Duration,
+) -> anyhow::Result<(
+    TestWorkerExecutor,
+    Arc<Worker<TestWorkerCtx>>,
+    KeyValueStorageFaults,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.active_agents.ttl = CACHE_TTL;
+                config.oplog.max_payload_size = 1;
+                config.durable_stream.reconciliation_interval = retry_interval;
+                config.agent_status_flush.enabled = false;
+            })),
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let name = agent_id!("Counter", "initialization-test-seed");
+    let id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "increment", data_value!())
+        .await?;
+    let seed = executor
+        .active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .await
+        .unwrap()
+        .primary();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while executor
+            .worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id))
+            .await
+        {
+            seed.stop_if_idle().await;
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    Ok((executor, seed, faults))
+}
+
+fn target(seed: &Worker<TestWorkerCtx>, name: &str) -> OwnedAgentId {
+    OwnedAgentId::new(
+        seed.get_initial_worker_metadata().environment_id,
+        &AgentId {
+            component_id: seed.agent_id().component_id,
+            agent_id: agent_id!("Counter", name.to_string()).to_string(),
+        },
+    )
+}
+
+async fn acquire(
+    seed: &Arc<Worker<TestWorkerCtx>>,
+    target: &OwnedAgentId,
+) -> Result<Arc<Worker<TestWorkerCtx>>, WorkerExecutorError> {
+    Worker::get_or_create_suspended(
+        seed.all(),
+        target,
+        Some(vec![("OWNER".into(), "original".into())]),
+        vec![],
+        None,
+        None,
+        &InvocationContextStack::fresh(),
+        Principal::anonymous(),
+    )
+    .await
+}
+
+async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<DurableStreamHandle> {
+    let metadata = worker.get_initial_worker_metadata();
+    let index = worker.oplog().current_oplog_index().await.next();
+    let source_invocation = StreamInvocationId {
+        callee_environment_id: metadata.environment_id,
+        callee: metadata.agent_id.clone(),
+        callee_fingerprint: metadata.fingerprint,
+        idempotency_key: IdempotencyKey::new("stream-session".into()),
+    };
+    let handle = DurableStreamHandle {
+        format_version: 1,
+        stream_id: StreamId::derive(
+            metadata.environment_id,
+            &metadata.agent_id,
+            metadata.fingerprint,
+            index,
+        )?,
+        producer_environment_id: metadata.environment_id,
+        producer: metadata.agent_id,
+        expected_producer_fingerprint: metadata.fingerprint,
+        producer_generation: OplogIndex::NONE,
+        source_invocation: source_invocation.clone(),
+        component_revision: metadata.last_known_status.component_revision,
+        element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+    };
+    assert_eq!(
+        worker
+            .add_and_commit_oplog(OplogEntry::StreamRegistered {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                summary: None,
+                record: OplogPayload::Inline(Box::new(StreamRegisteredRecord {
+                    format_version: 1,
+                    coordinate: StreamRegistrationRecordCoordinate::Root {
+                        invocation: StreamRegistrationInvocation::Local(
+                            source_invocation.idempotency_key,
+                        ),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: vec![],
+                    },
+                    source_invocation: StreamRegistrationInvocation::Local(
+                        handle.source_invocation.idempotency_key.clone(),
+                    ),
+                    component_revision: handle.component_revision,
+                    element_schema_fingerprint: handle.element_schema_fingerprint,
+                    source_kind: StreamSourceKind::InvocationOutput,
+                    session_role: None,
+                })),
+            })
+            .await
+            .unwrap(),
+        index
+    );
+    Ok(handle)
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn late_initialization_storage_failure_is_shared_then_retried(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    let id = target(&seed, "late-storage-failure");
+    let original = acquire(&seed, &id).await?;
+    seed.active_agents().remove(&id).await;
+    register_stream(&original).await?;
+    let before = original.get_initial_worker_metadata();
+    let status = faults.gate_next(
+        "update_status",
+        KeyValueStorageError::Other("old status write outage".into()),
+    );
+    let write = tokio::spawn({
+        let original = original.clone();
+        async move {
+            original
+                .add_and_commit_oplog(OplogEntry::grow_memory(0))
+                .await
+        }
+    });
+    status.entered().await;
+    write.abort();
+    assert!(write.await.unwrap_err().is_cancelled());
+    drop(original);
+    let failure = faults.gate_next(
+        "lookup_producer",
+        KeyValueStorageError::Other("late construction outage".into()),
+    );
+    let mut first = Box::pin(acquire(&seed, &id));
+    assert!(poll!(&mut first).is_pending());
+    failure.entered().await;
+    assert!(!executor.worker_is_cached(&id).await);
+    let mut waiters = vec![first];
+    for _ in 0..3 {
+        let mut waiter = Box::pin(acquire(&seed, &id));
+        assert!(poll!(&mut waiter).is_pending());
+        waiters.push(waiter);
+    }
+    failure.release();
+    // Cancellation of the writer's caller must not let construction finish cleanup before
+    // the old generation's actual status job completes.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut waiters[0])
+            .await
+            .is_err()
+    );
+    let mut waiter = Box::pin(acquire(&seed, &id));
+    assert!(poll!(&mut waiter).is_pending());
+    waiters.push(waiter);
+    status.release();
+    let mut errors = Vec::new();
+    for waiter in waiters {
+        errors.push(waiter.await.err().expect("all original waiters must fail"));
+    }
+    assert!(errors[0].to_string().contains("late construction outage"));
+    assert!(errors.iter().all(|error| error == &errors[0]));
+    assert!(!executor.worker_is_cached(&id).await);
+
+    let (retry, overlapping) = tokio::join!(acquire(&seed, &id), acquire(&seed, &id));
+    let retry = retry?;
+    assert!(Arc::ptr_eq(&retry, &overlapping?));
+    let after = retry.get_initial_worker_metadata();
+    assert_eq!(before.fingerprint, after.fingerprint);
+    assert_eq!(before.env, after.env);
+    assert_eq!(before.config, after.config);
+    assert_eq!(
+        before.last_known_status.component_revision,
+        after.last_known_status.component_revision
+    );
+    let entries = retry
+        .oplog()
+        .read_exact(
+            OplogIndex::INITIAL,
+            retry.oplog().current_oplog_index().await.as_u64(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::Create { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(retry.pending_invocations().await.len(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn partial_creation_reloads_identity_and_original_initialization(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    let all = seed.all().clone();
+    for agent_type in ["Counter", "EphemeralCounter"] {
+        let mut id = target(&seed, "partial-creation");
+        id.agent_id.agent_id = agent_id!(agent_type, "partial-creation").to_string();
+        faults.fail(
+            "read_cached_agent_mode",
+            1,
+            KeyValueStorageError::Other("before creation outage".into()),
+        );
+        assert!(
+            acquire(&seed, &id)
+                .await
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("before creation outage")
+        );
+        assert!(Worker::get_latest_metadata(&all, &id).await?.is_none());
+        let context = InvocationContextStack::fresh();
+        let principal = Principal::Agent(AgentPrincipal {
+            agent_id: seed.agent_id(),
+        });
+        let payload_directory = deps
+            .blob_storage_root()
+            .join("oplog_payload")
+            .join("ephemeral")
+            .join(id.environment_id.to_string())
+            .join(agent_path_segment(&id.agent_id));
+        let expected_error = if agent_type == "Counter" {
+            faults.fail(
+                "update_status",
+                1,
+                KeyValueStorageError::Other("initial status outage".into()),
+            );
+            "initial status outage"
+        } else {
+            tokio::fs::create_dir_all(payload_directory.parent().unwrap()).await?;
+            tokio::fs::write(&payload_directory, b"block payload directory creation").await?;
+            "Failed to upload invocation payload"
+        };
+        let failure = Worker::get_or_create_suspended(
+            &all,
+            &id,
+            Some(vec![("OWNER".into(), "first-creator".into())]),
+            vec![],
+            None,
+            None,
+            &context,
+            principal.clone(),
+        )
+        .await
+        .err()
+        .expect("creation must report the injected failure");
+        assert!(failure.to_string().contains(expected_error));
+        assert!(!executor.worker_is_cached(&id).await);
+        let before = Worker::get_latest_metadata(&all, &id).await?.unwrap();
+        assert_eq!(before.last_known_status.oplog_idx, OplogIndex::INITIAL);
+        let sentinel_id = target(&seed, &format!("expiry-sentinel-{agent_type}"));
+        let sentinel = acquire(&seed, &sentinel_id).await?;
+        let sentinel_weak = Arc::downgrade(&sentinel);
+        drop(sentinel);
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while sentinel_weak.upgrade().is_some() {
+                tokio::time::sleep(CACHE_TTL).await;
+            }
+        })
+        .await?;
+        if agent_type == "EphemeralCounter" {
+            tokio::fs::remove_file(&payload_directory).await?;
+        }
+
+        // A different caller retries. Create and initialization provenance belong to the first one.
+        let worker = acquire(&seed, &id).await?;
+        let after = worker.get_initial_worker_metadata();
+        assert_eq!(before.fingerprint, after.fingerprint);
+        assert_eq!(before.env, after.env);
+        assert_eq!(before.config, after.config);
+        assert_eq!(
+            before.last_known_status.component_revision,
+            after.last_known_status.component_revision
+        );
+        let oplog = worker.oplog();
+        let entries = oplog
+            .read_exact(
+                OplogIndex::INITIAL,
+                oplog.current_oplog_index().await.as_u64(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            entries
+                .values()
+                .filter(|entry| matches!(entry, OplogEntry::Create { .. }))
+                .count(),
+            1
+        );
+        let pending = entries
+            .values()
+            .filter_map(|entry| match entry {
+                OplogEntry::PendingAgentInvocation {
+                    payload, trace_id, ..
+                } => Some((payload, trace_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(pending.len(), 1);
+        let AgentInvocationPayload::AgentInitialization {
+            principal: recorded,
+            ..
+        } = oplog
+            .download_payload(pending[0].0.clone())
+            .await
+            .map_err(anyhow::Error::msg)?
+        else {
+            panic!("expected initialization payload")
+        };
+        assert_eq!(recorded, principal);
+        assert_eq!(pending[0].1, &context.trace_id);
+        if agent_type == "EphemeralCounter" {
+            // No guest was admitted by the failed creation, so this is not a fail-stop reload.
+            Worker::start_if_needed(worker.clone()).await?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
+    let id = target(&seed, "cancelled-creator");
+    let all = seed.all().clone();
+    Worker::interrupt(&all, &id, false, Principal::anonymous()).await?;
+    assert!(!executor.worker_is_cached(&id).await);
+    assert!(
+        !seed
+            .oplog_service()
+            .exists(&id, AgentMode::Durable)
+            .await
+            .unwrap()
+    );
+    let mut enqueue = executor
+        .gate_next_agent_initialization_enqueue(&id.agent_id)
+        .await;
+    let context = InvocationContextStack::fresh();
+    let original_principal = Principal::Agent(AgentPrincipal {
+        agent_id: seed.agent_id(),
+    });
+    let creating = tokio::spawn({
+        let all = all.clone();
+        let id = id.clone();
+        let context = context.clone();
+        let principal = original_principal.clone();
+        async move {
+            Worker::get_or_create_suspended(
+                &all,
+                &id,
+                Some(vec![("OWNER".into(), "creator".into())]),
+                vec![],
+                None,
+                None,
+                &context,
+                principal,
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(20), enqueue.entered())
+        .await
+        .expect("creator must reach the initialization enqueue");
+    creating.abort();
+    assert!(creating.await.err().unwrap().is_cancelled());
+    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, Principal::anonymous()));
+    let mut competing = Box::pin(acquire(&seed, &id));
+    assert!(poll!(&mut existing).is_pending());
+    assert!(poll!(&mut competing).is_pending());
+    assert!(!executor.worker_is_cached(&id).await);
+    drop(enqueue);
+    let (existing, worker) = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(existing, competing)
+    })
+    .await
+    .expect("acquisitions must finish after initialization enqueue resumes");
+    existing?;
+    let worker = worker?;
+    assert_eq!(
+        worker.get_initial_worker_metadata().env,
+        vec![("OWNER".into(), "creator".into())]
+    );
+    let oplog = worker.oplog();
+    let entries = oplog
+        .read_exact(
+            OplogIndex::INITIAL,
+            oplog.current_oplog_index().await.as_u64(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::Create { .. }))
+            .count(),
+        1
+    );
+    let mut initializations = 0;
+    for entry in entries.values() {
+        if let OplogEntry::PendingAgentInvocation {
+            payload, trace_id, ..
+        } = entry
+            && let AgentInvocationPayload::AgentInitialization { principal, .. } = oplog
+                .download_payload(payload.clone())
+                .await
+                .map_err(anyhow::Error::msg)?
+        {
+            initializations += 1;
+            assert_eq!(principal, original_principal);
+            assert_eq!(trace_id, &context.trace_id);
+        }
+    }
+    assert_eq!(initializations, 1);
+    Ok(())
+}
+
+async fn prepare_foreign_topology(
+    worker: &Worker<TestWorkerCtx>,
+    source: &DurableStreamHandle,
+    consumer_invocation: StreamInvocationId,
+    transport_stream_id: u64,
+) -> anyhow::Result<(StreamAttachmentKey, StreamSessionMappingRecord)> {
+    let metadata = worker.get_initial_worker_metadata();
+    let session_key = source.source_invocation.clone();
+    let attachment = StreamAttachmentKey {
+        attachment_id: AttachmentId::primary(
+            session_key.callee_environment_id,
+            &session_key.callee,
+            &session_key.idempotency_key,
+        )?,
+        stream_id: source.stream_id,
+        epoch: 1,
+        session_key: session_key.clone(),
+        producer_environment_id: source.producer_environment_id,
+        producer: source.producer.clone(),
+        expected_producer_fingerprint: source.expected_producer_fingerprint,
+        consumer_environment_id: metadata.environment_id,
+        consumer: metadata.agent_id,
+        expected_consumer_fingerprint: metadata.fingerprint,
+        consumer_invocation,
+    };
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id,
+        handle: source.clone(),
+        role: SessionStreamRole::Output,
+    };
+    worker
+        .add_and_commit_oplog(OplogEntry::StreamSession {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            summary: None,
+            record: OplogPayload::Inline(Box::new(StreamSessionRecord::TopologyPrepared(
+                StreamTopologyPreparedRecord {
+                    format_version: 1,
+                    session_key,
+                    attachment: attachment.clone(),
+                    mapping: mapping.clone(),
+                },
+            ))),
+        })
+        .await
+        .unwrap();
+    Ok((attachment, mapping))
+}
+
+async fn session_records(
+    worker: &Worker<TestWorkerCtx>,
+) -> anyhow::Result<Vec<StreamSessionRecord>> {
+    let oplog = worker.oplog();
+    let entries = oplog
+        .read_exact(
+            OplogIndex::INITIAL,
+            oplog.current_oplog_index().await.as_u64(),
+        )
+        .await?;
+    let mut result = Vec::new();
+    for entry in entries.into_values() {
+        if let OplogEntry::StreamSession { record, .. } = entry {
+            result.push(
+                oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(anyhow::Error::msg)?,
+            );
+        }
+    }
+    Ok(result)
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn active_consumer_read_repairs_lost_producer_activation_without_a_timer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (_executor, seed, _faults) =
+        setup_with_retry_interval(last_unique_id, deps, component, Duration::from_secs(3600))
+            .await?;
+    async {
+        let producer = acquire(&seed, &target(&seed, "read-repair-source")).await?;
+        let consumer_id = target(&seed, "read-repair-consumer");
+        let consumer = acquire(&seed, &consumer_id).await?;
+        // Keep the consumer cold: only its durable authority, not consumer recovery, can
+        // authorize and repair the producer's missing activation.
+        seed.active_agents().remove(&consumer_id).await;
+        let source = register_stream(&producer).await?;
+        prepare_session(&producer, false).await?;
+        let consumer_stream = register_stream(&consumer).await?;
+        let (attachment, mapping) =
+            prepare_foreign_topology(&consumer, &source, consumer_stream.source_invocation, 17)
+                .await?;
+        let now = Timestamp::now_utc().to_millis();
+        producer
+            .add_and_commit_oplog(OplogEntry::stream_session(
+                None,
+                OplogPayload::Inline(Box::new(StreamSessionRecord::AttachmentPrepared(
+                    StreamAttachmentPreparedRecord {
+                        format_version: 1,
+                        key: attachment.clone(),
+                        prepared_at_millis: now,
+                        lease_expires_at_millis: now + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
+                    },
+                ))),
+                None,
+            ))
+            .await?;
+        let request =
+            DurableStreamReadRequest::AttachedConsumer(Box::new(AttachedStreamSegmentRequest {
+                format_version: 1,
+                attachment: attachment.clone(),
+                mapping: mapping.clone(),
+                after: None,
+                through: None,
+                wait_for_events: false,
+            }));
+        assert!(
+            seed.rpc()
+                .read_durable_stream_segment(request.clone(), &AuthCtx::System)
+                .await
+                .is_err()
+        );
+        assert!(
+            !session_records(&producer)
+                .await?
+                .iter()
+                .any(|record| matches!(record, StreamSessionRecord::AttachmentActivated(_)))
+        );
+
+        // Publish only the consumer half: no activation RPC reaches the producer.
+        consumer
+            .add_and_commit_oplog(OplogEntry::stream_session(
+                None,
+                OplogPayload::Inline(Box::new(StreamSessionRecord::TopologyActivated(
+                    StreamTopologyActivatedRecord {
+                        format_version: 1,
+                        session_key: source.source_invocation,
+                        attachment: attachment.clone(),
+                        mapping,
+                    },
+                ))),
+                None,
+            ))
+            .await?;
+        for _ in 0..2 {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                seed.rpc()
+                    .read_durable_stream_segment(request.clone(), &AuthCtx::System),
+            )
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            assert_eq!(session_records(&producer).await?.iter().filter(|record| matches!(
+            record, StreamSessionRecord::AttachmentActivated(record) if record.key == attachment
+        )).count(), 1);
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await
+}
+
+async fn prepare_session(
+    worker: &Worker<TestWorkerCtx>,
+    completed: bool,
+) -> anyhow::Result<StreamSessionKey> {
+    let oplog = worker.oplog();
+    let pending_index = oplog.current_oplog_index().await.next().next();
+    let idempotency_key = IdempotencyKey::new("stream-session".into());
+    let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        method_name: "increment".into(),
+        input: data_value!().value().clone(),
+        principal: Principal::anonymous(),
+        scope_card: None,
+    }));
+    let context = InvocationContextStack::fresh();
+    let invocation_context = context.to_oplog_data();
+    let trace_id = context.trace_id;
+    let trace_states = context.trace_states;
+    let metadata = worker.get_initial_worker_metadata();
+    let session_key = StreamInvocationId {
+        callee_environment_id: metadata.environment_id,
+        callee: metadata.agent_id.clone(),
+        callee_fingerprint: metadata.fingerprint,
+        idempotency_key: idempotency_key.clone(),
+    };
+    let attachment_id = AttachmentId::primary(
+        metadata.environment_id,
+        &metadata.agent_id,
+        &idempotency_key,
+    )?;
+    let attempt_id = AttemptId::fresh();
+    for record in [
+        StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
+            format_version: 1,
+            public_session_id: idempotency_key.value.clone(),
+            session_key: idempotency_key.clone(),
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
+            attempt: StartAttemptDescriptor {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: metadata.fingerprint,
+                attempt_id,
+                invocation: PersistedStreamInvocationDescriptor {
+                    format_version: 1,
+                    session_key: session_key.clone(),
+                    target_component_revision: metadata.last_known_status.component_revision,
+                    target: PersistedInvocationTarget::AgentMethod {
+                        method_name: "increment".into(),
+                    },
+                    invocation_value: vec![],
+                    stream_handles: vec![],
+                    execution_config: vec![],
+                    effective_identity: vec![],
+                },
+                effective_identity: vec![],
+                live_join_buffer_events: 1,
+            },
+            stream_mappings: vec![],
+        }),
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+            format_version: 1,
+            session_key: idempotency_key.clone(),
+            attachment_id,
+            attempt_id,
+            epoch: 1,
+            pending_invocation_oplog_index: pending_index,
+        }),
+    ] {
+        let prepared = matches!(record, StreamSessionRecord::Prepared(_));
+        worker
+            .add_and_commit_oplog(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                summary: None,
+                record: OplogPayload::Inline(Box::new(record)),
+            })
+            .await
+            .unwrap();
+        if prepared {
+            assert_eq!(
+                worker
+                    .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+                        idempotency_key.clone(),
+                        payload.clone(),
+                        trace_id.clone(),
+                        trace_states.clone(),
+                        invocation_context.clone(),
+                    ))
+                    .await
+                    .unwrap(),
+                pending_index
+            );
+        }
+    }
+    if completed {
+        worker
+            .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                idempotency_key,
+                payload,
+                trace_id,
+                trace_states,
+                invocation_context,
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
+            })
+            .await
+            .unwrap();
+        worker
+            .add_and_commit_oplog(OplogEntry::AgentInvocationFinished {
+                timestamp: Timestamp::now_utc(),
+                result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentMethod {
+                    output: data_value!(1u32).value().clone(),
+                })),
+                method_name: Some("increment".into()),
+                consumed_fuel: 0,
+                component_revision: metadata.last_known_status.component_revision,
+            })
+            .await
+            .unwrap();
+    }
+    Ok(session_key)
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn completion_receipt_precedes_fifo_status_fold(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (_executor, worker, faults) = setup(last_unique_id, deps, component).await?;
+    let metadata = worker.get_initial_worker_metadata();
+    let idempotency_key = IdempotencyKey::new("direct-completion".into());
+    let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        method_name: "increment".into(),
+        input: data_value!().value().clone(),
+        principal: Principal::anonymous(),
+        scope_card: None,
+    }));
+    let context = InvocationContextStack::fresh();
+    let invocation_context = context.to_oplog_data();
+
+    worker
+        .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+            idempotency_key.clone(),
+            payload.clone(),
+            context.trace_id.clone(),
+            context.trace_states.clone(),
+            invocation_context.clone(),
+        ))
+        .await
+        .unwrap();
+    worker
+        .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: idempotency_key.clone(),
+            payload,
+            trace_id: context.trace_id,
+            trace_states: context.trace_states,
+            invocation_context,
+            wallet_pin: Box::new(InvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 0,
+                },
+                pinned_card_ids: Vec::new(),
+                scope_card_id: None,
+            }),
+        })
+        .await
+        .unwrap();
+    let finished_index = worker
+        .add_to_oplog(OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentMethod {
+                output: data_value!(1u32).value().clone(),
+            })),
+            method_name: Some("increment".into()),
+            consumed_fuel: 0,
+            component_revision: metadata.last_known_status.component_revision,
+        })
+        .await
+        .unwrap();
+
+    // Finishing changes Running to Idle, so the synchronous recovery-index update removes this
+    // worker. Holding that write deterministically pauses the actor after its durable commit and
+    // in-memory fold, but before the FIFO commit+fold job itself is complete.
+    let fold = faults.pause_next("remove");
+    let completion = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            worker
+                .commit_oplog_before_status_update(
+                    golem_worker_executor::services::oplog::CommitLevel::Always,
+                )
+                .await
+                .unwrap()
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(20), fold.entered()).await?;
+    tokio::time::timeout(Duration::from_secs(1), completion)
+        .await
+        .expect("completion receipt must not wait for status folding")?;
+    let persisted = worker
+        .oplog_service()
+        .read_exact(
+            &OwnedAgentId::new(metadata.environment_id, &metadata.agent_id),
+            AgentMode::Durable,
+            finished_index,
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        persisted.get(&finished_index),
+        Some(OplogEntry::AgentInvocationFinished { .. })
+    ));
+
+    // The receipt caller is gone, but actor-owned folding must continue. Both production reads
+    // are queued behind it rather than observing the already-swapped status out of FIFO order.
+    let status = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.get_last_known_status().await }
+    });
+    let result = tokio::spawn({
+        let worker = worker.clone();
+        let idempotency_key = idempotency_key.clone();
+        async move { worker.lookup_invocation_result(&idempotency_key).await }
+    });
+    let metadata_read = tokio::spawn({
+        let worker = worker.clone();
+        let owned_agent_id = OwnedAgentId::new(metadata.environment_id, &metadata.agent_id);
+        async move { Worker::get_latest_metadata(worker.all(), &owned_agent_id).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!status.is_finished(), "status read bypassed the FIFO fold");
+    assert!(
+        !result.is_finished(),
+        "result lookup bypassed the FIFO fold"
+    );
+    assert!(
+        !metadata_read.is_finished(),
+        "metadata read bypassed the FIFO fold"
+    );
+
+    fold.release();
+    let status = tokio::time::timeout(Duration::from_secs(20), status).await??;
+    assert_eq!(status.status, golem_common::model::AgentStatus::Idle);
+    assert_eq!(status.oplog_idx, finished_index);
+    let metadata = tokio::time::timeout(Duration::from_secs(20), metadata_read).await???;
+    assert_eq!(metadata.unwrap().last_known_status, *status);
+    let LookupResult::Complete(Ok(output)) =
+        tokio::time::timeout(Duration::from_secs(20), result).await??
+    else {
+        panic!("expected the completed invocation result");
+    };
+    assert_eq!(output.oplog_index, Some(finished_index));
+    assert_eq!(
+        output.result,
+        AgentInvocationResult::AgentMethod {
+            output: data_value!(1u32).value().clone(),
+        }
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn pending_failure_waits_for_completion_projection_without_blocking_success(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::{AgentInvocationOutput, regions::OplogRegion};
+    use golem_worker_executor::services::HasEvents;
+    use golem_worker_executor::services::events::Event;
+    use golem_worker_executor::services::oplog::CommitLevel;
+
+    let (executor, worker, faults) = setup(last_unique_id, deps, component).await?;
+    let key = IdempotencyKey::new("completion-during-stop".into());
+    let context = InvocationContextStack::fresh();
+    // Make the actor-owned invocation prefix fall inside the later Jump, forcing checkpoint
+    // fallback while leaving the invocation's completion itself in retained history.
+    let invalidated_prefix = worker
+        .add_and_commit_oplog(OplogEntry::grow_memory(1))
+        .await?;
+    worker
+        .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: key.clone(),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "increment".into(),
+                input: data_value!().value().clone(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            invocation_context: context.to_oplog_data(),
+            trace_id: context.trace_id,
+            trace_states: context.trace_states,
+            wallet_pin: Box::new(InvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 0,
+                },
+                pinned_card_ids: Vec::new(),
+                scope_card_id: None,
+            }),
+        })
+        .await?;
+    worker
+        .add_and_commit_oplog(OplogEntry::grow_memory(37))
+        .await?;
+    worker
+        .add_to_oplog(OplogEntry::jump(
+            None,
+            OplogRegion {
+                start: invalidated_prefix,
+                end: invalidated_prefix.next(),
+            },
+        ))
+        .await?;
+    let result = AgentInvocationResult::AgentMethod {
+        output: data_value!(7u32).value().clone(),
+    };
+    let finished = worker
+        .add_to_oplog(OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            result: OplogPayload::Inline(Box::new(result.clone())),
+            method_name: Some("increment".into()),
+            consumed_fuel: 0,
+            component_revision: worker
+                .get_initial_worker_metadata()
+                .last_known_status
+                .component_revision,
+        })
+        .await?;
+    // Actor-owned reconstruction must reach the checkpoint before publishing the repaired status.
+    let fold = faults.pause_next("read_cached_status");
+    let receipt = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            worker
+                .commit_oplog_before_status_update(CommitLevel::Always)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(20), fold.entered()).await?;
+    tokio::time::timeout(Duration::from_secs(1), receipt).await???;
+    let mut events = worker.events().subscribe();
+    let mut cleanup = Box::pin(worker.test_fail_pending_invocations());
+    assert!(poll!(cleanup.as_mut()).is_pending());
+    // No hydrated success existed when cleanup began. Publishing it must not await the fold.
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        worker.store_invocation_success(
+            &key,
+            AgentInvocationOutput {
+                result: result.clone(),
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: Some(finished),
+                agent_fingerprint: None,
+            },
+        ),
+    )
+    .await?;
+    fold.release();
+    tokio::time::timeout(Duration::from_secs(20), cleanup).await?;
+    let completion = |event: &Event| match event {
+        Event::InvocationCompleted {
+            idempotency_key,
+            result,
+            ..
+        } if idempotency_key == &key => Some(result.as_ref().clone()),
+        _ => None,
+    };
+    let observed =
+        tokio::time::timeout(Duration::from_secs(1), events.wait_for(&completion)).await???;
+    assert_eq!(observed.result, result);
+    assert!(matches!(
+        worker.lookup_invocation_result(&key).await,
+        LookupResult::Complete(Ok(_))
+    ));
+
+    // A late stop continuation after deletion must not await stopped actors or publish a failure.
+    executor.delete_worker(&worker.agent_id()).await?;
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        worker.test_fail_pending_invocations(),
+    )
+    .await?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), events.wait_for(&completion))
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn jump_projection_finishes_without_its_producer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::regions::OplogRegion;
+    use golem_worker_executor::services::oplog::CommitLevel;
+
+    let (_executor, worker, faults) = setup(last_unique_id, deps, component).await?;
+    let metadata = worker.get_initial_worker_metadata();
+    let owned = OwnedAgentId::new(metadata.environment_id, &metadata.agent_id);
+    let initial = worker.get_last_known_status().await;
+    let direct = worker.add_to_oplog(OplogEntry::grow_memory(7)).await?;
+    // Consume a durable commit receipt outside the status actor. Its precommit sample must
+    // recover the missing suffix even when the subsequent actor commit returns no entries.
+    worker.oplog().commit(CommitLevel::Always).await?;
+    worker
+        .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+        .await?;
+    let caught_up = worker.get_last_known_status().await;
+    assert_eq!(caught_up.oplog_idx, direct);
+    assert_eq!(
+        caught_up.total_linear_memory_size,
+        initial.total_linear_memory_size + 7
+    );
+    for cancel_full_waiter in [false, true] {
+        let before = worker.get_last_known_status().await;
+        let discarded = worker
+            .add_and_commit_oplog(OplogEntry::grow_memory(11))
+            .await?;
+        let key = IdempotencyKey::new(format!("invalidate-prefix-{cancel_full_waiter}"));
+        let context = InvocationContextStack::fresh();
+        let started = worker
+            .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                idempotency_key: key,
+                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                    method_name: "increment".into(),
+                    input: data_value!().value().clone(),
+                    principal: Principal::anonymous(),
+                    scope_card: None,
+                })),
+                invocation_context: context.to_oplog_data(),
+                trace_id: context.trace_id,
+                trace_states: context.trace_states,
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
+            })
+            .await?;
+        worker.add_to_oplog(OplogEntry::grow_memory(23)).await?;
+        let jump_index = worker.oplog().current_oplog_index().await.next();
+        worker
+            .add_to_oplog(OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: discarded,
+                    end: jump_index,
+                },
+            ))
+            .await?;
+        // The checkpoint lookup is inside actor-owned reconstruction, after the commit receipt.
+        let repair = faults.pause_next("read_cached_status");
+        let producer = tokio::spawn({
+            let worker = worker.clone();
+            async move {
+                if cancel_full_waiter {
+                    worker
+                        .commit_oplog_and_update_state(CommitLevel::Always)
+                        .await
+                        .map(|_| ())
+                } else {
+                    worker
+                        .commit_oplog_before_status_update(CommitLevel::Always)
+                        .await
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(20), repair.entered()).await?;
+        if cancel_full_waiter {
+            assert!(!producer.is_finished());
+            producer.abort();
+            assert!(producer.await.unwrap_err().is_cancelled());
+        } else {
+            tokio::time::timeout(Duration::from_secs(1), producer).await???;
+        }
+        let sentinel = worker.add_to_oplog(OplogEntry::grow_memory(101)).await?;
+        let status = tokio::spawn({
+            let worker = worker.clone();
+            async move { worker.get_last_known_status().await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!status.is_finished(), "status read bypassed reconstruction");
+        repair.release();
+        let status = tokio::time::timeout(Duration::from_secs(20), status).await??;
+        assert_eq!(status.oplog_idx, jump_index);
+        assert_eq!(
+            status.total_linear_memory_size,
+            before.total_linear_memory_size
+        );
+        assert!(status.skipped_regions.is_in_deleted_region(discarded));
+        assert!(status.skipped_regions.is_in_deleted_region(started));
+        // A second authoritative read neither commits the sentinel nor redoes reconstruction.
+        let checkpoint_reads = faults.calls("read_cached_status");
+        assert_eq!(*worker.get_last_known_status().await, *status);
+        assert_eq!(faults.calls("read_cached_status"), checkpoint_reads);
+        assert_eq!(
+            worker
+                .oplog_service()
+                .get_last_index(&owned, AgentMode::Durable)
+                .await
+                .unwrap(),
+            jump_index
+        );
+        worker
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        let status = worker.get_last_known_status().await;
+        assert_eq!(status.oplog_idx, sentinel);
+        assert_eq!(
+            status.total_linear_memory_size,
+            before.total_linear_memory_size + 101
+        );
+        assert_eq!(
+            worker
+                .oplog_service()
+                .get_last_index(&owned, AgentMode::Durable)
+                .await
+                .unwrap(),
+            sentinel
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn failure_handler_status_read_follows_concurrent_jump(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::regions::OplogRegion;
+    use golem_worker_executor::services::oplog::CommitLevel;
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| config.retry.max_attempts = 0)),
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let name = agent_id!("FailingCounter", "failure-status-jump");
+    let id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "add", data_value!(5u64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    assert_eq!(
+        worker.get_last_known_status().await.status,
+        golem_common::model::AgentStatus::Idle
+    );
+    // Failure untracks the worker after the handler's first status read and Error commit.
+    let failure_fold = faults.pause_next("remove");
+    let (invocation, coordination) = tokio::join!(
+        executor.invoke_and_await_agent(&component, &name, "add", data_value!(50u64)),
+        async {
+            tokio::time::timeout(Duration::from_secs(20), failure_fold.entered()).await?;
+            let error_index = worker.oplog().current_oplog_index().await;
+            assert!(matches!(
+                worker.oplog().read(error_index).await.unwrap(),
+                OplogEntry::Error { .. }
+            ));
+            let jump_index = worker
+                .add_to_oplog(OplogEntry::jump(
+                    None,
+                    OplogRegion {
+                        start: error_index,
+                        end: error_index.next(),
+                    },
+                ))
+                .await?;
+            // Polling enqueues this commit while the failure handler is still waiting on its
+            // prior commit. Thus the Jump is ahead of the handler's second FIFO status read.
+            let mut jump = Box::pin(worker.commit_oplog_and_update_state(CommitLevel::Always));
+            assert!(poll!(jump.as_mut()).is_pending());
+            failure_fold.release();
+            jump.await?;
+            let status = worker.get_last_known_status().await;
+            assert_eq!(status.oplog_idx, jump_index);
+            assert!(status.skipped_regions.is_in_deleted_region(error_index));
+            Ok::<_, anyhow::Error>(())
+        }
+    );
+    coordination?;
+    let error = invocation.unwrap_err().to_string();
+    assert!(error.contains("value is too large"), "{error}");
+    assert!(!error.contains("detached"), "{error}");
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    let a_id = target(&seed, "reciprocal-a");
+    let b_id = target(&seed, "reciprocal-b");
+    let a = acquire(&seed, &a_id).await?;
+    let b = acquire(&seed, &b_id).await?;
+    seed.active_agents().remove(&a_id).await;
+    seed.active_agents().remove(&b_id).await;
+    let a_stream = register_stream(&a).await?;
+    let b_stream = register_stream(&b).await?;
+    let (a_attachment, a_mapping) =
+        prepare_foreign_topology(&a, &b_stream, a_stream.source_invocation.clone(), 11).await?;
+    let a_fingerprint = a.get_initial_worker_metadata().fingerprint;
+    let (b_attachment, _) =
+        prepare_foreign_topology(&b, &a_stream, b_stream.source_invocation.clone(), 29).await?;
+    let completed_session = prepare_session(&a, true).await?;
+    prepare_session(&b, false).await?;
+    drop(a);
+    drop(b);
+    assert!(!executor.worker_is_cached(&a_id).await);
+    assert!(!executor.worker_is_cached(&b_id).await);
+
+    seed.worker_service()
+        .lookup_durable_stream_recovery_metadata(&a_id, AgentMode::Durable, a_fingerprint)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    // Hold A's recovery after publication. B may acquire A while recovering its own attachment,
+    // but a stream read may not treat A's merely prepared topology as an active attachment.
+    let recovery = faults.gate_next(
+        "read_recovery",
+        KeyValueStorageError::Other("recovery storage outage".into()),
+    );
+    let a = tokio::time::timeout(Duration::from_secs(20), acquire(&seed, &a_id)).await??;
+    recovery.entered().await;
+    assert!(executor.worker_is_cached(&a_id).await);
+    let b = tokio::time::timeout(Duration::from_secs(20), acquire(&seed, &b_id)).await??;
+    let read = seed
+        .rpc()
+        .read_durable_stream_segment(
+            DurableStreamReadRequest::AttachedConsumer(Box::new(AttachedStreamSegmentRequest {
+                format_version: 1,
+                attachment: a_attachment.clone(),
+                mapping: a_mapping,
+                after: None,
+                through: None,
+                wait_for_events: false,
+            })),
+            &AuthCtx::System,
+        )
+        .await;
+    assert!(
+        read.is_err(),
+        "prepared topology must not authorize a stream read"
+    );
+    let before = session_records(&a).await?;
+    assert!(!before.iter().any(|record| matches!(
+        record,
+        StreamSessionRecord::TopologyActivated(_) | StreamSessionRecord::Finished(_)
+    )));
+    recovery.release();
+
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let a_records = session_records(&a).await?;
+            let b_records = session_records(&b).await?;
+            let a_activated = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == a_attachment)).count();
+            let b_activated = b_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == b_attachment)).count();
+            let finished = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::Finished(record) if record.session_key == StreamRegistrationInvocation::Local(completed_session.idempotency_key.clone()))).count();
+            if a_activated != 0 && b_activated != 0 && finished != 0 {
+                assert_eq!(a_activated, 1);
+                assert_eq!(b_activated, 1);
+                assert_eq!(finished, 1);
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await??;
+    assert_eq!(
+        a.get_initial_worker_metadata().fingerprint,
+        a_stream.expected_producer_fingerprint
+    );
+    assert_eq!(
+        b.get_initial_worker_metadata().fingerprint,
+        b_stream.expected_producer_fingerprint
+    );
+
+    // Shutdown must wake and stop both reconcilers even when healthy attachments leave them
+    // parked without a retry timer.
+    drop(executor);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            a.wait_for_durable_stream_attachment_reconciler(),
+            b.wait_for_durable_stream_attachment_reconciler()
+        );
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("durable stream reconcilers did not stop within 10s"))?;
+    let a_stopped_at = a.oplog().current_oplog_index().await;
+    let b_stopped_at = b.oplog().current_oplog_index().await;
+    tokio::time::sleep(CACHE_TTL * 3).await;
+    assert_eq!(a.oplog().current_oplog_index().await, a_stopped_at);
+    assert_eq!(b.oplog().current_oplog_index().await, b_stopped_at);
+    Ok(())
+}

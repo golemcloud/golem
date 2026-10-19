@@ -1,0 +1,332 @@
+import { Callout, Tabs } from "nextra/components"
+
+# HTTP requests
+
+## Response continuation after recovery
+
+Recorded HTTP outcomes replay unchanged. If a response body cannot continue after reconstruction
+(for example, its recorded prefix no longer matches or the server rejects the resume range), the
+WASI P3 stream reports the existing `http-response-incomplete` error code without semantic retry.
+This means **response continuation was lost**, not that the request did not execute. Reconcile the
+remote outcome before repeating business work. Storage outages remain infrastructure recovery
+(`RecoveryRequired`), not response-loss results.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+    HTTP requests can be made with the standard `fetch` function.
+
+    For example:
+
+    ```typescript
+    const response = await fetch(`http://localhost:${port}/todos`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "foo",
+        body: "bar",
+        userId: 1,
+      }),
+    });
+
+    const data = await response.json();
+    console.log("Body:", data);
+    ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    Use Effect's `HttpClient` with `FetchHttpClient.layer` for outgoing requests. The layer uses QuickJS's WASI-backed global `fetch`, while request construction, errors, and response decoding stay in Effect:
+
+    ```typescript
+    import { Effect } from "effect"
+    import {
+      FetchHttpClient,
+      HttpClient,
+      HttpClientRequest,
+      HttpClientResponse,
+    } from "effect/http"
+
+    const request = HttpClientRequest.post("https://api.example.com/todos").pipe(
+      HttpClientRequest.bodyJson({
+        title: "foo",
+        body: "bar",
+        userId: 1,
+      }),
+      Effect.flatMap(HttpClient.execute),
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.json),
+      Effect.provide(FetchHttpClient.layer),
+    )
+    ```
+
+    This constructs a lazy Effect that rejects non-2xx responses and parses the JSON body. Return it from an agent method, or evaluate it with `yield* request` inside `Effect.gen`. For schema validation, authentication, and streaming, see [Making outgoing HTTP requests (Effect)](/v1.6/how-to-guides/effect/golem-make-http-request-effect).
+</Tabs.Tab>
+
+<Tabs.Tab>
+    Use `golem_rust::http` for outgoing WASI HTTP p3 requests. It reexports standard HTTP request and response types; no separate HTTP client crate is needed.
+
+    For example, inside an async agent method:
+
+    ```rust
+    use golem_rust::http::{self, Request};
+
+    let request = Request::post("https://api.example.com/todos")
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_vec(&serde_json::json!({
+            "title": "foo",
+            "body": "bar",
+            "userId": 1,
+        })).expect("Failed to serialize request"))
+        .expect("Failed to build request");
+
+    let response = http::send(request).await.expect("Request failed");
+    let status = response.status();
+    assert!(status.is_success(), "API returned HTTP {status}");
+
+    let data: serde_json::Value = http::response_json(response)
+        .await
+        .expect("Failed to parse response");
+    println!("Body: {data}");
+    ```
+
+    Use `.body(Vec::new())` for an empty GET request. Set authentication with an ordinary `Authorization` header, for example `.header("Authorization", format!("Bearer {token}"))`; obtain the token from configuration and do not log it.
+
+    `send` accepts `Request<Vec<u8>>` and returns `Result<Response, Error>`. It does not reject unsuccessful HTTP status codes, retry requests, or follow redirects automatically. Inspect `response.status()` and `response.headers()` before consuming the response. Handle request construction, transport, body reading, and decoding errors in your agent's error type rather than panicking in production code.
+
+    Choose `http::response_bytes(response)` for `bytes::Bytes`, `http::response_text(response)` for `String`, or `http::response_json::<T>(response)` for a deserialized value. Each helper is async, returns a `Result`, and consumes the whole response. The JSON helper requires the SDK's `json` feature, enabled by default.
+
+    For large responses, stream `response.into_body()` with `http_body_util::BodyExt` instead of collecting it. The default response body is `golem_rust::wasip3::http_compat::IncomingResponseBody`. For streaming uploads or low-level control, use `golem_rust::wasip3::http::client` and `golem_rust::wasip3::http::types`, or the reexported `golem_rust::wasip3::http_compat` adapters. Native sockets are not available.
+
+    **Read a response incrementally.** Add `http-body-util = "0.1"` to your component's dependencies. This counts body bytes without retaining the whole response:
+
+    ```rust
+    use golem_rust::http;
+    use http_body_util::BodyExt;
+
+    async fn response_size(response: http::Response) -> Result<u64, http::Error> {
+        let mut body = response.into_body();
+        let mut size = 0;
+        while let Some(frame) = body.frame().await {
+            let frame = frame?;
+            if let Some(chunk) = frame.data_ref() {
+                size += chunk.len() as u64;
+            }
+        }
+        Ok(size)
+    }
+    ```
+
+    The loop reads through trailers and checks late body errors; receiving the headers alone does not prove that the body completed. To save a download, write each chunk to a file instead, and treat that file as partial until the loop succeeds. Decode text across chunk boundaries, not one UTF-8 string per chunk.
+
+    **Stream a request body.** The high-level `http::send` buffers uploads. For an incremental upload, add `futures = "0.3"` and drive the body producer alongside request transmission:
+
+    ```rust
+    use golem_rust::wasip3::{http::{client, types}, wit_future, wit_stream};
+    use std::future::IntoFuture;
+
+    async fn upload(
+        authority: &str,
+        chunks: impl IntoIterator<Item = Vec<u8>>,
+    ) -> Result<types::Response, String> {
+        let headers = types::Fields::from_list(&[
+            ("content-type".into(), b"application/octet-stream".to_vec()),
+        ]).map_err(|error| format!("{error:?}"))?;
+        let (mut writer, contents) = wit_stream::new::<u8>();
+        let (trailers_writer, trailers) =
+            wit_future::new::<Result<Option<types::Fields>, types::ErrorCode>>(|| Ok(None));
+        let (request, transmitted) = types::Request::new(headers, Some(contents), trailers, None);
+        request.set_method(&types::Method::Post).map_err(|_| "Invalid method")?;
+        request.set_scheme(Some(&types::Scheme::Https)).map_err(|_| "Invalid scheme")?;
+        request.set_authority(Some(authority)).map_err(|_| "Invalid authority")?;
+        request.set_path_with_query(Some("/upload")).map_err(|_| "Invalid path")?;
+
+        let produce = async move {
+            for chunk in chunks {
+                if !writer.write_all(chunk).await.is_empty() {
+                    return Err("Upload consumer closed early".to_string());
+                }
+            }
+            drop(writer); // End the body before completing trailers.
+            let _ = trailers_writer.write(Ok(None)).await;
+            Ok::<_, String>(())
+        };
+        let (response, transmitted, produced) =
+            futures::join!(client::send(request), transmitted.into_future(), produce);
+        produced?;
+        transmitted.map_err(|error| format!("{error:?}"))?;
+        response.map_err(|error| format!("{error:?}"))
+    }
+    ```
+
+    Pass an HTTPS authority such as `api.example.com` and an iterator that produces bounded byte chunks. Do not collect the iterator first. The join waits for all three tasks, and the function checks both production and transmission errors. It returns a response even for a non-2xx status: inspect `get_status_code()` and consume or drop the response body. To reuse the response helpers above, convert it with `golem_rust::wasip3::http_compat::http_from_wasi_response`.
+
+    See [Making outgoing HTTP requests (Rust)](/v1.6/how-to-guides/rust/golem-make-http-request-rust) for GET, JSON POST, authentication, and error-handling examples.
+</Tabs.Tab>
+
+<Tabs.Tab>
+    HTTP requests can be made with the standard `fetch` function through Scala.js interop.
+
+    For example:
+
+    ```scala
+    import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+    import scala.scalajs.js
+    import scala.scalajs.js.Thenable.Implicits._
+
+    for {
+      response <- js.Dynamic.global
+        .fetch(
+          s"http://localhost:$port/todos",
+          js.Dynamic.literal(
+            method = "POST",
+            headers = js.Dynamic.literal(
+              "Content-Type" -> "application/json"
+            ),
+            body = js.JSON.stringify(
+              js.Dynamic.literal(
+                title = "foo",
+                body = "bar",
+                userId = 1
+              )
+            )
+          )
+        )
+        .asInstanceOf[js.Promise[js.Dynamic]]
+        .toFuture
+      data <- response.json().asInstanceOf[js.Promise[js.Dynamic]].toFuture
+    } yield println(s"Body: ${js.JSON.stringify(data)}")
+    ```
+
+</Tabs.Tab>
+
+<Tabs.Tab>
+    The MoonBit SDK wraps Preview 3 `wasi:http`. Import
+    `golemcloud/golem_sdk/http` as `@http`, `moonbitlang/core/encoding/utf8`
+    as `@utf8`, and `moonbitlang/core/json` as `@json` in `moon.pkg`.
+    This function sends the same JSON POST as the other examples:
+
+    ```moonbit
+    async fn create_todo(port : Int) -> Json {
+      // Encode the JSON payload and set its content type.
+      let payload : Json = { "title": "foo", "body": "bar", "userId": 1 }
+      let bytes = @utf8.encode(payload.stringify())
+      let headers = @http.Fields::fields()
+      guard headers.append(
+        "content-type",
+        @utf8.encode("application/json").to_fixedarray(),
+      ) is Ok(_) else {
+        abort("Invalid content-type header")
+      }
+
+      // Stream the request body, then close the upload.
+      let body = @http.Stream::produce(async fn(sink) {
+        guard sink.write_all_bytes(bytes[:]) else { abort("Upload closed") }
+        sink.close()
+      })
+
+      // Build POST http://localhost:<port>/todos.
+      let (request, sent) = @http.Request::new(
+        headers,
+        Some(body),
+        @http.Future::ready(Ok(None)),
+        None,
+      )
+      guard request.set_method(Post) is Ok(_) else { abort("Invalid method") }
+      guard request.set_scheme(Some(Http)) is Ok(_) else { abort("Invalid scheme") }
+      guard request.set_authority(Some("localhost:\{port}")) is Ok(_) else {
+        abort("Invalid authority")
+      }
+      guard request.set_path_with_query(Some("/todos")) is Ok(_) else {
+        abort("Invalid path")
+      }
+
+      // Await the response and confirm request transmission completed.
+      let response = match @http.send(request) {
+        Ok(response) => response
+        Err(_) => abort("HTTP transport error")
+      }
+      guard sent.get() is Ok(_) else { abort("Request transmission failed") }
+
+      // Save the status before consuming the response resource.
+      let status = response.get_status_code()
+      let (incoming, completed) = @http.Response::consume_body(
+        response,
+        @http.Future::ready(Ok(())),
+      )
+      defer incoming.drop()
+
+      // Collect every chunk; end-of-stream alone does not confirm success.
+      let buffer = Buffer()
+      while incoming.read(4096) is Some(chunk) {
+        for byte in chunk {
+          buffer.write_byte(byte)
+        }
+      }
+      match completed.get() {
+        Ok(Some(trailers)) => trailers.drop()
+        Ok(None) => ()
+        Err(_) => abort("Response body failed")
+      }
+
+      // Check the HTTP status before decoding the JSON response.
+      guard status >= 200 && status < 300 else {
+        abort("API returned HTTP \{status}")
+      }
+      let text = @utf8.decode(buffer.to_bytes()[:])
+      @json.parse(text)
+    }
+    ```
+
+    The body producer writes UTF-8 bytes. The reader collects every response chunk
+    and checks completion before decoding UTF-8 and parsing JSON. HTTP error
+    statuses are not transport errors: the example checks the status separately.
+    The example traps on HTTP failures; use your application's error handling
+    instead in production. Invalid UTF-8 and invalid JSON raise decoding errors.
+
+</Tabs.Tab>
+
+<Tabs.Tab>
+    HTTP requests can be made with the standard `net/http` package. The Go SDK installs its `wasi:http` transport as `http.DefaultTransport`, so `http.Get`, `http.DefaultClient`, and client libraries built on `net/http` work without extra setup.
+
+    For example:
+
+    ```go
+    import (
+        "bytes"
+        "encoding/json"
+        "fmt"
+        "log/slog"
+        "net/http"
+
+        "github.com/golemcloud/golem/sdks/go/golem"
+    )
+
+    type ExampleRequest struct {
+        Title  string `json:"title"`
+        Body   string `json:"body"`
+        UserID uint16 `json:"userId"`
+    }
+
+    payload := golem.Must(json.Marshal(ExampleRequest{Title: "foo", Body: "bar", UserID: 1}))
+
+    response := golem.Must(http.Post(
+        fmt.Sprintf("http://localhost:%d/todos", port),
+        "application/json",
+        bytes.NewReader(payload),
+    ))
+    defer response.Body.Close()
+
+    var data map[string]any
+    golem.Must0(json.NewDecoder(response.Body).Decode(&data))
+
+    slog.Info("Body", "data", data)
+    ```
+
+    Raw sockets (`net.Dial`) are not available in Go agents; outgoing HTTP goes through `net/http`.
+</Tabs.Tab>
+</Tabs>
+
+<Callout type="info">
+For WebSocket connections, see the [WebSocket client](/v1.6/develop/websocket) page. The HTTP APIs described above do not support WebSocket upgrades.
+</Callout>

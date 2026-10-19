@@ -22,6 +22,7 @@ export {
   typedSchemaValueToWit,
 } from '../internal/schema-model/wit';
 export { Uuid } from '../uuid';
+export { Result } from '../host/result';
 export { UnstructuredText } from '../newTypes/textInput';
 export { UnstructuredBinary } from '../newTypes/binaryInput';
 export type UnstructuredTextType<LC extends string[] = []> = SdkUnstructuredText<LC>;
@@ -30,3 +31,10 @@ export type UnstructuredBinaryType<MT extends string[] | string = string> =
 export * from './schema';
 export * from './agent';
 export * from './tool';
+export { AgentStream, agentStreamToHandle, agentStreamFromHandle } from '../schema/agentStream';
+export type { SchemaCodec } from '../schema/codec';
+export { withNativeStreamScope, ownSchemaValueStreams } from '../internal/schema-model/streamScope';
+export { throwIfAborted } from '../internal/pollableUtils';
+export { withCapabilityAdoptionTransaction } from '../internal/schema-model/capabilityTransaction';
+export { SchemaValueWriter } from '../schema/codec';
+export type { SchemaValueTree } from 'golem:core/types@2.0.0';

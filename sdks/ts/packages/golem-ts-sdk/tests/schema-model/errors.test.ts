@@ -23,6 +23,7 @@
 // exist at this layer are out-of-range indices, cycles, duplicate def ids, and
 // unknown carrier tags.
 
+import { fakeRawCard } from '../permissionCardTestSupport';
 import { describe, it, expect } from 'vitest';
 
 import type {
@@ -70,6 +71,9 @@ describe('schema value decode failures', () => {
       'u16-value': { valid: () => ({ tag: 'u16-value', val: 0 }) },
       'u32-value': { valid: () => ({ tag: 'u32-value', val: 0 }) },
       'u64-value': { valid: () => ({ tag: 'u64-value', val: 0n }) },
+      'uuid-value': {
+        valid: () => ({ tag: 'uuid-value', val: { highBits: 0n, lowBits: 0n } }),
+      },
       'f32-value': { valid: () => ({ tag: 'f32-value', val: 0 }) },
       'f64-value': { valid: () => ({ tag: 'f64-value', val: 0 }) },
       'char-value': { valid: () => ({ tag: 'char-value', val: 'x' }) },
@@ -186,7 +190,7 @@ describe('schema value decode failures', () => {
         valid: () => ({ tag: 'stream-value', val: {} as never }),
       },
       'permission-card-handle': {
-        valid: () => ({ tag: 'permission-card-handle', val: {} as never }),
+        valid: () => ({ tag: 'permission-card-handle', val: fakeRawCard() as never }),
       },
     } satisfies Record<NodeTag, Case>;
 

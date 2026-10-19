@@ -110,6 +110,7 @@ pub fn value_kind(v : @model.SchemaValue) -> String {
     Binary(_, _) => "binary"
     Path(_) => "path"
     Url(_) => "url"
+    Uuid(_) => "uuid"
     Datetime(_) => "datetime"
     Duration(_) => "duration"
     Quantity(_) => "quantity"

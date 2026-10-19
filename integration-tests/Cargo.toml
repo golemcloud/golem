@@ -15,13 +15,14 @@ autotests = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 golem-test-framework = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+chrono = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 base64 = { workspace = true }
@@ -39,6 +40,7 @@ rlimit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -48,8 +50,10 @@ uuid = { workspace = true, features = ["v4"] }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
-chrono = { workspace = true }
+flate2 = { workspace = true }
 goldenfile = { workspace = true }
+h2 = { workspace = true }
+http = { workspace = true }
 redis = { workspace = true }
 sqlx = { workspace = true }
 test-r = { workspace = true }
@@ -66,6 +70,16 @@ harness = false
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
+harness = false
+
+[[test]]
+name = "http-handler-lifecycle"
+path = "tests/http_handler_lifecycle.rs"
+harness = false
+
+[[test]]
+name = "streaming-session-recovery"
+path = "tests/streaming_session_recovery.rs"
 harness = false
 
 [[test]]

@@ -29,6 +29,9 @@ pub trait P3FileSystem {
     async fn write_replay_target(&self, value: String);
     /// Reads a file without changing it.
     async fn inspect_path(&self, path: String) -> Vec<String>;
+    /// Makes a directory and hard links it through both WASI versions, then makes a directory in
+    /// it, and reports `name=value` entries for each call.
+    async fn run_directory_link(&self) -> Vec<String>;
     /// Writes blocks through a P2 direct descriptor until the project quota
     /// denies further growth.
     async fn run_p2_quota_surface(&self) -> Vec<String>;
@@ -114,6 +117,10 @@ impl P3FileSystem for P3FileSystemImpl {
 
     async fn inspect_path(&self, path: String) -> Vec<String> {
         parity::inspect_file(&path).await
+    }
+
+    async fn run_directory_link(&self) -> Vec<String> {
+        parity::run_directory_link().await
     }
 
     async fn run_p2_quota_surface(&self) -> Vec<String> {

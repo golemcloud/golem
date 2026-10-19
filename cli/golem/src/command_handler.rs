@@ -16,18 +16,22 @@ use anyhow::{Context as _, anyhow, bail};
 use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};
 use golem_cli::command_handler::{CommandHandlerHooks, Handlers};
+use golem_cli::config::{DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT};
 use golem_cli::context::Context;
 use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
-use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
+use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::debug;
+use tokio::task::JoinSet;
+use tracing::{debug, info, warn};
 
 use crate::compat::map_local_server_startup_error;
-use crate::launch::{LaunchArgs, launch_golem_services};
+use crate::config::{GolemServerConfig, SnapshotRepositoryKeySource, load_server_config};
+use crate::launch::{StartupPorts, launch_golem_services};
+use crate::well_known_secrets::check_exposure;
 
 pub struct ServerCommandHandler;
 
@@ -47,45 +51,96 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     );
                 }
 
-                let launch_args = launch_args_from_run_args_and_manifest(&args, &ctx)?;
-                let data_dir = launch_args.data_dir.clone();
-                if args.clean && tokio::fs::metadata(&data_dir).await.is_ok() {
-                    clean_data_dir(&ctx, &data_dir).await?;
+                // The first load validates the configuration without touching the data
+                // directory, so `--clean` cannot delete a repository key that the started
+                // server uses. The second load takes the retained key, creating it if needed.
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &args,
+                    SnapshotRepositoryKeySource::ValidationOnly,
+                )?;
+                check_exposure(&config)?;
+                if args.clean && tokio::fs::metadata(&config.data_dir).await.is_ok() {
+                    clean_server_data_dir(&ctx, &config).await?;
+                };
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &args,
+                    SnapshotRepositoryKeySource::DataDir,
+                )?;
+                let data_dir = config.data_dir.clone();
+
+                // A single pinned signal future is shared by both phases below, so the
+                // handlers are installed once and a signal arriving between the two
+                // select! blocks is not lost.
+                let shutdown = shutdown_signal();
+                tokio::pin!(shutdown);
+
+                let launch_result = tokio::select! {
+                    res = launch_golem_services(&config) => Some(res),
+                    _ = &mut shutdown => None,
                 };
 
-                let mut join_set = launch_golem_services(&launch_args)
-                    .await
-                    .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+                let Some(launch_result) = launch_result else {
+                    info!("Received shutdown signal during startup, stopping Golem server");
+                    return Ok(());
+                };
 
-                while let Some(res) = join_set.join_next().await {
-                    res??;
+                let (mut join_set, startup_ports, worker_shutdown) =
+                    launch_result.map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+
+                // Subdomains of the manifest's built-in local environments are expanded from
+                // the `localServer` ports or their defaults, so the check applies whenever the
+                // manifest has such an environment (with or without a `localServer` section);
+                // which environment the CLI has selected is irrelevant to the local server.
+                if ctx.manifest_has_builtin_local_environment() {
+                    warn_on_subdomain_port_mismatches(ctx.manifest_local_server(), &startup_ports);
                 }
 
-                Ok(())
+                let run_result = tokio::select! {
+                    res = async {
+                        while let Some(res) = join_set.join_next().await {
+                            res??;
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    } => Some(res),
+                    _ = &mut shutdown => None,
+                };
+
+                match run_result {
+                    Some(res) => res,
+                    None => {
+                        info!("Received shutdown signal, stopping Golem server");
+                        shutdown_golem_services(&mut join_set, &worker_shutdown).await;
+                        Ok(())
+                    }
+                }
             }
-            ServerSubcommand::Clean => {
-                let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
-                clean_data_dir(&ctx, &data_dir).await
+            ServerSubcommand::Clean { config } => {
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &RunArgs {
+                        config,
+                        ..RunArgs::default()
+                    },
+                    SnapshotRepositoryKeySource::ValidationOnly,
+                )?;
+                clean_server_data_dir(&ctx, &config).await
             }
         }
     }
 
     async fn run_server() -> anyhow::Result<()> {
-        let args = RunArgs::default();
-        let data_dir = default_data_dir()?;
+        let config = load_server_config(
+            None,
+            &RunArgs::default(),
+            SnapshotRepositoryKeySource::DataDir,
+        )?;
+        let data_dir = config.data_dir.clone();
 
-        let mut join_set = launch_golem_services(&LaunchArgs {
-            router_addr: args.router_addr().to_string(),
-            router_port: args.router_port(),
-            custom_request_port: args.custom_request_port(),
-            mcp_port: args.mcp_port(),
-            ports_file: args.ports_file.clone(),
-            data_dir: data_dir.clone(),
-            agent_filesystem_root: args.agent_filesystem_root.clone(),
-            resource_usage_metering: resource_usage_metering_from_env()?,
-        })
-        .await
-        .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+        let (mut join_set, _, _) = launch_golem_services(&config)
+            .await
+            .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
         tokio::spawn(async move {
             while let Some(res) = join_set.join_next().await {
@@ -109,93 +164,97 @@ impl CommandHandlerHooks for ServerCommandHandler {
     }
 }
 
-fn default_data_dir() -> anyhow::Result<PathBuf> {
-    Ok(dirs::data_local_dir()
-        .ok_or_else(|| anyhow!("Failed to get data local dir"))?
-        .join("golem"))
-}
-
-fn launch_args_from_run_args_and_manifest(
-    args: &RunArgs,
-    ctx: &Context,
-) -> anyhow::Result<LaunchArgs> {
-    launch_args_from_run_args_and_local_server(
-        args,
-        ctx.manifest_local_server(),
-        resource_usage_metering_from_env()?,
-    )
-}
-
-fn resource_usage_metering_from_env() -> anyhow::Result<ResourceUsageMeteringConfig> {
-    Ok(ResourceUsageMeteringConfig {
-        compute: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__COMPUTE")?,
-        memory: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__MEMORY")?,
-        filesystem: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM")?,
-    })
-}
-
-fn metering_dimension_from_env(name: &str) -> anyhow::Result<bool> {
-    match std::env::var(name) {
-        Ok(value) => parse_metering_dimension(name, &value),
-        Err(std::env::VarError::NotPresent) => Ok(false),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("Failed to parse {name}: non-Unicode value")
-        }
+async fn shutdown_golem_services(
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+    worker_shutdown: &Shutdown,
+) {
+    worker_shutdown.cancel();
+    if !worker_shutdown.wait_for_tracked(SHUTDOWN_GRACE).await {
+        warn!(
+            grace = ?SHUTDOWN_GRACE,
+            "Background tasks did not finish within the shutdown grace period"
+        );
     }
+    join_set.shutdown().await;
 }
 
-fn parse_metering_dimension(name: &str, value: &str) -> anyhow::Result<bool> {
-    value
-        .parse()
-        .with_context(|| format!("Failed to parse {name}: {value}"))
+/// A local server port that differs from the one the manifest's deployment `subdomain`
+/// expansion uses, e.g. because it was overridden with a flag or requested as `0`.
+#[derive(Debug, PartialEq, Eq)]
+struct SubdomainPortMismatch {
+    deployment_kind: &'static str,
+    manifest_field: &'static str,
+    flag: &'static str,
+    expanded_port: u16,
+    bound_port: u16,
 }
 
-fn data_dir_from_local_server(
+/// Deployment subdomains expand to `<label>.localhost:<port>` using the manifest's
+/// `localServer.customRequestPort` / `localServer.mcpPort` (or their defaults), and a request is
+/// only routed when its `Host` header matches that expansion exactly. A server bound to a
+/// different port cannot serve those deployments, so the ports have to match. `local_server` is
+/// `None` when the manifest has no `localServer` section, in which case the defaults apply.
+fn subdomain_port_mismatches(
     local_server: Option<&ResolvedLocalServer>,
-) -> anyhow::Result<PathBuf> {
-    match local_server.and_then(|manifest| manifest.data_dir.clone()) {
-        Some(data_dir) => Ok(data_dir),
-        None => default_data_dir(),
+    startup_ports: &StartupPorts,
+) -> Vec<SubdomainPortMismatch> {
+    let checks = [
+        (
+            "HTTP API",
+            "localServer.customRequestPort",
+            "--custom-request-port",
+            local_server
+                .and_then(|local_server| local_server.custom_request_port)
+                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT),
+            startup_ports.custom_request_port,
+        ),
+        (
+            "MCP",
+            "localServer.mcpPort",
+            "--mcp-port",
+            local_server
+                .and_then(|local_server| local_server.mcp_port)
+                .unwrap_or(DEFAULT_LOCAL_MCP_PORT),
+            startup_ports.mcp_port,
+        ),
+    ];
+
+    checks
+        .into_iter()
+        .filter(|(_, _, _, expanded_port, bound_port)| expanded_port != bound_port)
+        .map(
+            |(deployment_kind, manifest_field, flag, expanded_port, bound_port)| {
+                SubdomainPortMismatch {
+                    deployment_kind,
+                    manifest_field,
+                    flag,
+                    expanded_port,
+                    bound_port,
+                }
+            },
+        )
+        .collect()
+}
+
+fn warn_on_subdomain_port_mismatches(
+    local_server: Option<&ResolvedLocalServer>,
+    startup_ports: &StartupPorts,
+) {
+    for mismatch in subdomain_port_mismatches(local_server, startup_ports) {
+        log_warn_action(
+            "Bound",
+            format!(
+                "{} port {} differs from port {} used by {} deployment subdomains ({}); those deployments are not reachable on this server, use the same value for {} and {}",
+                mismatch.deployment_kind,
+                mismatch.bound_port.to_string().log_color_highlight(),
+                mismatch.expanded_port.to_string().log_color_highlight(),
+                mismatch.deployment_kind,
+                mismatch.manifest_field.log_color_highlight(),
+                mismatch.manifest_field.log_color_highlight(),
+                mismatch.flag.log_color_highlight(),
+            ),
+        );
     }
-}
-
-fn launch_args_from_run_args_and_local_server(
-    args: &RunArgs,
-    local_server: Option<&ResolvedLocalServer>,
-    resource_usage_metering: ResourceUsageMeteringConfig,
-) -> anyhow::Result<LaunchArgs> {
-    Ok(LaunchArgs {
-        router_addr: args
-            .router_addr
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.router_addr.clone()))
-            .unwrap_or_else(|| args.router_addr().to_string()),
-        router_port: args
-            .router_port
-            .or_else(|| local_server.and_then(|manifest| manifest.router_port))
-            .unwrap_or_else(|| args.router_port()),
-        custom_request_port: args
-            .custom_request_port
-            .or_else(|| local_server.and_then(|manifest| manifest.custom_request_port))
-            .unwrap_or_else(|| args.custom_request_port()),
-        mcp_port: args
-            .mcp_port
-            .or_else(|| local_server.and_then(|manifest| manifest.mcp_port))
-            .unwrap_or_else(|| args.mcp_port()),
-        ports_file: args
-            .ports_file
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.ports_file.clone())),
-        data_dir: match &args.data_dir {
-            Some(data_dir) => data_dir.clone(),
-            None => data_dir_from_local_server(local_server)?,
-        },
-        agent_filesystem_root: args
-            .agent_filesystem_root
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.agent_filesystem_root.clone())),
-        resource_usage_metering,
-    })
 }
 
 fn resolve_clean_data_dir(data_dir: &Path) -> anyhow::Result<PathBuf> {
@@ -219,6 +278,24 @@ fn resolve_clean_data_dir(data_dir: &Path) -> anyhow::Result<PathBuf> {
     Ok(resolved_parent.join(file_name))
 }
 
+/// Deletes the data directory of `config`, when it holds all server state.
+async fn clean_server_data_dir(
+    ctx: &Arc<Context>,
+    config: &GolemServerConfig,
+) -> anyhow::Result<()> {
+    let clean_root = resolve_clean_data_dir(&config.data_dir)?;
+    let outside = config.state_outside(&clean_root);
+    if !outside.is_empty() {
+        bail!(
+            "Refusing to clean {}: these stores keep state outside the data directory, so \
+             deleting it does not delete the server state: {}",
+            clean_root.display().to_string().log_color_highlight(),
+            outside.join(", ")
+        );
+    }
+    clean_data_dir(ctx, &config.data_dir).await
+}
+
 async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<()> {
     let data_dir = resolve_clean_data_dir(data_dir)?;
     if !ctx
@@ -240,10 +317,38 @@ async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<(
         .map_err(|err| anyhow!("Failed cleaning data dir ({}): {}", data_dir.display(), err))
 }
 
+/// Resolves when the process receives a shutdown request.
+///
+/// Handlers must be installed explicitly: as PID 1 in a container the kernel
+/// does not apply default signal dispositions, so without this the standalone
+/// server cannot be stopped by SIGINT/SIGTERM (e.g. Ctrl+C or `docker stop`).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = sigint.recv() => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use golem_cli::model::app_raw::LocalServer;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
 
     fn local_server(value: LocalServer) -> ResolvedLocalServer {
@@ -251,84 +356,89 @@ mod tests {
     }
 
     #[test]
-    fn metering_dimension_values_are_validated() {
-        assert!(parse_metering_dimension("METERING", "true").unwrap());
-        assert!(!parse_metering_dimension("METERING", "false").unwrap());
-        assert!(parse_metering_dimension("METERING", "invalid").is_err());
+    async fn server_shutdown_waits_for_tracked_cleanup() {
+        let shutdown = Shutdown::new();
+        let cleanup_finished = Arc::new(AtomicBool::new(false));
+        let cleanup_finished_clone = cleanup_finished.clone();
+        let shutdown_token = shutdown.token();
+        shutdown.spawn(async move {
+            shutdown_token.cancelled().await;
+            tokio::task::yield_now().await;
+            cleanup_finished_clone.store(true, Ordering::Release);
+        });
+
+        shutdown_golem_services(&mut JoinSet::new(), &shutdown).await;
+
+        assert!(cleanup_finished.load(Ordering::Acquire));
     }
 
     #[test]
-    fn manifest_local_server_values_are_used_when_cli_args_are_absent() {
+    fn subdomain_ports_match_when_bound_ports_equal_manifest_or_default_ports() {
         let manifest = local_server(LocalServer {
-            router_addr: Some("127.0.0.1".to_string()),
-            router_port: Some(9882),
             custom_request_port: Some(9008),
-            mcp_port: Some(9009),
-            ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
-            data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
-            agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
+            ..LocalServer::default()
         });
-
-        let args = launch_args_from_run_args_and_local_server(
-            &RunArgs::default(),
-            Some(&manifest),
-            ResourceUsageMeteringConfig::default(),
-        )
-        .unwrap();
-
-        assert_eq!(args.router_addr, "127.0.0.1");
-        assert_eq!(args.router_port, 9882);
-        assert_eq!(args.custom_request_port, 9008);
-        assert_eq!(args.mcp_port, 9009);
-        assert_eq!(
-            args.ports_file,
-            Some(PathBuf::from("/tmp/test-app/.golem/ports.json"))
-        );
-        assert_eq!(args.data_dir, PathBuf::from("/tmp/test-app/.golem/data"));
-        assert_eq!(
-            args.agent_filesystem_root,
-            Some(PathBuf::from("/tmp/test-app/.golem/agents"))
-        );
-    }
-
-    #[test]
-    fn cli_args_override_manifest_local_server_values() {
-        let manifest = local_server(LocalServer {
-            router_addr: Some("127.0.0.1".to_string()),
-            router_port: Some(9882),
-            custom_request_port: Some(9008),
-            mcp_port: Some(9009),
-            ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
-            data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
-            agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
-        });
-        let run_args = RunArgs {
-            router_addr: Some("0.0.0.0".to_string()),
-            router_port: Some(10000),
-            custom_request_port: Some(10001),
-            mcp_port: Some(10002),
-            ports_file: Some(PathBuf::from("cli-ports.json")),
-            data_dir: Some(PathBuf::from("cli-data")),
-            clean: false,
-            agent_filesystem_root: Some(PathBuf::from("cli-agents")),
+        let ports = StartupPorts {
+            router_port: 9881,
+            custom_request_port: 9008,
+            mcp_port: DEFAULT_LOCAL_MCP_PORT,
         };
 
-        let args = launch_args_from_run_args_and_local_server(
-            &run_args,
-            Some(&manifest),
-            ResourceUsageMeteringConfig::default(),
-        )
-        .unwrap();
+        assert_eq!(subdomain_port_mismatches(Some(&manifest), &ports), vec![]);
+    }
 
-        assert_eq!(args.router_addr, "0.0.0.0");
-        assert_eq!(args.router_port, 10000);
-        assert_eq!(args.custom_request_port, 10001);
-        assert_eq!(args.mcp_port, 10002);
-        assert_eq!(args.ports_file, Some(PathBuf::from("cli-ports.json")));
-        assert_eq!(args.data_dir, PathBuf::from("cli-data"));
+    #[test]
+    fn subdomain_ports_use_defaults_without_local_server_section() {
+        // e.g. `--custom-request-port 0` in an app whose manifest has no `localServer`
+        let ports = StartupPorts {
+            router_port: 9881,
+            custom_request_port: 41235,
+            mcp_port: DEFAULT_LOCAL_MCP_PORT,
+        };
+
         assert_eq!(
-            args.agent_filesystem_root,
-            Some(PathBuf::from("cli-agents"))
+            subdomain_port_mismatches(None, &ports),
+            vec![SubdomainPortMismatch {
+                deployment_kind: "HTTP API",
+                manifest_field: "localServer.customRequestPort",
+                flag: "--custom-request-port",
+                expanded_port: DEFAULT_LOCAL_CUSTOM_REQUEST_PORT,
+                bound_port: 41235,
+            }]
+        );
+    }
+
+    #[test]
+    fn subdomain_ports_mismatch_when_bound_ports_differ() {
+        let manifest = local_server(LocalServer {
+            custom_request_port: Some(9008),
+            ..LocalServer::default()
+        });
+        // e.g. `--custom-request-port 0 --mcp-port 0`, OS-assigned ports
+        let ports = StartupPorts {
+            router_port: 9881,
+            custom_request_port: 41235,
+            mcp_port: 41236,
+        };
+
+        assert_eq!(
+            subdomain_port_mismatches(Some(&manifest), &ports),
+            vec![
+                SubdomainPortMismatch {
+                    deployment_kind: "HTTP API",
+                    manifest_field: "localServer.customRequestPort",
+                    flag: "--custom-request-port",
+                    expanded_port: 9008,
+                    bound_port: 41235,
+                },
+                SubdomainPortMismatch {
+                    deployment_kind: "MCP",
+                    manifest_field: "localServer.mcpPort",
+                    flag: "--mcp-port",
+                    expanded_port: DEFAULT_LOCAL_MCP_PORT,
+                    bound_port: 41236,
+                },
+            ]
         );
     }
 

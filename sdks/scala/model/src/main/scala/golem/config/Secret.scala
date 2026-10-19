@@ -16,16 +16,29 @@
 
 package golem.config
 
+import golem.schema.GuestSecretHandle
 import zio.blocks.schema.Schema
 
-final class Secret[T](private[golem] val path: List[String], private[golem] val loader: () => T) {
+final class Secret[T](
+  private[golem] val path: List[String],
+  private[golem] val loader: () => T,
+  private[golem] val handleLoader: () => GuestSecretHandle
+) {
   def get: T = loader()
+
+  /** Acquire an owned handle without revealing the configured secret. */
+  def handle(): GuestSecretHandle = handleLoader()
 }
 
 object Secret {
   implicit def schema[A](implicit underlying: Schema[A]): Schema[Secret[A]] =
     underlying.transform[Secret[A]](
-      a => new Secret[A](Nil, () => a),
+      a =>
+        new Secret[A](
+          Nil,
+          () => a,
+          () => throw new IllegalStateException("secret handles are available only for configured secrets")
+        ),
       _.get
     )
 }

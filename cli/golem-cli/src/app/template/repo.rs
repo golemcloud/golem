@@ -19,10 +19,11 @@ use crate::app::template::template::{
     AppTemplateComponent, AppTemplatesForLanguage,
 };
 use crate::fs;
+use crate::model::app_raw;
 use crate::model::language::GuestLanguage;
 use anyhow::{Context, anyhow, bail};
 use include_dir::{Dir, include_dir};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -35,19 +36,43 @@ static TEMPLATE_REPO: LazyLock<anyhow::Result<AppTemplateRepo>> =
 static TEMPLATES_REPO_DEV_MODE: LazyLock<anyhow::Result<AppTemplateRepo>> =
     LazyLock::new(|| AppTemplateRepo::new(true));
 
+/// A component template defined by a built-in, on-demand loaded common template.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinComponentTemplate {
+    pub language: GuestLanguage,
+    /// The component templates this template inherits from.
+    pub templates: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct AppTemplateRepo {
     languages: HashSet<GuestLanguage>,
     templates: GroupedAppTemplates,
+    builtin_component_templates: BTreeMap<String, BuiltinComponentTemplate>,
 }
 
 impl AppTemplateRepo {
     fn new(dev_mode: bool) -> anyhow::Result<Self> {
         let templates = Self::collect_grouped_templates(dev_mode)?;
+        let builtin_component_templates = Self::collect_builtin_component_templates(&templates)?;
         Ok(Self {
             languages: templates.keys().cloned().collect::<HashSet<_>>(),
             templates,
+            builtin_component_templates,
         })
+    }
+
+    pub fn builtin_component_templates(&self) -> &BTreeMap<String, BuiltinComponentTemplate> {
+        &self.builtin_component_templates
+    }
+
+    /// Languages whose built-in component templates are needed by the referenced template
+    /// names, including the templates inherited by the referenced built-in templates.
+    pub fn builtin_template_languages<'a>(
+        &self,
+        referenced_template_names: impl IntoIterator<Item = &'a String>,
+    ) -> BTreeSet<GuestLanguage> {
+        builtin_template_languages(&self.builtin_component_templates, referenced_template_names)
     }
 
     pub fn get(dev_mode: bool) -> anyhow::Result<&'static AppTemplateRepo> {
@@ -207,6 +232,47 @@ impl AppTemplateRepo {
         Ok(templates)
     }
 
+    fn collect_builtin_component_templates(
+        templates: &GroupedAppTemplates,
+    ) -> anyhow::Result<BTreeMap<String, BuiltinComponentTemplate>> {
+        let mut builtin_templates = BTreeMap::new();
+        for (language, language_templates) in templates {
+            let Some(common_on_demand) = &language_templates.common_on_demand else {
+                continue;
+            };
+            let Some(source) =
+                Self::template_file_contents(&common_on_demand.0, Path::new("golem.yaml"))?
+            else {
+                continue;
+            };
+            let application = app_raw::Application::from_yaml_str(&source).map_err(|err| {
+                anyhow!(
+                    "Failed to parse the built-in {} component templates: {err}",
+                    language.name()
+                )
+            })?;
+            for (name, template) in application.component_templates {
+                if template.guest_language != Some(*language) {
+                    bail!(
+                        "Built-in component template {name} must declare guestLanguage: {}",
+                        language.id()
+                    );
+                }
+                let builtin_template = BuiltinComponentTemplate {
+                    language: *language,
+                    templates: template.templates.into_vec(),
+                };
+                if builtin_templates
+                    .insert(name.clone(), builtin_template)
+                    .is_some()
+                {
+                    bail!("Built-in component template {name} is defined multiple times");
+                }
+            }
+        }
+        Ok(builtin_templates)
+    }
+
     pub fn common_template_skill_files(
         &self,
         language: GuestLanguage,
@@ -327,14 +393,124 @@ impl AppTemplateRepo {
     }
 }
 
+fn builtin_template_languages<'a>(
+    builtin_templates: &BTreeMap<String, BuiltinComponentTemplate>,
+    referenced_template_names: impl IntoIterator<Item = &'a String>,
+) -> BTreeSet<GuestLanguage> {
+    let mut languages = BTreeSet::new();
+    let mut visited = HashSet::new();
+    let mut pending = referenced_template_names
+        .into_iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    while let Some(name) = pending.pop() {
+        if !visited.insert(name) {
+            continue;
+        }
+        if let Some(template) = builtin_templates.get(name) {
+            languages.insert(template.language);
+            pending.extend(template.templates.iter().map(String::as_str));
+        }
+    }
+    languages
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AppTemplateRepo, TEMPLATES_DIR};
+    use super::{
+        AppTemplateRepo, BuiltinComponentTemplate, TEMPLATES_DIR, builtin_template_languages,
+    };
     use crate::model::app_raw::{Application, BuildCommand};
     use crate::model::language::GuestLanguage;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs as stdfs;
     use std::path::{Path, PathBuf};
     use test_r::test;
+
+    #[test]
+    fn public_agent_templates_share_the_core_examples() {
+        let repo = AppTemplateRepo::get(false).unwrap();
+        for language in repo.languages() {
+            let actual = repo
+                .agent_templates(*language)
+                .unwrap()
+                .keys()
+                .map(|name| name.name())
+                .collect::<BTreeSet<_>>();
+            let mut expected =
+                BTreeSet::from(["default", "human-in-the-loop", "json", "streaming"]);
+            // Go snapshot recovery is not supported.
+            if *language != GuestLanguage::Go {
+                expected.insert("snapshotting");
+            }
+            if *language == GuestLanguage::TypeScript {
+                expected.extend(["counter-arktype", "counter-valibot"]);
+            }
+            assert_eq!(actual, expected, "template set for {language}");
+        }
+    }
+
+    #[test]
+    fn builtin_component_templates_declare_their_languages() {
+        let repo = AppTemplateRepo::get(false).unwrap();
+        let languages = repo
+            .builtin_component_templates()
+            .iter()
+            .map(|(name, template)| (name.as_str(), template.language))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            languages,
+            BTreeMap::from([
+                ("go", GuestLanguage::Go),
+                ("effect", GuestLanguage::Effect),
+                ("moonbit", GuestLanguage::MoonBit),
+                ("rust", GuestLanguage::Rust),
+                ("scala", GuestLanguage::Scala),
+                ("ts", GuestLanguage::TypeScript),
+            ])
+        );
+    }
+
+    #[test]
+    fn builtin_template_languages_follow_only_builtin_template_names() {
+        let repo = AppTemplateRepo::get(false).unwrap();
+        let referenced = ["ts", "rust-helpers", "custom-ts", "moonbit-local"].map(String::from);
+
+        assert_eq!(
+            repo.builtin_template_languages(&referenced),
+            BTreeSet::from([GuestLanguage::TypeScript])
+        );
+    }
+
+    #[test]
+    fn builtin_template_languages_include_inherited_builtin_templates() {
+        let builtin = |language, templates: &[&str]| BuiltinComponentTemplate {
+            language,
+            templates: templates.iter().map(|name| name.to_string()).collect(),
+        };
+        let builtin_templates = BTreeMap::from([
+            ("ts".to_string(), builtin(GuestLanguage::TypeScript, &[])),
+            (
+                "ts-wrapper".to_string(),
+                builtin(GuestLanguage::TypeScript, &["rust-helper"]),
+            ),
+            (
+                "rust-helper".to_string(),
+                builtin(GuestLanguage::Rust, &["ts-wrapper"]),
+            ),
+            ("scala".to_string(), builtin(GuestLanguage::Scala, &[])),
+        ]);
+
+        assert_eq!(
+            builtin_template_languages(&builtin_templates, &["ts-wrapper".to_string()]),
+            BTreeSet::from([GuestLanguage::TypeScript, GuestLanguage::Rust])
+        );
+        assert_eq!(
+            builtin_template_languages(&builtin_templates, &["unknown".to_string()]),
+            BTreeSet::new()
+        );
+    }
 
     fn canonical_skill_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -350,6 +526,7 @@ mod tests {
 
         for language in [
             GuestLanguage::TypeScript,
+            GuestLanguage::Effect,
             GuestLanguage::Rust,
             GuestLanguage::Scala,
         ] {
@@ -380,22 +557,6 @@ mod tests {
         let expected_commands = [
             ("moonbit", "debug", "agent-guest"),
             ("moonbit", "release", "agent-guest"),
-            ("moonbit-tool-middleware", "debug", "tool-middleware-guest"),
-            (
-                "moonbit-tool-middleware",
-                "release",
-                "tool-middleware-guest",
-            ),
-            (
-                "moonbit-agent-tool-middleware",
-                "debug",
-                "agent-tool-middleware-guest",
-            ),
-            (
-                "moonbit-agent-tool-middleware",
-                "release",
-                "agent-tool-middleware-guest",
-            ),
         ];
 
         let embed_command_count = application
@@ -440,5 +601,54 @@ mod tests {
                 "{template_name}.{preset_name}"
             );
         }
+    }
+
+    /// Every `wasm-tools` step must declare both `sources` and `targets`, otherwise
+    /// it re-runs on every build and keeps re-touching the component wasm, which in
+    /// turn re-triggers `add-metadata` and `gen-bridge`. Declaring only one of the
+    /// two silently degrades to the same always-run behaviour, so assert on both.
+    #[test]
+    fn moonbit_wasm_tools_commands_declare_sources_and_targets() {
+        let template_source = TEMPLATES_DIR
+            .get_file("moonbit/common-on-demand/golem.yaml")
+            .unwrap()
+            .contents_utf8()
+            .unwrap();
+        let application = Application::from_yaml_str(template_source).unwrap();
+
+        let mut checked = 0;
+        for (template_name, template) in &application.component_templates {
+            for (preset_name, preset) in &template.presets {
+                for command in &preset.build {
+                    let BuildCommand::External(command) = command else {
+                        continue;
+                    };
+                    if !command.command.starts_with("wasm-tools component ") {
+                        continue;
+                    }
+                    assert!(
+                        !command.sources.is_empty(),
+                        "{template_name}.{preset_name}: `{}` declares no sources",
+                        command.command
+                    );
+                    assert!(
+                        !command.targets.is_empty(),
+                        "{template_name}.{preset_name}: `{}` declares no targets",
+                        command.command
+                    );
+                    assert_eq!(
+                        command.targets.len(),
+                        1,
+                        "{template_name}.{preset_name}: `{}` must declare exactly one target, \
+                         because the up-to-date check takes the newest of them",
+                        command.command
+                    );
+                    checked += 1;
+                }
+            }
+        }
+
+        // 1 component template x 2 presets x (embed + new)
+        assert_eq!(checked, 4);
     }
 }

@@ -342,9 +342,16 @@ impl RenderFragment for ComponentOwnerPattern {
     }
 }
 
+/// Gives the owner text of an agent leaf. For a concrete agent name, the function writes `%`, `/`
+/// and `?` as `%25`, `%2F` and `%3F`. So the name is one owner segment and holds no slot variable.
+/// The function replaces `%` before the other two characters, so that it does not change the `%`
+/// of an escape that it wrote. `AgentOwnerLeafPattern::parse` decodes the name.
 fn render_agent_leaf(agent: &AgentOwnerLeafPattern) -> String {
     match agent {
-        AgentOwnerLeafPattern::Agent(agent) => agent.clone(),
+        AgentOwnerLeafPattern::Agent(agent) => agent
+            .replace('%', "%25")
+            .replace('/', "%2F")
+            .replace('?', "%3F"),
         AgentOwnerLeafPattern::AgentTypeWildcard(agent_type) => format!("{}(*)", agent_type.0),
     }
 }
@@ -627,9 +634,13 @@ render_verb!(AccountVerb { View => "view", Update => "update", Delete => "delete
 render_verb!(AccountUsageVerb { View => "view", Update => "update" });
 render_verb!(AccountTokenVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(AccountPluginVerb { View => "view", Register => "register", Delete => "delete", Restore => "restore" });
+render_verb!(AccountToolReleaseVerb { View => "view", Publish => "publish", DePublish => "de-publish", Restore => "restore" });
+render_verb!(AccountToolMiddlewareReleaseVerb { View => "view", Publish => "publish", DePublish => "de-publish", Restore => "restore" });
 render_verb!(ApplicationVerb { View => "view", Create => "create", Update => "update", Delete => "delete" });
 render_verb!(EnvironmentVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Deploy => "deploy", Rollback => "rollback", ViewDeployment => "view-deployment", ViewDeploymentPlan => "view-deployment-plan", ViewAgentTypes => "view-agent-types", ViewTools => "view-tools", WriteDeploymentRecord => "write-deployment-record" });
 render_verb!(EnvironmentPluginGrantVerb { View => "view", Create => "create", Delete => "delete" });
+render_verb!(EnvironmentToolGrantVerb { View => "view", Create => "create", Delete => "delete", Restore => "restore" });
+render_verb!(EnvironmentToolMiddlewareGrantVerb { View => "view", Create => "create", Delete => "delete", Restore => "restore" });
 render_verb!(EnvironmentDomainRegistrationVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(EnvironmentSecuritySchemeVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Restore => "restore" });
 render_verb!(EnvironmentHttpApiDeploymentVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Restore => "restore" });
@@ -788,52 +799,39 @@ impl RenderFragment for ToolResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
         Ok(match self {
             Self::AnyInvocation => "*".to_string(),
+            Self::Request(_) => return Err("a tool request is not a permission pattern".into()),
             Self::Invocation(invocation) => {
-                let command = invocation.command_path.as_ref().map(|path| {
-                    path.iter()
+                let command = if invocation.command_path.is_empty() {
+                    ".".to_string()
+                } else {
+                    invocation
+                        .command_path
+                        .iter()
                         .map(|part| part.0.clone())
                         .collect::<Vec<_>>()
                         .join(".")
-                });
-                let args = invocation
-                    .args
-                    .iter()
-                    .map(render_tool_arg)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                match (command, args.is_empty()) {
-                    (Some(command), true) => command,
-                    (Some(command), false) => format!("{command} {args}"),
-                    (None, true) => "*".to_string(),
-                    (None, false) => args,
+                };
+                let mut parts = vec![command];
+                parts.extend(invocation.flags.iter().map(|flag| match &flag.value {
+                    Some(value) => format!("--{}={}", flag.name.0, render_tool_value(value)),
+                    None => format!("--{}", flag.name.0),
+                }));
+                if !invocation.positionals.is_empty() {
+                    parts.push("--".into());
+                    parts.extend(invocation.positionals.iter().map(render_tool_value));
                 }
+                parts.join(" ")
             }
         })
     }
 }
 
-fn render_tool_arg(arg: &ToolArgPattern) -> String {
-    match arg {
-        ToolArgPattern::ShortFlags { flags, value } => {
-            let flags = flags.iter().collect::<String>();
-            match value {
-                Some(value) => format!("-{flags}={}", render_tool_value(value)),
-                None => format!("-{flags}"),
-            }
-        }
-        ToolArgPattern::LongFlag { name, value } => match value {
-            Some(value) => format!("--{}={}", name.0, render_tool_value(value)),
-            None => format!("--{}", name.0),
-        },
-        ToolArgPattern::Positional(value) => render_tool_value(value),
-    }
-}
-
 fn render_tool_value(value: &ToolValuePattern) -> String {
-    match value {
-        ToolValuePattern::Literal(value) => value.0.clone(),
-        ToolValuePattern::Star => "*".to_string(),
-        ToolValuePattern::GlobStar => "**".to_string(),
+    let value = value.render_glob();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        format!("\"{value}\"")
+    } else {
+        value
     }
 }
 
@@ -895,6 +893,22 @@ impl RenderFragment for AccountPluginResourcePattern {
         })
     }
 }
+impl RenderFragment for AccountToolReleaseResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
+impl RenderFragment for AccountToolMiddlewareReleaseResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
 impl RenderFragment for AccountPermissionShareResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
         Ok(match self {
@@ -942,6 +956,23 @@ render_environment_named_resource!(
     EnvironmentKvBucketResourcePattern,
     EnvironmentBlobBucketResourcePattern,
 );
+
+impl RenderFragment for EnvironmentToolGrantResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
+impl RenderFragment for EnvironmentToolMiddlewareGrantResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
 
 impl RenderFragment for EnvironmentDomainRegistrationResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {

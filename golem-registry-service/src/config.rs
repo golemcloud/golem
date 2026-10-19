@@ -19,24 +19,235 @@ use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
+use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use golem_service_base::http_server::HttpServerConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::time::Duration;
 use uuid::uuid;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinArtifactSource {
+    pub url: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuiltinArtifactsConfig {
+    pub cache_dir: Option<PathBuf>,
+    /// Per-artifact source overrides. Defaults use the release manifest or local inventory.
+    pub source_overrides: BTreeMap<String, BuiltinArtifactSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ResolvedBuiltinArtifact {
+    Url(BuiltinArtifactSource),
+    #[cfg(feature = "embed-builtin-artifacts")]
+    Embedded(&'static [u8]),
+}
+
+impl BuiltinArtifactsConfig {
+    pub(crate) fn resolved_artifacts(
+        &self,
+    ) -> anyhow::Result<BTreeMap<String, ResolvedBuiltinArtifact>> {
+        #[cfg(feature = "embed-builtin-artifacts")]
+        {
+            let defaults: &[(&str, &'static [u8])] =
+                &include!(concat!(env!("OUT_DIR"), "/builtin-artifacts.rs"));
+            let mut artifacts: BTreeMap<_, _> = defaults
+                .iter()
+                .copied()
+                .map(|(id, bytes)| (id.to_string(), ResolvedBuiltinArtifact::Embedded(bytes)))
+                .collect();
+            artifacts.extend(
+                self.source_overrides
+                    .iter()
+                    .map(|(id, source)| (id.clone(), ResolvedBuiltinArtifact::Url(source.clone()))),
+            );
+            Ok(artifacts)
+        }
+        #[cfg(not(feature = "embed-builtin-artifacts"))]
+        self.resolved_artifacts_from_manifest(include_str!(concat!(
+            env!("OUT_DIR"),
+            "/builtin-artifacts.release.json"
+        )))
+    }
+
+    #[cfg(any(not(feature = "embed-builtin-artifacts"), test))]
+    fn resolved_artifacts_from_manifest(
+        &self,
+        manifest: &str,
+    ) -> anyhow::Result<BTreeMap<String, ResolvedBuiltinArtifact>> {
+        if manifest.is_empty() {
+            let inventory = crate::builtin_manifest::inventory()?;
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("registry crate has a source checkout parent");
+            let mut artifacts = inventory
+                .into_iter()
+                .map(|(id, entry)| {
+                    let path = root.join(entry.path);
+                    let url = url::Url::from_file_path(&path).map_err(|_| {
+                        anyhow::anyhow!("invalid built-in artifact path '{}'", path.display())
+                    })?;
+                    Ok((
+                        id,
+                        ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
+                            url: url.into(),
+                            sha256: None,
+                        }),
+                    ))
+                })
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            artifacts.extend(
+                self.source_overrides
+                    .iter()
+                    .map(|(id, source)| (id.clone(), ResolvedBuiltinArtifact::Url(source.clone()))),
+            );
+            return Ok(artifacts);
+        }
+        let mut artifacts: BTreeMap<_, _> = crate::builtin_manifest::parse_manifest(manifest)?
+            .into_iter()
+            .map(|(artifact_id, entry)| {
+                let url = format!(
+                    "https://github.com/golemcloud/golem-builtins/releases/download/{}-v{}/{}.wasm",
+                    entry.component, entry.version, entry.component
+                );
+                (
+                    artifact_id,
+                    ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
+                        url,
+                        sha256: Some(entry.sha256),
+                    }),
+                )
+            })
+            .collect();
+        artifacts.extend(
+            self.source_overrides
+                .iter()
+                .map(|(id, source)| (id.clone(), ResolvedBuiltinArtifact::Url(source.clone()))),
+        );
+        Ok(artifacts)
+    }
+
+    pub fn resolved_cache_dir(&self) -> anyhow::Result<PathBuf> {
+        match &self.cache_dir {
+            Some(path) => Ok(path.clone()),
+            None => {
+                let executable = std::env::current_exe().map_err(|error| {
+                    anyhow::anyhow!("failed to locate registry executable: {error}")
+                })?;
+                let parent = executable.parent().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "registry executable '{}' has no parent directory",
+                        executable.display()
+                    )
+                })?;
+                Ok(parent.join("builtin-artifacts"))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct McpImportResolverConfig {
+    pub cache_entries: usize,
+    pub fetch_concurrency: usize,
+    #[serde(with = "humantime_serde")]
+    pub refresh_interval: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub operation_timeout: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub cache_ttl: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub failure_ttl: std::time::Duration,
+    pub transport: golem_mcp_import::transport::Limits,
+    pub projection: golem_mcp_import::tool::Limits,
+}
+
+impl Default for McpImportResolverConfig {
+    fn default() -> Self {
+        Self {
+            cache_entries: 128,
+            fetch_concurrency: 16,
+            refresh_interval: std::time::Duration::from_secs(60),
+            operation_timeout: std::time::Duration::from_secs(25),
+            cache_ttl: std::time::Duration::from_secs(300),
+            failure_ttl: std::time::Duration::from_secs(1),
+            transport: golem_mcp_import::transport::Limits {
+                timeout: std::time::Duration::from_secs(20),
+                ..Default::default()
+            },
+            projection: Default::default(),
+        }
+    }
+}
+
+impl McpImportResolverConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.cache_entries > 0,
+            "MCP import cache_entries must be positive"
+        );
+        anyhow::ensure!(
+            self.fetch_concurrency > 0
+                && self.fetch_concurrency <= tokio::sync::Semaphore::MAX_PERMITS,
+            "MCP import fetch_concurrency is out of range"
+        );
+        anyhow::ensure!(
+            !self.refresh_interval.is_zero()
+                && self.refresh_interval <= std::time::Duration::from_secs(86_400),
+            "MCP import refresh_interval must be positive and at most one day"
+        );
+        anyhow::ensure!(
+            !self.operation_timeout.is_zero()
+                && self.operation_timeout <= std::time::Duration::from_secs(86_400),
+            "MCP import operation_timeout must be positive and at most one day"
+        );
+        anyhow::ensure!(
+            !self.cache_ttl.is_zero(),
+            "MCP import cache_ttl must be positive"
+        );
+        anyhow::ensure!(
+            !self.failure_ttl.is_zero(),
+            "MCP import failure_ttl must be positive"
+        );
+        anyhow::ensure!(
+            self.transport.timeout <= self.operation_timeout,
+            "MCP transport timeout exceeds operation timeout"
+        );
+        golem_mcp_import::transport::Client::new(
+            "https://config.invalid/mcp",
+            None,
+            self.transport,
+        )?;
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegistryServiceConfig {
     pub tracing: TracingConfig,
     pub environment: String,
     pub workspace: String,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub http_port: u16,
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
     pub grpc: GrpcApiConfig,
     pub db: DbConfig,
     pub login: LoginConfig,
@@ -44,14 +255,44 @@ pub struct RegistryServiceConfig {
     pub cors_origin_regex: String,
     pub domain_registration: DomainRegistrationConfig,
     pub component_compilation: ComponentCompilationConfig,
+    #[serde(default)]
+    pub component_file_upload: ComponentFileUploadConfig,
     pub initial_accounts: HashMap<String, PrecreatedAccount>,
     pub initial_plans: HashMap<String, PrecreatedPlan>,
     #[serde(default)]
     pub builtin_plugins: BuiltinPluginsConfig,
     #[serde(default)]
+    pub builtin_artifacts: BuiltinArtifactsConfig,
+    #[serde(default)]
     pub deployment_events: DeploymentEventsConfig,
     #[serde(default)]
     pub security_scheme: SecuritySchemeConfig,
+    pub mcp_oauth: golem_mcp_import::oauth::Limits,
+    #[serde(default)]
+    pub mcp_import: McpImportResolverConfig,
+    /// HTTP/2 settings of the API port.
+    #[serde(default)]
+    pub http_server: HttpServerConfig,
+    #[serde(default)]
+    pub body_limits: RequestBodyLimits,
+}
+
+impl RegistryServiceConfig {
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.blob_storage.validate()?;
+        self.mcp_oauth.validate()?;
+        self.mcp_import.validate()?;
+        self.http_server.validate().map_err(anyhow::Error::msg)?;
+        Ok(())
+    }
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -61,7 +302,13 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(
+            &mut result,
+            "runtime metrics sampling interval: {}s",
+            self.runtime_metrics_sampling_interval.as_secs()
+        );
 
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
@@ -95,10 +342,27 @@ impl SafeDisplay for RegistryServiceConfig {
             self.component_compilation.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "component file upload:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_file_upload.to_safe_string_indented()
+        );
+
         let _ = writeln!(
             &mut result,
             "builtin plugins: enabled={}",
             self.builtin_plugins.enabled(),
+        );
+        let _ = writeln!(
+            &mut result,
+            "builtin artifacts: cache_dir={}, source_overrides={}",
+            self.builtin_artifacts
+                .cache_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<next to executable>".to_string()),
+            self.builtin_artifacts.source_overrides.len(),
         );
 
         let _ = writeln!(&mut result, "deployment events:");
@@ -118,6 +382,15 @@ impl SafeDisplay for RegistryServiceConfig {
             "security scheme: strict_issuer_url_validation={}",
             self.security_scheme.strict_issuer_url_validation
         );
+        let _ = writeln!(&mut result, "MCP OAuth limits: {:?}", self.mcp_oauth);
+        let _ = writeln!(&mut result, "MCP import resolver: {:?}", self.mcp_import);
+        let _ = writeln!(&mut result, "HTTP server:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.http_server.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "request body limits: {:?}", self.body_limits);
 
         result
     }
@@ -125,7 +398,7 @@ impl SafeDisplay for RegistryServiceConfig {
 
 impl Default for RegistryServiceConfig {
     fn default() -> Self {
-        let mut initial_accounts = HashMap::with_capacity(3);
+        let mut initial_accounts = HashMap::with_capacity(4);
         initial_accounts.insert(
             "root".to_string(),
             PrecreatedAccount {
@@ -163,6 +436,17 @@ impl Default for RegistryServiceConfig {
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
             },
         );
+        initial_accounts.insert(
+            "builtin_tool_owner".to_string(),
+            PrecreatedAccount {
+                id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
+                name: "Builtin Tool Owner".to_string(),
+                email: AccountEmail::new(BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL),
+                token: None,
+                role: AccountRole::BuiltinPluginOwner,
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            },
+        );
 
         let mut initial_plans = HashMap::with_capacity(1);
         initial_plans.insert(
@@ -175,6 +459,7 @@ impl Default for RegistryServiceConfig {
                 component_limit: 100,
                 worker_connection_limit: 100,
                 storage_limit: 500000000,
+                blob_storage_limit: default_unlimited(),
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
@@ -200,23 +485,86 @@ impl Default for RegistryServiceConfig {
             tracing: TracingConfig::local_dev("registry-service"),
             environment: "dev".to_string(),
             workspace: "release".to_string(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8081,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
-                database: "golem_registry_service.db".to_string(),
+                database: "../data/golem_registry_service.db".to_string(),
+                foreign_keys: true,
                 ..Default::default()
             }),
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_compilation: ComponentCompilationConfig::default(),
+            component_file_upload: ComponentFileUploadConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             domain_registration: DomainRegistrationConfig::default(),
             initial_accounts,
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),
+            builtin_artifacts: BuiltinArtifactsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
+            mcp_oauth: golem_mcp_import::oauth::Limits::default(),
+            mcp_import: McpImportResolverConfig::default(),
+            http_server: HttpServerConfig::default(),
+            body_limits: RequestBodyLimits::default(),
         }
+    }
+}
+
+/// Largest request bodies, in bytes, on the API port. A larger body gets
+/// `413 Payload Too Large`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RequestBodyLimits {
+    /// Requests other than uploads.
+    pub api: usize,
+    /// `multipart/form-data` requests: component and plugin uploads, with their initial file
+    /// archives, and initial agent file uploads.
+    pub upload: usize,
+}
+
+impl Default for RequestBodyLimits {
+    fn default() -> Self {
+        Self {
+            api: 32 * 1024 * 1024,
+            // A component upload holds the WASM, which the plan limits to its component
+            // storage (500 MB in the default plan) and monthly upload (1 GB), and the initial
+            // file archive, at most `component_file_upload.max_uncompressed_archive_size`
+            // (1 GiB) plus the archive overhead.
+            upload: 2 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ComponentFileUploadConfig {
+    pub max_concurrent_files: NonZeroUsize,
+    pub max_uncompressed_file_size: u64,
+    pub max_uncompressed_archive_size: u64,
+}
+
+impl Default for ComponentFileUploadConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_files: NonZeroUsize::new(16).unwrap(),
+            max_uncompressed_file_size: 536_870_912,
+            max_uncompressed_archive_size: 1_073_741_824,
+        }
+    }
+}
+
+impl SafeDisplay for ComponentFileUploadConfig {
+    fn to_safe_string(&self) -> String {
+        format!(
+            "max concurrent files: {}, max uncompressed file size: {}, max uncompressed archive size: {}",
+            self.max_concurrent_files,
+            self.max_uncompressed_file_size,
+            self.max_uncompressed_archive_size,
+        )
     }
 }
 
@@ -403,6 +751,9 @@ impl Default for ComponentCompilationConfig {
 pub struct ComponentCompilationEnabledConfig {
     pub host: String,
     pub port: u16,
+    /// Total budget for cache-warming admission, including connection and retries.
+    #[serde(with = "humantime_serde")]
+    pub enqueue_timeout: Duration,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
 }
@@ -412,6 +763,7 @@ impl SafeDisplay for ComponentCompilationEnabledConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "enqueue timeout: {:?}", self.enqueue_timeout);
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -422,6 +774,7 @@ impl Default for ComponentCompilationEnabledConfig {
         Self {
             host: "localhost".to_string(),
             port: 9091,
+            enqueue_timeout: Duration::from_secs(1),
             client_config: GrpcClientConfig::default(),
         }
     }
@@ -491,6 +844,7 @@ pub struct PrecreatedPlan {
     pub component_limit: u64,
     pub worker_connection_limit: u64,
     pub storage_limit: u64,
+    pub blob_storage_limit: u64,
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
     pub max_memory_per_worker: u64,
@@ -573,13 +927,402 @@ pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use test_r::test;
 
-    use crate::config::{RegistryServiceConfig, make_config_loader};
+    use crate::config::{
+        BuiltinArtifactSource, BuiltinArtifactsConfig, ComponentFileUploadConfig,
+        RegistryServiceConfig, ResolvedBuiltinArtifact, make_config_loader,
+    };
+
+    #[test]
+    fn config_accepts_separate_s3_snapshot_buckets() {
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::default_s3(),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn default_config_is_valid() {
+        RegistryServiceConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn config_accepts_one_s3_bucket_for_every_namespace_with_namespace_prefixes() {
+        let bucket = "golem".to_string();
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    namespace_prefixes: true,
+                    compilation_cache_bucket: bucket.clone(),
+                    custom_data_bucket: bucket.clone(),
+                    oplog_payload_bucket: bucket.clone(),
+                    compressed_oplog_buckets: vec![bucket.clone()],
+                    initial_agent_files_bucket: bucket.clone(),
+                    components_bucket: bucket.clone(),
+                    filesystem_snapshots_bucket: bucket,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn config_rejects_shared_s3_snapshot_bucket() {
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    custom_data_bucket: "shared-bucket".to_string(),
+                    filesystem_snapshots_bucket: "shared-bucket".to_string(),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("filesystem_snapshots_bucket"), "{error}");
+        assert!(error.contains("custom_data_bucket"), "{error}");
+    }
 
     #[test]
     pub fn config_is_loadable() {
-        make_config_loader().load().expect("Failed to load config");
+        make_config_loader()
+            .load()
+            .expect("Failed to load config")
+            .validate()
+            .expect("Invalid config");
+    }
+
+    #[test]
+    pub fn builtin_artifact_defaults_follow_embedded_manifest() {
+        let config = BuiltinArtifactsConfig::default();
+        assert!(config.source_overrides.is_empty());
+        let artifacts = config.resolved_artifacts().unwrap();
+        assert_eq!(artifacts.len(), 8);
+        assert!(artifacts.contains_key("python"));
+        for (artifact_id, source) in artifacts {
+            #[cfg(feature = "embed-builtin-artifacts")]
+            assert!(
+                matches!(source, ResolvedBuiltinArtifact::Embedded(_)),
+                "local-install defaults must not depend on external files or downloads: {artifact_id}"
+            );
+            #[cfg(not(feature = "embed-builtin-artifacts"))]
+            let ResolvedBuiltinArtifact::Url(source) = source;
+            #[cfg(feature = "embed-builtin-artifacts")]
+            let source = match source {
+                ResolvedBuiltinArtifact::Url(source) => source,
+                ResolvedBuiltinArtifact::Embedded(bytes) => {
+                    assert!(!bytes.is_empty());
+                    continue;
+                }
+            };
+            if include_str!(concat!(env!("OUT_DIR"), "/builtin-artifacts.release.json")).is_empty()
+            {
+                let path = url::Url::parse(&source.url)
+                    .unwrap()
+                    .to_file_path()
+                    .unwrap();
+                assert!(
+                    path.starts_with(
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .parent()
+                            .unwrap()
+                    )
+                );
+                assert!(source.sha256.is_none());
+                continue;
+            }
+            assert!(
+                source
+                    .url
+                    .starts_with("https://github.com/golemcloud/golem-builtins/releases/download/"),
+                "unexpected URL for {artifact_id}: {}",
+                source.url
+            );
+            assert_eq!(
+                source.sha256.as_deref().map(str::len),
+                Some(64),
+                "missing or invalid SHA-256 for {artifact_id}"
+            );
+        }
+    }
+
+    #[test]
+    pub fn builtin_artifact_config_overrides_one_embedded_source() {
+        let override_source = crate::config::BuiltinArtifactSource {
+            url: "https://example.com/javascript-tools.wasm".to_string(),
+            sha256: None,
+        };
+        let config = BuiltinArtifactsConfig {
+            source_overrides: BTreeMap::from([(
+                "javascript_tools".to_string(),
+                override_source.clone(),
+            )]),
+            ..Default::default()
+        };
+
+        let artifacts = config.resolved_artifacts().unwrap();
+        assert_eq!(artifacts.len(), 8);
+        assert_eq!(
+            artifacts["javascript_tools"],
+            ResolvedBuiltinArtifact::Url(override_source)
+        );
+        let defaults = BuiltinArtifactsConfig::default()
+            .resolved_artifacts()
+            .unwrap();
+        for id in ["git_tool", "typescript_tools", "web_fetch"] {
+            assert_eq!(artifacts[id], defaults[id]);
+        }
+    }
+
+    #[test]
+    fn builtin_artifact_release_manifest_is_strict() {
+        let config = BuiltinArtifactsConfig::default();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/builtin-artifacts.release.json")).unwrap();
+        manifest["artifacts"]["python"]["sha256"] = serde_json::json!("ab".repeat(32));
+        let sources = config
+            .resolved_artifacts_from_manifest(&manifest.to_string())
+            .unwrap();
+        assert_eq!(sources["python"], ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
+            url: "https://github.com/golemcloud/golem-builtins/releases/download/python-v1.2.3/python.wasm".into(),
+            sha256: Some("ab".repeat(32)),
+        }));
+        for (pointer, invalid) in [
+            ("/schemaVersion", serde_json::json!(2)),
+            ("/repository", serde_json::json!("other/repo")),
+            (
+                "/artifacts/python/component",
+                serde_json::json!("../python"),
+            ),
+            ("/artifacts/python/component", serde_json::json!("bash")),
+            ("/artifacts/python/version", serde_json::json!("latest")),
+            (
+                "/artifacts/python/sha256",
+                serde_json::json!("AB".repeat(32)),
+            ),
+        ] {
+            let mut invalid_manifest = manifest.clone();
+            *invalid_manifest.pointer_mut(pointer).unwrap() = invalid;
+            assert!(
+                config
+                    .resolved_artifacts_from_manifest(&invalid_manifest.to_string())
+                    .is_err()
+            );
+        }
+        let mut incomplete = manifest.clone();
+        incomplete["artifacts"]
+            .as_object_mut()
+            .unwrap()
+            .remove("bash");
+        assert!(
+            config
+                .resolved_artifacts_from_manifest(&incomplete.to_string())
+                .is_err()
+        );
+        let mut extra = manifest.clone();
+        extra["artifacts"]["unknown"] = manifest["artifacts"]["python"].clone();
+        assert!(
+            config
+                .resolved_artifacts_from_manifest(&extra.to_string())
+                .is_err()
+        );
+        assert!(config.resolved_artifacts_from_manifest("not json").is_err());
+        let mut overrides = config;
+        overrides.source_overrides.insert(
+            "python".to_string(),
+            crate::config::BuiltinArtifactSource {
+                url: "file:///replacement.wasm".to_string(),
+                sha256: None,
+            },
+        );
+        let sources = overrides
+            .resolved_artifacts_from_manifest(&manifest.to_string())
+            .unwrap();
+        assert_eq!(
+            sources["python"],
+            ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
+                url: "file:///replacement.wasm".into(),
+                sha256: None,
+            })
+        );
+    }
+
+    #[test]
+    pub fn mcp_import_resolver_bounds_are_finite_and_validated() {
+        use std::time::Duration;
+
+        let defaults = RegistryServiceConfig::default().mcp_import;
+        assert!(defaults.cache_entries > 0);
+        assert!(defaults.fetch_concurrency > 0);
+        assert!(!defaults.refresh_interval.is_zero());
+        assert!(defaults.transport.timeout < Duration::from_secs(30));
+        defaults.validate().unwrap();
+
+        crate::config::McpImportResolverConfig {
+            cache_ttl: Duration::MAX,
+            failure_ttl: Duration::MAX,
+            ..defaults
+        }
+        .validate()
+        .unwrap();
+
+        for invalid in [
+            crate::config::McpImportResolverConfig {
+                cache_entries: 0,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                fetch_concurrency: 0,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                refresh_interval: Duration::ZERO,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                refresh_interval: Duration::MAX,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                operation_timeout: Duration::ZERO,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                cache_ttl: Duration::ZERO,
+                ..defaults
+            },
+            crate::config::McpImportResolverConfig {
+                failure_ttl: Duration::ZERO,
+                ..defaults
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    pub async fn mcp_import_resolver_rejects_unrepresentable_operation_timeout() {
+        use crate::bootstrap::Services;
+        use golem_common::config::{DbConfig, DbSqliteConfig};
+
+        let mut config = RegistryServiceConfig::default();
+        config.mcp_import.operation_timeout = std::time::Duration::MAX;
+        assert!(config.mcp_import.validate().is_err());
+
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("registry.db");
+        config.db = DbConfig::Sqlite(DbSqliteConfig {
+            database: database.to_str().unwrap().into(),
+            ..Default::default()
+        });
+        let mut tasks = tokio::task::JoinSet::new();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("operation_timeout"));
+        assert!(!database.exists());
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    pub fn mcp_import_resolver_deadline_limits_are_inclusive() {
+        use crate::config::McpImportResolverConfig;
+        use std::time::Duration;
+
+        let day = Duration::from_secs(24 * 60 * 60);
+        let config = McpImportResolverConfig {
+            refresh_interval: day,
+            operation_timeout: day,
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        for invalid in [
+            McpImportResolverConfig {
+                refresh_interval: day + Duration::from_nanos(1),
+                ..config
+            },
+            McpImportResolverConfig {
+                operation_timeout: day + Duration::from_nanos(1),
+                ..config
+            },
+            McpImportResolverConfig {
+                operation_timeout: Duration::from_secs(1),
+                ..config
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    pub async fn mcp_oauth_config_validates_before_bootstrap() {
+        use crate::bootstrap::Services;
+        use golem_common::config::{DbConfig, DbSqliteConfig};
+        use serde_json::json;
+        use std::time::Duration;
+
+        let mut config = RegistryServiceConfig::default();
+        assert_eq!(
+            serde_json::to_value(config.mcp_oauth).unwrap(),
+            json!({
+                "document_bytes": 1_048_576,
+                "request_bytes": 65_536,
+                "challenge_bytes": 16_384,
+                "timeout": "20s"
+            })
+        );
+        config.mcp_oauth = serde_json::from_value(json!({
+            "document_bytes": 1024,
+            "request_bytes": 512,
+            "challenge_bytes": 128,
+            "timeout": "250ms"
+        }))
+        .unwrap();
+        assert_eq!(
+            config.mcp_oauth.validate().unwrap().timeout,
+            Duration::from_millis(250)
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("registry.db");
+        config.db = DbConfig::Sqlite(DbSqliteConfig {
+            database: database.to_str().unwrap().into(),
+            ..Default::default()
+        });
+        config.mcp_oauth.timeout = Duration::ZERO;
+        let mut tasks = tokio::task::JoinSet::new();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("invalid OAuth limits"));
+        assert!(!database.exists());
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    pub fn component_file_upload_parallelism_rejects_zero() {
+        let result = serde_json::from_value::<ComponentFileUploadConfig>(serde_json::json!({
+            "max_concurrent_files": 0
+        }));
+        assert!(result.is_err());
     }
 
     /// A plan that raises the per-agent disk limit without declaring a ceiling must not

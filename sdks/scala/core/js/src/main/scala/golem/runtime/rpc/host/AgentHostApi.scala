@@ -76,6 +76,11 @@ object AgentHostApi {
     if (v == null || js.isUndefined(v)) None else Some(v)
   }
 
+  def registeredAgentTypeFor(agentId: String): Option[RegisteredAgentType] = {
+    val value = AgentRegistryModule.getAgentTypeByAgentId(agentId)
+    if (value == null || js.isUndefined(value)) None else Some(value)
+  }
+
   def getAllAgentTypes(): List[RegisteredAgentType] =
     AgentRegistryModule.getAllAgentTypes().toList
 
@@ -138,31 +143,13 @@ object AgentHostApi {
     AgentRegistryModule.createWebhook(promiseId)
 
   def getConfigValue(key: List[String], expected: JsSchemaGraph): JsSchemaValueTree =
-    AgentRegistryModule.getConfigValue(js.Array(key: _*), expected)
-
-  def getOplogIndex(): OplogIndex =
-    HostModule.getOplogIndex()
-
-  def setOplogIndex(index: OplogIndex): Unit =
-    HostModule.setOplogIndex(index)
-
-  def markBeginOperation(): OplogIndex =
-    HostModule.markBeginOperation()
-
-  def markEndOperation(begin: OplogIndex): Unit =
-    HostModule.markEndOperation(begin)
+    AgentRegistryModule.getConfigValue(js.Array(key*), expected)
 
   def trap(reason: String): Unit =
     HostModule.trap(reason)
 
   def oplogCommit(replicas: Int): Unit =
     HostModule.oplogCommit(replicas)
-
-  def getIdempotenceMode(): Boolean =
-    HostModule.getIdempotenceMode()
-
-  def setIdempotenceMode(flag: Boolean): Unit =
-    HostModule.setIdempotenceMode(flag)
 
   def generateIdempotencyKey(): UuidLiteral =
     HostModule.generateIdempotencyKey()
@@ -216,6 +203,7 @@ object AgentHostApi {
     def Automatic: UpdateMode = "automatic"
 
     def SnapshotBased: UpdateMode = "snapshot-based"
+
   }
 
   object FilterComparator {
@@ -351,21 +339,9 @@ object AgentHostApi {
 
     def completePromise(promiseId: PromiseIdLiteral, data: Uint8Array): Boolean = js.native
 
-    def getOplogIndex(): OplogIndex = js.native
-
-    def setOplogIndex(index: OplogIndex): Unit = js.native
-
-    def markBeginOperation(): OplogIndex = js.native
-
-    def markEndOperation(begin: OplogIndex): Unit = js.native
-
     def trap(reason: String): Unit = js.native
 
     def oplogCommit(replicas: Int): Unit = js.native
-
-    def getIdempotenceMode(): Boolean = js.native
-
-    def setIdempotenceMode(flag: Boolean): Unit = js.native
 
     def generateIdempotencyKey(): UuidLiteral = js.native
 
@@ -386,6 +362,8 @@ object AgentHostApi {
     def getAgentType(typeName: String): RegisteredAgentType = js.native
 
     def getAllAgentTypes(): js.Array[RegisteredAgentType] = js.native
+
+    def getAgentTypeByAgentId(agentId: String): RegisteredAgentType = js.native
 
     def makeAgentId(agentTypeName: String, input: JsSchemaValueTree, phantom: js.Any): String = js.native
 

@@ -2,6 +2,7 @@
 // Licensed under the Golem Source License v1.1
 
 import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type {
   CancellationToken,
   CancelableScheduledInvocationReceipt,
@@ -15,23 +16,76 @@ import {
   schemaValueFromWit,
   schemaValueToWit,
   schemaValueToWitAsync,
+  typedSchemaValueFromWit,
   typedSchemaValueToWit,
+  preflightWitValueTree,
   type SchemaValue,
   type TypedSchemaValue,
 } from '../internal/schema-model';
 import type { Uuid } from '../uuid';
+import { borrowScopeCardInternal, type ScopeCard } from '../host/permissions';
+import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
+import { restoreGuestPermissionCardHandleFromWire } from '../internal/schema-model/permissionCardHandle';
 
-export class RemoteCallError extends Error {
+export type RemoteAgentError<Value = TypedSchemaValue> =
+  | { readonly tag: 'invalid-input'; readonly details: string }
+  | { readonly tag: 'invalid-method'; readonly details: string }
+  | { readonly tag: 'invalid-type'; readonly details: string }
+  | { readonly tag: 'invalid-agent-id'; readonly details: string }
+  | { readonly tag: 'custom-error'; readonly value: Value };
+
+export type RemoteCallErrorCause<Value = TypedSchemaValue> =
+  | { readonly tag: 'protocol-error'; readonly details: string }
+  | { readonly tag: 'denied'; readonly details: string }
+  | { readonly tag: 'not-found'; readonly details: string }
+  | { readonly tag: 'remote-internal-error'; readonly details: string }
+  | { readonly tag: 'remote-agent-error'; readonly error: RemoteAgentError<Value> };
+
+export class RemoteCallError<Value = TypedSchemaValue> extends Error {
   readonly _tag = 'RemoteCallError';
+  override readonly cause: RemoteCallErrorCause<Value>;
+
+  constructor(context: string, cause: RemoteCallErrorCause<Value>) {
+    super(`${context}: ${formatRemoteCallErrorCause(cause)}`, { cause });
+    this.name = 'RemoteCallError';
+    this.cause = cause;
+  }
 }
-export interface RemoteInvocationResult {
+
+export function isRemoteCallError(error: unknown): error is RemoteCallError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { _tag?: unknown })._tag === 'RemoteCallError' &&
+    typeof (error as { message?: unknown }).message === 'string' &&
+    isRemoteCallErrorCause((error as { cause?: unknown }).cause)
+  );
+}
+
+export class RemoteOutputError extends Error {
+  readonly _tag = 'RemoteOutputError';
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RemoteOutputError';
+  }
+}
+export interface RemoteInvocationResult<Value = SchemaValue> {
   metadata: InvocationMetadata;
-  value?: SchemaValue;
+  value?: Value;
 }
 export interface AgentConfigEntry {
   readonly path: readonly string[];
   readonly value: TypedSchemaValue;
 }
+
+type RemoteAgentCreation = (
+  agentTypeName: string,
+  constructorTree: ReturnType<typeof schemaValueToWit>,
+  phantomId: Uuid | undefined,
+  config: Array<{ path: string[]; value: ReturnType<typeof typedSchemaValueToWit> }>,
+  agentId: string,
+) => WasmRpc;
 
 function isRpcError(error: unknown): error is RpcError {
   if (error === null || typeof error !== 'object') return false;
@@ -48,32 +102,169 @@ function isRpcError(error: unknown): error is RpcError {
   }
 }
 
-export interface RemoteAgentHandle {
+function remoteCallError(context: string, error: RpcError): RemoteCallError {
+  return new RemoteCallError(context, mapRemoteCallErrorCause(error, typedSchemaValueFromWit));
+}
+
+function mapRemoteCallErrorCause<Value>(
+  error: RpcError,
+  decode: (value: Parameters<typeof typedSchemaValueFromWit>[0]) => Value,
+): RemoteCallErrorCause<Value> {
+  switch (error.tag) {
+    case 'protocol-error':
+    case 'denied':
+    case 'not-found':
+    case 'remote-internal-error':
+      return { tag: error.tag, details: error.val };
+    case 'remote-agent-error':
+      return { tag: error.tag, error: mapRemoteAgentError(error.val, decode) };
+  }
+}
+
+function isRemoteCallErrorCause(cause: unknown): cause is RemoteCallErrorCause {
+  if (typeof cause !== 'object' || cause === null) return false;
+  const tagged = cause as { tag?: unknown; details?: unknown; error?: unknown };
+  switch (tagged.tag) {
+    case 'protocol-error':
+    case 'denied':
+    case 'not-found':
+    case 'remote-internal-error':
+      return typeof tagged.details === 'string';
+    case 'remote-agent-error':
+      return isRemoteAgentError(tagged.error);
+    default:
+      return false;
+  }
+}
+
+function isRemoteAgentError(error: unknown): error is RemoteAgentError {
+  if (typeof error !== 'object' || error === null) return false;
+  const tagged = error as { tag?: unknown; details?: unknown; value?: unknown };
+  switch (tagged.tag) {
+    case 'invalid-input':
+    case 'invalid-method':
+    case 'invalid-type':
+    case 'invalid-agent-id':
+      return typeof tagged.details === 'string';
+    case 'custom-error':
+      return typeof tagged.value === 'object' && tagged.value !== null;
+    default:
+      return false;
+  }
+}
+
+function mapRemoteAgentError<Value>(
+  error: Extract<RpcError, { tag: 'remote-agent-error' }>['val'],
+  decode: (value: Parameters<typeof typedSchemaValueFromWit>[0]) => Value,
+): RemoteAgentError<Value> {
+  switch (error.tag) {
+    case 'invalid-input':
+    case 'invalid-method':
+    case 'invalid-type':
+    case 'invalid-agent-id':
+      return { tag: error.tag, details: error.val };
+    case 'custom-error':
+      return { tag: error.tag, value: decode(error.val) };
+  }
+}
+
+function formatRemoteCallErrorCause(cause: RemoteCallErrorCause<unknown>): string {
+  if (cause.tag !== 'remote-agent-error') return `${cause.tag}: ${cause.details}`;
+  return cause.error.tag === 'custom-error'
+    ? 'remote-agent-error: custom-error'
+    : `remote-agent-error: ${cause.error.tag}: ${cause.error.details}`;
+}
+
+function mapRpcError<T>(context: string, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (!isRpcError(error)) throw error;
+    throw remoteCallError(context, error);
+  }
+}
+
+function snapshotInvocationMetadata(metadata: InvocationMetadata): InvocationMetadata {
+  return Object.freeze({
+    agentId: metadata.agentId,
+    idempotencyKey: metadata.idempotencyKey,
+  });
+}
+
+function disposeOwnedWitResources(tree: SchemaValueTree): void {
+  for (const node of tree.valueNodes) {
+    switch (node.tag) {
+      case 'stream-value':
+      case 'secret-value':
+      case 'quota-token-handle':
+      case 'permission-card-handle':
+        try {
+          // Native lowering spends the wrapper handle. Disposal releases only
+          // resources still owned here, including after partial lowering.
+          const resource = node.val as { [Symbol.dispose]?: () => void };
+          resource[Symbol.dispose]?.();
+        } catch {
+          // Attempt every resource while preserving the failed-start error.
+        }
+    }
+  }
+}
+
+/**
+ * Give the permission cards of an input tree that never reached the host back
+ * to their cards, and release every other resource the tree still owns.
+ */
+function returnUnsentWitResources(tree: SchemaValueTree): void {
+  for (const node of tree.valueNodes) {
+    if (
+      node.tag === 'permission-card-handle' &&
+      node.val !== undefined &&
+      restoreGuestPermissionCardHandleFromWire(PERMISSION_CARD_INTERNAL, node.val, node)
+    ) {
+      (node as { val: unknown }).val = undefined;
+    }
+  }
+  disposeOwnedWitResources(tree);
+}
+
+export interface RemoteAgentHandle<Value = SchemaValue> {
   readonly agentId: string;
+  /**
+   * Invoke `method` and await its result. A `scopeCard` is borrowed for the
+   * call: the callee holds its authority until the invocation ends, and the
+   * caller keeps the card.
+   */
   invokeAndAwait(
     method: string,
-    params: SchemaValue,
+    params: Value,
     signal?: AbortSignal,
-  ): Promise<SchemaValue | undefined>;
+    scopeCard?: ScopeCard,
+  ): Promise<Value | undefined>;
   invokeAndAwaitWithMetadata(
     method: string,
-    params: SchemaValue,
+    params: Value,
     signal?: AbortSignal,
-  ): Promise<RemoteInvocationResult>;
-  invoke(method: string, params: SchemaValue): void;
-  invokeWithMetadata(method: string, params: SchemaValue): InvocationMetadata;
-  schedule(at: Datetime, method: string, params: SchemaValue): void;
-  scheduleWithMetadata(
-    at: Datetime,
-    method: string,
-    params: SchemaValue,
-  ): ScheduledInvocationReceipt;
-  scheduleCancelable(at: Datetime, method: string, params: SchemaValue): CancellationToken;
+    scopeCard?: ScopeCard,
+  ): Promise<RemoteInvocationResult<Value>>;
+  invoke(method: string, params: Value): void;
+  invokeWithMetadata(method: string, params: Value): InvocationMetadata;
+  schedule(at: Datetime, method: string, params: Value): void;
+  scheduleWithMetadata(at: Datetime, method: string, params: Value): ScheduledInvocationReceipt;
+  scheduleCancelable(at: Datetime, method: string, params: Value): CancellationToken;
   scheduleCancelableWithMetadata(
     at: Datetime,
     method: string,
-    params: SchemaValue,
+    params: Value,
   ): CancelableScheduledInvocationReceipt;
+}
+
+const wireRemotes = new WeakMap<RemoteAgentHandle, RemoteAgentHandle<SchemaValueTree>>();
+
+/** Internal companion transport for prepared, capability-free invocation codecs. */
+export function wireRemoteAgent(
+  remote: RemoteAgentHandle,
+): RemoteAgentHandle<SchemaValueTree> | undefined {
+  return wireRemotes.get(remote);
 }
 
 export function resolveRemoteAgent(
@@ -83,10 +274,49 @@ export function resolveRemoteAgent(
   configEntries: readonly AgentConfigEntry[] = [],
   mode: 'durable' | 'ephemeral' = 'durable',
 ): RemoteAgentHandle {
+  return resolveRemoteAgentWith(
+    agentTypeName,
+    constructorValue,
+    phantomId,
+    configEntries,
+    mode,
+    (typeName, constructorTree, phantom, config) =>
+      new WasmRpc(typeName, constructorTree, phantom, config),
+  );
+}
+
+export function resolveRemoteAgentFallibly(
+  agentTypeName: string,
+  constructorValue: SchemaValue,
+  phantomId?: Uuid,
+  configEntries: readonly AgentConfigEntry[] = [],
+  mode: 'durable' | 'ephemeral' = 'durable',
+): RemoteAgentHandle {
+  return resolveRemoteAgentWith(
+    agentTypeName,
+    constructorValue,
+    phantomId,
+    configEntries,
+    mode,
+    (typeName, constructorTree, phantom, config, agentId) =>
+      mapRpcError(`Failed to create remote agent client for ${agentId}`, () =>
+        WasmRpc.create(typeName, constructorTree, phantom, config),
+      ),
+  );
+}
+
+function resolveRemoteAgentWith(
+  agentTypeName: string,
+  constructorValue: SchemaValue,
+  phantomId: Uuid | undefined,
+  configEntries: readonly AgentConfigEntry[],
+  mode: 'durable' | 'ephemeral',
+  create: RemoteAgentCreation,
+): RemoteAgentHandle {
   const constructorTree = schemaValueToWit(constructorValue);
   const agentId =
     mode === 'ephemeral' ? agentTypeName : makeAgentId(agentTypeName, constructorTree, phantomId);
-  const rpc = new WasmRpc(
+  const rpc = create(
     agentTypeName,
     constructorTree,
     phantomId,
@@ -94,62 +324,144 @@ export function resolveRemoteAgent(
       path: [...entry.path],
       value: typedSchemaValueToWit(entry.value),
     })),
+    agentId,
   );
+  const remote = remoteTransport(
+    rpc,
+    agentId,
+    schemaValueToWit,
+    schemaValueToWitAsync,
+    schemaValueFromWit,
+    remoteCallError,
+  );
+  wireRemotes.set(
+    remote,
+    remoteTransport(
+      rpc,
+      agentId,
+      (value) => value,
+      async (value) => value,
+      (value) => {
+        try {
+          preflightWitValueTree(value.valueNodes, value.root);
+        } catch (error) {
+          // Preserve the ordinary failed-preflight resource cleanup.
+          schemaValueFromWit(value);
+          throw error;
+        }
+        return value;
+      },
+      remoteCallError,
+    ),
+  );
+  return remote;
+}
+
+function remoteTransport<Value>(
+  rpc: WasmRpc,
+  agentId: string,
+  encode: (value: Value) => SchemaValueTree,
+  encodeAsync: (value: Value) => Promise<SchemaValueTree>,
+  decode: (value: SchemaValueTree) => Value,
+  failure: (context: string, error: RpcError) => Error,
+): RemoteAgentHandle<Value> {
+  const mapRpcError = <T>(context: string, operation: () => T): T => {
+    try {
+      return operation();
+    } catch (error) {
+      if (!isRpcError(error)) throw error;
+      throw failure(context, error);
+    }
+  };
   const awaitInvocation = async (
     method: string,
-    params: SchemaValue,
+    params: Value,
     signal?: AbortSignal,
-  ): Promise<RemoteInvocationResult> => {
+    scopeCard?: ScopeCard,
+  ): Promise<RemoteInvocationResult<Value>> => {
     throwIfAborted(signal);
-    const invocation = rpc.asyncInvokeAndAwait(
-      method,
-      await schemaValueToWitAsync(params),
-      undefined,
-    );
+    // Check the scope card before the input moves any argument capability.
+    if (scopeCard !== undefined) borrowScopeCardInternal(PERMISSION_CARD_INTERNAL, scopeCard);
+    const input = await encodeAsync(params);
+    let scope;
+    try {
+      throwIfAborted(signal);
+      scope =
+        scopeCard === undefined
+          ? undefined
+          : borrowScopeCardInternal(PERMISSION_CARD_INTERNAL, scopeCard);
+    } catch (error) {
+      returnUnsentWitResources(input);
+      throw error;
+    }
+    let invocation;
+    try {
+      invocation = rpc.asyncInvokeAndAwait(method, input, scope);
+    } catch (error) {
+      disposeOwnedWitResources(input);
+      throw error;
+    }
+    const metadata = snapshotInvocationMetadata(invocation.metadata);
     const future = invocation.future;
     let result;
     try {
       result = await awaitAbortable(future.get(), signal, () => future.cancel());
     } catch (error) {
       if (!isRpcError(error)) throw error;
-      throw new RemoteCallError(
-        `Remote agent ${agentId}.${method} errored: ${JSON.stringify(error, (_, value) => (typeof value === 'bigint' ? value.toString() : value))}`,
-      );
+      throw failure(`Remote agent ${agentId}.${method} errored`, error);
     }
     try {
       return {
-        metadata: invocation.metadata,
-        value: result === undefined ? undefined : schemaValueFromWit(result),
+        metadata,
+        value: result === undefined ? undefined : decode(result),
       };
     } catch (error) {
-      throw new RemoteCallError(
+      throw new RemoteOutputError(
         `Remote agent ${agentId}.${method} returned an invalid schema value: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
     }
   };
   return {
     agentId,
-    invokeAndAwait: async (method, params, signal) =>
-      (await awaitInvocation(method, params, signal)).value,
+    invokeAndAwait: async (method, params, signal, scopeCard) =>
+      (await awaitInvocation(method, params, signal, scopeCard)).value,
     invokeAndAwaitWithMetadata: awaitInvocation,
     invoke(method, params) {
-      rpc.invoke(method, schemaValueToWit(params), undefined);
+      mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
+        rpc.invoke(method, encode(params), undefined),
+      );
     },
     invokeWithMetadata(method, params) {
-      return rpc.invoke(method, schemaValueToWit(params), undefined);
+      const metadata = mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
+        rpc.invoke(method, encode(params), undefined),
+      );
+      return snapshotInvocationMetadata(metadata);
     },
     schedule(at, method, params) {
-      rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined);
+      mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleInvocation(at, method, encode(params), undefined),
+      );
     },
     scheduleWithMetadata(at, method, params) {
-      return rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined);
+      const receipt = mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleInvocation(at, method, encode(params), undefined),
+      );
+      return Object.freeze({ metadata: snapshotInvocationMetadata(receipt.metadata) });
     },
     scheduleCancelable(at, method, params) {
-      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined)
-        .cancellationToken;
+      return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleCancelableInvocation(at, method, encode(params), undefined),
+      ).cancellationToken;
     },
     scheduleCancelableWithMetadata(at, method, params) {
-      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined);
+      const receipt = mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleCancelableInvocation(at, method, encode(params), undefined),
+      );
+      return Object.freeze({
+        metadata: snapshotInvocationMetadata(receipt.metadata),
+        cancellationToken: receipt.cancellationToken,
+      });
     },
   };
 }

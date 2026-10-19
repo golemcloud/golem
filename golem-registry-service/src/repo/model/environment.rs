@@ -34,10 +34,27 @@ use golem_service_base::repo::{RepoError, SqlDateTime};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+fn compatibility_mode_string(
+    mode: golem_common::schema::tool::compatibility::ToolCompatibilityMode,
+) -> String {
+    match mode {
+        golem_common::schema::tool::compatibility::ToolCompatibilityMode::StrictEquality => {
+            "strict-equality"
+        }
+        golem_common::schema::tool::compatibility::ToolCompatibilityMode::StructuralSubtype => {
+            "structural-subtype"
+        }
+        golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal => "nominal",
+    }
+    .to_string()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentRepoError {
     #[error("Environment violates unique index")]
     EnvironmentViolatesUniqueness,
+    #[error("versionCheck cannot be enabled while the environment has mutable tool grants")]
+    MutableToolGrantsInVersionCheckedEnvironment,
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]
@@ -100,6 +117,7 @@ pub struct EnvironmentRevisionRecord {
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub compatibility_check: bool,
+    pub tool_compatibility_mode: String,
     pub version_check: bool,
     pub security_overrides: bool,
 }
@@ -172,6 +190,7 @@ impl EnvironmentRevisionRecord {
             name: environment.name.0,
             hash: SqlBlake3Hash::empty(),
             compatibility_check: environment.compatibility_check,
+            tool_compatibility_mode: compatibility_mode_string(environment.tool_compatibility_mode),
             version_check: environment.version_check,
             security_overrides: environment.security_overrides,
             audit: DeletableRevisionAuditFields::new(actor.0),
@@ -185,23 +204,28 @@ impl EnvironmentRevisionRecord {
             name: environment.name.0,
             hash: SqlBlake3Hash::empty(),
             compatibility_check: environment.compatibility_check,
+            tool_compatibility_mode: compatibility_mode_string(environment.tool_compatibility_mode),
             version_check: environment.version_check,
             security_overrides: environment.security_overrides,
             audit,
         }
     }
 
-    pub fn to_diffable(&self) -> diff::Environment {
-        diff::Environment {
+    pub fn to_diffable(&self) -> Result<diff::Environment, EnvironmentRepoError> {
+        Ok(diff::Environment {
             compatibility_check: self.compatibility_check,
+            tool_compatibility_mode: crate::repo::model::deployment::compatibility_mode(
+                &self.tool_compatibility_mode,
+            )
+            .map_err(anyhow::Error::new)?,
             version_check: self.version_check,
             security_overrides: self.security_overrides,
-        }
+        })
     }
 
     pub fn update_hash(&mut self) -> Result<(), EnvironmentRepoError> {
         self.hash = self
-            .to_diffable()
+            .to_diffable()?
             .hash()
             .map_err(|err| EnvironmentRepoError::InternalError(anyhow!(err)))?
             .into_blake3()
@@ -278,6 +302,10 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             name: EnvironmentName(value.revision.name),
             diff_model_version: DIFF_MODEL_VERSION,
             compatibility_check: value.revision.compatibility_check,
+            tool_compatibility_mode: crate::repo::model::deployment::compatibility_mode(
+                &value.revision.tool_compatibility_mode,
+            )
+            .map_err(anyhow::Error::new)?,
             version_check: value.revision.version_check,
             security_overrides: value.revision.security_overrides,
 
@@ -315,6 +343,7 @@ pub struct EnvironmentWithDetailsRecord {
     pub environment_revision_id: i64,
     pub environment_name: String,
     pub environment_compatibility_check: bool,
+    pub environment_tool_compatibility_mode: String,
     pub environment_version_check: bool,
     pub environment_security_overrides: bool,
 
@@ -341,6 +370,10 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
                 name: EnvironmentName(value.environment_name),
                 diff_model_version: DIFF_MODEL_VERSION,
                 compatibility_check: value.environment_compatibility_check,
+                tool_compatibility_mode: crate::repo::model::deployment::compatibility_mode(
+                    &value.environment_tool_compatibility_mode,
+                )
+                .map_err(anyhow::Error::new)?,
                 version_check: value.environment_version_check,
                 security_overrides: value.environment_security_overrides,
                 current_deployment: match (

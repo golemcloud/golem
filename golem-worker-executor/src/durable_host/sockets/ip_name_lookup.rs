@@ -15,7 +15,9 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::authorization::targets::dns_target;
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
@@ -79,40 +81,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await?;
 
         let result = 'resp: {
-            let (mut handle, denied) = if begun.is_live() {
-                let denied = match dns_target(&name) {
-                    Ok(target) => {
-                        !matches!(self.authorize_live_permission(&target).await, Ok(Ok(_)))
-                    }
-                    Err(_) => true,
-                };
-                (
-                    begun
-                        .start_live(self, HostRequestSocketsResolveName { name: name.clone() })
-                        .await?,
-                    denied,
-                )
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
-                }
-                (handle, false)
-            };
-
-            if denied {
-                break 'resp handle
-                    .complete(
-                        self,
-                        HostResponseSocketsResolveName {
-                            result: Err(SerializableSocketError::from(SocketError::from(
-                                ErrorCode::AccessDenied,
-                            ))),
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denial = match dns_target(&name) {
+                        Ok(target) => match self.authorize_live_permission(&target).await {
+                            Ok(Ok(_)) => None,
+                            Ok(Err(error)) => Some(error.to_string()),
+                            Err(error) => Some(error.to_string()),
                         },
-                    )
-                    .await?;
-            }
+                        Err(error) => Some(error.to_string()),
+                    };
+                    let request = HostRequestSocketsResolveName { name: name.clone() };
+                    if let Some(denial) = denial {
+                        break 'resp begun
+                            .start_live_denied(self, request, denial)
+                            .await
+                            .map_err(|e| SocketError::trap(wasmtime::Error::from_anyhow(e)))?;
+                    }
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    handle
+                }
+            };
 
             let result = loop {
                 let network_borrow = Resource::new_borrow(network.rep());

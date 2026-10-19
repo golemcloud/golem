@@ -19,6 +19,7 @@ use crate::model::agent_secret::AgentSecret;
 use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
+use crate::model::mcp_import::McpImportObservation;
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
@@ -29,9 +30,11 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
-    GetDeployedComponentMetadataRequest, GetResourceDefinitionByIdRequest,
-    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest, GetToolDeploymentStateRequest,
-    ResolveAgentTypeByNamesRequest, ResolveComponentRequest, RevokeCardRequest, RuntimeCardData,
+    GetDeployedComponentMetadataRequest, GetMcpRuntimeCredentialRequest,
+    GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
+    GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
+    ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
+    ResolveMcpImportRequest, RevokeCardRequest, RuntimeCardData,
     UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
     create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
@@ -39,9 +42,11 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
-    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
-    get_resource_limits_response, get_tool_deployment_state_response,
-    resolve_agent_type_by_names_response, resolve_component_response, revoke_card_response,
+    get_mcp_runtime_credential_response, get_resource_definition_by_id_response,
+    get_resource_definition_by_name_response, get_resource_limits_response,
+    get_tool_deployment_state_response, mcp_runtime_credential,
+    report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
+    resolve_component_response, resolve_mcp_import_response, revoke_card_response,
     update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
@@ -60,6 +65,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::ToolDeploymentState;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
@@ -67,6 +73,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -80,6 +87,23 @@ pub trait RegistryInvalidationHandler: Send + Sync {
     async fn on_event(&self, event: RegistryInvalidationEvent);
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResourceUsageMetering {
+    pub compute: bool,
+    pub memory: bool,
+    pub filesystem: bool,
+}
+
+impl ResourceUsageMetering {
+    pub const fn all_enabled() -> Self {
+        Self {
+            compute: true,
+            memory: true,
+            filesystem: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceUsageUpdate {
     pub fuel_delta: i64,
@@ -88,6 +112,20 @@ pub struct ResourceUsageUpdate {
     pub durable_storage_byte_seconds_delta: i64,
     pub ephemeral_storage_byte_seconds_delta: i64,
     pub memory_gb_seconds_delta: i64,
+    pub blob_storage_bytes_delta: i64,
+    pub metering: ResourceUsageMetering,
+}
+
+#[derive(Clone)]
+pub struct McpRuntimeCredential {
+    pub credential: Option<McpImportCredential>,
+    pub oauth_grant_generation: Option<uuid::Uuid>,
+}
+
+impl Debug for McpRuntimeCredential {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("McpRuntimeCredential { ..redacted.. }")
+    }
 }
 
 #[async_trait]
@@ -211,6 +249,36 @@ pub trait RegistryService: Send + Sync {
             "get_tool_deployment_state is not supported by this registry service",
         ))
     }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        _environment_id: EnvironmentId,
+        _deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_tool_deployment_state_at_revision is not supported by this registry service",
+        ))
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+    ) -> Result<McpRuntimeCredential, RegistryServiceError>;
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError>;
+
+    async fn resolve_mcp_import(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError>;
 
     async fn resolve_agent_type_by_names(
         &self,
@@ -589,6 +657,10 @@ impl RegistryService for GrpcRegistryService {
                 durable_storage_byte_seconds_delta: v.durable_storage_byte_seconds_delta,
                 ephemeral_storage_byte_seconds_delta: v.ephemeral_storage_byte_seconds_delta,
                 memory_gb_seconds_delta: v.memory_gb_seconds_delta,
+                compute_metering_enabled: v.metering.compute,
+                memory_metering_enabled: v.metering.memory,
+                filesystem_metering_enabled: v.metering.filesystem,
+                blob_storage_bytes_delta: v.blob_storage_bytes_delta,
             })
             .collect();
 
@@ -1044,6 +1116,159 @@ impl RegistryService for GrpcRegistryService {
                 .transpose()
                 .map_err(Into::into),
             Some(get_tool_deployment_state_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_tool_deployment_state_at_revision", move |client| {
+                let request = GetToolDeploymentStateAtRevisionRequest {
+                    environment_id: Some(environment_id.into()),
+                    deployment_revision: deployment_revision.into(),
+                };
+                Box::pin(client.get_tool_deployment_state_at_revision(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_tool_deployment_state_response::Result::Success(payload)) => payload
+                .tool_deployment
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(Into::into),
+            Some(get_tool_deployment_state_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+    ) -> Result<McpRuntimeCredential, RegistryServiceError> {
+        let request = GetMcpRuntimeCredentialRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: source.upstream_tool_name.clone(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+        };
+        let response = self
+            .client
+            .call("get_mcp_runtime_credential", move |client| {
+                Box::pin(client.get_mcp_runtime_credential(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(get_mcp_runtime_credential_response::Result::Success(value)) => {
+                Ok(McpRuntimeCredential {
+                    credential: value.credential.map(|credential| match credential {
+                        mcp_runtime_credential::Credential::Bearer(token) => {
+                            McpImportCredential::Bearer { token }
+                        }
+                        mcp_runtime_credential::Credential::Basic(basic) => {
+                            McpImportCredential::Basic {
+                                user: basic.user,
+                                password: basic.password,
+                            }
+                        }
+                    }),
+                    oauth_grant_generation: value.oauth_grant_generation.map(Into::into),
+                })
+            }
+            Some(get_mcp_runtime_credential_response::Result::Error(error)) => Err(error.into()),
+            None => Err(RegistryServiceError::empty_response()),
+        }
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        refresh: bool,
+    ) -> Result<McpImportObservation, RegistryServiceError> {
+        let request = ResolveMcpImportRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: String::new(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            refresh,
+        };
+        let response = self
+            .client
+            .call("resolve_mcp_import", move |client| {
+                Box::pin(client.resolve_mcp_import(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(resolve_mcp_import_response::Result::ObservationJson(bytes)) => {
+                let observation = McpImportObservation::from_json(&bytes).map_err(|_| {
+                    RegistryServiceError::internal_client_error("invalid MCP observation")
+                })?;
+                if observation.source.environment_id != source.environment_id
+                    || observation.source.deployment_revision != source.deployment_revision
+                    || observation.source.import_index != source.import_index
+                    || !observation.source.upstream_tool_name.is_empty()
+                {
+                    return Err(RegistryServiceError::internal_client_error(
+                        "mismatched MCP observation source",
+                    ));
+                }
+                Ok(observation)
+            }
+            Some(resolve_mcp_import_response::Result::Error(error)) => Err(error.into()),
+            None => Err(RegistryServiceError::empty_response()),
+        }
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        source: &McpImportSource,
+        auth_ctx: &AuthCtx,
+        oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        let request = ReportMcpResourceUnauthorizedRequest {
+            source: Some(
+                golem_api_grpc::proto::golem::registry::v1::McpImportSource {
+                    environment_id: Some(source.environment_id.into()),
+                    deployment_revision: source.deployment_revision.into(),
+                    import_index: source.import_index,
+                    upstream_tool_name: source.upstream_tool_name.clone(),
+                },
+            ),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            oauth_grant_generation: oauth_grant_generation.map(Into::into),
+        };
+        let response = self
+            .client
+            .call("report_mcp_resource_unauthorized", move |client| {
+                Box::pin(client.report_mcp_resource_unauthorized(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(report_mcp_resource_unauthorized_response::Result::Success(_)) => Ok(()),
+            Some(report_mcp_resource_unauthorized_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+            None => Err(RegistryServiceError::empty_response()),
         }
     }
 
@@ -1569,6 +1794,9 @@ pub enum RegistryServiceError {
     NotFound(String),
     #[error("AlreadyExists: {0}")]
     AlreadyExists(String),
+    /// The runtime card was revoked; its id can never be created again.
+    #[error("RuntimeCardRevoked: {0}")]
+    RuntimeCardRevoked(String),
     #[error("Internal server error: {0}")]
     InternalServerError(String),
     #[error("Cound not authenticate: {0}")]
@@ -1591,6 +1819,7 @@ impl SafeDisplay for RegistryServiceError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::AlreadyExists(_) => self.to_string(),
+            Self::RuntimeCardRevoked(_) => self.to_string(),
             Self::BadRequest(_) => self.to_string(),
             Self::CouldNotAuthenticate(_) => self.to_string(),
             Self::LimitExceeded(_) => self.to_string(),
@@ -1616,6 +1845,12 @@ impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
         match value.error {
             Some(Error::LimitExceeded(error)) => Self::LimitExceeded(error.error),
             Some(Error::NotFound(error)) => Self::NotFound(error.error),
+            Some(Error::AlreadyExists(error))
+                if error.code
+                    == golem_common::base_model::api::error_code::RUNTIME_CARD_REVOKED =>
+            {
+                Self::RuntimeCardRevoked(error.error)
+            }
             Some(Error::AlreadyExists(error)) => Self::AlreadyExists(error.error),
             Some(Error::BadRequest(errors)) => Self::BadRequest(errors.errors),
             Some(Error::InternalError(error)) => Self::InternalServerError(error.error),

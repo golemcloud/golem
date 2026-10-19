@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::common::ApiEndpointError;
+use crate::config::WebSocketTransportLimits;
+use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::model;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
@@ -24,9 +26,12 @@ use golem_common::base_model::api;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
-use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
+};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::worker::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
@@ -39,7 +44,6 @@ use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::*;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
@@ -53,6 +57,7 @@ pub struct WorkerApi {
     component_service: Arc<dyn ComponentService>,
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
+    connect_websocket: WebSocketTransportLimits,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
@@ -61,11 +66,13 @@ impl WorkerApi {
         component_service: Arc<dyn ComponentService>,
         worker_service: Arc<WorkerService>,
         auth_service: Arc<dyn AuthService>,
+        connect_websocket: WebSocketTransportLimits,
     ) -> Self {
         Self {
             component_service,
             worker_service,
             auth_service,
+            connect_websocket,
         }
     }
 
@@ -325,7 +332,8 @@ impl WorkerApi {
         agent_id: AgentId,
         auth: AuthCtx,
     ) -> Result<Json<AgentMetadataDto>> {
-        let response = self.worker_service.get_metadata(&agent_id, auth).await?;
+        let mut response = self.worker_service.get_metadata(&agent_id, auth).await?;
+        response.redact_host_managed_values_for_external();
 
         Ok(Json(response))
     }
@@ -412,17 +420,9 @@ impl WorkerApi {
             _ => None,
         };
 
-        let cursor = match cursor {
-            Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
-                ApiEndpointError::bad_request(
-                    api::error_code::INVALID_SCAN_CURSOR,
-                    golem_common::safe(e),
-                )
-            })?),
-            None => None,
-        };
+        let cursor = cursor.map(ScanCursor::from);
 
-        let (cursor, workers) = self
+        let (cursor, mut workers) = self
             .worker_service
             .find_metadata(
                 component_id,
@@ -433,6 +433,8 @@ impl WorkerApi {
                 auth,
             )
             .await?;
+
+        redact_worker_metadata_for_external(&mut workers);
 
         Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
     }
@@ -490,7 +492,7 @@ impl WorkerApi {
         params: WorkersMetadataRequest,
         auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let (cursor, workers) = self
+        let (cursor, mut workers) = self
             .worker_service
             .find_metadata(
                 component_id,
@@ -501,6 +503,8 @@ impl WorkerApi {
                 auth,
             )
             .await?;
+
+        redact_worker_metadata_for_external(&mut workers);
 
         Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
     }
@@ -578,7 +582,8 @@ impl WorkerApi {
         params: UpdateWorkerRequest,
         auth: AuthCtx,
     ) -> Result<Json<UpdateWorkerResponse>> {
-        self.worker_service
+        let update_attempt_index = self
+            .worker_service
             .update(
                 &agent_id,
                 params.mode,
@@ -588,7 +593,9 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(UpdateWorkerResponse {}))
+        Ok(Json(UpdateWorkerResponse {
+            update_attempt_index: update_attempt_index.into(),
+        }))
     }
 
     /// Get the oplog of a worker
@@ -632,7 +639,7 @@ impl WorkerApi {
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        let response = match (from, query) {
+        let mut response = match (from, query) {
             (Some(_), Some(_)) => {
                 return Err(ApiEndpointError::bad_request(
                     api::error_code::INVALID_OPLOG_QUERY_PARAMS,
@@ -658,7 +665,72 @@ impl WorkerApi {
             }
         };
 
+        for entry in &mut response.entries {
+            if let PublicOplogPageEntry::Included(entry) = entry {
+                entry.entry.redact_host_managed_values_for_external();
+            }
+        }
+
         Ok(Json(response))
+    }
+
+    /// Get one oplog entry of a worker
+    ///
+    /// Oplog pages omit entries whose encoded form is larger than a server limit, and describe
+    /// them by their type, timestamp, size and component revision. This endpoint returns such an
+    /// entry in full. Pass the component revision of the description to save the server from
+    /// scanning the oplog for it.
+    #[oai(
+        path = "/:component_id/workers/:agent_name/oplog/:oplog_index",
+        method = "get",
+        operation_id = "get_oplog_entry"
+    )]
+    async fn get_oplog_entry(
+        &self,
+        component_id: Path<ComponentId>,
+        agent_name: Path<String>,
+        oplog_index: Path<u64>,
+        component_revision: Query<Option<ComponentRevision>>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<PublicOplogEntryWithIndex>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
+            .await?;
+
+        let record = recorded_http_api_request!(
+            "get_oplog_entry",
+            agent_id = agent_id.to_string(),
+            oplog_index = oplog_index.0
+        );
+
+        let response = self
+            .get_oplog_entry_internal(
+                agent_id,
+                OplogIndex::from_u64(oplog_index.0),
+                component_revision.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_oplog_entry_internal(
+        &self,
+        agent_id: AgentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        auth: AuthCtx,
+    ) -> Result<Json<PublicOplogEntryWithIndex>> {
+        let mut entry = self
+            .worker_service
+            .get_oplog_entry(&agent_id, oplog_index, component_revision, auth)
+            .await?;
+        entry.entry.redact_host_managed_values_for_external();
+        Ok(Json(entry))
     }
 
     /// List files in a worker
@@ -1046,21 +1118,24 @@ impl WorkerApi {
         // The stream captured this when it was built, inside the request span.
         let origin = worker_stream.origin();
 
-        let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(move |socket_stream| {
-            Box::pin(async move {
-                let (sink, stream) = socket_stream.split();
-                let _ = proxy_worker_connection(
-                    agent_id,
-                    origin,
-                    worker_stream,
-                    sink,
-                    stream,
-                    WORKER_CONNECT_PING_INTERVAL,
-                    WORKER_CONNECT_PING_TIMEOUT,
-                )
-                .await;
-            })
-        }));
+        let upgraded: BoxWebSocketUpgraded = websocket
+            .config(self.connect_websocket.websocket_config())
+            .on_upgrade(Box::new(move |socket_stream| {
+                Box::pin(async move {
+                    let _active = ActiveHttpApiStream::open(HttpApiStreamKind::Connect);
+                    let (sink, stream) = socket_stream.split();
+                    let _ = proxy_worker_connection(
+                        agent_id,
+                        origin,
+                        worker_stream,
+                        sink,
+                        stream,
+                        WORKER_CONNECT_PING_INTERVAL,
+                        WORKER_CONNECT_PING_TIMEOUT,
+                    )
+                    .await;
+                })
+            }));
 
         Ok(upgraded)
     }
@@ -1136,6 +1211,12 @@ impl WorkerApi {
     }
 }
 
+fn redact_worker_metadata_for_external(workers: &mut [AgentMetadataDto]) {
+    for worker in workers {
+        worker.redact_host_managed_values_for_external();
+    }
+}
+
 fn normalize_agent_name_with_latest_component(
     component_id: ComponentId,
     agent_id: &str,
@@ -1205,6 +1286,7 @@ mod tests {
 
     fn test_agent_type(mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("weather-agent".to_string()),
             description: String::new(),
             source_language: String::new(),

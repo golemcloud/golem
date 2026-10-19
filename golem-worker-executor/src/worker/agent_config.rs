@@ -16,12 +16,12 @@ use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::schema::agent::typed_schema_value_with_projected_defs;
-use golem_common::schema::render::from_json_value;
 use golem_common::schema::schema_type::SecretSpec;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{
     AgentTypeSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
+use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
@@ -179,12 +179,14 @@ pub fn parse_worker_creation_agent_config(
         let declared_type = &config_declaration.value_type;
 
         let schema_value: SchemaValue =
-            from_json_value(&agent_type.schema, declared_type, &entry.value.0).map_err(|err| {
-                WorkerExecutorError::invalid_request(format!(
-                    "config value for path {} is not a valid schema value: {err}",
-                    entry.path.join(".")
-                ))
-            })?;
+            from_untrusted_json_value(&agent_type.schema, declared_type, &entry.value.0).map_err(
+                |err| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "config value for path {} is not a valid schema value: {err}",
+                        entry.path.join(".")
+                    ))
+                },
+            )?;
 
         validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
             WorkerExecutorError::invalid_request(format!(
@@ -328,6 +330,7 @@ mod tests {
         let config_path = vec!["apiKey".to_string()];
         let secret_type = SchemaGraph::anonymous(SchemaType::string());
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name.clone(),
             description: String::new(),
             source_language: String::new(),
@@ -409,6 +412,7 @@ mod tests {
         let config_path = vec!["apiKey".to_string()];
         let secret_type = SchemaGraph::anonymous(SchemaType::string());
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name.clone(),
             description: String::new(),
             source_language: String::new(),
@@ -506,6 +510,7 @@ mod tests {
         // mapped error must not.
         let secret_type = SchemaGraph::anonymous(SchemaType::url(UrlRestrictions::default()));
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name.clone(),
             description: String::new(),
             source_language: String::new(),

@@ -1,7 +1,7 @@
 use middleware_definition::{
     BackendEchoUnderlying, BackendError, PublicEchoMiddleware, PublicEchoUnderlying, PublicError,
 };
-use sdk::{tool_middleware, tool::ToolInvokeError};
+use sdk::{tool::ToolInvokeError, tool_middleware};
 
 struct Transparent;
 
@@ -15,7 +15,7 @@ impl Transparent {
 impl PublicEchoMiddleware for Transparent {
     async fn echo(
         &self,
-        underlying: &mut PublicEchoUnderlying,
+        underlying: &PublicEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<PublicError>> {
         underlying.echo(value).await
@@ -34,7 +34,7 @@ impl Adapter {
 impl PublicEchoMiddleware<BackendEchoUnderlying> for Adapter {
     async fn echo(
         &self,
-        underlying: &mut BackendEchoUnderlying,
+        underlying: &BackendEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<PublicError>> {
         underlying

@@ -15,13 +15,43 @@
 #![recursion_limit = "512"]
 
 use golem::command_handler::ServerCommandHandler;
-use golem_cli::command_handler::CommandHandler;
+use golem_cli::command::GolemCliCommand;
+use golem_cli::command_handler::{CommandHandler, requires_executor_runtime};
 use golem_cli::main_wrapper;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 fn main() -> ExitCode {
-    main_wrapper(|| {
-        CommandHandler::handle_args(std::env::args_os(), Arc::new(ServerCommandHandler {}))
-    })
+    // This binary links rustls with both the `ring` and the `aws-lc-rs` provider, so rustls cannot
+    // choose a process default. TLS clients that do not name a provider use this one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    if let Some(flag) = std::env::args_os()
+        .nth(1)
+        .and_then(|flag| flag.into_string().ok())
+        && flag.starts_with("--dump-config")
+    {
+        return match golem::config::dump_config(&flag) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(err) => {
+                golem_cli::log::eprint_line(format!("Failed to dump config: {err:#}"));
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    let command_parse_result = GolemCliCommand::try_parse_from_lenient(std::env::args_os(), true);
+
+    if requires_executor_runtime(&command_parse_result) {
+        golem_worker_executor::bootstrap::create_runtime()
+            .expect("Failed to build tokio runtime")
+            .block_on(CommandHandler::handle(
+                command_parse_result,
+                Arc::new(ServerCommandHandler {}),
+            ))
+    } else {
+        main_wrapper(|| {
+            CommandHandler::handle(command_parse_result, Arc::new(ServerCommandHandler {}))
+        })
+    }
 }

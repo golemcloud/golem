@@ -1,0 +1,28 @@
+name: 'Restore Built-in Artifacts'
+description: 'Restore the validated built-in WASM publication and install it'
+inputs:
+  run-id:
+    description: 'GitHub run ID that published the artifacts'
+    required: true
+  disk-key:
+    description: 'Exact sticky disk key exported by the producer attempt'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Restore built-in artifact WASMs
+      uses: ./.github/actions/restore-binary-publication
+      with:
+        run-id: ${{ inputs.run-id }}
+        disk-key: ${{ inputs.disk-key }}
+        path: tmp/builtin-publication
+        file: builtin-artifacts.tar.zst
+    - name: Install built-in artifact WASMs
+      shell: bash
+      run: |
+        set -euo pipefail
+        time tar --zstd -xf tmp/builtin-publication/builtin-artifacts.tar.zst
+        while IFS= read -r path; do
+          test -s "$path"
+        done < <(jq -r '.[].path' builtin-artifacts.json)
+        echo 'GOLEM_BUILTIN_ARTIFACTS_PREBUILT=1' >> "$GITHUB_ENV"

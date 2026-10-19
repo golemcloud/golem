@@ -19,6 +19,7 @@ use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
 use crate::app::manifest_upgrade::plan_manifest_upgrade_steps;
 use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
+use crate::command_handler::ResolvedToolMiddlewareGrants;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::error::NonSuccessfulExit;
 use crate::fs;
@@ -36,22 +37,66 @@ use crate::model::deploy::log_unified_diff_for_path;
 use crate::model::format::Format;
 use crate::model::language::GuestLanguage;
 use crate::model::text_format::DecoratedIndent;
+use crate::model::tool_release::ResolvedToolGrants;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
+use golem_common::model::deployment::DeploymentPlanAmbientToolEntry;
 use golem_common::model::diff;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
+#[derive(Clone, Debug)]
+pub struct ResolvedMcpDiagnostic {
+    pub canonical_name: String,
+    pub import_index: u32,
+    pub upstream_name: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedEnvironmentTools {
+    pub environment_id: EnvironmentId,
+    pub ambient_tools: Vec<DeploymentPlanAmbientToolEntry>,
+    pub mcp_tools: Vec<golem_client::model::McpResolvedTool>,
+    pub mcp_diagnostics: Vec<ResolvedMcpDiagnostic>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ResolvedEnvironmentTool<'a> {
+    Ambient(&'a DeploymentPlanAmbientToolEntry),
+    Mcp(&'a golem_client::model::McpResolvedTool),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BuildMetadataRequired {
+    #[error("Remote tool '{0}' is not granted to the selected environment")]
+    Tool(golem_common::model::tool::ToolName),
+    #[error("Tool middleware '{0}' has no environment release grant")]
+    Middleware(golem_common::model::tool_middleware::ToolMiddlewareName),
+    #[error(
+        "Environment tool dependency '{0}' was not found among the selected environment's ambient tools or MCP imports"
+    )]
+    EnvironmentTool(golem_common::model::tool::ToolName),
+}
+
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
+    resolved_tool_grants: Option<&'a ResolvedToolGrants>,
+    resolved_tool_middleware_grants: Option<&'a ResolvedToolMiddlewareGrants>,
+    environment_tools: Option<&'a ResolvedEnvironmentTools>,
+    pub(crate) extracted_metadata: std::sync::Mutex<
+        BTreeMap<ComponentName, golem_common::model::agent::extraction::ExtractedComponentMetadata>,
+    >,
 }
 
 impl<'a> BuildContext<'a> {
@@ -59,7 +104,109 @@ impl<'a> BuildContext<'a> {
         Self {
             application_context,
             build_config,
+            resolved_tool_grants: None,
+            resolved_tool_middleware_grants: None,
+            environment_tools: None,
+            extracted_metadata: Default::default(),
         }
+    }
+
+    pub fn new_with_resolved_tool_grants(
+        application_context: &'a ApplicationContext,
+        build_config: &'a BuildConfig,
+        resolved_tool_grants: &'a ResolvedToolGrants,
+    ) -> Self {
+        Self {
+            application_context,
+            build_config,
+            resolved_tool_grants: Some(resolved_tool_grants),
+            resolved_tool_middleware_grants: None,
+            environment_tools: None,
+            extracted_metadata: Default::default(),
+        }
+    }
+
+    pub fn with_tool_middleware_grants(mut self, grants: &'a ResolvedToolMiddlewareGrants) -> Self {
+        self.resolved_tool_middleware_grants = Some(grants);
+        self
+    }
+
+    pub(crate) fn remote_middleware_definition(
+        &self,
+        name: &golem_common::model::tool_middleware::ToolMiddlewareName,
+    ) -> anyhow::Result<golem_common::schema::tool::ToolMiddleware> {
+        let declaration = self
+            .application()
+            .tool_middleware_declarations()
+            .get(name)
+            .ok_or_else(|| anyhow!("Tool middleware '{name}' is not declared"))?;
+        let reference = declaration
+            .value
+            .release
+            .as_ref()
+            .ok_or_else(|| anyhow!("Tool middleware '{name}' has no release"))?
+            .to_release_reference()
+            .map_err(anyhow::Error::msg)?;
+        self.resolved_tool_middleware_grants
+            .and_then(|grants| grants.get(&reference))
+            .map(|grant| grant.release.definition.clone())
+            .ok_or_else(|| BuildMetadataRequired::Middleware(name.clone()).into())
+    }
+
+    pub fn with_environment_tools(mut self, tools: &'a ResolvedEnvironmentTools) -> Self {
+        self.environment_tools = Some(tools);
+        self
+    }
+
+    pub fn mcp_tools(&self) -> &[golem_client::model::McpResolvedTool] {
+        self.environment_tools
+            .map(|tools| tools.mcp_tools.as_slice())
+            .unwrap_or_default()
+    }
+
+    pub fn ambient_tools(&self) -> &[DeploymentPlanAmbientToolEntry] {
+        self.environment_tools
+            .map(|tools| tools.ambient_tools.as_slice())
+            .unwrap_or_default()
+    }
+
+    pub fn environment_tools_id(&self) -> Option<EnvironmentId> {
+        self.environment_tools.map(|tools| tools.environment_id)
+    }
+
+    pub fn environment_tool(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> anyhow::Result<ResolvedEnvironmentTool<'_>> {
+        if let Some(tool) = self.ambient_tools().iter().find(|tool| tool.name == *name) {
+            return Ok(ResolvedEnvironmentTool::Ambient(tool));
+        }
+        if let Some(tool) = self
+            .mcp_tools()
+            .iter()
+            .find(|tool| tool.definition.name() == Some(name.as_str()))
+        {
+            return Ok(ResolvedEnvironmentTool::Mcp(tool));
+        }
+        if let Some(diagnostic) = self.environment_tool_diagnostic(name) {
+            bail!(
+                "Environment tool '{name}' was rejected by MCP import {} (upstream '{}'): {}",
+                diagnostic.import_index,
+                diagnostic.upstream_name,
+                diagnostic.reason
+            );
+        }
+        Err(BuildMetadataRequired::EnvironmentTool(name.clone()).into())
+    }
+
+    pub fn environment_tool_diagnostic(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> Option<&ResolvedMcpDiagnostic> {
+        self.environment_tools
+            .into_iter()
+            .flat_map(|tools| &tools.mcp_diagnostics)
+            .find(|diagnostic| diagnostic.canonical_name == name.as_str())
     }
 
     pub fn application_context(&self) -> &ApplicationContext {
@@ -104,6 +251,23 @@ impl<'a> BuildContext<'a> {
 
     pub fn tools_with_ensured_common_deps(&self) -> &ToolsWithEnsuredCommonDeps {
         &self.application_context.tools_with_ensured_common_deps
+    }
+
+    pub fn release_grant(
+        &self,
+        reference: &app_raw::RegistrySubject,
+    ) -> Option<&EnvironmentToolGrantWithDetails> {
+        self.resolved_tool_grants?
+            .get(&reference.to_release_reference().ok()?)
+    }
+
+    pub fn release_grant_by_name(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> Option<&EnvironmentToolGrantWithDetails> {
+        self.application()
+            .remote_release_reference(name)
+            .and_then(|reference| self.release_grant(reference))
     }
 }
 
@@ -155,7 +319,6 @@ pub struct ApplicationPreloadResult {
     pub loaded_with_warnings: bool,
     pub application_preload: Option<ApplicationPreload>,
     pub resolved_local_server: Option<ResolvedLocalServer>,
-    pub used_language_templates: HashSet<GuestLanguage>,
 }
 
 pub struct ApplicationContext {
@@ -170,6 +333,27 @@ pub struct ApplicationContext {
 }
 
 impl ApplicationContext {
+    #[cfg(test)]
+    pub(crate) fn for_test(application: Application) -> Self {
+        Self {
+            calling_working_dir: application.app_root_dir().to_path_buf(),
+            selected_component_names: application.component_names().cloned().collect(),
+            application,
+            loaded_with_warnings: false,
+            config: ApplicationConfig {
+                offline: true,
+                dev_mode: false,
+                should_colorize: false,
+                enable_wasmtime_fs_cache: false,
+            },
+            component_metadata: crate::app::component_metadata::ComponentMetadataRegistry::new(
+                false,
+            ),
+            builtin_local_url: "http://localhost:9881".parse().unwrap(),
+            tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
+        }
+    }
+
     pub fn plan_and_apply_manifest_upgrades_before_load(
         source_mode: ApplicationSourceMode,
         yes: bool,
@@ -270,7 +454,6 @@ impl ApplicationContext {
                 loaded_with_warnings: false,
                 application_preload: None,
                 resolved_local_server: None,
-                used_language_templates: HashSet::new(),
             }),
         }
     }
@@ -335,6 +518,7 @@ impl ApplicationContext {
             agent_type_names: Default::default(),
             target_language: Some(language),
             output_dir: Some(repl_root_bridge_sdk_dir.clone()),
+            rust_config: Default::default(),
         }
     }
 
@@ -494,8 +678,22 @@ impl ApplicationContext {
         self.application.component_names().cloned().collect()
     }
 
-    pub async fn build(&self, build_config: &BuildConfig) -> anyhow::Result<()> {
-        build_app(&BuildContext::new(self, build_config)).await
+    pub async fn build(
+        &self,
+        build_config: &BuildConfig,
+        resolved_tool_grants: &ResolvedToolGrants,
+        resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
+        environment_tools: Option<&ResolvedEnvironmentTools>,
+    ) -> anyhow::Result<()> {
+        let ctx =
+            BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
+                .with_tool_middleware_grants(resolved_tool_middleware_grants);
+        match environment_tools {
+            Some(environment_tools) => {
+                build_app(&ctx.with_environment_tools(environment_tools)).await
+            }
+            None => build_app(&ctx).await,
+        }
     }
 
     pub async fn custom_command(
@@ -732,13 +930,13 @@ fn preload_app(
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
-            let used_language_templates =
-                Application::language_templates_from_raw_apps(&loaded_raw_apps.raw_apps);
+            let referenced_template_names =
+                Application::referenced_template_names_from_raw_apps(&loaded_raw_apps.raw_apps);
 
             Application::preload_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
                 .and_then(|application_preload| {
                     ValidatedResult::from_result(ensure_on_demand_commons(
-                        &used_language_templates,
+                        &referenced_template_names,
                         dev_mode,
                     ))
                     .map(|on_demand_common_raw_apps| {
@@ -771,7 +969,6 @@ fn preload_app(
                         loaded_with_warnings: false,
                         application_preload: Some(application_preload),
                         resolved_local_server,
-                        used_language_templates,
                     }
                 })
         })
@@ -779,15 +976,15 @@ fn preload_app(
 }
 
 fn ensure_on_demand_commons(
-    languages: &HashSet<GuestLanguage>,
+    referenced_template_names: &BTreeSet<String>,
     dev_mode: bool,
 ) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
     let app_template_repo = AppTemplateRepo::get(dev_mode)?;
 
     let mut on_demand_raw_apps = Vec::new();
 
-    for language in languages {
-        if let Some(template) = app_template_repo.common_on_demand_template(*language)? {
+    for language in app_template_repo.builtin_template_languages(referenced_template_names) {
+        if let Some(template) = app_template_repo.common_on_demand_template(language)? {
             let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
             template.generate(&app_dir, &target_dir)?;

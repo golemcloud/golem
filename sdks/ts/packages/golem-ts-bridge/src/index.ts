@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import WebSocket, { type RawData } from 'ws';
+
 export type PhantomId = string;
 
 export type GolemServer =
@@ -41,6 +43,208 @@ export type EnvironmentName = string;
 export type AgentTypeName = string;
 export type IdempotencyKey = string;
 
+/** Binary rich value used by the public streaming protocol. */
+export interface AgentBinary {
+  bytes: Uint8Array;
+  mimeType?: string;
+}
+
+/** Text rich value used by the public streaming protocol. */
+export interface AgentText {
+  text: string;
+  language?: string;
+}
+
+/** A single-consumer asynchronous stream returned by a streaming agent method. */
+export interface AgentStream<T> extends AsyncIterable<T> {}
+
+/** Wraps an async iterable with the affine `AgentStream` ownership contract. */
+export function agentStream<T>(source: AsyncIterable<T>): AgentStream<T> {
+  let claimed = false;
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<T> {
+      if (claimed) throw new Error('AgentStream can only be iterated once');
+      claimed = true;
+      return source[Symbol.asyncIterator]();
+    },
+  };
+}
+
+export type PublicValue =
+  | null
+  | boolean
+  | number
+  | string
+  | PublicValue[]
+  | {
+      [key: string]: PublicValue;
+    };
+
+export type NumericBound =
+  | { tag: 'signed'; val: bigint }
+  | { tag: 'unsigned'; val: bigint }
+  | { tag: 'float-bits'; val: bigint };
+
+export interface NumericRestrictions {
+  min?: NumericBound;
+  max?: NumericBound;
+  unit?: string;
+}
+
+export interface TextRestrictions {
+  languages?: string[];
+  minLength?: number;
+  maxLength?: number;
+  regex?: string;
+}
+
+export interface BinaryRestrictions {
+  mimeTypes?: string[];
+  minBytes?: number;
+  maxBytes?: number;
+}
+
+export interface PathSpec {
+  direction: 'input' | 'output' | 'in-out';
+  kind: 'file' | 'directory' | 'any';
+  allowedMimeTypes?: string[];
+  allowedExtensions?: string[];
+}
+
+export interface UrlRestrictions {
+  allowedSchemes?: string[];
+  allowedHosts?: string[];
+}
+
+export interface QuantityValue {
+  mantissa: bigint;
+  scale: number;
+  unit: string;
+}
+
+export interface QuantitySpec {
+  baseUnit: string;
+  allowedSuffixes: string[];
+  min?: QuantityValue;
+  max?: QuantityValue;
+}
+
+export type DiscriminatorRule =
+  | { tag: 'prefix'; val: string }
+  | { tag: 'suffix'; val: string }
+  | { tag: 'contains'; val: string }
+  | { tag: 'regex'; val: string }
+  | { tag: 'field-equals'; val: { fieldName: string; literal?: string } }
+  | { tag: 'field-absent'; val: string };
+
+export interface MetadataEnvelope {
+  doc?: string;
+  aliases: string[];
+  examples: string[];
+  deprecated?: string;
+  role?:
+    | { tag: 'multimodal' }
+    | { tag: 'unstructured-text' }
+    | { tag: 'unstructured-binary' }
+    | { tag: 'other'; val: string };
+}
+
+export interface NamedFieldType {
+  name: string;
+  body: SchemaType;
+  metadata: MetadataEnvelope;
+}
+
+export interface VariantCaseType {
+  name: string;
+  payload?: SchemaType;
+  metadata: MetadataEnvelope;
+}
+
+export interface UnionBranch {
+  tag: string;
+  body: SchemaType;
+  discriminator: DiscriminatorRule;
+  metadata: MetadataEnvelope;
+}
+
+export type SchemaTypeBody =
+  | { tag: 'ref'; id: string }
+  | { tag: 'bool' }
+  | { tag: 's8'; restrictions?: NumericRestrictions }
+  | { tag: 's16'; restrictions?: NumericRestrictions }
+  | { tag: 's32'; restrictions?: NumericRestrictions }
+  | { tag: 's64'; restrictions?: NumericRestrictions }
+  | { tag: 'u8'; restrictions?: NumericRestrictions }
+  | { tag: 'u16'; restrictions?: NumericRestrictions }
+  | { tag: 'u32'; restrictions?: NumericRestrictions }
+  | { tag: 'u64'; restrictions?: NumericRestrictions }
+  | { tag: 'f32'; restrictions?: NumericRestrictions }
+  | { tag: 'f64'; restrictions?: NumericRestrictions }
+  | { tag: 'char' }
+  | { tag: 'string' }
+  | { tag: 'record'; fields: NamedFieldType[] }
+  | { tag: 'variant'; cases: VariantCaseType[] }
+  | { tag: 'enum'; cases: string[] }
+  | { tag: 'flags'; names: string[] }
+  | { tag: 'tuple'; elements: SchemaType[] }
+  | { tag: 'list'; element: SchemaType }
+  | { tag: 'fixed-list'; element: SchemaType; length: number }
+  | { tag: 'map'; key: SchemaType; value: SchemaType }
+  | { tag: 'option'; element: SchemaType }
+  | { tag: 'result'; ok?: SchemaType; err?: SchemaType }
+  | { tag: 'text'; restrictions: TextRestrictions }
+  | { tag: 'binary'; restrictions: BinaryRestrictions }
+  | { tag: 'path'; spec: PathSpec }
+  | { tag: 'url'; restrictions: UrlRestrictions }
+  | { tag: 'datetime' }
+  | { tag: 'duration' }
+  | { tag: 'quantity'; spec: QuantitySpec }
+  | { tag: 'union'; branches: UnionBranch[] }
+  | { tag: 'secret'; spec: { category?: string }; inner: SchemaType }
+  | { tag: 'quota-token'; spec: { resourceName?: string } }
+  | { tag: 'permission-card'; spec: { polymorphic: boolean } }
+  | { tag: 'future'; element?: SchemaType }
+  | { tag: 'stream'; element?: SchemaType };
+
+export interface SchemaType {
+  body: SchemaTypeBody;
+  metadata: MetadataEnvelope;
+}
+
+export interface SchemaTypeDef {
+  name?: string;
+  body: SchemaType;
+}
+
+export interface SchemaGraph {
+  defs: ReadonlyMap<string, SchemaTypeDef>;
+  root: SchemaType;
+}
+
+export function schemaType(
+  body: SchemaTypeBody,
+  metadata: MetadataEnvelope = { aliases: [], examples: [] },
+): SchemaType {
+  return { body, metadata };
+}
+
+export interface StreamingInvocationDescriptor {
+  application: string;
+  environment: string;
+  agentType: string;
+  constructorParameters: PublicValue;
+  phantomId?: string;
+  config: Array<{ path: string[]; value: PublicValue }>;
+  method: string;
+  idempotencyKey?: string;
+}
+
+export type StreamingRemoteMethod<Args extends any[], R> = {
+  (...args: Args): Promise<R>;
+  abortable(signal: AbortSignal, ...args: Args): Promise<R>;
+};
+
 // ===========================================================================
 // Schema-native wire values
 //
@@ -57,8 +261,10 @@ export interface TextValuePayload {
 
 export interface BinaryValuePayload {
   bytes: number[];
-  mime_type?: string;
+  mimeType?: string;
 }
+
+export type SchemaFloat = number | { $float: 'nan' | 'positive-infinity' | 'negative-infinity' };
 
 /**
  * Schema-native value, mirroring the server's Rust `SchemaValue`. The wire
@@ -72,13 +278,13 @@ export type SchemaValue =
   | { kind: 's8'; value: number }
   | { kind: 's16'; value: number }
   | { kind: 's32'; value: number }
-  | { kind: 's64'; value: number }
+  | { kind: 's64'; value: string }
   | { kind: 'u8'; value: number }
   | { kind: 'u16'; value: number }
   | { kind: 'u32'; value: number }
-  | { kind: 'u64'; value: number }
-  | { kind: 'f32'; value: number }
-  | { kind: 'f64'; value: number }
+  | { kind: 'u64'; value: string }
+  | { kind: 'f32'; value: SchemaFloat }
+  | { kind: 'f64'; value: SchemaFloat }
   | { kind: 'char'; value: string }
   | { kind: 'string'; value: string }
   | { kind: 'record'; value: { fields: SchemaValue[] } }
@@ -89,16 +295,21 @@ export type SchemaValue =
   | { kind: 'list'; value: { elements: SchemaValue[] } }
   | { kind: 'fixed-list'; value: { elements: SchemaValue[] } }
   | { kind: 'map'; value: { entries: [SchemaValue, SchemaValue][] } }
-  | { kind: 'option'; value: { inner?: SchemaValue } }
-  | { kind: 'result'; value: { tag: 'ok' | 'err'; value?: SchemaValue } }
+  | { kind: 'option'; value: { inner: SchemaValue | null } }
+  | { kind: 'result'; value: { tag: 'ok' | 'err'; value: SchemaValue | null } }
   | { kind: 'text'; value: TextValuePayload }
   | { kind: 'binary'; value: BinaryValuePayload }
-  | { kind: 'url'; value: { url: string } };
+  | { kind: 'path'; value: { path: string } }
+  | { kind: 'url'; value: { url: string } }
+  | { kind: 'datetime'; value: { value: string } }
+  | { kind: 'duration'; value: { nanoseconds: string } }
+  | { kind: 'quantity'; value: { mantissa: string; scale: number; unit: string } }
+  | { kind: 'union'; value: { tag: string; body: SchemaValue } };
 
 /**
  * A self-contained schema graph paired with a value (the server's Rust
- * `TypedSchemaValue`). Generated clients decode `value` guided by their static
- * schema and do not need to interpret `graph`.
+ * `TypedSchemaValue`). Generated clients first validate `value` against this
+ * returned graph and then against their locally generated expected schema.
  */
 export interface TypedSchemaValue {
   graph: unknown;
@@ -144,7 +355,7 @@ export interface InvocationReceipt {
 
 export interface AgentConfigEntry {
   path: string[];
-  value: SchemaValue;
+  value: PublicValue;
 }
 
 export interface CreateAgentRequest {
@@ -359,6 +570,151 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function restJson(value: unknown): string {
+  const chunks: string[] = [];
+  const encode = (current: unknown, arrayElement: boolean, nativeValue: boolean): void => {
+    if (current === null) {
+      chunks.push('null');
+      return;
+    }
+    switch (typeof current) {
+      case 'boolean':
+      case 'string':
+        chunks.push(JSON.stringify(current));
+        return;
+      case 'bigint':
+        chunks.push(current.toString());
+        return;
+      case 'number':
+        chunks.push(Number.isFinite(current) ? JSON.stringify(current) : 'null');
+        return;
+      case 'object':
+        if (Array.isArray(current)) {
+          chunks.push('[');
+          for (let i = 0; i < current.length; i++) {
+            if (i > 0) chunks.push(',');
+            if (i in current) encode(current[i], true, nativeValue);
+          }
+          chunks.push(']');
+          return;
+        }
+        const object = current as Record<string, unknown>;
+        chunks.push('{');
+        let first = true;
+        for (const key of Object.keys(object)) {
+          const item = object[key];
+          if (item === undefined || typeof item === 'function' || typeof item === 'symbol')
+            continue;
+          if (!first) chunks.push(',');
+          first = false;
+          chunks.push(JSON.stringify(key), ':');
+          if (
+            nativeValue &&
+            key === 'value' &&
+            (object.kind === 'f32' || object.kind === 'f64') &&
+            typeof item === 'number' &&
+            Object.is(item, -0)
+          ) {
+            chunks.push('-0');
+          } else {
+            encode(
+              item,
+              false,
+              nativeValue ||
+                (current === value && (key === 'parameters' || key === 'methodParameters')),
+            );
+          }
+        }
+        chunks.push('}');
+        return;
+      case 'undefined':
+      case 'function':
+      case 'symbol':
+        if (arrayElement) chunks.push('null');
+    }
+  };
+  encode(value, false, false);
+  return chunks.length === 0 ? 'null' : chunks.join('');
+}
+
+function parseInvocationResultJson(json: string): AgentInvocationResult {
+  return restoreJsonIntegers(parseJson(json, true)) as AgentInvocationResult;
+}
+
+class JsonNumberToken {
+  constructor(readonly lexeme: string) {}
+}
+
+function jsonIntegerToken(token: JsonNumberToken, kind: 's64' | 'u64'): bigint {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?)(\d+))?$/u.exec(token.lexeme);
+  if (!match) throw new Error(`${kind} value is not an integer`);
+
+  const negative = match[1] === '-';
+  const fraction = match[3] ?? '';
+  let digits = `${match[2]}${fraction}`.replace(/^0+/u, '');
+  if (digits === '') return 0n;
+
+  const exponentDigits = (match[5] ?? '0').replace(/^0+/u, '') || '0';
+  if (exponentDigits.length > 15)
+    throw new Error(`${kind} value is ${match[4] === '-' ? 'not an integer' : 'out of range'}`);
+  const exponent = Number(exponentDigits) * (match[4] === '-' ? -1 : 1);
+  const scale = exponent - fraction.length;
+  if (scale >= 0) {
+    if (digits.length + scale > 20) throw new Error(`${kind} value is out of range`);
+    digits += '0'.repeat(scale);
+  } else {
+    const integerLength = digits.length + scale;
+    if (integerLength <= 0 || /[1-9]/u.test(digits.slice(integerLength)))
+      throw new Error(`${kind} value is not an integer`);
+    digits = digits.slice(0, integerLength);
+  }
+
+  if (digits.length > 20) throw new Error(`${kind} value is out of range`);
+  const result = BigInt(`${negative ? '-' : ''}${digits}`);
+  if (kind === 'u64' && (result < 0n || result > U64_MAX))
+    throw new Error('u64 value is out of range');
+  if (kind === 's64' && (result < -(1n << 63n) || result >= 1n << 63n))
+    throw new Error('s64 value is out of range');
+  return result;
+}
+
+function restoreJsonIntegers(
+  value: unknown,
+  integerKind?: 's64' | 'u64' | 'quantity' | 'duration',
+): unknown {
+  if (value instanceof JsonNumberToken)
+    return integerKind === 's64' || integerKind === 'u64'
+      ? jsonIntegerToken(value, integerKind)
+      : Number(value.lexeme);
+  if (Array.isArray(value)) return value.map((item) => restoreJsonIntegers(item));
+  if (!isRecord(value)) return value;
+
+  const valueKind = value.kind === 's64' || value.kind === 'u64' ? value.kind : undefined;
+  const boundKind =
+    value.kind === 'signed'
+      ? 's64'
+      : value.kind === 'unsigned' || value.kind === 'float-bits'
+        ? 'u64'
+        : undefined;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      restoreJsonIntegers(
+        item,
+        key === 'value'
+          ? (valueKind ??
+              boundKind ??
+              (value.kind === 'quantity' || value.kind === 'duration' ? value.kind : undefined))
+          : key === 'mantissa'
+            ? 's64'
+            : key === 'nanoseconds'
+              ? 's64'
+              : undefined,
+      ),
+    ]),
+  );
+}
+
 export async function createAgent(
   server: GolemServer,
   request: CreateAgentRequest,
@@ -392,7 +748,7 @@ export async function createAgent(
   const rawResponse = await fetch(`${baseUrl}/v1/agents/create-agent`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(request),
+    body: restJson(request),
   });
 
   if (!rawResponse.ok) {
@@ -462,7 +818,7 @@ export async function invokeAgent(
     const rawResponse = await fetch(`${baseUrl}/v1/agents/invoke-agent`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(request),
+      body: restJson(request),
       signal,
     });
 
@@ -470,7 +826,11 @@ export async function invokeAgent(
       await throwGolemServiceError('invokeAgent', rawResponse);
     }
 
-    let response = await (rawResponse.json() as Promise<AgentInvocationResult>);
+    const response = parseInvocationResultJson(await rawResponse.text());
+    if (response.result !== undefined) {
+      const returnedGraph = schemaGraphFromWire(response.result.graph);
+      new PublicValueValidator(returnedGraph, 'none').validate(response.result.value);
+    }
 
     if (aroundInvokeHook) {
       await aroundInvokeHook.afterInvoke(request, { ok: response });
@@ -873,7 +1233,7 @@ export const UnstructuredBinary = {
         `Invalid value for parameter ${parameterName}. Expected a 'binary' payload for the unstructured-binary inline case`,
       );
     }
-    const mimeType = payload.value.mime_type;
+    const mimeType = payload.value.mimeType;
     // Lenient decode (matches Rust/schema `check_binary`): a missing mime type
     // is always allowed; only a present mime type outside the allow-list is
     // rejected.
@@ -917,7 +1277,7 @@ export const UnstructuredBinary = {
           kind: 'binary',
           value: {
             bytes: Array.from(input.val),
-            mime_type: input.mimeType as string | undefined,
+            mimeType: input.mimeType as string | undefined,
           },
         },
       },
@@ -975,7 +1335,7 @@ export const UnstructuredBinary = {
 /** Encodes an optional value into a schema-native `option` value. */
 export function encodeOption<T>(value: T | undefined, encode: (v: T) => SchemaValue): SchemaValue {
   if (value === undefined || value === null) {
-    return { kind: 'option', value: {} };
+    return { kind: 'option', value: { inner: null } };
   } else {
     return { kind: 'option', value: { inner: encode(value) } };
   }
@@ -1032,4 +1392,3134 @@ export function decodeFlags<T extends Record<string, boolean>>(
     (result as Record<string, boolean>)[jsName] = bits[idx] === true;
   });
   return result;
+}
+
+const STREAM_SUBPROTOCOL = 'golem.agent-invocation.v1';
+const STREAM_ENDPOINT = '/v1/agents/invoke-agent-session';
+
+export class StreamingProtocolError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'StreamingProtocolError';
+  }
+}
+
+class RetryableStreamingConnectionError extends Error {}
+
+export type PublicStreamReferencePolicy = 'none' | 'provisional' | 'stable';
+
+/** Validates a public protocol value against an exact projected schema graph. */
+export class PublicValueCodec {
+  private readonly resolved = new Map<SchemaType, SchemaTypeBody>();
+  private readonly fusedApplication: boolean;
+  constructor(private readonly graph: SchemaGraph) {
+    this.fusedApplication = canFuseApplication(graph.root);
+  }
+
+  validate(value: unknown, streamPolicy: PublicStreamReferencePolicy): PublicValue {
+    new PublicValueValidator(this.graph, streamPolicy, this.resolved).validate(value);
+    return value as PublicValue;
+  }
+
+  application(value: unknown): PublicValue {
+    const validator = new PublicValueValidator(this.graph, 'none', this.resolved);
+    if (this.fusedApplication) return validator.convert(value) as PublicValue;
+    validator.validate(value);
+    return validator.application(value) as PublicValue;
+  }
+}
+
+export function publicValueCodec(graph: SchemaGraph): PublicValueCodec {
+  return new PublicValueCodec(graph);
+}
+
+// These shapes cannot fail application conversion after value validation. Keep
+// two-pass ordering for floats and semantic types with representability errors.
+function canFuseApplication(type: SchemaType, depth = 0): boolean {
+  if (depth >= 64) return false;
+  const body = type.body;
+  switch (body.tag) {
+    case 'bool':
+    case 's8':
+    case 's16':
+    case 's32':
+    case 's64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 'u64':
+    case 'char':
+    case 'string':
+      return true;
+    case 'record':
+      return body.fields.every((field) => canFuseApplication(field.body, depth + 1));
+    case 'tuple':
+      return body.elements.every((element) => canFuseApplication(element, depth + 1));
+    case 'list':
+    case 'fixed-list':
+    case 'option':
+      return canFuseApplication(body.element, depth + 1);
+    default:
+      return false;
+  }
+}
+
+class PublicValueValidator {
+  private charge = 0;
+  private readonly streams = new Set<string>();
+
+  constructor(
+    private readonly graph: SchemaGraph,
+    private readonly streamPolicy: PublicStreamReferencePolicy,
+    private readonly resolved: Map<SchemaType, SchemaTypeBody> = new Map(),
+  ) {}
+
+  validate(value: unknown): void {
+    this.value(this.graph.root, value, 0);
+  }
+
+  application(value: unknown): unknown {
+    return this.applicationValue(this.graph.root, value);
+  }
+
+  convert(value: unknown): unknown {
+    return this.value(this.graph.root, value, 0, true);
+  }
+
+  private applicationValue(type: SchemaType, value: unknown): unknown {
+    const body = this.resolve(type);
+    const payload = publicObject(value, `${body.tag} value`).value;
+    switch (body.tag) {
+      case 'bool':
+      case 's8':
+      case 's16':
+      case 's32':
+      case 'u8':
+      case 'u16':
+      case 'u32':
+      case 's64':
+      case 'u64':
+      case 'char':
+      case 'string':
+        return payload;
+      case 'f32':
+        if (typeof payload !== 'number')
+          this.fail(
+            'unsupported-value',
+            'exceptional floats have no application JSON representation',
+          );
+        return Math.fround(payload);
+      case 'f64':
+        if (typeof payload !== 'number')
+          this.fail(
+            'unsupported-value',
+            'exceptional floats have no application JSON representation',
+          );
+        return payload;
+      case 'record': {
+        const fields = publicArray(publicObject(payload, 'record payload').fields, 'record fields');
+        return Object.fromEntries(
+          body.fields.map((field, index) => [
+            field.name,
+            this.applicationValue(field.body, fields[index]),
+          ]),
+        );
+      }
+      case 'variant': {
+        const variant = publicObject(payload, 'variant payload');
+        const selected = body.cases[variant.case as number];
+        return selected.payload
+          ? { [selected.name]: this.applicationValue(selected.payload, variant.payload) }
+          : selected.name;
+      }
+      case 'enum':
+        return body.cases[(payload as { case: number }).case];
+      case 'flags':
+        return body.names.filter((_, index) => (payload as { bits: boolean[] }).bits[index]);
+      case 'tuple':
+        return body.elements.map((element, index) =>
+          this.applicationValue(element, (payload as { elements: unknown[] }).elements[index]),
+        );
+      case 'list':
+      case 'fixed-list':
+        return (payload as { elements: unknown[] }).elements.map((item) =>
+          this.applicationValue(body.element, item),
+        );
+      case 'map':
+        return (payload as { entries: [unknown, unknown][] }).entries.map(([key, item]) => [
+          this.applicationValue(body.key, key),
+          this.applicationValue(body.value, item),
+        ]);
+      case 'option': {
+        const inner = (payload as { inner: unknown }).inner;
+        return inner === null ? null : this.applicationValue(body.element, inner);
+      }
+      case 'result': {
+        const result = payload as { tag: 'ok' | 'err'; value: unknown };
+        const resultType = result.tag === 'ok' ? body.ok : body.err;
+        return {
+          [result.tag]: resultType ? this.applicationValue(resultType, result.value) : null,
+        };
+      }
+      case 'text':
+        return payload;
+      case 'binary': {
+        const binary = payload as { bytes: number[]; mimeType?: string };
+        return {
+          bytes: Buffer.from(binary.bytes).toString('base64url'),
+          ...(binary.mimeType === undefined ? {} : { mimeType: binary.mimeType }),
+        };
+      }
+      case 'path':
+        return (payload as { path: string }).path;
+      case 'url':
+        return (payload as { url: string }).url;
+      case 'datetime':
+        return canonicalApplicationDatetime((payload as { value: string }).value);
+      case 'duration':
+      case 'quantity':
+        return payload;
+      case 'union': {
+        const union = payload as { tag: string; body: unknown };
+        const branch = body.branches.find((item) => item.tag === union.tag)!;
+        return this.applicationValue(branch.body, union.body);
+      }
+      case 'stream':
+      case 'future':
+      case 'secret':
+      case 'quota-token':
+      case 'permission-card':
+      case 'ref':
+        return this.fail(
+          'unsupported-value',
+          `schema type '${body.tag}' has no application JSON representation`,
+        );
+    }
+  }
+
+  private value(type: SchemaType, value: unknown, depth: number, application = false): unknown {
+    if (depth >= 64) this.fail('resource-exhausted', 'schema value nesting exceeds 64 levels');
+    this.add(1);
+    const body = this.resolve(type);
+    if (
+      body.tag === 'secret' ||
+      body.tag === 'quota-token' ||
+      body.tag === 'permission-card' ||
+      body.tag === 'future'
+    )
+      this.fail('unsupported-value', `schema type '${body.tag}' cannot cross the public boundary`);
+    const payload = this.node(body.tag, value);
+    switch (body.tag) {
+      case 'bool':
+        if (typeof payload !== 'boolean') this.mismatch('boolean');
+        this.add(1);
+        return payload;
+      case 's8':
+        this.integer(body, payload, -128, 127, 1, 'signed');
+        return payload;
+      case 's16':
+        this.integer(body, payload, -32768, 32767, 2, 'signed');
+        return payload;
+      case 's32':
+        this.integer(body, payload, -2147483648, 2147483647, 4, 'signed');
+        return payload;
+      case 'u8':
+        this.integer(body, payload, 0, 255, 1, 'unsigned');
+        return payload;
+      case 'u16':
+        this.integer(body, payload, 0, 65535, 2, 'unsigned');
+        return payload;
+      case 'u32':
+        this.integer(body, payload, 0, 4294967295, 4, 'unsigned');
+        return payload;
+      case 's64':
+        this.decimalInteger(body, payload, true);
+        return payload;
+      case 'u64':
+        this.decimalInteger(body, payload, false);
+        return payload;
+      case 'f32':
+        this.float(body, payload, true);
+        return;
+      case 'f64':
+        this.float(body, payload, false);
+        return;
+      case 'char': {
+        if (typeof payload !== 'string' || [...payload].length !== 1)
+          this.mismatch('Unicode scalar');
+        const point = payload.codePointAt(0) as number;
+        if (point >= 0xd800 && point <= 0xdfff) this.mismatch('Unicode scalar');
+        this.string(payload);
+        return payload;
+      }
+      case 'string':
+        if (typeof payload !== 'string') this.mismatch('string');
+        this.string(payload);
+        return payload;
+      case 'record': {
+        const input = publicObject(payload, 'record payload');
+        if (Object.keys(input).length !== 1 || input.fields === undefined)
+          this.fail('malformed-message', 'invalid members in record payload');
+        const fields = publicArray(input.fields, 'record fields');
+        if (fields.length !== body.fields.length)
+          this.fail('validation-error', 'record arity does not match schema');
+        this.collection(body.fields.length);
+        if (application)
+          return Object.fromEntries(
+            body.fields.map((field, index) => [
+              field.name,
+              this.value(field.body, fields[index], depth + 1, true),
+            ]),
+          );
+        body.fields.forEach((field, index) => this.value(field.body, fields[index], depth + 1));
+        return;
+      }
+      case 'variant': {
+        const input = publicObject(payload, 'variant payload');
+        const caseIndex = input.case;
+        if (
+          !Number.isInteger(caseIndex) ||
+          (caseIndex as number) < 0 ||
+          (caseIndex as number) >= body.cases.length
+        )
+          this.fail('validation-error', 'variant case is out of range');
+        const selected = body.cases[caseIndex as number];
+        publicExactMembers(
+          input,
+          new Set(selected.payload ? ['case', 'payload'] : ['case']),
+          'variant payload',
+        );
+        if (selected.payload) this.value(selected.payload, input.payload, depth + 1);
+        return;
+      }
+      case 'enum': {
+        const input = publicObject(payload, 'enum payload');
+        publicExactMembers(input, new Set(['case']), 'enum payload');
+        if (
+          !Number.isInteger(input.case) ||
+          (input.case as number) < 0 ||
+          (input.case as number) >= body.cases.length
+        )
+          this.fail('validation-error', 'enum case is out of range');
+        return;
+      }
+      case 'flags': {
+        const input = publicObject(payload, 'flags payload');
+        publicExactMembers(input, new Set(['bits']), 'flags payload');
+        const values = publicArray(input.bits, 'flag bits');
+        if (values.length !== body.names.length || values.some((item) => typeof item !== 'boolean'))
+          this.fail('validation-error', 'flags must contain one boolean per declared flag');
+        this.collection(values.length);
+        return;
+      }
+      case 'tuple': {
+        const input = publicObject(payload, 'tuple payload');
+        publicExactMembers(input, new Set(['elements']), 'tuple payload');
+        const values = publicArray(input.elements, 'tuple elements');
+        if (values.length !== body.elements.length)
+          this.fail('validation-error', 'tuple arity does not match schema');
+        this.collection(values.length);
+        if (application)
+          return body.elements.map((element, index) =>
+            this.value(element, values[index], depth + 1, true),
+          );
+        body.elements.forEach((element, index) => this.value(element, values[index], depth + 1));
+        return;
+      }
+      case 'list':
+        return this.repeated(body.element, payload, depth, undefined, application);
+      case 'fixed-list':
+        return this.repeated(body.element, payload, depth, body.length, application);
+      case 'map': {
+        const input = publicObject(payload, 'map payload');
+        publicExactMembers(input, new Set(['entries']), 'map payload');
+        const entries = publicArray(input.entries, 'map entries');
+        this.collection(entries.length);
+        for (const entry of entries) {
+          const pair = publicArray(entry, 'map entry');
+          if (pair.length !== 2)
+            this.fail('validation-error', 'map entry must contain exactly two elements');
+          this.value(body.key, pair[0], depth + 1);
+          this.value(body.value, pair[1], depth + 1);
+        }
+        return;
+      }
+      case 'option': {
+        const input = publicObject(payload, 'option payload');
+        if (Object.keys(input).length !== 1 || input.inner === undefined)
+          this.fail('malformed-message', 'invalid members in option payload');
+        return input.inner === null
+          ? null
+          : this.value(body.element, input.inner, depth + 1, application);
+      }
+      case 'result': {
+        const input = publicObject(payload, 'result payload');
+        const tag = publicString(input.tag, 'result tag');
+        const resultPayload = tag === 'ok' ? body.ok : tag === 'err' ? body.err : undefined;
+        if (tag !== 'ok' && tag !== 'err')
+          this.fail('validation-error', `invalid result tag '${tag}'`);
+        publicExactMembers(input, new Set(['tag', 'value']), 'result payload');
+        this.string(tag);
+        if (resultPayload) {
+          if (input.value === null)
+            this.fail('validation-error', 'result payload is unexpectedly absent');
+          this.value(resultPayload, input.value, depth + 1);
+        } else if (input.value !== null) {
+          this.fail('validation-error', 'result payload is unexpectedly present');
+        }
+        return;
+      }
+      case 'text':
+        this.text(body.restrictions, payload);
+        return;
+      case 'binary':
+        this.binary(body.restrictions, payload);
+        return;
+      case 'path': {
+        const input = publicObject(payload, 'path payload');
+        publicExactMembers(input, new Set(['path']), 'path payload');
+        const path = publicString(input.path, 'path');
+        if (path.length === 0) this.fail('validation-error', 'path must be non-empty');
+        const parts = path.split('/');
+        const name = parts[parts.length - 1] ?? path;
+        const index = name.lastIndexOf('.');
+        if (index >= 0 && index < name.length - 1 && body.spec.allowedExtensions) {
+          const extension = name.slice(index + 1);
+          if (!body.spec.allowedExtensions.includes(extension))
+            this.fail('validation-error', 'path extension is not allowed');
+        }
+        this.string(path);
+        return;
+      }
+      case 'url':
+        {
+          const input = publicObject(payload, 'URL payload');
+          publicExactMembers(input, new Set(['url']), 'URL payload');
+          this.url(body.restrictions, input.url);
+        }
+        return;
+      case 'datetime': {
+        const input = publicObject(payload, 'datetime payload');
+        publicExactMembers(input, new Set(['value']), 'datetime payload');
+        const datetime = publicString(input.value, 'datetime');
+        if (!validPublicDatetime(datetime))
+          this.fail('validation-error', 'datetime must be canonical RFC 3339 UTC');
+        this.string(datetime);
+        return;
+      }
+      case 'duration': {
+        const input = publicObject(payload, 'duration');
+        publicExactMembers(input, new Set(['nanoseconds']), 'duration');
+        publicDecimal(input.nanoseconds, true, -(1n << 63n), (1n << 63n) - 1n);
+        this.add(8);
+        return;
+      }
+      case 'quantity':
+        this.quantity(body.spec, payload);
+        return;
+      case 'union': {
+        const input = publicObject(payload, 'union');
+        publicExactMembers(input, new Set(['tag', 'body']), 'union');
+        const tag = publicString(input.tag, 'union tag');
+        const branch = body.branches.find((item) => item.tag === tag);
+        if (!branch) this.fail('validation-error', `unknown union branch '${tag}'`);
+        this.value(branch.body, input.body, depth + 1);
+        if (!this.discriminatorMatches(branch.discriminator, input.body, branch.body))
+          this.fail('validation-error', 'union body does not satisfy its discriminator');
+        this.string(tag);
+        return;
+      }
+      case 'stream':
+        this.stream(payload);
+        return;
+      case 'ref':
+        this.fail('validation-error', 'unresolved schema reference');
+    }
+  }
+
+  private node(expectedKind: string, value: unknown): unknown {
+    const node = publicObject(value, `${expectedKind} value`);
+    publicExactMembers(node, new Set(['kind', 'value']), `${expectedKind} value`);
+    if (node.kind !== expectedKind)
+      this.fail('validation-error', `expected '${expectedKind}' value`);
+    return node.value;
+  }
+
+  private discriminatorMatches(rule: DiscriminatorRule, value: unknown, type: SchemaType): boolean {
+    const node = isRecord(value) ? value : undefined;
+    const scalar = node?.value;
+    const stringValue = (candidate: unknown): string | undefined => {
+      if (!isRecord(candidate) || typeof candidate.kind !== 'string') return undefined;
+      if (candidate.kind === 'string')
+        return typeof candidate.value === 'string' ? candidate.value : undefined;
+      if (!isRecord(candidate.value)) return undefined;
+      if (candidate.kind === 'text')
+        return typeof candidate.value.text === 'string' ? candidate.value.text : undefined;
+      if (candidate.kind === 'url')
+        return typeof candidate.value.url === 'string' ? candidate.value.url : undefined;
+      if (candidate.kind === 'path')
+        return typeof candidate.value.path === 'string' ? candidate.value.path : undefined;
+      return undefined;
+    };
+    if (rule.tag === 'field-equals') {
+      const body = this.resolve(type);
+      if (body.tag !== 'record' || !isRecord(scalar) || !Array.isArray(scalar.fields)) return false;
+      const index = body.fields.findIndex((field) => field.name === rule.val.fieldName);
+      if (index < 0) return false;
+      return (
+        rule.val.literal === undefined || stringValue(scalar.fields[index]) === rule.val.literal
+      );
+    }
+    if (rule.tag === 'field-absent') {
+      const body = this.resolve(type);
+      return body.tag === 'record' && body.fields.every((field) => field.name !== rule.val);
+    }
+    const string = stringValue(value);
+    if (string === undefined) return false;
+    switch (rule.tag) {
+      case 'prefix':
+        return string.startsWith(rule.val);
+      case 'suffix':
+        return string.endsWith(rule.val);
+      case 'contains':
+        return string.includes(rule.val);
+      case 'regex':
+        return new RegExp(rule.val, 'u').test(string);
+    }
+  }
+
+  private resolve(type: SchemaType): SchemaTypeBody {
+    if (type.body.tag !== 'ref') return type.body;
+    const resolved = this.resolved.get(type);
+    if (resolved) return resolved;
+    let current = type;
+    const seen = new Set<string>();
+    while (current.body.tag === 'ref') {
+      const id = current.body.id;
+      if (seen.has(id)) this.fail('validation-error', `cyclic schema alias '${id}'`);
+      seen.add(id);
+      const definition = this.graph.defs.get(id);
+      if (!definition) this.fail('validation-error', `unresolved schema reference '${id}'`);
+      current = definition.body;
+    }
+    this.resolved.set(type, current.body);
+    return current.body;
+  }
+
+  private repeated(
+    type: SchemaType,
+    value: unknown,
+    depth: number,
+    length?: number,
+    application = false,
+  ): unknown {
+    const input = publicObject(value, 'list payload');
+    publicExactMembers(input, new Set(['elements']), 'list payload');
+    const values = publicArray(
+      input.elements,
+      length === undefined ? 'list elements' : 'fixed-list elements',
+    );
+    if (length !== undefined && values.length !== length)
+      this.fail('validation-error', 'fixed-list length does not match schema');
+    this.collection(values.length);
+    if (application) return values.map((item) => this.value(type, item, depth + 1, true));
+    values.forEach((item) => this.value(type, item, depth + 1));
+  }
+
+  private integer(
+    body: { restrictions?: NumericRestrictions },
+    value: unknown,
+    min: number,
+    max: number,
+    width: number,
+    family: 'signed' | 'unsigned',
+  ): void {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max)
+      this.fail('validation-error', 'integer is out of range');
+    this.numeric(body.restrictions, family, BigInt(value));
+    this.add(width);
+  }
+
+  private decimalInteger(
+    body: { restrictions?: NumericRestrictions },
+    value: unknown,
+    signed: boolean,
+  ): void {
+    if (typeof value !== 'string')
+      this.fail('malformed-message', '64-bit integer payload must be a decimal string');
+    const parsed = publicDecimal(
+      value,
+      signed,
+      signed ? -(1n << 63n) : 0n,
+      signed ? (1n << 63n) - 1n : (1n << 64n) - 1n,
+    );
+    this.numeric(body.restrictions, signed ? 'signed' : 'unsigned', parsed);
+    this.add(8);
+  }
+
+  private float(body: { restrictions?: NumericRestrictions }, value: unknown, f32: boolean): void {
+    let number: number;
+    if (typeof value === 'number') {
+      number = value;
+      if (!Number.isFinite(number)) this.mismatch('finite JSON number');
+      if (f32) {
+        number = Math.fround(number);
+        if (!Number.isFinite(number)) this.fail('validation-error', 'f32 is out of range');
+      }
+    } else {
+      const input = publicObject(value, 'exceptional float');
+      publicExactMembers(input, new Set(['$float']), 'exceptional float');
+      const tag = publicString(input.$float, 'exceptional float tag');
+      if (!['nan', 'positive-infinity', 'negative-infinity'].includes(tag))
+        this.fail('malformed-message', `invalid exceptional float tag '${tag}'`);
+      number =
+        tag === 'nan'
+          ? Number.NaN
+          : tag === 'positive-infinity'
+            ? Number.POSITIVE_INFINITY
+            : Number.NEGATIVE_INFINITY;
+    }
+    if (Number.isFinite(number)) this.numeric(body.restrictions, 'float', number);
+    else if (body.restrictions?.min || body.restrictions?.max)
+      this.fail('validation-error', 'exceptional float does not satisfy numeric restrictions');
+    this.add(f32 ? 4 : 8);
+  }
+
+  private numeric(
+    restrictions: NumericRestrictions | undefined,
+    family: 'signed' | 'unsigned' | 'float',
+    value: bigint | number,
+  ): void {
+    if (!restrictions) return;
+    const compare = (bound: NumericBound): number => {
+      if (family === 'float') {
+        if (bound.tag !== 'float-bits')
+          this.fail('validation-error', 'numeric bound family does not match schema');
+        const bytes = Buffer.allocUnsafe(8);
+        bytes.writeBigUInt64BE(BigInt.asUintN(64, bound.val));
+        const decoded = bytes.readDoubleBE();
+        return (value as number) < decoded ? -1 : (value as number) > decoded ? 1 : 0;
+      }
+      if (bound.tag !== family)
+        this.fail('validation-error', 'numeric bound family does not match schema');
+      return (value as bigint) < bound.val ? -1 : (value as bigint) > bound.val ? 1 : 0;
+    };
+    if (restrictions.min && compare(restrictions.min) < 0)
+      this.fail('validation-error', 'number is below schema minimum');
+    if (restrictions.max && compare(restrictions.max) > 0)
+      this.fail('validation-error', 'number is above schema maximum');
+  }
+
+  private text(restrictions: TextRestrictions, value: unknown): void {
+    const input = publicObject(value, 'text');
+    publicExactOptionalMembers(input, new Set(['text']), new Set(['language']), 'text');
+    const text = publicString(input.text, 'text body');
+    const language =
+      input.language === undefined ? undefined : publicString(input.language, 'language');
+    if (language !== undefined && !/^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/u.test(language))
+      this.fail('validation-error', 'invalid BCP-47 language tag');
+    if (
+      language !== undefined &&
+      restrictions.languages &&
+      restrictions.languages.length > 0 &&
+      !restrictions.languages.includes(language)
+    )
+      this.fail('validation-error', 'text language is not allowed');
+    const length = [...text].length;
+    if (restrictions.minLength !== undefined && length < restrictions.minLength)
+      this.fail('validation-error', 'text is shorter than schema minimum');
+    if (restrictions.maxLength !== undefined && length > restrictions.maxLength)
+      this.fail('validation-error', 'text is longer than schema maximum');
+    if (restrictions.regex !== undefined && !new RegExp(restrictions.regex, 'u').test(text))
+      this.fail('validation-error', 'text does not match schema regex');
+    this.string(text);
+    if (language !== undefined) this.string(language);
+  }
+
+  private binary(restrictions: BinaryRestrictions, value: unknown): void {
+    const input = publicObject(value, 'binary');
+    publicExactOptionalMembers(input, new Set(['bytes']), new Set(['mimeType']), 'binary');
+    const bytes = publicArray(input.bytes, 'binary bytes');
+    if (
+      bytes.some(
+        (byte) => !Number.isInteger(byte) || (byte as number) < 0 || (byte as number) > 255,
+      )
+    )
+      this.fail('validation-error', 'binary bytes must be u8 integers');
+    const mime =
+      input.mimeType === undefined ? undefined : publicString(input.mimeType, 'MIME type');
+    if (mime !== undefined && !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u.test(mime))
+      this.fail('validation-error', 'invalid MIME type');
+    if (
+      mime !== undefined &&
+      restrictions.mimeTypes &&
+      restrictions.mimeTypes.length > 0 &&
+      !restrictions.mimeTypes.includes(mime)
+    )
+      this.fail('validation-error', 'binary MIME type is not allowed');
+    if (restrictions.minBytes !== undefined && bytes.length < restrictions.minBytes)
+      this.fail('validation-error', 'binary is shorter than schema minimum');
+    if (restrictions.maxBytes !== undefined && bytes.length > restrictions.maxBytes)
+      this.fail('validation-error', 'binary is longer than schema maximum');
+    this.add(bytes.length);
+    if (mime !== undefined) this.string(mime);
+  }
+
+  private url(restrictions: UrlRestrictions, value: unknown): void {
+    const raw = publicString(value, 'URL');
+    if (raw.length === 0 || /[\u0000-\u0020\u007f]/u.test(raw))
+      this.fail('validation-error', 'invalid URL');
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      this.fail('validation-error', 'invalid URL');
+    }
+    const scheme = parsed.protocol.slice(0, -1);
+    if (restrictions.allowedSchemes?.every((item) => item.toLowerCase() !== scheme.toLowerCase()))
+      this.fail('validation-error', 'URL scheme is not allowed');
+    if (
+      restrictions.allowedHosts &&
+      (parsed.hostname.length === 0 ||
+        restrictions.allowedHosts.every(
+          (item) => item.toLowerCase() !== parsed.hostname.toLowerCase(),
+        ))
+    )
+      this.fail('validation-error', 'URL host is not allowed');
+    this.string(raw);
+  }
+
+  private quantity(spec: QuantitySpec, value: unknown): void {
+    const input = publicObject(value, 'quantity');
+    publicExactMembers(input, new Set(['mantissa', 'scale', 'unit']), 'quantity');
+    const mantissa = publicDecimal(input.mantissa, true, -(1n << 63n), (1n << 63n) - 1n);
+    if (
+      typeof input.scale !== 'number' ||
+      !Number.isInteger(input.scale) ||
+      input.scale < -2147483648 ||
+      input.scale > 2147483647
+    )
+      this.fail('validation-error', 'quantity scale is out of range');
+    const unit = publicString(input.unit, 'quantity unit');
+    const allowed = spec.allowedSuffixes.length === 0 ? [spec.baseUnit] : spec.allowedSuffixes;
+    if (!allowed.includes(unit)) this.fail('validation-error', 'quantity unit is not allowed');
+    const current: QuantityValue = { mantissa, scale: input.scale, unit };
+    if (spec.min && !publicQuantityLe(spec.min, current))
+      this.fail('validation-error', 'quantity is below schema minimum');
+    if (spec.max && !publicQuantityLe(current, spec.max))
+      this.fail('validation-error', 'quantity is above schema maximum');
+    this.add(12);
+    this.string(unit);
+  }
+
+  private stream(value: unknown): void {
+    if (this.streamPolicy === 'none')
+      this.fail('unsupported-value', 'stream references are not allowed in this value');
+    const identity = publicObject(value, 'stream identity');
+    const expected = this.streamPolicy === 'provisional' ? 'provisionalRef' : 'streamToken';
+    publicExactMembers(identity, new Set([expected]), 'stream identity');
+    const reference = publicString(identity[expected], 'stream identity');
+    if (this.streams.has(`${expected}:${reference}`))
+      this.fail('stream-already-consumed', 'stream reference appears more than once');
+    this.streams.add(`${expected}:${reference}`);
+    if (expected === 'provisionalRef') {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(reference))
+        this.fail('validation-error', 'provisional stream reference must be a lower-case UUIDv4');
+      this.add(16);
+    } else {
+      if (
+        reference.length === 0 ||
+        Buffer.byteLength(reference) > 8192 ||
+        [...reference].some((character) => character.codePointAt(0)! > 0x7f)
+      )
+        this.fail('token-invalid', 'invalid stream token');
+      this.string(reference);
+    }
+  }
+
+  private collection(size: number): void {
+    if (size > 100000) this.fail('resource-exhausted', 'collection exceeds 100000 entries');
+    this.add(4);
+  }
+
+  private string(value: string): void {
+    if (!isUnicodeScalarString(value)) this.fail('validation-error', 'invalid Unicode string');
+    this.add(Buffer.byteLength(value));
+  }
+
+  private add(amount: number): void {
+    this.charge += amount;
+    if (this.charge > 16 * 1024 * 1024)
+      this.fail('resource-exhausted', 'schema value exceeds 16 MiB');
+  }
+
+  private mismatch(expected: string): never {
+    return this.fail('validation-error', `expected ${expected}`);
+  }
+
+  private fail(code: string, message: string): never {
+    throw new StreamingProtocolError(code, `Public value codec: ${message}`);
+  }
+}
+
+function publicObject(value: unknown, what: string): Record<string, unknown> {
+  if (!isRecord(value))
+    throw new StreamingProtocolError(
+      'validation-error',
+      `Public value codec: expected ${what} object`,
+    );
+  return value;
+}
+
+function publicArray(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value))
+    throw new StreamingProtocolError(
+      'validation-error',
+      `Public value codec: expected ${what} array`,
+    );
+  return value;
+}
+
+function publicString(value: unknown, what: string): string {
+  if (typeof value !== 'string')
+    throw new StreamingProtocolError(
+      'validation-error',
+      `Public value codec: expected ${what} string`,
+    );
+  if (!isUnicodeScalarString(value))
+    throw new StreamingProtocolError(
+      'validation-error',
+      `Public value codec: invalid Unicode in ${what}`,
+    );
+  return value;
+}
+
+function publicExactMembers(
+  value: Record<string, unknown>,
+  expected: Set<string>,
+  what: string,
+): void {
+  const actual = Object.keys(value);
+  if (actual.length !== expected.size || actual.some((name) => !expected.has(name)))
+    throw new StreamingProtocolError(
+      'validation-error',
+      `Public value codec: invalid members in ${what}`,
+    );
+}
+
+function publicExactOptionalMembers(
+  value: Record<string, unknown>,
+  required: Set<string>,
+  optional: Set<string>,
+  what: string,
+): void {
+  const actual = new Set(Object.keys(value));
+  if (
+    [...required].some((name) => !actual.has(name)) ||
+    [...actual].some((name) => !required.has(name) && !optional.has(name))
+  )
+    throw new StreamingProtocolError(
+      'validation-error',
+      `Public value codec: invalid members in ${what}`,
+    );
+}
+
+/** Parses the serde JSON representation of a native `SchemaGraph`. */
+export function schemaGraphFromWire(value: unknown): SchemaGraph {
+  const graph = publicObject(value, 'schema graph');
+  publicExactOptionalMembers(graph, new Set(['root']), new Set(['defs']), 'schema graph');
+  const definitions = graph.defs === undefined ? [] : publicArray(graph.defs, 'schema definitions');
+  const defs = new Map<string, SchemaTypeDef>();
+  for (const definition of definitions) {
+    const input = publicObject(definition, 'schema definition');
+    publicExactOptionalMembers(
+      input,
+      new Set(['id', 'body']),
+      new Set(['name']),
+      'schema definition',
+    );
+    const id = publicString(input.id, 'schema definition id');
+    if (defs.has(id))
+      throw new StreamingProtocolError('validation-error', `duplicate schema definition '${id}'`);
+    const name = input.name === undefined ? undefined : publicString(input.name, 'schema name');
+    defs.set(id, { name, body: schemaTypeFromWire(input.body) });
+  }
+  const result = { defs, root: schemaTypeFromWire(graph.root) };
+  const checkReferences = (type: SchemaType, seen: Set<SchemaType>): void => {
+    if (seen.has(type)) return;
+    seen.add(type);
+    const body = type.body;
+    if (body.tag === 'ref') {
+      if (!defs.has(body.id))
+        throw new StreamingProtocolError(
+          'validation-error',
+          `unresolved schema reference '${body.id}'`,
+        );
+      return;
+    }
+    switch (body.tag) {
+      case 'record':
+        body.fields.forEach((field) => checkReferences(field.body, seen));
+        break;
+      case 'variant':
+        body.cases.forEach((item) => item.payload && checkReferences(item.payload, seen));
+        break;
+      case 'tuple':
+        body.elements.forEach((item) => checkReferences(item, seen));
+        break;
+      case 'list':
+      case 'fixed-list':
+      case 'option':
+        checkReferences(body.element, seen);
+        break;
+      case 'map':
+        checkReferences(body.key, seen);
+        checkReferences(body.value, seen);
+        break;
+      case 'result':
+        if (body.ok) checkReferences(body.ok, seen);
+        if (body.err) checkReferences(body.err, seen);
+        break;
+      case 'union':
+        body.branches.forEach((branch) => checkReferences(branch.body, seen));
+        break;
+      case 'secret':
+        checkReferences(body.inner, seen);
+        break;
+      case 'future':
+      case 'stream':
+        if (body.element) checkReferences(body.element, seen);
+        break;
+    }
+  };
+  checkReferences(result.root, new Set());
+  for (const definition of defs.values()) checkReferences(definition.body, new Set());
+  return result;
+}
+
+function schemaTypeFromWire(value: unknown): SchemaType {
+  const outer = publicObject(value, 'schema type');
+  publicExactMembers(outer, new Set(['kind', 'value']), 'schema type');
+  const kind = publicString(outer.kind, 'schema type kind');
+  const payload = publicObject(outer.value, `${kind} schema type`);
+  const metadata = schemaMetadataFromWire(payload.metadata);
+  const exact = (required: string[], optional: string[] = []): void =>
+    publicExactOptionalMembers(
+      payload,
+      new Set(required),
+      new Set([...optional, 'metadata']),
+      `${kind} schema type`,
+    );
+  const nested = (input: unknown): SchemaType => schemaTypeFromWire(input);
+  let body: SchemaTypeBody;
+  switch (kind) {
+    case 'ref':
+      exact(['id']);
+      body = { tag: 'ref', id: publicString(payload.id, 'schema reference') };
+      break;
+    case 'bool':
+    case 'char':
+    case 'string':
+    case 'datetime':
+    case 'duration':
+      exact([]);
+      body = { tag: kind };
+      break;
+    case 's8':
+    case 's16':
+    case 's32':
+    case 's64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 'u64':
+    case 'f32':
+    case 'f64':
+      exact([], ['restrictions']);
+      body = {
+        tag: kind,
+        restrictions:
+          payload.restrictions === undefined
+            ? undefined
+            : numericRestrictionsFromWire(payload.restrictions),
+      };
+      break;
+    case 'record':
+      exact(['fields']);
+      body = {
+        tag: 'record',
+        fields: publicArray(payload.fields, 'record fields').map((field) => {
+          const input = publicObject(field, 'record field');
+          publicExactOptionalMembers(
+            input,
+            new Set(['name', 'body']),
+            new Set(['metadata']),
+            'record field',
+          );
+          return {
+            name: publicString(input.name, 'record field name'),
+            body: nested(input.body),
+            metadata: schemaMetadataFromWire(input.metadata),
+          };
+        }),
+      };
+      break;
+    case 'variant':
+      exact(['cases']);
+      body = {
+        tag: 'variant',
+        cases: publicArray(payload.cases, 'variant cases').map((item) => {
+          const input = publicObject(item, 'variant case');
+          publicExactOptionalMembers(
+            input,
+            new Set(['name']),
+            new Set(['payload', 'metadata']),
+            'variant case',
+          );
+          return {
+            name: publicString(input.name, 'variant case name'),
+            payload: input.payload === undefined ? undefined : nested(input.payload),
+            metadata: schemaMetadataFromWire(input.metadata),
+          };
+        }),
+      };
+      break;
+    case 'enum':
+      exact(['cases']);
+      body = { tag: 'enum', cases: schemaStrings(payload.cases, 'enum cases') };
+      break;
+    case 'flags':
+      exact(['flags']);
+      body = { tag: 'flags', names: schemaStrings(payload.flags, 'flag names') };
+      break;
+    case 'tuple':
+      exact(['elements']);
+      body = {
+        tag: 'tuple',
+        elements: publicArray(payload.elements, 'tuple elements').map(nested),
+      };
+      break;
+    case 'list':
+      exact(['element']);
+      body = { tag: 'list', element: nested(payload.element) };
+      break;
+    case 'fixed-list':
+      exact(['element', 'length']);
+      body = {
+        tag: 'fixed-list',
+        element: nested(payload.element),
+        length: schemaU32(payload.length, 'fixed-list length'),
+      };
+      break;
+    case 'map':
+      exact(['key', 'value']);
+      body = { tag: 'map', key: nested(payload.key), value: nested(payload.value) };
+      break;
+    case 'option':
+      exact(['inner']);
+      body = { tag: 'option', element: nested(payload.inner) };
+      break;
+    case 'result': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'result specification');
+      publicExactOptionalMembers(spec, new Set(), new Set(['ok', 'err']), 'result specification');
+      body = {
+        tag: 'result',
+        ok: spec.ok === undefined ? undefined : nested(spec.ok),
+        err: spec.err === undefined ? undefined : nested(spec.err),
+      };
+      break;
+    }
+    case 'text':
+      exact(['restrictions']);
+      body = { tag: 'text', restrictions: textRestrictionsFromWire(payload.restrictions) };
+      break;
+    case 'binary':
+      exact(['restrictions']);
+      body = { tag: 'binary', restrictions: binaryRestrictionsFromWire(payload.restrictions) };
+      break;
+    case 'path': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'path specification');
+      publicExactOptionalMembers(
+        spec,
+        new Set(['direction', 'kind']),
+        new Set(['allowedMimeTypes', 'allowedExtensions']),
+        'path specification',
+      );
+      const direction = publicString(spec.direction, 'path direction');
+      const pathKind = publicString(spec.kind, 'path kind');
+      if (
+        !['input', 'output', 'in-out'].includes(direction) ||
+        !['file', 'directory', 'any'].includes(pathKind)
+      )
+        throw new StreamingProtocolError('validation-error', 'invalid path specification');
+      body = {
+        tag: 'path',
+        spec: {
+          direction: direction as PathSpec['direction'],
+          kind: pathKind as PathSpec['kind'],
+          allowedMimeTypes: schemaOptionalStrings(spec.allowedMimeTypes, 'allowed MIME types'),
+          allowedExtensions: schemaOptionalStrings(spec.allowedExtensions, 'allowed extensions'),
+        },
+      };
+      break;
+    }
+    case 'url': {
+      exact(['restrictions']);
+      const restrictions = publicObject(payload.restrictions, 'URL restrictions');
+      publicExactOptionalMembers(
+        restrictions,
+        new Set(),
+        new Set(['allowedSchemes', 'allowedHosts']),
+        'URL restrictions',
+      );
+      body = {
+        tag: 'url',
+        restrictions: {
+          allowedSchemes: schemaOptionalStrings(restrictions.allowedSchemes, 'allowed schemes'),
+          allowedHosts: schemaOptionalStrings(restrictions.allowedHosts, 'allowed hosts'),
+        },
+      };
+      break;
+    }
+    case 'quantity':
+      exact(['spec']);
+      body = { tag: 'quantity', spec: quantitySpecFromWire(payload.spec) };
+      break;
+    case 'union': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'union specification');
+      publicExactMembers(spec, new Set(['branches']), 'union specification');
+      body = {
+        tag: 'union',
+        branches: publicArray(spec.branches, 'union branches').map((item) => {
+          const branch = publicObject(item, 'union branch');
+          publicExactOptionalMembers(
+            branch,
+            new Set(['tag', 'body', 'discriminator']),
+            new Set(['metadata']),
+            'union branch',
+          );
+          return {
+            tag: publicString(branch.tag, 'union tag'),
+            body: nested(branch.body),
+            discriminator: discriminatorFromWire(branch.discriminator),
+            metadata: schemaMetadataFromWire(branch.metadata),
+          };
+        }),
+      };
+      break;
+    }
+    case 'secret': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'secret specification');
+      publicExactOptionalMembers(
+        spec,
+        new Set(),
+        new Set(['inner', 'category']),
+        'secret specification',
+      );
+      body = {
+        tag: 'secret',
+        spec: {
+          category:
+            spec.category === undefined
+              ? undefined
+              : publicString(spec.category, 'secret category'),
+        },
+        inner: spec.inner === undefined ? schemaType({ tag: 'string' }) : nested(spec.inner),
+      };
+      break;
+    }
+    case 'quota-token': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'quota-token specification');
+      publicExactOptionalMembers(
+        spec,
+        new Set(),
+        new Set(['resourceName']),
+        'quota-token specification',
+      );
+      body = {
+        tag: 'quota-token',
+        spec: {
+          resourceName:
+            spec.resourceName === undefined
+              ? undefined
+              : publicString(spec.resourceName, 'quota-token resource name'),
+        },
+      };
+      break;
+    }
+    case 'permission-card': {
+      exact(['spec']);
+      const spec = publicObject(payload.spec, 'permission-card specification');
+      publicExactMembers(spec, new Set(['polymorphic']), 'permission-card specification');
+      if (typeof spec.polymorphic !== 'boolean')
+        throw new StreamingProtocolError(
+          'validation-error',
+          'invalid permission-card specification',
+        );
+      body = { tag: 'permission-card', spec: { polymorphic: spec.polymorphic } };
+      break;
+    }
+    case 'future':
+    case 'stream':
+      exact(['inner']);
+      body = { tag: kind, element: payload.inner === null ? undefined : nested(payload.inner) };
+      break;
+    default:
+      throw new StreamingProtocolError('validation-error', `unknown schema type '${kind}'`);
+  }
+  return schemaType(body, metadata);
+}
+
+function schemaMetadataFromWire(value: unknown): MetadataEnvelope {
+  if (value === undefined) return { aliases: [], examples: [] };
+  const input = publicObject(value, 'schema metadata');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['doc', 'aliases', 'examples', 'deprecated', 'role']),
+    'schema metadata',
+  );
+  let role: MetadataEnvelope['role'];
+  if (input.role !== undefined) {
+    const wire = publicObject(input.role, 'schema role');
+    const tag = publicString(wire.tag, 'schema role tag');
+    publicExactOptionalMembers(
+      wire,
+      new Set(['tag']),
+      new Set(tag === 'other' ? ['value'] : []),
+      'schema role',
+    );
+    if (tag === 'multimodal' || tag === 'unstructured-text' || tag === 'unstructured-binary')
+      role = { tag };
+    else if (tag === 'other') role = { tag, val: publicString(wire.value, 'schema role value') };
+    else throw new StreamingProtocolError('validation-error', `unknown schema role '${tag}'`);
+  }
+  return {
+    doc: input.doc === undefined ? undefined : publicString(input.doc, 'schema documentation'),
+    aliases: input.aliases === undefined ? [] : schemaStrings(input.aliases, 'schema aliases'),
+    examples: input.examples === undefined ? [] : schemaStrings(input.examples, 'schema examples'),
+    deprecated:
+      input.deprecated === undefined
+        ? undefined
+        : publicString(input.deprecated, 'schema deprecation'),
+    role,
+  };
+}
+
+function schemaStrings(value: unknown, what: string): string[] {
+  return publicArray(value, what).map((item) => publicString(item, what));
+}
+
+function schemaOptionalStrings(value: unknown, what: string): string[] | undefined {
+  return value === undefined ? undefined : schemaStrings(value, what);
+}
+
+function schemaU32(value: unknown, what: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffff_ffff)
+    throw new StreamingProtocolError('validation-error', `${what} is out of range`);
+  return value;
+}
+
+function schemaI32(value: unknown, what: string): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < -0x8000_0000 ||
+    value > 0x7fff_ffff
+  )
+    throw new StreamingProtocolError('validation-error', `${what} is out of range`);
+  return value;
+}
+
+function schemaBigInt(value: unknown, signed: boolean, what: string): bigint {
+  const parsed =
+    typeof value === 'bigint'
+      ? value
+      : typeof value === 'number' && Number.isSafeInteger(value)
+        ? BigInt(value)
+        : undefined;
+  const max = signed ? (1n << 63n) - 1n : U64_MAX;
+  const min = signed ? -(1n << 63n) : 0n;
+  if (parsed === undefined || parsed < min || parsed > max)
+    throw new StreamingProtocolError('validation-error', `${what} is out of range`);
+  return parsed;
+}
+
+function numericBoundFromWire(value: unknown): NumericBound {
+  const input = publicObject(value, 'numeric bound');
+  publicExactMembers(input, new Set(['kind', 'value']), 'numeric bound');
+  const kind = publicString(input.kind, 'numeric bound kind');
+  if (kind !== 'signed' && kind !== 'unsigned' && kind !== 'float-bits')
+    throw new StreamingProtocolError('validation-error', `unknown numeric bound '${kind}'`);
+  return {
+    tag: kind,
+    val: schemaBigInt(input.value, kind === 'signed', 'numeric bound'),
+  } as NumericBound;
+}
+
+function numericRestrictionsFromWire(value: unknown): NumericRestrictions {
+  const input = publicObject(value, 'numeric restrictions');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['min', 'max', 'unit']),
+    'numeric restrictions',
+  );
+  return {
+    min: input.min === undefined ? undefined : numericBoundFromWire(input.min),
+    max: input.max === undefined ? undefined : numericBoundFromWire(input.max),
+    unit: input.unit === undefined ? undefined : publicString(input.unit, 'numeric unit'),
+  };
+}
+
+function textRestrictionsFromWire(value: unknown): TextRestrictions {
+  const input = publicObject(value, 'text restrictions');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['languages', 'minLength', 'maxLength', 'regex']),
+    'text restrictions',
+  );
+  return {
+    languages: schemaOptionalStrings(input.languages, 'text languages'),
+    minLength:
+      input.minLength === undefined ? undefined : schemaU32(input.minLength, 'minimum text length'),
+    maxLength:
+      input.maxLength === undefined ? undefined : schemaU32(input.maxLength, 'maximum text length'),
+    regex: input.regex === undefined ? undefined : publicString(input.regex, 'text regex'),
+  };
+}
+
+function binaryRestrictionsFromWire(value: unknown): BinaryRestrictions {
+  const input = publicObject(value, 'binary restrictions');
+  publicExactOptionalMembers(
+    input,
+    new Set(),
+    new Set(['mimeTypes', 'minBytes', 'maxBytes']),
+    'binary restrictions',
+  );
+  return {
+    mimeTypes: schemaOptionalStrings(input.mimeTypes, 'binary MIME types'),
+    minBytes:
+      input.minBytes === undefined ? undefined : schemaU32(input.minBytes, 'minimum binary length'),
+    maxBytes:
+      input.maxBytes === undefined ? undefined : schemaU32(input.maxBytes, 'maximum binary length'),
+  };
+}
+
+function quantityValueFromWire(value: unknown): QuantityValue {
+  const input = publicObject(value, 'quantity value');
+  publicExactMembers(input, new Set(['mantissa', 'scale', 'unit']), 'quantity value');
+  return {
+    mantissa: schemaBigInt(input.mantissa, true, 'quantity mantissa'),
+    scale: schemaI32(input.scale, 'quantity scale'),
+    unit: publicString(input.unit, 'quantity unit'),
+  };
+}
+
+function quantitySpecFromWire(value: unknown): QuantitySpec {
+  const input = publicObject(value, 'quantity specification');
+  publicExactOptionalMembers(
+    input,
+    new Set(['baseUnit']),
+    new Set(['allowedSuffixes', 'min', 'max']),
+    'quantity specification',
+  );
+  return {
+    baseUnit: publicString(input.baseUnit, 'quantity base unit'),
+    allowedSuffixes:
+      input.allowedSuffixes === undefined
+        ? []
+        : schemaStrings(input.allowedSuffixes, 'quantity suffixes'),
+    min: input.min === undefined ? undefined : quantityValueFromWire(input.min),
+    max: input.max === undefined ? undefined : quantityValueFromWire(input.max),
+  };
+}
+
+function discriminatorFromWire(value: unknown): DiscriminatorRule {
+  const input = publicObject(value, 'union discriminator');
+  publicExactMembers(input, new Set(['rule', 'value']), 'union discriminator');
+  const rule = publicString(input.rule, 'union discriminator rule');
+  const payload = publicObject(input.value, 'union discriminator value');
+  switch (rule) {
+    case 'prefix':
+    case 'suffix':
+    case 'regex': {
+      publicExactMembers(payload, new Set([rule]), 'union discriminator value');
+      return { tag: rule, val: publicString(payload[rule], `union ${rule}`) };
+    }
+    case 'contains':
+      publicExactMembers(payload, new Set(['substring']), 'union discriminator value');
+      return { tag: 'contains', val: publicString(payload.substring, 'union substring') };
+    case 'field-equals':
+      publicExactOptionalMembers(
+        payload,
+        new Set(['fieldName']),
+        new Set(['literal']),
+        'union field discriminator',
+      );
+      return {
+        tag: 'field-equals',
+        val: {
+          fieldName: publicString(payload.fieldName, 'union field name'),
+          literal:
+            payload.literal === undefined
+              ? undefined
+              : publicString(payload.literal, 'union field literal'),
+        },
+      };
+    case 'field-absent':
+      publicExactMembers(payload, new Set(['fieldName']), 'union field discriminator');
+      return { tag: 'field-absent', val: publicString(payload.fieldName, 'union field name') };
+    default:
+      throw new StreamingProtocolError('validation-error', `unknown union discriminator '${rule}'`);
+  }
+}
+
+function publicDecimal(value: unknown, signed: boolean, min: bigint, max: bigint): bigint {
+  if (
+    typeof value !== 'string' ||
+    !(signed ? /^(?:0|-[1-9]\d*|[1-9]\d*)$/u : /^(?:0|[1-9]\d*)$/u).test(value)
+  )
+    throw new StreamingProtocolError(
+      'validation-error',
+      'Public value codec: non-canonical decimal string',
+    );
+  const parsed = BigInt(value);
+  if (parsed < min || parsed > max)
+    throw new StreamingProtocolError(
+      'validation-error',
+      'Public value codec: decimal integer is out of range',
+    );
+  return parsed;
+}
+
+function publicQuantityLe(left: QuantityValue, right: QuantityValue): boolean {
+  const common = Math.max(left.scale, right.scale);
+  const leftShift = common - left.scale;
+  const rightShift = common - right.scale;
+  if (leftShift > 38 || rightShift > 38)
+    throw new StreamingProtocolError(
+      'validation-error',
+      'Public value codec: quantity comparison overflows',
+    );
+  const leftValue = left.mantissa * 10n ** BigInt(leftShift);
+  const rightValue = right.mantissa * 10n ** BigInt(rightShift);
+  const min = -(1n << 127n);
+  const max = (1n << 127n) - 1n;
+  if (leftValue < min || leftValue > max || rightValue < min || rightValue > max)
+    throw new StreamingProtocolError(
+      'validation-error',
+      'Public value codec: quantity comparison overflows',
+    );
+  return leftValue <= rightValue;
+}
+
+function validPublicDatetime(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/u.exec(value);
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= days[month - 1];
+}
+
+function canonicalApplicationDatetime(value: string): string {
+  return value.replace(
+    /(?:\.(\d{1,9}))?Z$/u,
+    (_, fraction: string | undefined) => `.${(fraction ?? '').padEnd(9, '0')}Z`,
+  );
+}
+
+type OutputResolver = (
+  token: string,
+  decode: (value: unknown) => unknown,
+  schemaIdentity?: string,
+  wireKind?: 'json' | 'u8' | 'binary',
+) => AgentStream<unknown>;
+type InputRegistrar = (
+  source: AsyncIterable<unknown>,
+  encode: (value: unknown) => unknown,
+  wireKind?: 'json' | 'u8' | 'binary',
+) => unknown;
+
+/**
+ * Creates the Node-only public v1 WebSocket implementation used by generated
+ * stream-bearing methods. Stream-free methods continue to use the REST runtime.
+ */
+export function createStreamingRemoteMethod<Args extends any[], R>(
+  getServer: () => GolemServer,
+  getDescriptor: () => StreamingInvocationDescriptor,
+  encode: (args: Args, stream: InputRegistrar) => PublicValue,
+  decode: (value: unknown, stream: OutputResolver) => R,
+): StreamingRemoteMethod<Args, R> {
+  const invoke = (signal: AbortSignal | undefined, args: Args) =>
+    new StreamingSession(getServer(), getDescriptor(), signal).start(
+      (register) => encode(args, register),
+      (value, resolve) => decode(value, resolve),
+    );
+  const method = ((...args: Args) => invoke(undefined, args)) as StreamingRemoteMethod<Args, R>;
+  method.abortable = (signal: AbortSignal, ...args: Args) => invoke(signal, args);
+  return method;
+}
+
+type InputState = {
+  source: AsyncIterator<unknown>;
+  encode: (value: unknown) => unknown;
+  channel?: number;
+  sequence: bigint;
+  terminal: boolean;
+  cancelReason?: 'source-unavailable';
+  wireKind: 'json' | 'u8' | 'binary';
+  bufferedPull?: Promise<IteratorResult<unknown>>;
+  naturalEnd?: boolean;
+  pending?: PendingInput;
+};
+
+type PendingInput = {
+  sequence: bigint;
+  itemCount: bigint;
+  terminal: boolean;
+  bytes: number;
+  render: (channel: number) => string | Buffer;
+  trim?: (accepted: bigint) => PendingInput;
+};
+
+const MAX_QUEUE_ITEMS = 256;
+const MAX_QUEUE_BYTES = 16 * 1024 * 1024;
+const MAX_SESSION_QUEUE_BYTES = 32 * 1024 * 1024;
+const MAX_LOGICAL_VALUE_BYTES = 16 * 1024 * 1024;
+const U64_MAX = 18_446_744_073_709_551_615n;
+
+function validateOpaqueToken(value: unknown, name: string): asserts value is string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 8192 ||
+    !/^[\x20-\x7e]+$/u.test(value)
+  )
+    throw new StreamingProtocolError(
+      name === 'cursor token' ? 'invalid-cursor' : 'token-invalid',
+      `${name} must be 1..8192 printable ASCII bytes`,
+    );
+}
+
+function validateChannel(value: unknown): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 0xffff_ffff)
+    throw new StreamingProtocolError('invalid-channel', 'channel must be a u32 integer');
+}
+
+function canonicalJson(value: unknown, depth = 0): string {
+  if (depth >= 64)
+    throw new StreamingProtocolError('resource-exhausted', 'JSON nesting exceeds 64 levels');
+  if (value === null) return 'null';
+  if (typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'string') {
+    if (!isUnicodeScalarString(value))
+      throw new StreamingProtocolError('validation-error', 'invalid Unicode string');
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value))
+      throw new StreamingProtocolError('validation-error', 'non-finite JSON number');
+    return Object.is(value, -0) ? '-0' : JSON.stringify(value);
+  }
+  if (Array.isArray(value))
+    return `[${value.map((item) => canonicalJson(item, depth + 1)).join(',')}]`;
+  if (isRecord(value)) {
+    const entries = Object.keys(value)
+      .map((key) => {
+        if (!isUnicodeScalarString(key))
+          throw new StreamingProtocolError('validation-error', 'invalid Unicode object key');
+        return key;
+      })
+      .sort(compareCodePoints)
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key], depth + 1)}`);
+    return `{${entries.join(',')}}`;
+  }
+  throw new StreamingProtocolError('validation-error', 'value is not canonical JSON');
+}
+
+/** Runtime conformance hook for the public v1 binary envelope codec. */
+export function encodeStreamSessionBinaryEnvelope(metadata: unknown, payload: Uint8Array): Buffer {
+  const json = canonicalJson(metadata);
+  const prefix = Buffer.allocUnsafe(4);
+  prefix.writeUInt32BE(Buffer.byteLength(json));
+  return Buffer.concat([prefix, Buffer.from(json), Buffer.from(payload)]);
+}
+
+/** Runtime conformance hook for canonical public v1 text frames. */
+export function encodeStreamSessionTextFrame(value: unknown): string {
+  return canonicalJson(value);
+}
+
+/** Runtime conformance hook for strict public v1 JSON parsing. */
+export function parseStreamSessionTextFrame(text: string): unknown {
+  return parseStrictJson(text);
+}
+
+function isUnicodeScalarString(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function compareCodePoints(left: string, right: string): number {
+  const leftPoints = [...left].map((value) => value.codePointAt(0) as number);
+  const rightPoints = [...right].map((value) => value.codePointAt(0) as number);
+  for (let index = 0; index < Math.min(leftPoints.length, rightPoints.length); index += 1) {
+    if (leftPoints[index] !== rightPoints[index]) return leftPoints[index] - rightPoints[index];
+  }
+  return leftPoints.length - rightPoints.length;
+}
+
+function parseJson(
+  text: string,
+  integersAsBigInt = false,
+  enforceStreamingBudgets = false,
+): unknown {
+  let offset = 0;
+  const scalar = /(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/uy;
+  const whitespace = () => {
+    while (offset < text.length) {
+      const code = text.charCodeAt(offset);
+      if (code !== 32 && code !== 9 && code !== 13 && code !== 10) break;
+      offset += 1;
+    }
+  };
+  const string = (): string => {
+    const start = offset;
+    offset += 1;
+    while (offset < text.length) {
+      if (text[offset] === '\\') offset += 2;
+      else if (text[offset++] === '"') {
+        const token = text.slice(start, offset);
+        const value = JSON.parse(token) as unknown;
+        if (typeof value !== 'string' || !isUnicodeScalarString(value)) throw new Error();
+        return value;
+      } else if (text.charCodeAt(offset - 1) < 0x20) throw new Error();
+    }
+    throw new Error();
+  };
+  const value = (depth = 0): unknown => {
+    if (enforceStreamingBudgets && depth >= 64) throw new Error();
+    whitespace();
+    const char = text[offset];
+    if (char === '"') return string();
+    if (char === '[') {
+      const result: unknown[] = [];
+      offset += 1;
+      whitespace();
+      if (text[offset] === ']') return ((offset += 1), result);
+      for (;;) {
+        if (enforceStreamingBudgets && result.length >= 100_000) throw new Error();
+        result.push(value(depth + 1));
+        whitespace();
+        if (text[offset++] === ']') return result;
+        if (text[offset - 1] !== ',') throw new Error();
+      }
+    }
+    if (char === '{') {
+      const result: Record<string, unknown> = {};
+      const keys = new Set<string>();
+      offset += 1;
+      whitespace();
+      if (text[offset] === '}') return ((offset += 1), result);
+      for (;;) {
+        whitespace();
+        if (text[offset] !== '"') throw new Error();
+        const key = string();
+        if (keys.has(key)) throw new Error();
+        keys.add(key);
+        if (enforceStreamingBudgets && keys.size > 100_000) throw new Error();
+        whitespace();
+        if (text[offset++] !== ':') throw new Error();
+        result[key] = value(depth + 1);
+        whitespace();
+        if (text[offset++] === '}') return result;
+        if (text[offset - 1] !== ',') throw new Error();
+      }
+    }
+    scalar.lastIndex = offset;
+    const match = scalar.exec(text);
+    if (!match) throw new Error();
+    offset += match[0].length;
+    return integersAsBigInt && /^-?\d/u.test(match[0])
+      ? new JsonNumberToken(match[0])
+      : JSON.parse(match[0]);
+  };
+  const result = value();
+  whitespace();
+  if (offset !== text.length) throw new Error('invalid JSON');
+  return result;
+}
+
+function parseStrictJson(text: string): unknown {
+  try {
+    return restoreJsonIntegers(parseJson(text, true, true));
+  } catch {
+    throw new StreamingProtocolError('malformed-message', 'invalid JSON');
+  }
+}
+
+function object(value: unknown, required: string[], optional: string[] = []): Record<string, any> {
+  if (!isRecord(value)) throw new StreamingProtocolError('malformed-message', 'expected object');
+  const allowed = new Set([...required, ...optional]);
+  if (
+    required.some((key) => !(key in value)) ||
+    Object.keys(value).some((key) => !allowed.has(key))
+  )
+    throw new StreamingProtocolError('malformed-message', 'invalid message fields');
+  return value;
+}
+
+function decimal(value: unknown, field: string): bigint {
+  if (typeof value !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(value))
+    throw new StreamingProtocolError(
+      'malformed-message',
+      `${field} must be a canonical unsigned decimal string`,
+    );
+  const result = BigInt(value);
+  if (result > U64_MAX)
+    throw new StreamingProtocolError('invalid-sequence', `${field} exceeds u64`);
+  return result;
+}
+
+type OutputEntry = {
+  value?: unknown;
+  cursor?: { token: string; sequence: bigint };
+  deliveredSequence?: bigint;
+  error?: unknown;
+  done?: true;
+  packed?: { payload: Uint8Array; index: number };
+  bytes: number;
+};
+
+class OutputStream<T> implements AgentStream<T> {
+  private claimed = false;
+  private waiting: Array<{
+    resolve: (value: IteratorResult<T>) => void;
+    reject: (error: unknown) => void;
+  }> = [];
+  private queue: Array<OutputEntry> = [];
+  private queueBytes = 0;
+  private protocolTerminal = false;
+  private deliveredTerminal = false;
+  private consumerDropped = false;
+  private exposed = false;
+  private receivedSequence = 0n;
+  private deliveredSequence = 0n;
+  private wireKind?: 'json' | 'u8' | 'binary';
+  private decode?: (value: unknown) => T;
+
+  constructor(
+    private readonly dropped: () => void,
+    private readonly delivered: (
+      cursor: { token: string; sequence: bigint },
+      deliveredSequence: bigint,
+    ) => void,
+    private readonly queued: (delta: number) => void,
+    private readonly deliveryFailed: (error: unknown) => void,
+  ) {}
+
+  expose(wireKind: 'json' | 'u8' | 'binary'): void {
+    if (this.exposed) throw new StreamingProtocolError('stream-conflict', 'output stream reused');
+    if (this.wireKind && this.wireKind !== wireKind)
+      throw new StreamingProtocolError('stream-conflict', 'output stream lane changed');
+    this.exposed = true;
+    this.wireKind = wireKind;
+  }
+
+  setDecoder(decode: (value: unknown) => T): void {
+    this.decode = decode;
+  }
+
+  accept(first: bigint, count: bigint, wireKind?: 'json' | 'u8' | 'binary'): bigint {
+    if (this.protocolTerminal)
+      throw new StreamingProtocolError(
+        'protocol-error',
+        'message received after output stream terminal',
+      );
+    if (wireKind && this.wireKind && this.wireKind !== wireKind)
+      throw new StreamingProtocolError('stream-conflict', 'output stream lane changed');
+    if (wireKind) this.wireKind = wireKind;
+    if (first !== this.receivedSequence)
+      throw new StreamingProtocolError('invalid-sequence', 'output sequence is not contiguous');
+    if (count > U64_MAX - first)
+      throw new StreamingProtocolError('invalid-sequence', 'output sequence overflow');
+    this.receivedSequence = first + count;
+    return this.receivedSequence;
+  }
+
+  prepareResume(): void {
+    this.queued(-this.queueBytes);
+    this.queue = [];
+    this.queueBytes = 0;
+    this.protocolTerminal = this.deliveredTerminal;
+    this.receivedSequence = this.deliveredSequence;
+  }
+
+  isTerminal(): boolean {
+    return this.protocolTerminal;
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    if (this.claimed) {
+      throw new Error('AgentStream can only be iterated once');
+    }
+    this.claimed = true;
+    return {
+      next: () => this.next(),
+      return: async () => {
+        if (!this.protocolTerminal && !this.consumerDropped) this.dropped();
+        this.consumerDropped = true;
+        this.queued(-this.queueBytes);
+        this.queue = [];
+        this.queueBytes = 0;
+        for (const waiting of this.waiting) waiting.resolve({ done: true, value: undefined });
+        this.waiting = [];
+        return { done: true, value: undefined };
+      },
+    };
+  }
+
+  push(
+    value: unknown,
+    cursor: { token: string; sequence: bigint } | undefined,
+    bytes: number,
+    deliveredSequence?: bigint,
+  ): void {
+    this.enqueue({ value, cursor, bytes, deliveredSequence });
+  }
+
+  pushPacked(
+    payload: Uint8Array,
+    cursor: { token: string; sequence: bigint },
+    deliveredSequence: bigint,
+  ): void {
+    this.enqueue({
+      packed: { payload, index: 0 },
+      cursor,
+      deliveredSequence,
+      bytes: payload.byteLength,
+    });
+  }
+
+  finish(cursor?: { token: string; sequence: bigint }, deliveredSequence?: bigint): void {
+    this.protocolTerminal = true;
+    if (!this.consumerDropped) this.enqueue({ done: true, cursor, deliveredSequence, bytes: 1 });
+  }
+
+  fail(
+    error: unknown,
+    cursor?: { token: string; sequence: bigint },
+    deliveredSequence?: bigint,
+  ): void {
+    if (this.protocolTerminal) return;
+    this.protocolTerminal = true;
+    if (!this.consumerDropped) this.enqueue({ error, cursor, deliveredSequence, bytes: 1 });
+  }
+
+  abort(error: unknown): void {
+    this.protocolTerminal = true;
+    this.queued(-this.queueBytes);
+    this.queue = [];
+    this.queueBytes = 0;
+    if (this.waiting.length > 0) {
+      for (const waiting of this.waiting) waiting.reject(error);
+      this.waiting = [];
+    } else if (!this.consumerDropped) this.queue.push({ error, bytes: 0 });
+  }
+
+  private enqueue(item: OutputEntry): void {
+    if (this.consumerDropped) return;
+    if (this.queue.length >= MAX_QUEUE_ITEMS || this.queueBytes + item.bytes > MAX_QUEUE_BYTES) {
+      throw new StreamingProtocolError(
+        'resource-exhausted',
+        'output delivery queue limit exceeded',
+      );
+    }
+    this.queued(item.bytes);
+    this.queue.push(item);
+    this.queueBytes += item.bytes;
+    while (this.waiting.length > 0) {
+      const waiting = this.waiting[0];
+      const next = this.take();
+      if (!next) break;
+      this.waiting.shift();
+      this.deliver(next, waiting.resolve, waiting.reject);
+    }
+    if (this.protocolTerminal && this.queue.length === 0) {
+      for (const waiting of this.waiting) waiting.resolve({ done: true, value: undefined });
+      this.waiting = [];
+    }
+  }
+
+  private next(): Promise<IteratorResult<T>> {
+    if (this.consumerDropped) return Promise.resolve({ done: true, value: undefined });
+    const item = this.take();
+    if (item) return new Promise((resolve, reject) => this.deliver(item, resolve, reject));
+    if (this.protocolTerminal) return Promise.resolve({ done: true, value: undefined });
+    return new Promise((resolve, reject) => this.waiting.push({ resolve, reject }));
+  }
+
+  private take(): OutputEntry | undefined {
+    const item = this.queue[0];
+    if (!item) return undefined;
+    if (item.packed) {
+      const index = item.packed.index;
+      const final = index === item.packed.payload.length - 1;
+      const value = item.packed.payload[index];
+      item.packed.index += 1;
+      if (final) {
+        this.queue.shift();
+        this.queueBytes -= item.bytes;
+        this.queued(-item.bytes);
+      }
+      return {
+        value: { kind: 'u8', value },
+        cursor: final ? item.cursor : undefined,
+        deliveredSequence: final ? item.deliveredSequence : undefined,
+        bytes: 0,
+      };
+    }
+    this.queue.shift();
+    this.queueBytes -= item.bytes;
+    this.queued(-item.bytes);
+    return item;
+  }
+
+  private deliver(
+    item: OutputEntry,
+    resolve: (value: IteratorResult<T>) => void,
+    reject: (error: unknown) => void,
+  ): void {
+    let result: IteratorResult<T>;
+    try {
+      if (item.error !== undefined) {
+        if (item.cursor) this.checkpoint(item);
+        reject(item.error);
+        return;
+      } else if (item.done) result = { done: true, value: undefined };
+      else {
+        if (!this.decode)
+          throw new StreamingProtocolError(
+            'protocol-error',
+            'output was consumed before its stream reference',
+          );
+        result = { done: false, value: this.decode(item.value) };
+      }
+      if (item.cursor) this.checkpoint(item);
+      resolve(result);
+    } catch (error) {
+      reject(error);
+      this.deliveryFailed(error);
+    }
+  }
+
+  private checkpoint(item: OutputEntry): void {
+    if (!item.cursor) return;
+    if (item.deliveredSequence === undefined)
+      throw new StreamingProtocolError('protocol-error', 'cursor has no delivery sequence');
+    this.deliveredSequence = item.deliveredSequence;
+    this.delivered(item.cursor, item.deliveredSequence);
+    if (item.done || item.error !== undefined) this.deliveredTerminal = true;
+  }
+}
+
+class StreamingSession {
+  private socket?: WebSocket;
+  private accepted = false;
+  private everAccepted = false;
+  private pendingResume = false;
+  private resumeOperation: 'resume' | 'takeover' = 'resume';
+  private sessionToken?: string;
+  private attemptId = crypto.randomUUID();
+  private idempotencyKey = '';
+  private pendingOperation = '';
+  private inputs = new Map<string, InputState>();
+  private inputSources = new WeakSet<object>();
+  private inputTokens = new Map<string, InputState>();
+  private outputs = new Map<string, OutputStream<unknown>>();
+  private channels = new Map<number, { direction: 'input' | 'output'; token: string }>();
+  private stableMappings = new Map<
+    string,
+    { direction: 'input' | 'output'; provisionalRef?: string; schemaIdentity?: string }
+  >();
+  private cursors = new Map<string, string>();
+  private resultResolve?: (value: unknown) => void;
+  private resultReject?: (error: unknown) => void;
+  private reconnecting = false;
+  private resultSeen = false;
+  private finished = false;
+  private queuedOutputBytes = 0;
+  private pendingInputBytes = 0;
+  private outputCancelReasons = new Map<string, 'consumer-drop'>();
+
+  constructor(
+    private readonly server: GolemServer,
+    private readonly descriptor: StreamingInvocationDescriptor,
+    private readonly signal?: AbortSignal,
+  ) {}
+
+  async start<R>(
+    encode: (register: InputRegistrar) => PublicValue,
+    decode: (value: unknown, resolve: OutputResolver) => R,
+  ): Promise<R> {
+    throwIfAborted(this.signal);
+    let parameters: PublicValue;
+    try {
+      parameters = encode((source, itemEncode, wireKind = 'json') => {
+        if (typeof source !== 'object' || source === null || this.inputSources.has(source))
+          throw new StreamingProtocolError(
+            'stream-already-consumed',
+            'input stream appears more than once',
+          );
+        if (this.inputs.size >= 4096)
+          throw new StreamingProtocolError('resource-exhausted', 'too many input streams');
+        this.inputSources.add(source);
+        const provisionalRef = crypto.randomUUID();
+        this.inputs.set(provisionalRef, {
+          source: source[Symbol.asyncIterator](),
+          encode: itemEncode,
+          sequence: 0n,
+          terminal: false,
+          wireKind,
+        });
+        return { kind: 'stream', value: { provisionalRef } };
+      });
+      for (const [name, value] of [
+        ['application', this.descriptor.application],
+        ['environment', this.descriptor.environment],
+        ['agent type', this.descriptor.agentType],
+        ['method', this.descriptor.method],
+      ] as const) {
+        if (typeof value !== 'string' || value.length === 0)
+          throw new StreamingProtocolError('validation-error', `invalid ${name}`);
+      }
+      if (
+        this.descriptor.phantomId !== undefined &&
+        (typeof this.descriptor.phantomId !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+            this.descriptor.phantomId,
+          ))
+      )
+        throw new StreamingProtocolError('validation-error', 'invalid phantom id');
+      this.idempotencyKey = this.descriptor.idempotencyKey ?? crypto.randomUUID();
+      if (
+        typeof this.idempotencyKey !== 'string' ||
+        this.idempotencyKey.length === 0 ||
+        Buffer.byteLength(this.idempotencyKey) > 1024
+      )
+        throw new StreamingProtocolError('validation-error', 'invalid idempotency key');
+      if (!Array.isArray(this.descriptor.config) || this.descriptor.config.length > 4096)
+        throw new StreamingProtocolError('validation-error', 'invalid configuration');
+      for (const entry of this.descriptor.config) {
+        if (
+          !isRecord(entry) ||
+          !Array.isArray(entry.path) ||
+          entry.path.length === 0 ||
+          entry.path.some((part) => typeof part !== 'string' || part.length === 0)
+        )
+          throw new StreamingProtocolError('validation-error', 'invalid configuration path');
+      }
+    } catch (error) {
+      this.releaseInputs();
+      throw error;
+    }
+    this.pendingOperation = canonicalJson({
+      version: 1,
+      type: 'invocationStart',
+      attemptId: this.attemptId,
+      selector: {
+        application: this.descriptor.application,
+        environment: this.descriptor.environment,
+        agentType: this.descriptor.agentType,
+        constructorParameters: this.descriptor.constructorParameters,
+        method: this.descriptor.method,
+        ...(this.descriptor.phantomId === undefined
+          ? {}
+          : { phantomId: this.descriptor.phantomId }),
+      },
+      config: this.descriptor.config,
+      methodParameters: parameters,
+      idempotencyKey: this.idempotencyKey,
+    });
+    const result = new Promise<unknown>((resolve, reject) => {
+      this.resultResolve = resolve;
+      this.resultReject = reject;
+    });
+    this.signal?.addEventListener('abort', () => this.cancelAll(), { once: true });
+    try {
+      await this.connectRetry();
+    } catch (error) {
+      this.fail(error);
+      await result.catch(() => undefined);
+      throw error;
+    }
+    try {
+      return decode(await result, (token, itemDecode, schemaIdentity, wireKind) =>
+        this.output(token, itemDecode, schemaIdentity, wireKind),
+      ) as R;
+    } catch (error) {
+      this.fail(error);
+      this.socket?.close(1002);
+      throw error;
+    }
+  }
+
+  private endpoint(): { url: string; token: string } {
+    const base =
+      this.server.type === 'local'
+        ? 'http://localhost:9881'
+        : this.server.type === 'cloud'
+          ? 'https://release.api.golem.cloud'
+          : this.server.url;
+    const token = this.server.type === 'local' ? LOCAL_WELL_KNOWN_TOKEN : this.server.token;
+    const url = new URL(STREAM_ENDPOINT, base);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return { url: url.toString(), token };
+  }
+
+  private connect(): Promise<void> {
+    const { url, token } = this.endpoint();
+    return new Promise((resolve, reject) => {
+      let operationSent = false;
+      let definitiveFailure = false;
+      let settled = false;
+      const resolveOnce = () => {
+        if (!settled) {
+          settled = true;
+          operationSent = true;
+          resolve();
+        }
+      };
+      const rejectOnce = (error: unknown) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      };
+      const socket = new WebSocket(url, STREAM_SUBPROTOCOL, {
+        headers: { Authorization: `Bearer ${token}` },
+        perMessageDeflate: false,
+        maxPayload: 32 * 1024 * 1024,
+      });
+      this.socket = socket;
+      socket.binaryType = 'nodebuffer';
+      socket.once('open', () => {
+        if (socket.protocol !== STREAM_SUBPROTOCOL) {
+          definitiveFailure = true;
+          socket.close(1002);
+          rejectOnce(
+            new StreamingProtocolError(
+              'unsupported-subprotocol',
+              'server selected an unsupported subprotocol',
+            ),
+          );
+          return;
+        }
+        try {
+          operationSent = true;
+          socket.send(this.pendingOperation);
+          resolveOnce();
+        } catch (error) {
+          operationSent = false;
+          rejectOnce(
+            new RetryableStreamingConnectionError(
+              error instanceof Error ? error.message : 'failed to send attachment',
+            ),
+          );
+        }
+      });
+      socket.on('message', (data, isBinary) => this.message(data, isBinary));
+      socket.once('unexpected-response', (_request, response) => {
+        definitiveFailure = true;
+        response.resume();
+        rejectOnce(
+          new StreamingProtocolError(
+            'handshake-failed',
+            `WebSocket upgrade failed with HTTP ${response.statusCode ?? 'error'}`,
+          ),
+        );
+      });
+      socket.on('error', (error) => {
+        if (!operationSent && !definitiveFailure)
+          rejectOnce(new RetryableStreamingConnectionError(error.message));
+      });
+      socket.on('close', () => {
+        if (!operationSent) {
+          if (!definitiveFailure)
+            rejectOnce(new RetryableStreamingConnectionError('connection closed before attach'));
+          return;
+        }
+        if (this.socket !== socket || this.signal?.aborted || this.finished) return;
+        void this.reconnect();
+      });
+    });
+  }
+
+  private async connectRetry(): Promise<void> {
+    for (;;) {
+      try {
+        await this.connect();
+        return;
+      } catch (error) {
+        if (!(error instanceof RetryableStreamingConnectionError) || this.signal?.aborted)
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+  }
+
+  private message(data: RawData, binary: boolean): void {
+    try {
+      if (binary) this.binary(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
+      else this.text(Buffer.isBuffer(data) ? data.toString('utf8') : String(data));
+    } catch (error) {
+      this.fail(error);
+      this.socket?.close(1002);
+    }
+  }
+
+  private text(text: string): void {
+    const parsed = parseStrictJson(text);
+    if (!isRecord(parsed))
+      throw new StreamingProtocolError('malformed-message', 'invalid server message');
+    const message = parsed as Record<string, any>;
+    if (typeof message.version !== 'number' || typeof message.type !== 'string')
+      throw new StreamingProtocolError('malformed-message', 'invalid server message');
+    if (message.version !== 1)
+      throw new StreamingProtocolError('unsupported-version', 'unsupported server message version');
+    if (
+      !this.accepted &&
+      message.type !== 'invocationAccepted' &&
+      message.type !== 'invocationRejected'
+    )
+      throw new StreamingProtocolError('protocol-error', 'message received before acceptance');
+    if (this.finished)
+      throw new StreamingProtocolError(
+        'protocol-error',
+        'message received after invocation finish',
+      );
+    switch (message.type) {
+      case 'invocationAccepted': {
+        if (this.accepted)
+          throw new StreamingProtocolError('protocol-error', 'duplicate invocation acceptance');
+        object(message, [
+          'version',
+          'type',
+          'attemptId',
+          'idempotencyKey',
+          'mappings',
+          'sessionToken',
+        ]);
+        if (message.attemptId !== this.attemptId)
+          throw new StreamingProtocolError('protocol-error', 'unexpected attempt acceptance');
+        if (message.idempotencyKey !== this.idempotencyKey)
+          throw new StreamingProtocolError('protocol-error', 'unexpected invocation identity');
+        validateOpaqueToken(message.sessionToken, 'session token');
+        this.install(message.mappings, true);
+        this.sessionToken = message.sessionToken;
+        this.accepted = true;
+        this.everAccepted = true;
+        this.pendingResume = false;
+        break;
+      }
+      case 'invocationRejected': {
+        object(message, ['version', 'type', 'code', 'message', 'retryable'], ['attemptId']);
+        if (
+          (message.attemptId !== undefined && message.attemptId !== this.attemptId) ||
+          (this.everAccepted && message.attemptId === undefined)
+        )
+          throw new StreamingProtocolError('protocol-error', 'unexpected attempt rejection');
+        if (
+          typeof message.code !== 'string' ||
+          typeof message.message !== 'string' ||
+          typeof message.retryable !== 'boolean'
+        )
+          throw new StreamingProtocolError('malformed-message', 'invalid invocation rejection');
+        if (message.code === 'invalid-attachment-state') {
+          if (
+            this.everAccepted &&
+            this.pendingResume &&
+            !this.accepted &&
+            this.resumeOperation === 'resume'
+          )
+            void this.reconnect(true, 'takeover');
+          else this.fail(new StreamingProtocolError(message.code, message.message));
+        } else if (this.everAccepted && message.retryable) void this.reconnect(true);
+        else this.fail(new StreamingProtocolError(message.code, message.message));
+        break;
+      }
+      case 'invocationResult':
+        if (this.resultSeen)
+          throw new StreamingProtocolError('protocol-error', 'duplicate invocation result');
+        object(message, ['version', 'type', 'mappings', 'result']);
+        this.install(message.mappings);
+        const result = object(
+          message.result,
+          message.result.kind === 'value' ? ['kind', 'graph', 'value'] : ['kind'],
+        );
+        if (result.kind !== 'none' && result.kind !== 'value')
+          throw new StreamingProtocolError('malformed-message', 'invalid invocation result');
+        if (result.kind === 'value') {
+          const returnedGraph = schemaGraphFromWire(result.graph);
+          new PublicValueValidator(returnedGraph, 'stable').validate(result.value);
+        }
+        this.resultSeen = true;
+        this.resultResolve?.(result.kind === 'none' ? undefined : result);
+        break;
+      case 'inputStreamAck':
+        object(message, [
+          'version',
+          'type',
+          'channel',
+          'highestContiguousSequence',
+          'mappings',
+          'terminal',
+        ]);
+        this.install(message.mappings);
+        if (typeof message.terminal !== 'boolean')
+          throw new StreamingProtocolError('malformed-message', 'invalid input terminal state');
+        this.ack(
+          message.channel,
+          decimal(message.highestContiguousSequence, 'highestContiguousSequence'),
+          message.terminal,
+        );
+        break;
+      case 'outputStreamItem': {
+        object(message, [
+          'version',
+          'type',
+          'channel',
+          'cursorToken',
+          'mappings',
+          'sequence',
+          'value',
+        ]);
+        this.install(message.mappings);
+        const output = this.outputByChannel(message.channel);
+        const sequence = decimal(message.sequence, 'sequence');
+        const deliveredSequence = output.stream.accept(sequence, 1n, 'json');
+        validateOpaqueToken(message.cursorToken, 'cursor token');
+        output.stream.push(
+          message.value,
+          { token: message.cursorToken, sequence },
+          Buffer.byteLength(text),
+          deliveredSequence,
+        );
+        break;
+      }
+      case 'outputStreamEnd': {
+        object(message, ['version', 'type', 'channel', 'outcome', 'sequence'], ['cursorToken']);
+        const output = this.outputByChannel(message.channel);
+        const sequence = decimal(message.sequence, 'sequence');
+        const deliveredSequence = output.stream.accept(sequence, 0n);
+        if (!isRecord(message.outcome) || typeof message.outcome.kind !== 'string')
+          throw new StreamingProtocolError('malformed-message', 'invalid output outcome');
+        let failure: StreamingProtocolError | undefined;
+        if (message.outcome.kind === 'ok') object(message.outcome, ['kind']);
+        else if (message.outcome.kind === 'error') {
+          object(message.outcome, ['kind', 'code', 'message']);
+          if (
+            typeof message.outcome.code !== 'string' ||
+            typeof message.outcome.message !== 'string'
+          )
+            throw new StreamingProtocolError('malformed-message', 'invalid output error');
+          failure = new StreamingProtocolError(message.outcome.code, message.outcome.message);
+        } else if (message.outcome.kind === 'cancelled') {
+          object(message.outcome, ['kind', 'reason']);
+          if (typeof message.outcome.reason !== 'string')
+            throw new StreamingProtocolError('malformed-message', 'invalid cancellation reason');
+          failure = new StreamingProtocolError('cancelled', message.outcome.reason);
+        } else throw new StreamingProtocolError('malformed-message', 'invalid output outcome');
+        const cursor =
+          message.cursorToken !== undefined
+            ? (validateOpaqueToken(message.cursorToken, 'cursor token'),
+              {
+                token: message.cursorToken as string,
+                sequence,
+              })
+            : undefined;
+        if (failure === undefined) output.stream.finish(cursor, deliveredSequence);
+        else output.stream.fail(failure, cursor, deliveredSequence);
+        this.outputCancelReasons.delete(output.token);
+        break;
+      }
+      case 'streamCancel':
+        object(message, ['version', 'type', 'channel', 'reason']);
+        if (typeof message.reason !== 'string')
+          throw new StreamingProtocolError('malformed-message', 'invalid cancellation reason');
+        this.cancelChannel(message.channel);
+        break;
+      case 'attachmentRevoked':
+        object(message, ['version', 'type', 'reason']);
+        if (message.reason !== 'replaced')
+          throw new StreamingProtocolError('malformed-message', 'invalid revocation reason');
+        void this.reconnect(true);
+        break;
+      case 'invocationFinished':
+        object(message, ['version', 'type', 'outcome']);
+        if (!isRecord(message.outcome) || typeof message.outcome.kind !== 'string')
+          throw new StreamingProtocolError('malformed-message', 'invalid invocation outcome');
+        if (message.outcome.kind === 'failure') {
+          object(message.outcome, ['kind', 'code', 'message']);
+          if (
+            typeof message.outcome.code !== 'string' ||
+            typeof message.outcome.message !== 'string'
+          )
+            throw new StreamingProtocolError('malformed-message', 'invalid invocation failure');
+          if ([...this.outputs.values()].some((output) => !output.isTerminal()))
+            throw new StreamingProtocolError(
+              'protocol-error',
+              'invocation failure preceded output terminal',
+            );
+          this.finish(new StreamingProtocolError(message.outcome.code, message.outcome.message));
+        } else if (message.outcome.kind !== 'success')
+          throw new StreamingProtocolError('malformed-message', 'invalid invocation outcome');
+        else {
+          object(message.outcome, ['kind']);
+          if (!this.resultSeen)
+            throw new StreamingProtocolError('protocol-error', 'invocation finished before result');
+          if ([...this.outputs.values()].some((output) => !output.isTerminal()))
+            throw new StreamingProtocolError(
+              'protocol-error',
+              'invocation finished before output terminal',
+            );
+          this.finish();
+        }
+        this.socket?.close(1000);
+        break;
+      default:
+        throw new StreamingProtocolError(
+          'malformed-message',
+          `unknown server message ${message.type}`,
+        );
+    }
+  }
+
+  private binary(frame: Buffer): void {
+    if (frame.length < 4)
+      throw new StreamingProtocolError('malformed-message', 'truncated binary frame');
+    const length = frame.readUInt32BE(0);
+    if (length > 16 * 1024 || length + 4 > frame.length)
+      throw new StreamingProtocolError('malformed-message', 'invalid binary metadata length');
+    const metadata = object(
+      parseStrictJson(frame.subarray(4, 4 + length).toString('utf8')),
+      ['version', 'kind', 'channel', 'sequence', 'itemCount'],
+      ['cursorToken', 'mimeType'],
+    );
+    if (typeof metadata.version !== 'number')
+      throw new StreamingProtocolError('malformed-message', 'invalid binary metadata version');
+    if (metadata.version !== 1)
+      throw new StreamingProtocolError(
+        'unsupported-version',
+        'unsupported binary metadata version',
+      );
+    const payload = frame.subarray(4 + length);
+    const output = this.outputByChannel(metadata.channel);
+    const sequence = decimal(metadata.sequence, 'sequence');
+    const itemCount = decimal(metadata.itemCount, 'itemCount');
+    validateOpaqueToken(metadata.cursorToken, 'cursor token');
+    if (metadata.kind === 'output-u8') {
+      if (
+        payload.length === 0 ||
+        itemCount !== BigInt(payload.length) ||
+        payload.length > 1024 * 1024 ||
+        metadata.mimeType !== undefined
+      )
+        throw new StreamingProtocolError('malformed-message', 'packed u8 item count mismatch');
+      if (sequence + itemCount > U64_MAX)
+        throw new StreamingProtocolError('invalid-sequence', 'packed u8 sequence overflow');
+      const deliveredSequence = output.stream.accept(sequence, itemCount, 'u8');
+      output.stream.pushPacked(
+        payload,
+        { token: metadata.cursorToken, sequence: sequence + itemCount - 1n },
+        deliveredSequence,
+      );
+    } else if (metadata.kind === 'output-binary') {
+      if (
+        itemCount !== 1n ||
+        payload.length > MAX_LOGICAL_VALUE_BYTES ||
+        (metadata.mimeType !== undefined && typeof metadata.mimeType !== 'string')
+      )
+        throw new StreamingProtocolError('malformed-message', 'invalid binary item metadata');
+      const deliveredSequence = output.stream.accept(sequence, 1n, 'binary');
+      output.stream.push(
+        {
+          kind: 'binary',
+          value: {
+            bytes: [...payload],
+            ...(metadata.mimeType === undefined ? {} : { mimeType: metadata.mimeType }),
+          },
+        },
+        { token: metadata.cursorToken, sequence },
+        payload.length + (metadata.mimeType ? Buffer.byteLength(metadata.mimeType) : 0),
+        deliveredSequence,
+      );
+    } else throw new StreamingProtocolError('malformed-message', 'invalid server binary kind');
+  }
+
+  private install(mappings: any[], complete = false): void {
+    if (!Array.isArray(mappings) || mappings.length > 4096)
+      throw new StreamingProtocolError('malformed-message', 'invalid stream mappings');
+    const messageChannels = new Set<number>();
+    const messageTokens = new Set<string>();
+    const messageProvisionals = new Set<string>();
+    const parsed: Array<{
+      channel: number;
+      direction: 'input' | 'output';
+      token: string;
+      provisionalRef?: string;
+      input?: InputState;
+      highWater?: bigint;
+      terminal?: boolean;
+    }> = [];
+    for (const mapping of mappings) {
+      object(
+        mapping,
+        ['channel', 'direction', 'streamToken'],
+        ['inputHighWater', 'provisionalRef'],
+      );
+      validateChannel(mapping.channel);
+      if (
+        (mapping.direction !== 'input' && mapping.direction !== 'output') ||
+        (mapping.direction === 'input') !== (mapping.inputHighWater !== undefined)
+      )
+        throw new StreamingProtocolError('stream-conflict', 'invalid stream mapping');
+      validateOpaqueToken(mapping.streamToken, 'stream token');
+      if (messageChannels.has(mapping.channel) || messageTokens.has(mapping.streamToken))
+        throw new StreamingProtocolError('stream-conflict', 'duplicate stream mapping');
+      messageChannels.add(mapping.channel);
+      messageTokens.add(mapping.streamToken);
+      if (mapping.provisionalRef !== undefined) {
+        if (
+          mapping.direction !== 'input' ||
+          typeof mapping.provisionalRef !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+            mapping.provisionalRef,
+          ) ||
+          messageProvisionals.has(mapping.provisionalRef)
+        )
+          throw new StreamingProtocolError('stream-conflict', 'invalid provisional stream mapping');
+        messageProvisionals.add(mapping.provisionalRef);
+      }
+      const connection = this.channels.get(mapping.channel);
+      if (
+        connection &&
+        (connection.direction !== mapping.direction || connection.token !== mapping.streamToken)
+      )
+        throw new StreamingProtocolError('stream-conflict', 'channel mapping rebound');
+      if (
+        [...this.channels].some(
+          ([channel, value]) => channel !== mapping.channel && value.token === mapping.streamToken,
+        )
+      )
+        throw new StreamingProtocolError('stream-conflict', 'stream mapping rebound');
+      const stable = this.stableMappings.get(mapping.streamToken);
+      if (
+        stable &&
+        (stable.direction !== mapping.direction ||
+          (stable.provisionalRef !== undefined &&
+            mapping.provisionalRef !== undefined &&
+            stable.provisionalRef !== mapping.provisionalRef))
+      )
+        throw new StreamingProtocolError('stream-conflict', 'stable stream mapping rebound');
+      if (!stable && this.stableMappings.size >= 4096)
+        throw new StreamingProtocolError('resource-exhausted', 'too many stream mappings');
+      let input: InputState | undefined;
+      let highWater: bigint | undefined;
+      let terminal: boolean | undefined;
+      if (mapping.direction === 'input') {
+        const provisionalInput =
+          mapping.provisionalRef === undefined
+            ? undefined
+            : this.inputs.get(mapping.provisionalRef);
+        if (mapping.provisionalRef !== undefined && !provisionalInput)
+          throw new StreamingProtocolError('stream-conflict', 'unknown provisional stream mapping');
+        input = provisionalInput ?? this.inputTokens.get(mapping.streamToken);
+        if (!input)
+          throw new StreamingProtocolError('stream-conflict', 'unknown provisional stream mapping');
+        const previous = this.inputTokens.get(mapping.streamToken);
+        if (previous && previous !== input)
+          throw new StreamingProtocolError('stream-conflict', 'input stream token was rebound');
+        if (
+          [...this.inputTokens].some(
+            ([token, known]) => token !== mapping.streamToken && known === input,
+          )
+        )
+          throw new StreamingProtocolError('stream-conflict', 'input stream was rebound');
+        object(mapping.inputHighWater, ['sequence', 'terminal']);
+        highWater = decimal(mapping.inputHighWater.sequence, 'sequence');
+        terminal = mapping.inputHighWater.terminal;
+        if (typeof terminal !== 'boolean')
+          throw new StreamingProtocolError('stream-conflict', 'invalid input high-water');
+        this.validateInputReconcile(input, highWater, terminal);
+      } else if (mapping.provisionalRef !== undefined) {
+        throw new StreamingProtocolError('stream-conflict', 'output mapping has provisional input');
+      }
+      parsed.push({
+        channel: mapping.channel,
+        direction: mapping.direction,
+        token: mapping.streamToken,
+        provisionalRef: mapping.provisionalRef,
+        input,
+        highWater,
+        terminal,
+      });
+    }
+    if (new Set([...this.stableMappings.keys(), ...messageTokens]).size > 4096)
+      throw new StreamingProtocolError('resource-exhausted', 'too many stream mappings');
+    if (complete) {
+      if (this.pendingResume) {
+        if ([...this.stableMappings.keys()].some((token) => !messageTokens.has(token)))
+          throw new StreamingProtocolError(
+            'stream-conflict',
+            'resume acceptance omitted a known stream mapping',
+          );
+      } else {
+        const expected = new Set(this.inputs.keys());
+        if (
+          expected.size !== messageProvisionals.size ||
+          [...expected].some((reference) => !messageProvisionals.has(reference))
+        )
+          throw new StreamingProtocolError(
+            'stream-conflict',
+            'initial acceptance omitted a provisional stream mapping',
+          );
+      }
+    }
+    const pumps = new Set<InputState>();
+    for (const mapping of parsed) {
+      const stable = this.stableMappings.get(mapping.token);
+      this.stableMappings.set(mapping.token, {
+        direction: mapping.direction,
+        provisionalRef: mapping.provisionalRef ?? stable?.provisionalRef,
+        schemaIdentity: stable?.schemaIdentity,
+      });
+      this.channels.set(mapping.channel, {
+        direction: mapping.direction,
+        token: mapping.token,
+      });
+      if (mapping.direction === 'output') {
+        this.ensureOutput(mapping.token);
+        const reason = this.outputCancelReasons.get(mapping.token);
+        if (reason)
+          this.send({ version: 1, type: 'streamCancel', channel: mapping.channel, reason });
+      } else {
+        const input = mapping.input as InputState;
+        this.inputTokens.set(mapping.token, input);
+        input.channel = mapping.channel;
+        this.reconcileInput(input, mapping.highWater as bigint, mapping.terminal as boolean);
+        if (mapping.terminal) input.cancelReason = undefined;
+        else if (input.cancelReason)
+          this.send({
+            version: 1,
+            type: 'streamCancel',
+            channel: mapping.channel,
+            reason: input.cancelReason,
+          });
+        else if (input.pending) this.socket?.send(input.pending.render(mapping.channel));
+        else pumps.add(input);
+      }
+    }
+    pumps.forEach((input) => void this.pump(input));
+  }
+
+  private async pump(input: InputState): Promise<void> {
+    if (input.terminal || input.cancelReason || input.channel === undefined || input.pending)
+      return;
+    try {
+      const next = input.naturalEnd
+        ? ({ done: true } as IteratorResult<unknown>)
+        : await this.pull(input);
+      const pending = next.done
+        ? this.terminalInput(input.sequence)
+        : input.wireKind === 'u8'
+          ? await this.packedU8Input(input, next.value)
+          : input.wireKind === 'binary'
+            ? this.binaryInput(input, next.value)
+            : this.jsonInput(input, next.value);
+      const channel = input.channel;
+      const message = pending.render(channel ?? 4294967295);
+      const bytes = Buffer.byteLength(message);
+      if (bytes > MAX_LOGICAL_VALUE_BYTES)
+        throw new StreamingProtocolError(
+          'resource-exhausted',
+          'input logical value limit exceeded',
+        );
+      if (this.pendingInputBytes + bytes > MAX_QUEUE_BYTES)
+        throw new StreamingProtocolError(
+          'resource-exhausted',
+          'unacknowledged input limit exceeded',
+        );
+      pending.bytes = bytes;
+      input.pending = pending;
+      this.pendingInputBytes += bytes;
+      if (channel !== undefined) this.socket?.send(pending.render(channel));
+    } catch (error) {
+      if (error instanceof StreamingProtocolError) {
+        this.fail(error);
+        this.socket?.close(1002);
+        return;
+      }
+      input.cancelReason = 'source-unavailable';
+      if (input.channel !== undefined)
+        this.send({
+          version: 1,
+          type: 'streamCancel',
+          channel: input.channel,
+          reason: input.cancelReason,
+        });
+    }
+  }
+
+  private pull(input: InputState): Promise<IteratorResult<unknown>> {
+    const pending = input.bufferedPull;
+    if (pending) {
+      input.bufferedPull = undefined;
+      return pending;
+    }
+    return input.source.next();
+  }
+
+  private jsonInput(input: InputState, value: unknown): PendingInput {
+    const encoded = input.encode(value);
+    const sequence = input.sequence;
+    return {
+      sequence,
+      itemCount: 1n,
+      terminal: false,
+      bytes: 0,
+      render: (channel) =>
+        canonicalJson({
+          version: 1,
+          type: 'inputStreamItem',
+          channel,
+          sequence: sequence.toString(),
+          value: encoded,
+        }),
+    };
+  }
+
+  private binaryInput(input: InputState, value: unknown): PendingInput {
+    const encoded = input.encode(value) as any;
+    if (
+      !isRecord(encoded) ||
+      encoded.kind !== 'binary' ||
+      !isRecord(encoded.value) ||
+      !Array.isArray(encoded.value.bytes)
+    )
+      throw new StreamingProtocolError('schema-mismatch', 'invalid binary stream item');
+    if (
+      encoded.value.bytes.some(
+        (byte: unknown) =>
+          !Number.isInteger(byte) || (byte as number) < 0 || (byte as number) > 255,
+      )
+    )
+      throw new StreamingProtocolError('schema-mismatch', 'invalid binary stream bytes');
+    const payload = Buffer.from(encoded.value.bytes);
+    if (payload.length > MAX_LOGICAL_VALUE_BYTES)
+      throw new StreamingProtocolError('resource-exhausted', 'binary stream item exceeds 16 MiB');
+    const sequence = input.sequence;
+    const mimeType = encoded.value.mimeType;
+    if (
+      mimeType !== undefined &&
+      (typeof mimeType !== 'string' ||
+        !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u.test(mimeType))
+    )
+      throw new StreamingProtocolError('schema-mismatch', 'invalid binary MIME type');
+    return {
+      sequence,
+      itemCount: 1n,
+      terminal: false,
+      bytes: 0,
+      render: (channel) =>
+        this.binaryInputFrame('input-binary', channel, sequence, payload, mimeType),
+    };
+  }
+
+  private async packedU8Input(input: InputState, first: unknown): Promise<PendingInput> {
+    const bytes = [this.nativeU8(input.encode(first))];
+    while (bytes.length < 1024 * 1024) {
+      const pull = input.source.next();
+      const next = await Promise.race([
+        pull.then((value) => ({ kind: 'value' as const, value })),
+        new Promise<{ kind: 'timeout' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'timeout' }), 1),
+        ),
+      ]);
+      if (next.kind === 'timeout') {
+        input.bufferedPull = pull;
+        break;
+      }
+      if (next.value.done) {
+        input.naturalEnd = true;
+        break;
+      }
+      bytes.push(this.nativeU8(input.encode(next.value.value)));
+    }
+    return this.packedU8Range(input.sequence, Buffer.from(bytes));
+  }
+
+  private packedU8Range(sequence: bigint, payload: Buffer): PendingInput {
+    return {
+      sequence,
+      itemCount: BigInt(payload.length),
+      terminal: false,
+      bytes: 0,
+      render: (channel) => this.binaryInputFrame('input-u8', channel, sequence, payload),
+      trim: (accepted) => {
+        const offset = Number(accepted - sequence);
+        return this.packedU8Range(accepted, payload.subarray(offset));
+      },
+    };
+  }
+
+  private terminalInput(sequence: bigint): PendingInput {
+    return {
+      sequence,
+      itemCount: 0n,
+      terminal: true,
+      bytes: 0,
+      render: (channel) =>
+        canonicalJson({
+          version: 1,
+          type: 'inputStreamEnd',
+          channel,
+          sequence: sequence.toString(),
+        }),
+    };
+  }
+
+  private binaryInputFrame(
+    kind: 'input-u8' | 'input-binary',
+    channel: number,
+    sequence: bigint,
+    payload: Buffer,
+    mimeType?: string,
+  ): Buffer {
+    const metadata = {
+      version: 1,
+      kind,
+      channel,
+      sequence: sequence.toString(),
+      itemCount: kind === 'input-u8' ? payload.length.toString() : '1',
+      ...(kind === 'input-binary' && mimeType ? { mimeType } : {}),
+    };
+    return encodeStreamSessionBinaryEnvelope(metadata, payload);
+  }
+
+  private nativeU8(value: unknown): number {
+    if (
+      !isRecord(value) ||
+      value.kind !== 'u8' ||
+      !Number.isInteger(value.value) ||
+      (value.value as number) < 0 ||
+      (value.value as number) > 255
+    )
+      throw new StreamingProtocolError('schema-mismatch', 'u8 stream item is out of range');
+    return value.value as number;
+  }
+
+  private validateInputReconcile(input: InputState, highWater: bigint, terminal: boolean): void {
+    if (highWater < input.sequence)
+      throw new StreamingProtocolError('invalid-sequence', 'input high-water moved backwards');
+    const pending = input.pending;
+    if (!pending) {
+      if (
+        highWater !== input.sequence ||
+        (terminal !== input.terminal && !(terminal && input.cancelReason !== undefined))
+      )
+        throw new StreamingProtocolError(
+          'invalid-sequence',
+          'input high-water conflicts with local state',
+        );
+      return;
+    }
+    const end = pending.sequence + pending.itemCount;
+    if (highWater < pending.sequence || highWater > end)
+      throw new StreamingProtocolError(
+        'invalid-sequence',
+        'input high-water conflicts with pending data',
+      );
+    if (terminal && !pending.terminal)
+      throw new StreamingProtocolError(
+        'invalid-sequence',
+        'input high-water reports an unsent terminal',
+      );
+    if (!pending.terminal && highWater > pending.sequence && highWater < end && !pending.trim)
+      throw new StreamingProtocolError('invalid-sequence', 'input high-water split an atomic item');
+  }
+
+  private reconcileInput(input: InputState, highWater: bigint, terminal: boolean): void {
+    this.validateInputReconcile(input, highWater, terminal);
+    const pending = input.pending;
+    if (!pending) {
+      if (terminal && input.cancelReason) {
+        input.cancelReason = undefined;
+        input.terminal = true;
+      }
+      return;
+    }
+    const end = pending.sequence + pending.itemCount;
+    if (pending.terminal) {
+      if (highWater !== pending.sequence || !terminal) return;
+      this.clearPendingInput(input);
+      input.terminal = true;
+      return;
+    }
+    if (highWater === end) this.clearPendingInput(input);
+    else if (highWater > pending.sequence) {
+      const trimmed = (pending.trim as (accepted: bigint) => PendingInput)(highWater);
+      this.pendingInputBytes -= pending.bytes;
+      const rendered = trimmed.render(input.channel as number);
+      trimmed.bytes = Buffer.byteLength(rendered);
+      this.pendingInputBytes += trimmed.bytes;
+      input.pending = trimmed;
+    }
+    input.sequence = highWater;
+  }
+
+  private ack(channel: number, highWater: bigint, terminal: boolean): void {
+    validateChannel(channel);
+    const input = [...this.inputs.values()].find((candidate) => candidate.channel === channel);
+    if (!input)
+      throw new StreamingProtocolError('invalid-channel', 'ACK referenced an unknown input');
+    if (highWater < input.sequence)
+      throw new StreamingProtocolError('invalid-sequence', 'input ACK moved backwards');
+    if (input.pending && highWater > input.pending.sequence + input.pending.itemCount)
+      throw new StreamingProtocolError('invalid-sequence', 'input ACK advanced beyond sent data');
+    this.reconcileInput(input, highWater, terminal);
+    if (!input.pending) void this.pump(input);
+  }
+
+  private output(
+    token: string,
+    decode: (value: unknown) => unknown,
+    schemaIdentity = 'anonymous',
+    wireKind: 'json' | 'u8' | 'binary' = 'json',
+  ): AgentStream<unknown> {
+    validateOpaqueToken(token, 'stream token');
+    const stable = this.stableMappings.get(token);
+    if (!stable || stable.direction !== 'output')
+      throw new StreamingProtocolError('stream-conflict', 'unknown output stream token');
+    if (stable.schemaIdentity && stable.schemaIdentity !== schemaIdentity)
+      throw new StreamingProtocolError('stream-conflict', 'output stream schema changed');
+    stable.schemaIdentity = schemaIdentity;
+    let stream = this.outputs.get(token);
+    if (!stream) {
+      stream = new OutputStream(
+        () => {
+          this.outputCancelReasons.set(token, 'consumer-drop');
+          const channel = [...this.channels].find(([, value]) => value.token === token)?.[0];
+          if (channel !== undefined)
+            this.send({ version: 1, type: 'streamCancel', channel, reason: 'consumer-drop' });
+        },
+        (cursor, deliveredSequence) => {
+          const previous = (stream as any).__delivered as
+            | { token: string; sequence: bigint; deliveredSequence: bigint }
+            | undefined;
+          if (previous && cursor.sequence < previous.sequence)
+            throw new StreamingProtocolError('invalid-sequence', 'output delivery moved backwards');
+          if (previous && cursor.sequence === previous.sequence && cursor.token !== previous.token)
+            throw new StreamingProtocolError('invalid-cursor', 'conflicting output cursor');
+          if (
+            [...this.cursors].some(
+              ([knownToken, knownCursor]) => knownToken !== token && knownCursor === cursor.token,
+            )
+          )
+            throw new StreamingProtocolError(
+              'invalid-cursor',
+              'cursor token reused across streams',
+            );
+          (stream as any).__delivered = { ...cursor, deliveredSequence };
+          this.cursors.set(token, cursor.token);
+        },
+        (delta) => {
+          const next = this.queuedOutputBytes + delta;
+          if (next > MAX_SESSION_QUEUE_BYTES || next < 0)
+            throw new StreamingProtocolError(
+              'resource-exhausted',
+              'session output delivery queue limit exceeded',
+            );
+          this.queuedOutputBytes = next;
+        },
+        (error) => {
+          this.fail(error);
+          this.socket?.close(1002);
+        },
+      );
+      this.outputs.set(token, stream);
+    }
+    stream.expose(wireKind);
+    stream.setDecoder(decode);
+    return stream;
+  }
+
+  private ensureOutput(token: string): OutputStream<unknown> {
+    let stream = this.outputs.get(token);
+    if (!stream) {
+      stream = new OutputStream(
+        () => {
+          this.outputCancelReasons.set(token, 'consumer-drop');
+          const channel = [...this.channels].find(([, value]) => value.token === token)?.[0];
+          if (channel !== undefined)
+            this.send({ version: 1, type: 'streamCancel', channel, reason: 'consumer-drop' });
+        },
+        (cursor, deliveredSequence) => {
+          const previous = (stream as any).__delivered as
+            | { token: string; sequence: bigint; deliveredSequence: bigint }
+            | undefined;
+          if (previous && cursor.sequence < previous.sequence)
+            throw new StreamingProtocolError('invalid-sequence', 'output delivery moved backwards');
+          if (previous && cursor.sequence === previous.sequence && cursor.token !== previous.token)
+            throw new StreamingProtocolError('invalid-cursor', 'conflicting output cursor');
+          (stream as any).__delivered = { ...cursor, deliveredSequence };
+          this.cursors.set(token, cursor.token);
+        },
+        (delta) => {
+          const next = this.queuedOutputBytes + delta;
+          if (next > MAX_SESSION_QUEUE_BYTES || next < 0)
+            throw new StreamingProtocolError(
+              'resource-exhausted',
+              'session output delivery queue limit exceeded',
+            );
+          this.queuedOutputBytes = next;
+        },
+        (error) => {
+          this.fail(error);
+          this.socket?.close(1002);
+        },
+      );
+      this.outputs.set(token, stream);
+    }
+    return stream;
+  }
+
+  private outputByChannel(channel: number): {
+    token: string;
+    stream: OutputStream<unknown>;
+  } {
+    validateChannel(channel);
+    const mapping = this.channels.get(channel);
+    if (!mapping || mapping.direction !== 'output')
+      throw new StreamingProtocolError('invalid-channel', 'unknown output channel');
+    const stream = this.ensureOutput(mapping.token);
+    return { token: mapping.token, stream };
+  }
+
+  private async reconnect(forceFreshResume = false, operation?: 'takeover'): Promise<void> {
+    if (this.reconnecting || this.signal?.aborted) return;
+    this.reconnecting = true;
+    try {
+      const freshResume = forceFreshResume || this.accepted;
+      const previous = this.socket;
+      this.socket = undefined;
+      previous?.terminate();
+      this.channels.clear();
+      for (const input of this.inputs.values()) input.channel = undefined;
+      if (this.everAccepted) for (const output of this.outputs.values()) output.prepareResume();
+      if (freshResume) {
+        if (!this.sessionToken)
+          throw new StreamingProtocolError('stale-session', 'accepted session has no resume token');
+        const outputCursors: string[] =
+          operation === 'takeover'
+            ? JSON.parse(this.pendingOperation).outputCursors
+            : [...this.cursors.values()];
+        if (new Set(outputCursors).size !== outputCursors.length)
+          throw new StreamingProtocolError('invalid-cursor', 'duplicate output cursor token');
+        this.resumeOperation = operation ?? (this.accepted ? 'resume' : this.resumeOperation);
+        this.attemptId = crypto.randomUUID();
+        this.pendingResume = true;
+        this.pendingOperation = canonicalJson({
+          version: 1,
+          type: 'resumeAttach',
+          attemptId: this.attemptId,
+          operation: this.resumeOperation,
+          sessionToken: this.sessionToken,
+          outputCursors,
+        });
+      }
+      this.accepted = false;
+      await this.connectRetry();
+    } catch (error) {
+      this.fail(error);
+    } finally {
+      this.reconnecting = false;
+    }
+  }
+
+  private cancelChannel(channel: number): void {
+    validateChannel(channel);
+    const mapping = this.channels.get(channel);
+    if (!mapping || mapping.direction !== 'input')
+      throw new StreamingProtocolError(
+        'invalid-channel',
+        'cancellation referenced an unknown input',
+      );
+    const input = this.inputTokens.get(mapping.token);
+    if (!input)
+      throw new StreamingProtocolError(
+        'invalid-channel',
+        'cancellation referenced an unknown input',
+      );
+    void input.source.return?.();
+    this.clearPendingInput(input);
+    input.cancelReason = undefined;
+    input.terminal = true;
+  }
+  private clearPendingInput(input: InputState): void {
+    if (input.pending) this.pendingInputBytes -= input.pending.bytes;
+    input.pending = undefined;
+  }
+  private cancelAll(): void {
+    this.fail(this.signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+    this.socket?.close(1000);
+  }
+  private send(message: unknown): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(canonicalJson(message));
+  }
+  private fail(error: unknown): void {
+    this.finished = true;
+    this.resultReject?.(error);
+    for (const output of this.outputs.values()) output.abort(error);
+    this.releaseInputs();
+  }
+  private finish(error?: unknown): void {
+    this.finished = true;
+    if (error !== undefined) this.resultReject?.(error);
+    this.releaseInputs();
+  }
+  private releaseInputs(): void {
+    for (const input of this.inputs.values()) {
+      if (!input.terminal) void input.source.return?.();
+      this.clearPendingInput(input);
+      input.terminal = true;
+    }
+  }
 }

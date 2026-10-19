@@ -68,25 +68,17 @@
  *     (`commands.nodes[0].name`); `get-tool(name)` and
  *     `guest.invoke(tool-name, …)` match against it. `commands.nodes`
  *     is always non-empty.
- * Capability scoping (WASI preopens, env masking, outbound-socket
- * filters, subprocess-exec capability, and `golem:agent/host`'s
- * `get-config-value` resolution) is performed by the host by inspecting
- * the component's WIT imports — what a component *can* do is already
- * declared structurally by which interfaces it imports — not by reading
- * a declarative metadata record.
+ * Capability scoping is performed by the host. `requires-filesystem` declares
+ * that the tool cannot operate without a filesystem binding; it does not grant
+ * filesystem access.
  */
 declare module 'golem:tool/common@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  export class UnderlyingTool {
-    /**
-     * @throws ToolError
-     */
-    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<InvocationResult>;
-  }
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type ToolError = golemCore200Types.ToolError;
   /**
    * Command tree
    */
@@ -371,6 +363,7 @@ declare module 'golem:tool/common@0.1.0' {
     constraints: Constraint[];
     stdin?: StreamSpec;
     stdout?: StreamSpec;
+    stderr?: StreamSpec;
     result?: ResultSpec;
     errors: ErrorCase[];
     annotations?: CommandAnnotations;
@@ -398,6 +391,7 @@ declare module 'golem:tool/common@0.1.0' {
    */
   export type Tool = {
     version: string;
+    requiresFilesystem: boolean;
     commands: CommandTree;
     /**
      * Self-contained type-node pool holding every type referenced from
@@ -422,54 +416,20 @@ declare module 'golem:tool/common@0.1.0' {
   };
   export type ToolMiddleware = {
     name: string;
+    version: string;
     aliases: string[];
     doc: Doc;
     scope: ToolMiddlewareScope;
+    /** Schema of the static configuration supplied for each installation. */
+    parameterSchema: SchemaGraph;
   };
   /**
-   * Invocation contract — shared between guest and host
+   * Invocation contract — shared between guest and host. Both attachment
+   * fields must be absent: output bytes use the writers supplied to the guest.
    */
-  export type ToolError =
-  {
-    tag: 'invalid-tool-name'
-    val: string
-  } |
-  {
-    tag: 'invalid-command-path'
-    val: string[]
-  } |
-  {
-    tag: 'invalid-input'
-    val: string
-  } |
-  {
-    tag: 'constraint-violation'
-    val: string
-  } |
-  /**
-   * Returned `invocation-result` does not match the body's
-   * declared `result-spec` (e.g., the returned value's root type
-   * does not match the body's declared result schema; see §6.1
-   * transparency invariant).
-   */
-  {
-    tag: 'invalid-result'
-    val: string
-  } |
-  /**
-   * Tool-defined failure. Mirrors `golem:agent/common`'s
-   * `agent-error::custom-error`: the payload is a self-contained
-   * `typed-schema-value` carrying the error value. Producers SHOULD
-   * shape it so its root type matches one of the body's declared
-   * `error-case` payload types.
-   */
-  {
-    tag: 'custom-error'
-    val: TypedSchemaValue
-  };
   export type InvocationResult = {
     result?: TypedSchemaValue;
     stdout?: AsyncIterable<number>;
+    stderr?: AsyncIterable<number>;
   };
-  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

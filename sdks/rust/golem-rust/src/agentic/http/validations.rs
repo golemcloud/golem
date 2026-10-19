@@ -16,9 +16,100 @@ use crate::agentic::{
     AutoInjectedParamType, EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor,
 };
 use crate::golem_agentic::golem::agent::common::{
-    HttpEndpointDetails, HttpMountDetails, PathSegment,
+    HttpEndpointDetails, HttpMountDetails, PathSegment, PhantomIdBinding,
 };
 use std::collections::HashSet;
+
+#[doc(hidden)]
+pub fn validate_wire_agent_http(
+    agent: &crate::golem_agentic::golem::agent::common::AgentType,
+) -> Result<(), String> {
+    use crate::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
+    use crate::schema::wit::wire::Role;
+    let names = |input: &InputSchema, principal: bool| {
+        let InputSchema::Parameters(fields) = input;
+        fields
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::AutoInjected(_)) == principal)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>()
+    };
+    let roles = |input: &InputSchema, role: Role| {
+        let InputSchema::Parameters(fields) = input;
+        fields
+            .iter()
+            .filter(|field| {
+                matches!(field.source, FieldSource::UserSupplied)
+                    && agent.schema.type_nodes[field.schema as usize]
+                        .metadata
+                        .role
+                        .as_ref()
+                        .is_some_and(|actual| {
+                            std::mem::discriminant(actual) == std::mem::discriminant(&role)
+                        })
+            })
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>()
+    };
+    if let Some(mount) = &agent.http_mount {
+        let input = &agent.constructor.input_schema;
+        let parameters = names(input, false);
+        validate_phantom_selector(
+            mount,
+            &names(input, false)
+                .union(&names(input, true))
+                .cloned()
+                .collect(),
+        )?;
+        if mount.phantom_id_binding.is_some()
+            && (agent.mode == crate::golem_agentic::golem::agent::common::AgentMode::Ephemeral
+                || agent.kind
+                    == crate::golem_agentic::golem::agent::common::AgentTypeKind::HttpRouter)
+        {
+            return Err("Phantom selectors require a regular durable agent".into());
+        }
+        validate_no_catch_all_in_http_mount(&agent.type_name, mount)?;
+        for (role, kind) in [
+            (Role::UnstructuredText, "UnstructuredText"),
+            (Role::UnstructuredBinary, "UnstructuredBinary"),
+            (Role::Multimodal, "Multimodal"),
+        ] {
+            if let Some(name) = roles(input, role).iter().next() {
+                return Err(format!(
+                    "Agent '{}' constructor parameter '{}' cannot be of type '{}' when used with HTTP mount",
+                    agent.type_name, name, kind
+                ));
+            }
+        }
+        validate_mount_variables_are_not_principal(mount, &names(input, true))?;
+        validate_mount_variables_exist_in_constructor(mount, &parameters)?;
+        validate_constructor_vars_are_satisfied(mount, &parameters)?;
+    }
+    for method in &agent.methods {
+        if method.http_endpoint.is_empty() {
+            continue;
+        }
+        if agent.http_mount.is_none() {
+            return Err(format!(
+                "Agent method '{}' of '{}' defines HTTP endpoints but the agent is not mounted over HTTP. Please specify mount details in 'agent_definition'",
+                method.name, agent.type_name
+            ));
+        }
+        let input = &method.input_schema;
+        for endpoint in &method.http_endpoint {
+            validate_phantom_endpoint(agent.http_mount.as_ref().unwrap(), endpoint)?;
+            validate_endpoint_variables(
+                endpoint,
+                &names(input, false),
+                &names(input, true),
+                &roles(input, Role::UnstructuredBinary),
+                &roles(input, Role::UnstructuredText),
+                &roles(input, Role::Multimodal),
+            )?;
+        }
+    }
+    Ok(())
+}
 
 // This validation is applied along with other details in the definition
 // unlike basic parsing of the HTTP mount which is done earlier.
@@ -30,6 +121,11 @@ pub fn validate_http_mount(
 ) -> Result<(), String> {
     let constructor_input_params = collect_constructor_input_parameter_names(agent_constructor);
 
+    let all_parameters = constructor_input_params
+        .union(parameters_for_principal)
+        .cloned()
+        .collect();
+    validate_phantom_selector(agent_mount, &all_parameters)?;
     validate_no_catch_all_in_http_mount(agent_class_name, agent_mount)?;
     validate_constructor_params_are_http_safe(agent_class_name, agent_constructor)?;
     validate_mount_variables_are_not_principal(agent_mount, parameters_for_principal)?;
@@ -64,6 +160,7 @@ pub fn validate_http_endpoint(
     let multimodal_params = collect_multimodal_params(&agent_method.input_schema);
 
     for endpoint in &agent_method.http_endpoint {
+        validate_phantom_endpoint(http_mount_details.unwrap(), endpoint)?;
         validate_endpoint_variables(
             endpoint,
             &method_vars_without_auto_injected_variables,
@@ -440,6 +537,10 @@ fn validate_mount_variables_exist_in_constructor(
         if let PathSegment::PathVariable(path_variable) = segment {
             let variable_name = &path_variable.variable_name;
 
+            if matches!(&agent_mount.phantom_id_binding, Some(PhantomIdBinding::Path(binding)) if &binding.name == variable_name)
+            {
+                continue;
+            }
             if !constructor_vars.contains(variable_name) {
                 return Err(format!(
                     "HTTP mount path variable '{}' (in path segment {}) is not defined in the agent constructor.",
@@ -449,6 +550,41 @@ fn validate_mount_variables_exist_in_constructor(
         }
     }
 
+    Ok(())
+}
+
+fn validate_phantom_selector(
+    mount: &HttpMountDetails,
+    constructor_vars: &HashSet<String>,
+) -> Result<(), String> {
+    let Some(selector) = &mount.phantom_id_binding else {
+        return Ok(());
+    };
+    let (PhantomIdBinding::Path(binding) | PhantomIdBinding::Query(binding)) = selector;
+    if binding.name.is_empty() || !mount.filesystem_bindings.is_empty() {
+        return Err("Phantom selectors require a nonempty name and no filesystem exposure".into());
+    }
+    if matches!(selector, PhantomIdBinding::Path(_)) &&
+        (constructor_vars.contains(&binding.name) || mount.path_prefix.iter().filter(|s| matches!(s, PathSegment::PathVariable(v) if v.variable_name == binding.name)).count() != 1) {
+        return Err("Phantom path selector must name exactly one mount capture, not a constructor parameter".into());
+    }
+    Ok(())
+}
+
+fn validate_phantom_endpoint(
+    mount: &HttpMountDetails,
+    endpoint: &HttpEndpointDetails,
+) -> Result<(), String> {
+    let conflict = match &mount.phantom_id_binding {
+        Some(PhantomIdBinding::Path(binding)) => endpoint.path_suffix.iter().any(|s| matches!(s, PathSegment::PathVariable(v) | PathSegment::RemainingPathVariable(v) if v.variable_name == binding.name)),
+        Some(PhantomIdBinding::Query(binding)) => endpoint.query_vars.iter().any(|q| q.query_param_name == binding.name) || (endpoint.durable_streams.is_some() && ["offset", "cursor", "live"].contains(&binding.name.as_str())),
+        None => false,
+    };
+    if conflict {
+        return Err(
+            "Phantom selector conflicts with an endpoint binding or durable-stream control".into(),
+        );
+    }
     Ok(())
 }
 
@@ -515,10 +651,15 @@ mod tests {
             path_prefix: segments,
             auth_details: Some(AuthDetails { required: true }),
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },
             webhook_suffix: vec![],
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            file_response_headers: vec![],
+            openapi_provider_method: None,
         }
     }
 
@@ -536,6 +677,48 @@ mod tests {
 
     fn literal() -> PathSegment {
         PathSegment::Literal("literal".to_string())
+    }
+
+    #[test]
+    fn phantom_capture_is_not_a_constructor_binding() {
+        use crate::golem_agentic::golem::agent::common::PhantomIdBindingDetails;
+        let constructor = constructor_with_params(vec![("customer", String::get_type())]);
+        let mut mount =
+            mount_with_segments(vec![literal(), path_var("customer"), path_var("instance")]);
+        mount.phantom_id_binding = Some(PhantomIdBinding::Path(PhantomIdBindingDetails {
+            name: "instance".into(),
+            optional: true,
+        }));
+        assert!(validate_http_mount("Selected", &mount, &constructor, &HashSet::new()).is_ok());
+        mount.path_prefix.push(path_var("other"));
+        assert!(
+            validate_http_mount("Selected", &mount, &constructor, &HashSet::new())
+                .unwrap_err()
+                .contains("other")
+        );
+        mount.path_prefix.pop();
+        let colliding = constructor_with_params(vec![
+            ("customer", String::get_type()),
+            ("instance", String::get_type()),
+        ]);
+        assert!(
+            validate_http_mount("Selected", &mount, &colliding, &HashSet::new())
+                .unwrap_err()
+                .contains("constructor parameter")
+        );
+        mount.path_prefix.pop();
+        assert!(
+            validate_http_mount("Selected", &mount, &constructor, &HashSet::new())
+                .unwrap_err()
+                .contains("exactly one")
+        );
+        mount.phantom_id_binding = Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+            name: "instance".into(),
+            optional: false,
+        }));
+        assert!(validate_http_mount("Selected", &mount, &constructor, &HashSet::new()).is_ok());
+        mount.path_prefix.push(path_var("instance"));
+        assert!(validate_http_mount("Selected", &mount, &constructor, &HashSet::new()).is_err());
     }
 
     #[test]
@@ -729,6 +912,7 @@ mod tests {
             cors_options: CorsOptions {
                 allowed_patterns: cors.into_iter().map(|s| s.to_string()).collect(),
             },
+            durable_streams: None,
         }
     }
 

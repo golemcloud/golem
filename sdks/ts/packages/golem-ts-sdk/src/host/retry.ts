@@ -38,6 +38,7 @@ import {
   Props,
   type DurationInput,
   type NamedPolicyInput,
+  type PolicyInput,
   type PredicateValueInput,
   toRawDuration,
   toRawNamedPolicy,
@@ -54,6 +55,7 @@ export {
   Props,
   type DurationInput,
   type NamedPolicyInput,
+  type PolicyInput,
   type PredicateValueInput,
   toRawDuration,
   toRawNamedPolicy,
@@ -61,6 +63,8 @@ export {
   toRawPredicate,
   toRawPredicateValue,
 };
+
+export { retry, RetryPolicyError, type RetryOptions, type RetryProperties } from './retryExecutor';
 
 export function setRetryPolicy(policy: NamedPolicyInput): void {
   rawSetRetryPolicy(toRawNamedPolicy(policy));
@@ -111,8 +115,7 @@ export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => R): R;
  * it did not exist before). On failure the policy is also restored and the error
  * propagates normally.
  *
- * To make errors inside `f` subject to executor-level retries, wrap the
- * body with {@link atomically}.
+ * Use {@link retry} to retry guest code. Host HTTP retry remains host-managed.
  *
  * @param policy - The named retry policy to set.
  * @param f - The function to execute (sync or async).

@@ -104,11 +104,11 @@ object SchemaPayloadSpec extends ZIOSpecDefault {
             val source = AgentStream.fromPull(() => Future.successful(None: Option[String]))
 
             for {
-              encoded   <- SchemaPayload.encodeAsync(source)
-              stream     = SchemaPayload.decode[AgentStream[String]](encoded).fold(throw _, identity)
-              forwarded <- SchemaPayload.encodeAsync(stream)
+              encoded         <- SchemaPayload.encodeAsync(source)
+              originalEndpoint = encoded.valueNodes(0).asInstanceOf[js.Dynamic].selectDynamic("val")
+              stream           = SchemaPayload.decode[AgentStream[String]](encoded).fold(throw _, identity)
+              forwarded       <- SchemaPayload.encodeAsync(stream)
             } yield {
-              val originalEndpoint  = encoded.valueNodes(0).asInstanceOf[js.Dynamic].selectDynamic("val")
               val forwardedEndpoint = forwarded.valueNodes(0).asInstanceOf[js.Dynamic].selectDynamic("val")
               assertTrue(originalEndpoint.asInstanceOf[AnyRef] eq forwardedEndpoint.asInstanceOf[AnyRef])
             }

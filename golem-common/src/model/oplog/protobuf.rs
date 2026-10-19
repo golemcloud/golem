@@ -15,22 +15,29 @@
 use super::public_oplog_entry::CardExpiredParams;
 use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
-    LoadSnapshotParameters, LogLevel, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogCursor, PluginInstallationDescription,
-    ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicTypedAgentConfigEntry,
-    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters, StringAttributeValue, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    AgentMethodInvocationParameters, AgentResourceId, ExternalToolInvocationParameters,
+    ExternalToolResultParameters, FallibleResultParameters, JsonSnapshotData,
+    LoadSnapshotParameters, LogLevel, LogTraceContext, ManualUpdateParameters, MultipartPartData,
+    MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogCursor,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
+    PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue,
+    PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
+    PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicExternalSpanData,
+    PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicOplogPageEntry,
+    PublicRetryPolicyState, PublicSnapshotAssistedUpdateDetails, PublicSnapshotData,
+    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanLink,
+    PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotAssistedAutomaticUpdateParameters,
+    SnapshotAssistedUpdateDetails, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use crate::base_model::oplog::{
     CardInstallFailure, PublicQueuedCardEvent, PublicQueuedCardEventTransfer,
@@ -49,38 +56,204 @@ use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::payload::host_functions::{
     HostFunctionName, host_request_from_typed_schema_value,
 };
+use crate::model::oplog::payload::types::{
+    SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolRpcError,
+};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
     CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
+};
+use crate::model::oplog::raw_types::{
+    AttributeMap, CreateParameters, DurableStreamEventSummary, DurableStreamOutcome,
+    SpanAttributes, SpanFinished, SpanKind, SpanLink, SpanOutcome, SpanStarted,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
-    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
-    PublicQueuedCardEventCard, ReadOnlyViolationError,
+    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FailedSnapshotAssistedUpdateDetails,
+    HostStreamKind, OplogEntry, OplogErrorKind, PublicQueuedCardEventCard, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
-use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
     AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan,
     RawCardExpiredParameters, invocation_span, oplog_entry, wrapped_function_type,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
+
+fn decode_attachment_observation(
+    value: &crate::schema::TypedSchemaValue,
+) -> Result<crate::base_model::oplog::attachment::ToolAttachmentReadObservation, String> {
+    use crate::schema::FromSchema as _;
+    crate::base_model::oplog::attachment::ToolAttachmentReadObservation::from_value(value.value())
+        .map_err(|error| error.to_string())
+}
+
+fn decode_attachment_control(
+    attachment: &crate::schema::TypedSchemaValue,
+    transition: &crate::schema::TypedSchemaValue,
+) -> Result<
+    (
+        crate::base_model::oplog::attachment::ToolAttachmentId,
+        crate::base_model::oplog::attachment::ToolAttachmentControl,
+    ),
+    String,
+> {
+    use crate::base_model::oplog::attachment::{ToolAttachmentControl, ToolAttachmentId};
+    use crate::schema::FromSchema as _;
+    Ok((
+        ToolAttachmentId::from_value(attachment.value()).map_err(|error| error.to_string())?,
+        ToolAttachmentControl::from_value(transition.value()).map_err(|error| error.to_string())?,
+    ))
+}
+
+#[cfg(test)]
+mod tool_attachment_control_tests {
+    use super::*;
+    use crate::base_model::oplog::attachment::{
+        ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentControl, ToolAttachmentId,
+        ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use crate::model::Timestamp;
+    use crate::model::oplog::public_oplog_entry::ToolAttachmentControlParams;
+    use crate::schema::IntoTypedSchemaValue;
+    use test_r::test;
+
+    #[test]
+    fn tool_attachment_control_contract_roundtrips() {
+        let timestamp = Timestamp::now_utc().rounded();
+        let transitions = [
+            ToolAttachmentControl::ReaderDiscarded,
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::HostResourceExhausted),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Finished,
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::ConsumerCancelled,
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled),
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Failed("failure".to_string())),
+            )),
+        ];
+        for slot in [
+            ToolAttachmentSlot::Stdin,
+            ToolAttachmentSlot::Stdout,
+            ToolAttachmentSlot::Stderr,
+            ToolAttachmentSlot::Output,
+        ] {
+            let attachment = ToolAttachmentId {
+                creation_start: OplogIndex::from_u64(3),
+                slot,
+            };
+            for transition in &transitions {
+                for parent in [None, Some(OplogIndex::from_u64(2))] {
+                    let raw = OplogEntry::ToolAttachmentControl {
+                        timestamp,
+                        entity_parent_start_index: parent,
+                        attachment,
+                        transition: transition.clone(),
+                    };
+                    assert!(raw.is_hint());
+                    assert_eq!(raw.entity_parent_start_index(), parent);
+                    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+                        raw.clone().try_into().unwrap();
+                    let decoded: OplogEntry = proto.try_into().unwrap();
+                    assert_eq!(decoded, raw);
+                    let bytes = crate::serialization::serialize(&raw).unwrap();
+                    let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+                    assert_eq!(decoded, raw);
+                }
+                let public = PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+                    timestamp,
+                    attachment: attachment.into_typed_schema_value().unwrap(),
+                    transition: transition.clone().into_typed_schema_value().unwrap(),
+                });
+                let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                    public.clone().try_into().unwrap();
+                let decoded: PublicOplogEntry = proto.try_into().unwrap();
+                assert_eq!(decoded, public);
+                for value in ["toolattachmentcontrol", "tool-attachment-control"] {
+                    assert!(public.matches(&crate::model::lucene::Query::Term {
+                        value: value.to_string(),
+                    }));
+                }
+                let json = serde_json::to_value(&public).unwrap();
+                assert_eq!(json["type"], "ToolAttachmentControl");
+                assert!(json.get("payload").is_none());
+                assert_eq!(
+                    serde_json::from_value::<PublicOplogEntry>(json).unwrap(),
+                    public
+                );
+                let raw: OplogEntry = public.try_into().unwrap();
+                assert_eq!(
+                    raw,
+                    OplogEntry::ToolAttachmentControl {
+                        timestamp,
+                        entity_parent_start_index: None,
+                        attachment,
+                        transition: transition.clone(),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_attachment_control_rejects_invalid_metadata() {
+        let timestamp = Timestamp::now_utc();
+        let attachment = ToolAttachmentId {
+            creation_start: OplogIndex::from_u64(3),
+            slot: ToolAttachmentSlot::Output,
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        let transition = ToolAttachmentControl::ReaderDiscarded
+            .into_typed_schema_value()
+            .unwrap();
+        for (attachment, transition) in [
+            (transition.clone(), transition.clone()),
+            (attachment.clone(), attachment.clone()),
+        ] {
+            let public = PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+                timestamp,
+                attachment: attachment.clone(),
+                transition: transition.clone(),
+            });
+            let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                public.clone().try_into().unwrap();
+            assert!(PublicOplogEntry::try_from(proto).is_err());
+            assert!(OplogEntry::try_from(public).is_err());
+            let proto = golem_api_grpc::proto::golem::worker::RawOplogEntry {
+                timestamp: Some(timestamp.into()),
+                entity_parent_start_index: None,
+                entry: Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::ToolAttachmentControl(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentControlParameters {
+                        attachment: Some(attachment.try_into().unwrap()),
+                        transition: Some(transition.try_into().unwrap()),
+                    },
+                )),
+            };
+            assert!(OplogEntry::try_from(proto).is_err());
+        }
+    }
+}
 
 impl TryFrom<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
@@ -327,7 +500,9 @@ fn raw_queued_card_event_from_proto(
             Ok(QueuedCardEvent::TransferReceived(
                 QueuedCardEventTransferReceived {
                     transfer_id: event.transfer_id.ok_or("Missing transfer_id")?.into(),
-                    source_card_id: event.source_card_id.map(|card_id| CardId(card_id.into())),
+                    source_card_id: CardId(
+                        event.source_card_id.ok_or("Missing source_card_id")?.into(),
+                    ),
                     card_id,
                     card: Some(card),
                 },
@@ -410,7 +585,7 @@ fn raw_queued_card_event_to_proto(
                 transfer_id: Some(event.transfer_id.into()),
                 card_id: Some(event.card_id.0.into()),
                 card: crate::serialization::serialize(&card)?,
-                source_card_id: event.source_card_id.map(|card_id| card_id.0.into()),
+                source_card_id: Some(event.source_card_id.0.into()),
             })
         }
     };
@@ -716,6 +891,491 @@ impl TryFrom<AttributeValue> for PublicAttributeValue {
     }
 }
 
+fn public_span_started_from_proto(
+    value: golem_api_grpc::proto::golem::worker::SpanStarted,
+) -> Result<PublicSpanStarted, String> {
+    Ok(PublicSpanStarted {
+        span_id: SpanId(NonZeroU64::new(value.span_id).ok_or("Span ID must be non-zero")?),
+        trace_id: TraceId::from_string(value.trace_id)?,
+        trace_states: value.trace_states,
+        parent_span_id: value
+            .parent_span_id
+            .map(|id| {
+                NonZeroU64::new(id)
+                    .map(SpanId)
+                    .ok_or("Parent span ID must be non-zero")
+            })
+            .transpose()?,
+        links: value
+            .links
+            .into_iter()
+            .map(|link| {
+                Ok(PublicSpanLink {
+                    trace_id: TraceId::from_string(link.trace_id)?,
+                    span_id: SpanId(
+                        NonZeroU64::new(link.span_id).ok_or("Link span ID must be non-zero")?,
+                    ),
+                    trace_states: link.trace_states,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        started_at: value.started_at.ok_or("Missing span started_at")?.into(),
+        attributes: value
+            .attributes
+            .into_iter()
+            .map(|(key, value)| value.try_into().map(|value| PublicAttribute { key, value }))
+            .collect::<Result<_, _>>()?,
+        kind: match golem_api_grpc::proto::golem::worker::SpanKind::try_from(value.kind)
+            .map_err(|_| "Invalid span kind")?
+        {
+            golem_api_grpc::proto::golem::worker::SpanKind::Internal => PublicSpanKind::Internal,
+            golem_api_grpc::proto::golem::worker::SpanKind::Client => PublicSpanKind::Client,
+            golem_api_grpc::proto::golem::worker::SpanKind::Server => PublicSpanKind::Server,
+        },
+    })
+}
+
+impl From<LogTraceContext> for golem_api_grpc::proto::golem::worker::LogTraceContext {
+    fn from(value: LogTraceContext) -> Self {
+        Self {
+            trace_id: value.trace_id.to_string(),
+            span_id: value.span_id.to_string(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::LogTraceContext> for LogTraceContext {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::LogTraceContext,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            trace_id: TraceId::from_string(value.trace_id)?,
+            span_id: SpanId::from_string(&value.span_id)?,
+        })
+    }
+}
+
+impl From<crate::base_model::oplog::DurableInvocationId>
+    for golem_api_grpc::proto::golem::worker::DurableInvocationId
+{
+    fn from(value: crate::base_model::oplog::DurableInvocationId) -> Self {
+        Self {
+            anchor: value.anchor.as_u64(),
+            ordinal: value.ordinal,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::DurableInvocationId>
+    for crate::base_model::oplog::DurableInvocationId
+{
+    fn from(value: golem_api_grpc::proto::golem::worker::DurableInvocationId) -> Self {
+        Self::new(OplogIndex::from_u64(value.anchor), value.ordinal)
+    }
+}
+
+impl From<DurableStreamEventSummary>
+    for golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary
+{
+    fn from(value: DurableStreamEventSummary) -> Self {
+        use golem_api_grpc::proto::golem::worker::raw_durable_stream_event_summary::{
+            Kind, Outcome,
+        };
+
+        let (kind, item_count, outcome) = match value {
+            DurableStreamEventSummary::Registered => (Kind::Registered, None, None),
+            DurableStreamEventSummary::Items { item_count } => {
+                (Kind::Items, Some(item_count), None)
+            }
+            DurableStreamEventSummary::End { outcome } => (Kind::End, None, Some(outcome)),
+            DurableStreamEventSummary::Cancelled => (Kind::Cancelled, None, None),
+            DurableStreamEventSummary::SessionResult => (Kind::SessionResult, None, None),
+            DurableStreamEventSummary::SessionFinished { outcome } => {
+                (Kind::SessionFinished, None, Some(outcome))
+            }
+            DurableStreamEventSummary::SessionCancellation => {
+                (Kind::SessionCancellation, None, None)
+            }
+            DurableStreamEventSummary::SessionExpired => (Kind::SessionExpired, None, None),
+        };
+        Self {
+            kind: kind as i32,
+            item_count,
+            outcome: outcome.map(|outcome| match outcome {
+                DurableStreamOutcome::Success => Outcome::Success as i32,
+                DurableStreamOutcome::Error => Outcome::Error as i32,
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary>
+    for DurableStreamEventSummary
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::raw_durable_stream_event_summary::{
+            Kind, Outcome,
+        };
+
+        let kind = Kind::try_from(value.kind).map_err(|error| error.to_string())?;
+        let outcome = value
+            .outcome
+            .map(
+                |outcome| match Outcome::try_from(outcome).map_err(|error| error.to_string())? {
+                    Outcome::Success => Ok::<_, String>(DurableStreamOutcome::Success),
+                    Outcome::Error => Ok(DurableStreamOutcome::Error),
+                },
+            )
+            .transpose()?;
+        match (kind, value.item_count, outcome) {
+            (Kind::Registered, None, None) => Ok(Self::Registered),
+            (Kind::Items, Some(item_count), None) => Ok(Self::Items { item_count }),
+            (Kind::End, None, Some(outcome)) => Ok(Self::End { outcome }),
+            (Kind::Cancelled, None, None) => Ok(Self::Cancelled),
+            (Kind::SessionResult, None, None) => Ok(Self::SessionResult),
+            (Kind::SessionFinished, None, Some(outcome)) => Ok(Self::SessionFinished { outcome }),
+            (Kind::SessionCancellation, None, None) => Ok(Self::SessionCancellation),
+            (Kind::SessionExpired, None, None) => Ok(Self::SessionExpired),
+            _ => Err("Invalid durable stream event summary fields".to_string()),
+        }
+    }
+}
+
+fn public_span_started_to_proto(
+    value: PublicSpanStarted,
+) -> golem_api_grpc::proto::golem::worker::SpanStarted {
+    golem_api_grpc::proto::golem::worker::SpanStarted {
+        span_id: value.span_id.0.get(),
+        trace_id: value.trace_id.to_string(),
+        trace_states: value.trace_states,
+        parent_span_id: value.parent_span_id.map(|id| id.0.get()),
+        links: value
+            .links
+            .into_iter()
+            .map(|link| golem_api_grpc::proto::golem::worker::SpanLink {
+                trace_id: link.trace_id.to_string(),
+                span_id: link.span_id.0.get(),
+                trace_states: link.trace_states,
+            })
+            .collect(),
+        started_at: Some(value.started_at.into()),
+        attributes: value
+            .attributes
+            .into_iter()
+            .map(|a| (a.key, a.value.into()))
+            .collect(),
+        kind: match value.kind {
+            PublicSpanKind::Internal => golem_api_grpc::proto::golem::worker::SpanKind::Internal,
+            PublicSpanKind::Client => golem_api_grpc::proto::golem::worker::SpanKind::Client,
+            PublicSpanKind::Server => golem_api_grpc::proto::golem::worker::SpanKind::Server,
+        } as i32,
+    }
+}
+
+fn public_span_finished_from_proto(
+    value: golem_api_grpc::proto::golem::worker::SpanFinished,
+) -> Result<PublicSpanFinished, String> {
+    Ok(PublicSpanFinished {
+        span_id: SpanId(NonZeroU64::new(value.span_id).ok_or("Span ID must be non-zero")?),
+        finished_at: value.finished_at.ok_or("Missing span finished_at")?.into(),
+        outcome: match golem_api_grpc::proto::golem::worker::SpanOutcome::try_from(value.outcome)
+            .map_err(|_| "Invalid span outcome")?
+        {
+            golem_api_grpc::proto::golem::worker::SpanOutcome::Completed => {
+                PublicSpanOutcome::Completed
+            }
+            golem_api_grpc::proto::golem::worker::SpanOutcome::Failed => PublicSpanOutcome::Failed,
+            golem_api_grpc::proto::golem::worker::SpanOutcome::Cancelled => {
+                PublicSpanOutcome::Cancelled
+            }
+            golem_api_grpc::proto::golem::worker::SpanOutcome::Abandoned => {
+                PublicSpanOutcome::Abandoned
+            }
+            golem_api_grpc::proto::golem::worker::SpanOutcome::Denied => PublicSpanOutcome::Denied,
+        },
+    })
+}
+
+fn public_span_finished_to_proto(
+    value: PublicSpanFinished,
+) -> golem_api_grpc::proto::golem::worker::SpanFinished {
+    golem_api_grpc::proto::golem::worker::SpanFinished {
+        span_id: value.span_id.0.get(),
+        finished_at: Some(value.finished_at.into()),
+        outcome: match value.outcome {
+            PublicSpanOutcome::Completed => {
+                golem_api_grpc::proto::golem::worker::SpanOutcome::Completed
+            }
+            PublicSpanOutcome::Failed => golem_api_grpc::proto::golem::worker::SpanOutcome::Failed,
+            PublicSpanOutcome::Cancelled => {
+                golem_api_grpc::proto::golem::worker::SpanOutcome::Cancelled
+            }
+            PublicSpanOutcome::Abandoned => {
+                golem_api_grpc::proto::golem::worker::SpanOutcome::Abandoned
+            }
+            PublicSpanOutcome::Denied => golem_api_grpc::proto::golem::worker::SpanOutcome::Denied,
+        } as i32,
+    }
+}
+
+fn public_span_attributes_from_proto(
+    value: golem_api_grpc::proto::golem::worker::SpanAttributes,
+) -> Result<PublicSpanAttributes, String> {
+    Ok(PublicSpanAttributes {
+        span_id: SpanId(NonZeroU64::new(value.span_id).ok_or("Span ID must be non-zero")?),
+        attributes: value
+            .attributes
+            .into_iter()
+            .map(|(key, value)| value.try_into().map(|value| PublicAttribute { key, value }))
+            .collect::<Result<_, _>>()?,
+    })
+}
+fn public_span_attributes_to_proto(
+    value: PublicSpanAttributes,
+) -> golem_api_grpc::proto::golem::worker::SpanAttributes {
+    golem_api_grpc::proto::golem::worker::SpanAttributes {
+        span_id: value.span_id.0.get(),
+        attributes: value
+            .attributes
+            .into_iter()
+            .map(|a| (a.key, a.value.into()))
+            .collect(),
+    }
+}
+
+fn raw_span_started_to_proto(
+    value: SpanStarted,
+) -> golem_api_grpc::proto::golem::worker::RawSpanStarted {
+    golem_api_grpc::proto::golem::worker::RawSpanStarted {
+        span_id: value.span_id.to_string(),
+        trace_id: value.trace_id.to_string(),
+        trace_states: value.trace_states,
+        parent_span_id: value.parent_span_id.map(|id| id.to_string()),
+        links: value
+            .links
+            .into_iter()
+            .map(|link| golem_api_grpc::proto::golem::worker::RawSpanLink {
+                trace_id: link.trace_id.to_string(),
+                span_id: link.span_id.to_string(),
+                trace_states: link.trace_states,
+            })
+            .collect(),
+        started_at: Some(value.started_at.into()),
+        attributes: value
+            .attributes
+            .0
+            .into_iter()
+            .map(|(key, value)| match value {
+                crate::model::invocation_context::AttributeValue::String(value) => (key, value),
+            })
+            .collect(),
+        kind: match value.kind {
+            SpanKind::Internal => golem_api_grpc::proto::golem::worker::RawSpanKind::Internal,
+            SpanKind::Client => golem_api_grpc::proto::golem::worker::RawSpanKind::Client,
+            SpanKind::Server => golem_api_grpc::proto::golem::worker::RawSpanKind::Server,
+        } as i32,
+    }
+}
+fn raw_span_started_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawSpanStarted,
+) -> Result<SpanStarted, String> {
+    Ok(SpanStarted {
+        span_id: SpanId::from_string(value.span_id)?,
+        trace_id: TraceId::from_string(value.trace_id)?,
+        trace_states: value.trace_states,
+        parent_span_id: value.parent_span_id.map(SpanId::from_string).transpose()?,
+        links: value
+            .links
+            .into_iter()
+            .map(|link| {
+                Ok(SpanLink {
+                    trace_id: TraceId::from_string(link.trace_id)?,
+                    span_id: SpanId::from_string(link.span_id)?,
+                    trace_states: link.trace_states,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        started_at: value.started_at.ok_or("Missing span started_at")?.into(),
+        attributes: AttributeMap(
+            value
+                .attributes
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        key,
+                        crate::model::invocation_context::AttributeValue::String(value),
+                    )
+                })
+                .collect(),
+        ),
+        kind: match golem_api_grpc::proto::golem::worker::RawSpanKind::try_from(value.kind)
+            .map_err(|_| "Invalid span kind")?
+        {
+            golem_api_grpc::proto::golem::worker::RawSpanKind::Internal => SpanKind::Internal,
+            golem_api_grpc::proto::golem::worker::RawSpanKind::Client => SpanKind::Client,
+            golem_api_grpc::proto::golem::worker::RawSpanKind::Server => SpanKind::Server,
+        },
+    })
+}
+fn raw_span_finished_to_proto(
+    value: SpanFinished,
+) -> golem_api_grpc::proto::golem::worker::RawSpanFinished {
+    golem_api_grpc::proto::golem::worker::RawSpanFinished {
+        span_id: value.span_id.to_string(),
+        finished_at: Some(value.finished_at.into()),
+        outcome: match value.outcome {
+            SpanOutcome::Completed => {
+                golem_api_grpc::proto::golem::worker::RawSpanOutcome::Completed
+            }
+            SpanOutcome::Failed => golem_api_grpc::proto::golem::worker::RawSpanOutcome::Failed,
+            SpanOutcome::Cancelled => {
+                golem_api_grpc::proto::golem::worker::RawSpanOutcome::Cancelled
+            }
+            SpanOutcome::Abandoned => {
+                golem_api_grpc::proto::golem::worker::RawSpanOutcome::Abandoned
+            }
+            SpanOutcome::Denied => golem_api_grpc::proto::golem::worker::RawSpanOutcome::Denied,
+        } as i32,
+    }
+}
+fn raw_span_finished_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawSpanFinished,
+) -> Result<SpanFinished, String> {
+    Ok(SpanFinished {
+        span_id: SpanId::from_string(value.span_id)?,
+        finished_at: value.finished_at.ok_or("Missing span finished_at")?.into(),
+        outcome: match golem_api_grpc::proto::golem::worker::RawSpanOutcome::try_from(value.outcome)
+            .map_err(|_| "Invalid span outcome")?
+        {
+            golem_api_grpc::proto::golem::worker::RawSpanOutcome::Completed => {
+                SpanOutcome::Completed
+            }
+            golem_api_grpc::proto::golem::worker::RawSpanOutcome::Failed => SpanOutcome::Failed,
+            golem_api_grpc::proto::golem::worker::RawSpanOutcome::Cancelled => {
+                SpanOutcome::Cancelled
+            }
+            golem_api_grpc::proto::golem::worker::RawSpanOutcome::Abandoned => {
+                SpanOutcome::Abandoned
+            }
+            golem_api_grpc::proto::golem::worker::RawSpanOutcome::Denied => SpanOutcome::Denied,
+        },
+    })
+}
+fn raw_span_attributes_to_proto(
+    value: SpanAttributes,
+) -> golem_api_grpc::proto::golem::worker::RawSpanAttributes {
+    golem_api_grpc::proto::golem::worker::RawSpanAttributes {
+        span_id: value.span_id.to_string(),
+        attributes: value
+            .attributes
+            .0
+            .into_iter()
+            .map(|(key, value)| match value {
+                crate::model::invocation_context::AttributeValue::String(value) => (key, value),
+            })
+            .collect(),
+    }
+}
+fn raw_span_attributes_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawSpanAttributes,
+) -> Result<SpanAttributes, String> {
+    Ok(SpanAttributes {
+        span_id: SpanId::from_string(value.span_id)?,
+        attributes: AttributeMap(
+            value
+                .attributes
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        key,
+                        crate::model::invocation_context::AttributeValue::String(value),
+                    )
+                })
+                .collect(),
+        ),
+    })
+}
+
+fn public_span_started_to_raw(value: PublicSpanStarted) -> SpanStarted {
+    SpanStarted {
+        span_id: value.span_id,
+        trace_id: value.trace_id,
+        trace_states: value.trace_states,
+        parent_span_id: value.parent_span_id,
+        links: value
+            .links
+            .into_iter()
+            .map(|link| SpanLink {
+                trace_id: link.trace_id,
+                span_id: link.span_id,
+                trace_states: link.trace_states,
+            })
+            .collect(),
+        started_at: value.started_at,
+        attributes: AttributeMap(
+            value
+                .attributes
+                .into_iter()
+                .map(|a| {
+                    (
+                        a.key,
+                        match a.value {
+                            PublicAttributeValue::String(v) => {
+                                crate::model::invocation_context::AttributeValue::String(v.value)
+                            }
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        kind: match value.kind {
+            PublicSpanKind::Internal => SpanKind::Internal,
+            PublicSpanKind::Client => SpanKind::Client,
+            PublicSpanKind::Server => SpanKind::Server,
+        },
+    }
+}
+fn public_span_finished_to_raw(value: PublicSpanFinished) -> SpanFinished {
+    SpanFinished {
+        span_id: value.span_id,
+        finished_at: value.finished_at,
+        outcome: match value.outcome {
+            PublicSpanOutcome::Completed => SpanOutcome::Completed,
+            PublicSpanOutcome::Failed => SpanOutcome::Failed,
+            PublicSpanOutcome::Cancelled => SpanOutcome::Cancelled,
+            PublicSpanOutcome::Abandoned => SpanOutcome::Abandoned,
+            PublicSpanOutcome::Denied => SpanOutcome::Denied,
+        },
+    }
+}
+fn public_span_attributes_to_raw(value: PublicSpanAttributes) -> SpanAttributes {
+    SpanAttributes {
+        span_id: value.span_id,
+        attributes: AttributeMap(
+            value
+                .attributes
+                .into_iter()
+                .map(|a| {
+                    (
+                        a.key,
+                        match a.value {
+                            PublicAttributeValue::String(v) => {
+                                crate::model::invocation_context::AttributeValue::String(v.value)
+                            }
+                        },
+                    )
+                })
+                .collect(),
+        ),
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
     type Error = String;
 
@@ -727,6 +1387,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .agent_id
                     .ok_or("Missing agent_id field")?
                     .try_into()?,
+                owner_kind: crate::model::agent::OwnerKind::try_from(create.owner_kind)?,
                 agent_mode: golem_api_grpc::proto::golem::component::AgentMode::try_from(
                     create.agent_mode,
                 )
@@ -781,18 +1442,35 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .durable_function_type
                     .ok_or("Missing durable_function_type field")?
                     .try_into()?,
+                span_started: start
+                    .span_started
+                    .map(public_span_started_from_proto)
+                    .transpose()?,
+                denial: start.denial,
             })),
             oplog_entry::Entry::End(end) => Ok(PublicOplogEntry::End(EndParams {
                 timestamp: end.timestamp.ok_or("Missing timestamp field")?.into(),
                 start_index: crate::base_model::OplogIndex::from_u64(end.start_index),
                 response: end.response.map(TryInto::try_into).transpose()?,
                 forced_commit: end.forced_commit,
+                span_finished: end
+                    .span_finished
+                    .map(public_span_finished_from_proto)
+                    .transpose()?,
+                span_attributes: end
+                    .span_attributes
+                    .map(public_span_attributes_from_proto)
+                    .transpose()?,
             })),
             oplog_entry::Entry::Cancelled(cancelled) => {
                 Ok(PublicOplogEntry::Cancelled(CancelledParams {
                     timestamp: cancelled.timestamp.ok_or("Missing timestamp field")?.into(),
                     start_index: crate::base_model::OplogIndex::from_u64(cancelled.start_index),
                     partial: cancelled.partial.map(TryInto::try_into).transpose()?,
+                    span_finished: cancelled
+                        .span_finished
+                        .map(public_span_finished_from_proto)
+                        .transpose()?,
                 }))
             }
             oplog_entry::Entry::CompletionDiscarded(completion_discarded) => Ok(
@@ -827,10 +1505,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .invocation
                         .ok_or("Missing invocation field")?
                         .try_into()?,
-                    wallet_pin: agent_invocation_started
-                        .wallet_pin
-                        .map(public_invocation_wallet_pin_from_proto)
-                        .transpose()?,
+                    wallet_pin: public_invocation_wallet_pin_from_proto(
+                        agent_invocation_started
+                            .wallet_pin
+                            .ok_or("Missing wallet_pin field")?,
+                    )?,
                 }),
             ),
             oplog_entry::Entry::AgentInvocationFinished(agent_invocation_finished) => Ok(
@@ -853,17 +1532,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             })),
             oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
+                kind: oplog_error_kind_from_proto(error.kind)?,
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
-                inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error
                     .retry_policy_state
                     .map(TryInto::try_into)
                     .transpose()?,
             })),
-            oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
-                timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
-            })),
+            oplog_entry::Entry::RecoverySucceeded(recovery_succeeded) => Ok(
+                PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
+                    timestamp: recovery_succeeded
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                }),
+            ),
             oplog_entry::Entry::Jump(jump) => Ok(PublicOplogEntry::Jump(JumpParams {
                 timestamp: jump.timestamp.ok_or("Missing timestamp field")?.into(),
                 jump: OplogRegion {
@@ -882,24 +1566,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::Exited(exited) => Ok(PublicOplogEntry::Exited(ExitedParams {
                 timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
-            oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => Ok(
-                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
-                    timestamp: begin_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                }),
-            ),
-            oplog_entry::Entry::EndAtomicRegion(end_atomic_region) => {
-                Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                    timestamp: end_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    begin_index: OplogIndex::from_u64(end_atomic_region.begin_index),
-                }))
-            }
-
             oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
                 PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                     timestamp: pending_worker_invocation
@@ -923,6 +1589,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .update_description
                         .ok_or("Missing update_description field")?
                         .try_into()?,
+                    update_attempt_index: OplogIndex::from_u64(pending_update.update_attempt_index),
                 }))
             }
             oplog_entry::Entry::SuccessfulUpdate(successful_update) => {
@@ -940,6 +1607,23 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                             .map(|pr| pr.try_into())
                             .collect::<Result<Vec<_>, _>>()?,
                     ),
+                    snapshot_assisted_details: successful_update
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            Ok::<_, String>(PublicSnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_revision_start_index: OplogIndex::from_u64(
+                                    details.source_revision_start_index,
+                                ),
+                                snapshot_index: OplogIndex::from_u64(details.snapshot_index),
+                            })
+                        })
+                        .transpose()?,
                 }))
             }
             oplog_entry::Entry::FailedUpdate(failed_update) => {
@@ -950,6 +1634,26 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     target_revision: failed_update.target_revision.try_into()?,
                     details: failed_update.details,
+                    update_attempt_index: failed_update
+                        .update_attempt_index
+                        .map(OplogIndex::from_u64),
+                    snapshot_assisted_details: failed_update
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            Ok::<_, String>(PublicFailedSnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_revision_start_index: OplogIndex::from_u64(
+                                    details.source_revision_start_index,
+                                ),
+                                snapshot_index: OplogIndex::from_u64(details.snapshot_index),
+                            })
+                        })
+                        .transpose()?,
                 }))
             }
             oplog_entry::Entry::GrowMemory(grow_memory) => {
@@ -988,9 +1692,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 timestamp: log.timestamp.ok_or("Missing timestamp field")?.into(),
                 context: log.context,
                 message: log.message,
+                trace_context: log.trace_context.map(TryInto::try_into).transpose()?,
             })),
             oplog_entry::Entry::Restart(restart) => Ok(PublicOplogEntry::Restart(RestartParams {
                 timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
+            })),
+            oplog_entry::Entry::Resumed(resumed) => Ok(PublicOplogEntry::Resumed(ResumedParams {
+                timestamp: resumed.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
             oplog_entry::Entry::ActivatePlugin(activate) => {
                 Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
@@ -1026,52 +1734,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                 }),
             ),
-            Entry::StartSpan(start) => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
-                timestamp: start.timestamp.ok_or("Missing timestamp field")?.into(),
-                span_id: SpanId(
-                    NonZeroU64::new(start.span_id).ok_or("Span ID cannot be zero".to_string())?,
-                ),
-                parent_id: start
-                    .parent_id
-                    .map(|id| {
-                        NonZeroU64::new(id)
-                            .ok_or("Span ID cannot be zero".to_string())
-                            .map(SpanId)
-                    })
-                    .transpose()?,
-                linked_context: start
-                    .linked_context
-                    .map(|id| {
-                        NonZeroU64::new(id)
-                            .ok_or("Span ID cannot be zero".to_string())
-                            .map(SpanId)
-                    })
-                    .transpose()?,
-                attributes: start
-                    .attributes
-                    .into_iter()
-                    .map(|(key, value)| value.try_into().map(|v| PublicAttribute { key, value: v }))
-                    .collect::<Result<Vec<PublicAttribute>, String>>()?,
-            })),
-            Entry::FinishSpan(finish) => Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
-                timestamp: finish.timestamp.ok_or("Missing timestamp field")?.into(),
-                span_id: SpanId(
-                    NonZeroU64::new(finish.span_id).ok_or("Span ID cannot be zero".to_string())?,
-                ),
-            })),
-            Entry::SetSpanAttribute(set) => {
-                Ok(PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
-                    timestamp: set.timestamp.ok_or("Missing timestamp field")?.into(),
-                    span_id: SpanId(
-                        NonZeroU64::new(set.span_id).ok_or("Span ID cannot be zero".to_string())?,
-                    ),
-                    key: set.key,
-                    value: set
-                        .value
-                        .ok_or("Missing attribute value".to_string())?
-                        .try_into()?,
-                }))
-            }
             oplog_entry::Entry::BeginRemoteTransaction(value) => Ok(
                 PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1152,8 +1814,15 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
                     timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
                     data,
+                    filesystem_snapshot: snapshot.filesystem_snapshot,
                 }))
             }
+            oplog_entry::Entry::SnapshotConfirmed(value) => Ok(
+                PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    filesystem_snapshot: value.filesystem_snapshot,
+                }),
+            ),
             oplog_entry::Entry::OplogProcessorCheckpoint(value) => Ok(
                 PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1252,7 +1921,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .transfer_id
                         .ok_or("Missing transfer_id field")?
                         .into(),
-                    source_card_id: params.source_card_id.map(|id| CardId(id.into())),
+                    source_card_id: CardId(
+                        params
+                            .source_card_id
+                            .ok_or("Missing source_card_id field")?
+                            .into(),
+                    ),
                     installed_card_id: CardId(
                         params
                             .installed_card_id
@@ -1317,6 +1991,40 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     payload: params.payload.ok_or("Missing payload field")?.try_into()?,
                 }))
             }
+            oplog_entry::Entry::ToolAttachmentControl(params) => {
+                let attachment = params
+                    .attachment
+                    .ok_or("Missing attachment field")?
+                    .try_into()?;
+                let transition = params
+                    .transition
+                    .ok_or("Missing transition field")?
+                    .try_into()?;
+                decode_attachment_control(&attachment, &transition)?;
+                Ok(PublicOplogEntry::ToolAttachmentControl(
+                    crate::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                        timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                        attachment,
+                        transition,
+                    },
+                ))
+            }
+            oplog_entry::Entry::ToolAttachmentRead(params) => {
+                let observation = params
+                    .observation
+                    .ok_or("Missing observation field")?
+                    .try_into()?;
+                decode_attachment_observation(&observation)?
+                    .validate_payload_presence(params.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(PublicOplogEntry::ToolAttachmentRead(
+                    crate::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                        timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                        observation,
+                        payload: params.payload,
+                    },
+                ))
+            }
             oplog_entry::Entry::StreamRegistered(params) => {
                 Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1361,6 +2069,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         agent_id: Some(create.agent_id.into()),
+                        owner_kind: create.owner_kind.into(),
                         agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(
                             create.agent_mode,
                         ) as i32,
@@ -1396,6 +2105,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         observational_owner: start.observational_owner.map(|id| id.as_u64()),
                         request: start.request.map(TryInto::try_into).transpose()?,
                         durable_function_type: Some(start.durable_function_type.into()),
+                        span_started: start.span_started.map(public_span_started_to_proto),
+                        denial: start.denial,
                     },
                 )),
             },
@@ -1406,6 +2117,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         start_index: end.start_index.as_u64(),
                         response: end.response.map(TryInto::try_into).transpose()?,
                         forced_commit: end.forced_commit,
+                        span_finished: end.span_finished.map(public_span_finished_to_proto),
+                        span_attributes: end.span_attributes.map(public_span_attributes_to_proto),
                     },
                 )),
             },
@@ -1416,6 +2129,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(cancelled.timestamp.into()),
                             start_index: cancelled.start_index.as_u64(),
                             partial: cancelled.partial.map(TryInto::try_into).transpose()?,
+                            span_finished: cancelled
+                                .span_finished
+                                .map(public_span_finished_to_proto),
                         },
                     )),
                 }
@@ -1446,9 +2162,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::AgentInvocationStartedParameters {
                             timestamp: Some(agent_invocation_started.timestamp.into()),
                             invocation: Some(agent_invocation_started.invocation.try_into()?),
-                            wallet_pin: agent_invocation_started
-                                .wallet_pin
-                                .map(public_invocation_wallet_pin_to_proto),
+                            wallet_pin: Some(public_invocation_wallet_pin_to_proto(
+                                agent_invocation_started.wallet_pin,
+                            )),
                         },
                     )),
                 }
@@ -1479,20 +2195,22 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 entry: Some(oplog_entry::Entry::Error(
                     golem_api_grpc::proto::golem::worker::ErrorParameters {
                         timestamp: Some(error.timestamp.into()),
+                        kind: oplog_error_kind_to_proto(error.kind) as i32,
                         error: error.error,
                         retry_from: error.retry_from.0,
-                        inside_atomic_region: error.inside_atomic_region,
                         retry_policy_state: error.retry_policy_state.map(Into::into),
                     },
                 )),
             },
-            PublicOplogEntry::NoOp(no_op) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::NoOp(
-                    golem_api_grpc::proto::golem::worker::TimestampParameter {
-                        timestamp: Some(no_op.timestamp.into()),
-                    },
-                )),
-            },
+            PublicOplogEntry::RecoverySucceeded(recovery_succeeded) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::RecoverySucceeded(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(recovery_succeeded.timestamp.into()),
+                        },
+                    )),
+                }
+            }
             PublicOplogEntry::Jump(jump) => golem_api_grpc::proto::golem::worker::OplogEntry {
                 entry: Some(oplog_entry::Entry::Jump(
                     golem_api_grpc::proto::golem::worker::JumpParameters {
@@ -1518,26 +2236,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::BeginAtomicRegion(begin_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::BeginAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(begin_atomic_region.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::EndAtomicRegion(end_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::EndAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::EndAtomicRegionParameters {
-                            timestamp: Some(end_atomic_region.timestamp.into()),
-                            begin_index: end_atomic_region.begin_index.into(),
-                        },
-                    )),
-                }
-            }
-
             PublicOplogEntry::PendingAgentInvocation(pending_worker_invocation) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::PendingAgentInvocation(
@@ -1555,6 +2253,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(pending_update.timestamp.into()),
                             target_revision: pending_update.target_revision.into(),
                             update_description: Some(pending_update.description.into()),
+                            update_attempt_index: pending_update.update_attempt_index.into(),
                         },
                     )),
                 }
@@ -1571,6 +2270,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                 .into_iter()
                                 .map(Into::into)
                                 .collect(),
+                            snapshot_assisted_details: successful_update
+                                .snapshot_assisted_details
+                                .map(|details| {
+                                    golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateDetails {
+                                        pending_update_index: details.pending_update_index.into(),
+                                        source_component_revision: details.source_component_revision.into(),
+                                        source_revision_start_index: details.source_revision_start_index.into(),
+                                        snapshot_index: details.snapshot_index.into(),
+                                    }
+                                }),
                         },
                     )),
                 }
@@ -1582,6 +2291,19 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(failed_update.timestamp.into()),
                             target_revision: failed_update.target_revision.into(),
                             details: failed_update.details,
+                            update_attempt_index: failed_update
+                                .update_attempt_index
+                                .map(Into::into),
+                            snapshot_assisted_details: failed_update
+                                .snapshot_assisted_details
+                                .map(|details| {
+                                    golem_api_grpc::proto::golem::worker::FailedSnapshotAssistedUpdateDetails {
+                                        pending_update_index: details.pending_update_index.into(),
+                                        source_component_revision: details.source_component_revision.into(),
+                                        source_revision_start_index: details.source_revision_start_index.into(),
+                                        snapshot_index: details.snapshot_index.into(),
+                                    }
+                                }),
                         },
                     )),
                 }
@@ -1629,6 +2351,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         ) as i32,
                         context: log.context,
                         message: log.message,
+                        trace_context: log.trace_context.map(Into::into),
                     },
                 )),
             },
@@ -1637,6 +2360,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::Restart(
                         golem_api_grpc::proto::golem::worker::TimestampParameter {
                             timestamp: Some(restart.timestamp.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::Resumed(resumed) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Resumed(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(resumed.timestamp.into()),
                         },
                     )),
                 }
@@ -1676,45 +2408,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CancelInvocationParameters {
                             timestamp: Some(cancel.timestamp.into()),
                             idempotency_key: Some(cancel.idempotency_key.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::StartSpan(start) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::StartSpan(
-                        golem_api_grpc::proto::golem::worker::StartSpanParameters {
-                            timestamp: Some(start.timestamp.into()),
-                            span_id: start.span_id.0.get(),
-                            parent_id: start.parent_id.map(|id| id.0.get()),
-                            linked_context: start.linked_context.map(|id| id.0.get()),
-                            attributes: start
-                                .attributes
-                                .into_iter()
-                                .map(|attr| (attr.key, attr.value.into()))
-                                .collect(),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::FinishSpan(finish) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::FinishSpan(
-                        golem_api_grpc::proto::golem::worker::FinishSpanParameters {
-                            timestamp: Some(finish.timestamp.into()),
-                            span_id: finish.span_id.0.get(),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::SetSpanAttribute(set) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::SetSpanAttribute(
-                        golem_api_grpc::proto::golem::worker::SetSpanAttributeParameters {
-                            timestamp: Some(set.timestamp.into()),
-                            span_id: set.span_id.0.get(),
-                            key: set.key,
-                            value: Some(set.value.into()),
                         },
                     )),
                 }
@@ -1827,6 +2520,17 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::SnapshotDataParameters {
                             timestamp: Some(snapshot.timestamp.into()),
                             data: Some(data),
+                            filesystem_snapshot: snapshot.filesystem_snapshot,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::SnapshotConfirmed(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::SnapshotConfirmed(
+                        golem_api_grpc::proto::golem::worker::SnapshotConfirmedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            filesystem_snapshot: params.filesystem_snapshot,
                         },
                     )),
                 }
@@ -1947,7 +2651,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CardTransferredParameters {
                             timestamp: Some(params.timestamp.into()),
                             transfer_id: Some(params.transfer_id.into()),
-                            source_card_id: params.source_card_id.map(|id| id.0.into()),
+                            source_card_id: Some(params.source_card_id.0.into()),
                             installed_card_id: Some(params.installed_card_id.0.into()),
                             target_holder: Some(card_holder_to_proto(params.target_holder)),
                             target_wallet_generation: params.target_wallet_generation,
@@ -2016,6 +2720,28 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ToolAttachmentControl(
+                        golem_api_grpc::proto::golem::worker::ToolAttachmentControlParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            attachment: Some(params.attachment.try_into()?),
+                            transition: Some(params.transition.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ToolAttachmentRead(
+                        golem_api_grpc::proto::golem::worker::ToolAttachmentReadParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            observation: Some(params.observation.try_into()?),
+                            payload: params.payload,
+                        },
+                    )),
+                }
+            }
             PublicOplogEntry::StreamItems(params) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::StreamItems(
@@ -2068,7 +2794,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
     fn try_from(
         value: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
     ) -> Result<Self, Self::Error> {
-        match value.r#type() {
+        match wrapped_function_type::Type::try_from(value.r#type).map_err(|err| err.to_string())? {
             wrapped_function_type::Type::ReadLocal => {
                 Ok(PublicDurableFunctionType::ReadLocal(Empty {}))
             }
@@ -2081,18 +2807,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
             wrapped_function_type::Type::WriteRemote => {
                 Ok(PublicDurableFunctionType::WriteRemote(Empty {}))
             }
-            wrapped_function_type::Type::WriteRemoteBatched => Ok(
-                PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
-                    index: value.oplog_index.map(OplogIndex::from_u64),
-                }),
-            ),
-            wrapped_function_type::Type::WriteRemoteTransaction => {
-                Ok(PublicDurableFunctionType::WriteRemoteTransaction(
-                    WriteRemoteTransactionParameters {
-                        index: value.oplog_index.map(OplogIndex::from_u64),
-                    },
-                ))
-            }
         }
     }
 }
@@ -2103,37 +2817,21 @@ impl From<PublicDurableFunctionType> for golem_api_grpc::proto::golem::worker::W
             PublicDurableFunctionType::ReadLocal(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::ReadLocal as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::WriteLocal(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::WriteLocal as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::ReadRemote(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::ReadRemote as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::WriteRemote(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::WriteRemote as i32,
-                    oplog_index: None,
-                }
-            }
-            PublicDurableFunctionType::WriteRemoteBatched(parameters) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
-                    oplog_index: parameters.index.map(|index| index.into()),
-                }
-            }
-            PublicDurableFunctionType::WriteRemoteTransaction(parameters) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemoteTransaction as i32,
-                    oplog_index: parameters.index.map(|index| index.into()),
                 }
             }
         }
@@ -2219,6 +2917,24 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                         function_input,
                         trace_id: TraceId::from_string(method.trace_id)?,
                         trace_states: method.trace_states,
+                        invocation_context,
+                    },
+                ))
+            }
+            Invocation::ExternalTool(tool) => {
+                let input = tool.input.ok_or("Missing input field")?.try_into()?;
+                let invocation_context = encode_public_span_data(tool.invocation_context)?;
+                Ok(PublicAgentInvocation::ExternalTool(
+                    ExternalToolInvocationParameters {
+                        idempotency_key: tool
+                            .idempotency_key
+                            .ok_or("Missing idempotency_key field")?
+                            .into(),
+                        tool_name: tool.tool_name,
+                        command_path: tool.command_path,
+                        input,
+                        trace_id: TraceId::from_string(tool.trace_id)?,
+                        trace_states: tool.trace_states,
                         invocation_context,
                     },
                 ))
@@ -2322,8 +3038,22 @@ impl TryFrom<PublicAgentInvocation>
                     },
                 )
             }
+            PublicAgentInvocation::ExternalTool(tool) => {
+                let invocation_context = decode_public_span_data(&tool.invocation_context, 0);
+                Invocation::ExternalTool(
+                    golem_api_grpc::proto::golem::worker::PublicExternalToolInvocation {
+                        idempotency_key: Some(tool.idempotency_key.into()),
+                        tool_name: tool.tool_name,
+                        command_path: tool.command_path,
+                        input: Some(tool.input.try_into()?),
+                        trace_id: tool.trace_id.to_string(),
+                        trace_states: tool.trace_states,
+                        invocation_context,
+                    },
+                )
+            }
             PublicAgentInvocation::SaveSnapshot(_) => {
-                Invocation::SaveSnapshot(golem_api_grpc::proto::golem::common::Empty {})
+                Invocation::SaveSnapshot(golem_schema::proto::golem::common::Empty {})
             }
             PublicAgentInvocation::LoadSnapshot(load) => {
                 let snapshot_data = match load.snapshot {
@@ -2415,6 +3145,51 @@ impl TryFrom<PublicAgentInvocation>
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicExternalToolResult>
+    for PublicExternalToolResult
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicExternalToolResult,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_external_tool_result::Result;
+        match value.result.ok_or("Missing external tool result")? {
+            Result::Success(success) => Ok(Self::Success(SerializableToolInvocationResult {
+                result: success
+                    .result
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .map(Box::new),
+            })),
+            Result::Error(error) => Ok(Self::Failure(tool_rpc_error_from_proto(error)?)),
+        }
+    }
+}
+
+impl TryFrom<PublicExternalToolResult>
+    for golem_api_grpc::proto::golem::worker::PublicExternalToolResult
+{
+    type Error = String;
+
+    fn try_from(value: PublicExternalToolResult) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_external_tool_result::Result;
+        let result = match value {
+            PublicExternalToolResult::Success(result) => Result::Success(
+                golem_api_grpc::proto::golem::worker::PublicToolInvocationResult {
+                    result: result.result.map(|value| (*value).try_into()).transpose()?,
+                },
+            ),
+            PublicExternalToolResult::Failure(error) => {
+                Result::Error(tool_rpc_error_to_proto(error)?)
+            }
+        };
+        Ok(Self {
+            result: Some(result),
+        })
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
     for PublicAgentInvocationResult
 {
@@ -2437,6 +3212,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                     AgentInvocationOutputParameters { output },
                 ))
             }
+            ProtoResult::ExternalTool(tool) => Ok(PublicAgentInvocationResult::ExternalTool(
+                ExternalToolResultParameters {
+                    result: tool.try_into()?,
+                },
+            )),
             ProtoResult::ManualUpdate(_) => Ok(PublicAgentInvocationResult::ManualUpdate(Empty {})),
             ProtoResult::LoadSnapshot(opt_err) => Ok(PublicAgentInvocationResult::LoadSnapshot(
                 FallibleResultParameters {
@@ -2515,8 +3295,11 @@ impl TryFrom<PublicAgentInvocationResult>
             PublicAgentInvocationResult::AgentMethod(output) => {
                 ProtoResult::AgentMethodOutput(output.output.try_into()?)
             }
+            PublicAgentInvocationResult::ExternalTool(tool) => {
+                ProtoResult::ExternalTool(tool.result.try_into()?)
+            }
             PublicAgentInvocationResult::ManualUpdate(_) => {
-                ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})
+                ProtoResult::ManualUpdate(golem_schema::proto::golem::common::Empty {})
             }
             PublicAgentInvocationResult::LoadSnapshot(fallible) => {
                 ProtoResult::LoadSnapshot(golem_api_grpc::proto::golem::worker::OptionalError {
@@ -2606,6 +3389,87 @@ impl TryFrom<PublicAgentInvocationResult>
     }
 }
 
+fn tool_rpc_error_from_proto(
+    value: golem_api_grpc::proto::golem::worker::PublicToolRpcError,
+) -> Result<SerializableToolRpcError, String> {
+    use golem_api_grpc::proto::golem::worker::public_tool_error::Error as ToolError;
+    use golem_api_grpc::proto::golem::worker::public_tool_rpc_error::Error as RpcError;
+    Ok(match value.error.ok_or("Missing tool RPC error")? {
+        RpcError::ProtocolError(value) => SerializableToolRpcError::ProtocolError(value),
+        RpcError::Denied(value) => SerializableToolRpcError::Denied(value),
+        RpcError::NotFound(value) => SerializableToolRpcError::NotFound(value),
+        RpcError::RemoteInternalError(value) => {
+            SerializableToolRpcError::RemoteInternalError(value)
+        }
+        RpcError::Cancelled(_) => SerializableToolRpcError::Cancelled,
+        RpcError::ResourceExhausted(value) => SerializableToolRpcError::ResourceExhausted(value),
+        RpcError::RemoteToolError(value) => SerializableToolRpcError::RemoteToolError(Box::new(
+            match value.error.ok_or("Missing remote tool error")? {
+                ToolError::InvalidToolName(value) => SerializableToolError::InvalidToolName(value),
+                ToolError::InvalidCommandPath(value) => {
+                    SerializableToolError::InvalidCommandPath(value.values)
+                }
+                ToolError::InvalidInput(value) => SerializableToolError::InvalidInput(value),
+                ToolError::ConstraintViolation(value) => {
+                    SerializableToolError::ConstraintViolation(value)
+                }
+                ToolError::InvalidResult(value) => SerializableToolError::InvalidResult(value),
+                ToolError::CustomError(value) => {
+                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                        name: value.name,
+                        payload: value
+                            .payload
+                            .ok_or("Missing custom tool error payload")?
+                            .try_into()?,
+                    }))
+                }
+            },
+        )),
+    })
+}
+
+fn tool_rpc_error_to_proto(
+    value: SerializableToolRpcError,
+) -> Result<golem_api_grpc::proto::golem::worker::PublicToolRpcError, String> {
+    use golem_api_grpc::proto::golem::worker::public_tool_error::Error as ToolError;
+    use golem_api_grpc::proto::golem::worker::public_tool_rpc_error::Error as RpcError;
+    let error = match value {
+        SerializableToolRpcError::ProtocolError(value) => RpcError::ProtocolError(value),
+        SerializableToolRpcError::Denied(value) => RpcError::Denied(value),
+        SerializableToolRpcError::NotFound(value) => RpcError::NotFound(value),
+        SerializableToolRpcError::RemoteInternalError(value) => {
+            RpcError::RemoteInternalError(value)
+        }
+        SerializableToolRpcError::Cancelled => {
+            RpcError::Cancelled(golem_schema::proto::golem::common::Empty {})
+        }
+        SerializableToolRpcError::ResourceExhausted(value) => RpcError::ResourceExhausted(value),
+        SerializableToolRpcError::RemoteToolError(value) => {
+            let error = match *value {
+                SerializableToolError::InvalidToolName(value) => ToolError::InvalidToolName(value),
+                SerializableToolError::InvalidCommandPath(values) => ToolError::InvalidCommandPath(
+                    golem_api_grpc::proto::golem::worker::StringList { values },
+                ),
+                SerializableToolError::InvalidInput(value) => ToolError::InvalidInput(value),
+                SerializableToolError::ConstraintViolation(value) => {
+                    ToolError::ConstraintViolation(value)
+                }
+                SerializableToolError::InvalidResult(value) => ToolError::InvalidResult(value),
+                SerializableToolError::CustomError(value) => ToolError::CustomError(
+                    golem_api_grpc::proto::golem::worker::PublicCustomToolError {
+                        name: value.name,
+                        payload: Some(value.payload.try_into()?),
+                    },
+                ),
+            };
+            RpcError::RemoteToolError(golem_api_grpc::proto::golem::worker::PublicToolError {
+                error: Some(error),
+            })
+        }
+    };
+    Ok(golem_api_grpc::proto::golem::worker::PublicToolRpcError { error: Some(error) })
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for PublicUpdateDescription {
     type Error = String;
 
@@ -2616,11 +3480,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
             golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(_) => {
                 Ok(PublicUpdateDescription::Automatic(Empty {}))
             }
+            golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotAssistedAutomatic(_) => {
+                Ok(PublicUpdateDescription::SnapshotAssistedAutomatic(
+                    SnapshotAssistedAutomaticUpdateParameters {},
+                ))
+            }
             golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
                 snapshot_based,
             ) => Ok(PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: snapshot_based.payload,
                 mime_type: snapshot_based.mime_type,
+                filesystem_snapshot: snapshot_based.filesystem_snapshot,
             })),
         }
     }
@@ -2632,10 +3502,19 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
             PublicUpdateDescription::Automatic(_) => golem_api_grpc::proto::golem::worker::UpdateDescription {
                 description: Some(
                     golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(
-                        golem_api_grpc::proto::golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             },
+            PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+                golem_api_grpc::proto::golem::worker::UpdateDescription {
+                    description: Some(
+                        golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotAssistedAutomatic(
+                            golem_schema::proto::golem::common::Empty {},
+                        ),
+                    ),
+                }
+            }
             PublicUpdateDescription::SnapshotBased(snapshot_based) => {
                 golem_api_grpc::proto::golem::worker::UpdateDescription {
                     description: Some(
@@ -2643,6 +3522,7 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
                             golem_api_grpc::proto::golem::worker::SnapshotBasedUpdateParameters {
                                 payload: snapshot_based.payload,
                                 mime_type: snapshot_based.mime_type,
+                                filesystem_snapshot: snapshot_based.filesystem_snapshot,
                             }
                         ),
                     ),
@@ -2759,6 +3639,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             oplog_index: OplogIndex::from_u64(value.oplog_index),
+            attribution: value
+                .attribution
+                .ok_or("Missing field: attribution")?
+                .try_into()?,
             entry: value.entry.ok_or("Missing field: entry")?.try_into()?,
         })
     }
@@ -2773,7 +3657,265 @@ impl TryFrom<PublicOplogEntryWithIndex>
         Ok(Self {
             oplog_index: value.oplog_index.into(),
             entry: Some(value.entry.try_into()?),
+            attribution: Some(value.attribution.into()),
         })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogPageEntry> for PublicOplogPageEntry {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::OplogPageEntry,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::oplog_page_entry::Entry;
+
+        match value.entry.ok_or("Missing field: entry")? {
+            Entry::Included(entry) => Ok(PublicOplogPageEntry::Included(entry.try_into()?)),
+            Entry::Omitted(omitted) => Ok(PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+                oplog_index: OplogIndex::from_u64(omitted.oplog_index),
+                attribution: omitted
+                    .attribution
+                    .ok_or("Missing field: attribution")?
+                    .try_into()?,
+                timestamp: omitted.timestamp.ok_or("Missing field: timestamp")?.into(),
+                entry_type: omitted.entry_type,
+                size: omitted.size,
+                component_revision: omitted.component_revision.try_into()?,
+            })),
+        }
+    }
+}
+
+impl TryFrom<PublicOplogPageEntry> for golem_api_grpc::proto::golem::worker::OplogPageEntry {
+    type Error = String;
+
+    fn try_from(value: PublicOplogPageEntry) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::oplog_page_entry::Entry;
+
+        let entry = match value {
+            PublicOplogPageEntry::Included(entry) => Entry::Included(entry.try_into()?),
+            PublicOplogPageEntry::Omitted(omitted) => {
+                Entry::Omitted(golem_api_grpc::proto::golem::worker::OmittedOplogEntry {
+                    oplog_index: omitted.oplog_index.into(),
+                    attribution: Some(omitted.attribution.into()),
+                    timestamp: Some(omitted.timestamp.into()),
+                    entry_type: omitted.entry_type,
+                    size: omitted.size,
+                    component_revision: omitted.component_revision.into(),
+                })
+            }
+        };
+        Ok(Self { entry: Some(entry) })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicOplogEntryAttribution>
+    for PublicOplogEntryAttribution
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicOplogEntryAttribution,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_oplog_entry_attribution::Attribution;
+
+        match value.attribution.ok_or("Missing oplog entry attribution")? {
+            Attribution::Agent(_) => Ok(Self::agent()),
+            Attribution::Entity(context) => Ok(Self::entity(context.try_into()?)),
+        }
+    }
+}
+
+impl From<PublicOplogEntryAttribution>
+    for golem_api_grpc::proto::golem::worker::PublicOplogEntryAttribution
+{
+    fn from(value: PublicOplogEntryAttribution) -> Self {
+        use golem_api_grpc::proto::golem::worker::public_oplog_entry_attribution::Attribution;
+
+        let attribution = match value {
+            PublicOplogEntryAttribution::Agent(_) => {
+                Attribution::Agent(golem_schema::proto::golem::common::Empty {})
+            }
+            PublicOplogEntryAttribution::Entity(context) => Attribution::Entity(context.into()),
+        };
+        Self {
+            attribution: Some(attribution),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicEntityInvocationContext>
+    for PublicEntityInvocationContext
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicEntityInvocationContext,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            invocation: value
+                .invocation
+                .ok_or("Missing entity invocation")?
+                .try_into()?,
+            ancestors: value
+                .ancestors
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<PublicEntityInvocationContext>
+    for golem_api_grpc::proto::golem::worker::PublicEntityInvocationContext
+{
+    fn from(value: PublicEntityInvocationContext) -> Self {
+        Self {
+            invocation: Some(value.invocation.into()),
+            ancestors: value.ancestors.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicEntityInvocation>
+    for PublicEntityInvocation
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicEntityInvocation,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::PublicEntityCallMode as ProtoCallMode;
+
+        let call_mode = match ProtoCallMode::try_from(value.call_mode)
+            .map_err(|_| format!("Invalid PublicEntityCallMode: {}", value.call_mode))?
+        {
+            ProtoCallMode::Synchronous => PublicEntityCallMode::Synchronous,
+            ProtoCallMode::Asynchronous => PublicEntityCallMode::Asynchronous,
+            ProtoCallMode::FireAndForget => PublicEntityCallMode::FireAndForget,
+            ProtoCallMode::Unspecified => {
+                return Err("Unspecified PublicEntityCallMode".to_string());
+            }
+        };
+        let start_index = value.start_index.ok_or("Missing entity start index")?;
+        if start_index == 0 {
+            return Err("Invalid entity start index: 0".to_string());
+        }
+        Ok(Self {
+            entity: value
+                .entity
+                .ok_or("Missing public agent entity")?
+                .try_into()?,
+            start_index: OplogIndex::from_u64(start_index),
+            call_mode,
+            operation: value.operation.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+impl From<PublicEntityInvocation> for golem_api_grpc::proto::golem::worker::PublicEntityInvocation {
+    fn from(value: PublicEntityInvocation) -> Self {
+        use golem_api_grpc::proto::golem::worker::PublicEntityCallMode as ProtoCallMode;
+
+        let call_mode = match value.call_mode {
+            PublicEntityCallMode::Synchronous => ProtoCallMode::Synchronous,
+            PublicEntityCallMode::Asynchronous => ProtoCallMode::Asynchronous,
+            PublicEntityCallMode::FireAndForget => ProtoCallMode::FireAndForget,
+        };
+        Self {
+            entity: Some(value.entity.into()),
+            start_index: Some(value.start_index.into()),
+            call_mode: call_mode as i32,
+            operation: value.operation.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentEntity> for PublicAgentEntity {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicAgentEntity,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::PublicAgentEntityKind as ProtoKind;
+
+        let kind = match ProtoKind::try_from(value.kind)
+            .map_err(|_| format!("Invalid PublicAgentEntityKind: {}", value.kind))?
+        {
+            ProtoKind::Tool => PublicAgentEntityKind::Tool,
+            ProtoKind::ToolMiddleware => PublicAgentEntityKind::ToolMiddleware,
+            ProtoKind::Unspecified => return Err("Unspecified PublicAgentEntityKind".to_string()),
+        };
+        Ok(Self {
+            kind,
+            name: value.name,
+        })
+    }
+}
+
+impl From<PublicAgentEntity> for golem_api_grpc::proto::golem::worker::PublicAgentEntity {
+    fn from(value: PublicAgentEntity) -> Self {
+        use golem_api_grpc::proto::golem::worker::PublicAgentEntityKind as ProtoKind;
+
+        let kind = match value.kind {
+            PublicAgentEntityKind::Tool => ProtoKind::Tool,
+            PublicAgentEntityKind::ToolMiddleware => ProtoKind::ToolMiddleware,
+        };
+        Self {
+            kind: kind as i32,
+            name: value.name,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicEntityInvocationOperation>
+    for PublicEntityInvocationOperation
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicEntityInvocationOperation,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_entity_invocation_operation::Operation;
+
+        match value
+            .operation
+            .ok_or("Missing entity invocation operation")?
+        {
+            Operation::Tool(tool) => Ok(Self::Tool(PublicToolInvocationOperation {
+                command_path: tool.command_path,
+                has_stdin: tool.has_stdin,
+                has_stdout: tool.has_stdout,
+                declares_stdout: tool.declares_stdout,
+                has_stderr: tool.has_stderr,
+                declares_stderr: tool.declares_stderr,
+            })),
+        }
+    }
+}
+
+impl From<PublicEntityInvocationOperation>
+    for golem_api_grpc::proto::golem::worker::PublicEntityInvocationOperation
+{
+    fn from(value: PublicEntityInvocationOperation) -> Self {
+        use golem_api_grpc::proto::golem::worker::public_entity_invocation_operation::Operation;
+
+        let operation = match value {
+            PublicEntityInvocationOperation::Tool(tool) => Operation::Tool(
+                golem_api_grpc::proto::golem::worker::PublicToolInvocationOperation {
+                    command_path: tool.command_path,
+                    has_stdin: tool.has_stdin,
+                    has_stdout: tool.has_stdout,
+                    declares_stdout: tool.declares_stdout,
+                    has_stderr: tool.has_stderr,
+                    declares_stderr: tool.declares_stderr,
+                },
+            ),
+        };
+        Self {
+            operation: Some(operation),
+        }
     }
 }
 
@@ -2788,7 +3930,7 @@ impl From<PublicRetryPolicyState> for golem_api_grpc::proto::golem::worker::Retr
         let state = match value {
             PublicRetryPolicyState::Counter(c) => State::Counter(c.count),
             PublicRetryPolicyState::Terminal(_) => {
-                State::Terminal(golem_api_grpc::proto::golem::common::Empty {})
+                State::Terminal(golem_schema::proto::golem::common::Empty {})
             }
             PublicRetryPolicyState::Wrapper(w) => {
                 State::Wrapper(Box::new(RetryPolicyStateWrapper {
@@ -2895,27 +4037,30 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
         match value {
             PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
                 timestamp: create.timestamp,
-                agent_id: create.agent_id,
-                agent_mode: create.agent_mode,
-                component_revision: create.component_revision,
-                env: create.env.into_iter().collect(),
-                environment_id: create.environment_id,
-                created_by: create.created_by,
-                local_agent_config: create
-                    .local_agent_config
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-                parent: create.parent,
-                component_size: create.component_size,
-                initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                initial_active_plugins: create
-                    .initial_active_plugins
-                    .into_iter()
-                    .map(|p| p.environment_plugin_grant_id)
-                    .collect(),
-                original_phantom_id: create.original_phantom_id,
-                instance_id: create.instance_id
+                parameters: Box::new(CreateParameters {
+                    agent_id: create.agent_id,
+                    owner_kind: create.owner_kind,
+                    agent_mode: create.agent_mode,
+                    component_revision: create.component_revision,
+                    env: create.env.into_iter().collect(),
+                    environment_id: create.environment_id,
+                    created_by: create.created_by,
+                    local_agent_config: create
+                        .local_agent_config
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    parent: create.parent,
+                    component_size: create.component_size,
+                    initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                    initial_active_plugins: create
+                        .initial_active_plugins
+                        .into_iter()
+                        .map(|p| p.environment_plugin_grant_id)
+                        .collect(),
+                    original_phantom_id: create.original_phantom_id,
+                    instance_id: create.instance_id,
+                }),
             }),
             PublicOplogEntry::Start(start) => {
                 let durable_function_type = match start.durable_function_type {
@@ -2923,12 +4068,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     PublicDurableFunctionType::WriteLocal(_) => DurableFunctionType::WriteLocal,
                     PublicDurableFunctionType::ReadRemote(_) => DurableFunctionType::ReadRemote,
                     PublicDurableFunctionType::WriteRemote(_) => DurableFunctionType::WriteRemote,
-                    PublicDurableFunctionType::WriteRemoteBatched(params) => {
-                        DurableFunctionType::WriteRemoteBatched(params.index)
-                    }
-                    PublicDurableFunctionType::WriteRemoteTransaction(params) => {
-                        DurableFunctionType::WriteRemoteTransaction(params.index)
-                    }
                 };
 
                 let request = start
@@ -2947,6 +4086,11 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     observational_owner: start.observational_owner,
                     request,
                     durable_function_type,
+                    span_started: start
+                        .span_started
+                        .map(public_span_started_to_raw)
+                        .map(Box::new),
+                    denial: start.denial,
                 })
             }
             PublicOplogEntry::End(end) => {
@@ -2964,6 +4108,8 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     start_index: end.start_index,
                     response,
                     forced_commit: end.forced_commit,
+                    span_finished: end.span_finished.map(public_span_finished_to_raw),
+                    span_attributes: end.span_attributes.map(public_span_attributes_to_raw),
                 })
             }
             PublicOplogEntry::Cancelled(cancelled) => {
@@ -2975,6 +4121,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     timestamp: cancelled.timestamp,
                     start_index: cancelled.start_index,
                     partial,
+                    span_finished: cancelled.span_finished.map(public_span_finished_to_raw),
                 })
             }
             PublicOplogEntry::CompletionDiscarded(completion_discarded) => {
@@ -3007,16 +4154,18 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }),
             PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
                 timestamp: error.timestamp,
+                entity_parent_start_index: None,
+                kind: error.kind,
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
-                inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
             }),
-            PublicOplogEntry::NoOp(p) => Ok(OplogEntry::NoOp {
+            PublicOplogEntry::RecoverySucceeded(p) => Ok(OplogEntry::RecoverySucceeded {
                 timestamp: p.timestamp,
             }),
             PublicOplogEntry::Jump(jump) => Ok(OplogEntry::Jump {
                 timestamp: jump.timestamp,
+                entity_parent_start_index: None,
                 jump: jump.jump,
             }),
             PublicOplogEntry::Interrupted(p) => Ok(OplogEntry::Interrupted {
@@ -3025,16 +4174,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Exited(p) => Ok(OplogEntry::Exited {
                 timestamp: p.timestamp,
             }),
-            PublicOplogEntry::BeginAtomicRegion(p) => {
-                Ok(OplogEntry::BeginAtomicRegion { timestamp: p.timestamp })
-            }
-            PublicOplogEntry::EndAtomicRegion(p) => {
-                Ok(OplogEntry::EndAtomicRegion {
-                    timestamp: p.timestamp,
-                    begin_index: p.begin_index,
-                })
-            }
-
             PublicOplogEntry::PendingAgentInvocation(_) => {
                 Err("Cannot convert PendingAgentInvocation from public to raw oplog entry".to_string())
             }
@@ -3053,12 +4192,30 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     new_component_size: p.new_component_size,
                     new_total_linear_memory_size: None,
                     new_active_plugins,
+                    snapshot_assisted_details: p.snapshot_assisted_details.map(|details| {
+                        SnapshotAssistedUpdateDetails {
+                            pending_update_index: details.pending_update_index,
+                            source_component_revision: details.source_component_revision,
+                            source_revision_start_index: details.source_revision_start_index,
+                            snapshot_index: details.snapshot_index,
+                        }
+                    }),
                 })
             }
             PublicOplogEntry::FailedUpdate(p) => Ok(OplogEntry::FailedUpdate {
                 timestamp: p.timestamp,
                 target_revision: p.target_revision,
                 details: p.details,
+                update_attempt_index: p.update_attempt_index,
+                snapshot_assisted_details: p.snapshot_assisted_details.map(|details| {
+                    FailedSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index,
+                        source_component_revision: details.source_component_revision,
+                        source_revision_start_index: details.source_revision_start_index,
+                        snapshot_index: details.snapshot_index,
+                    }
+                }),
+                snapshot_fault: None,
             }),
             PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp: p.timestamp,
@@ -3066,6 +4223,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }),
             PublicOplogEntry::CreateResource(p) => Ok(OplogEntry::CreateResource {
                 timestamp: p.timestamp,
+                entity_parent_start_index: None,
                 id: p.id,
                 resource_type_id: ResourceTypeId {
                     owner: p.owner,
@@ -3074,6 +4232,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }),
             PublicOplogEntry::DropResource(p) => Ok(OplogEntry::DropResource {
                 timestamp: p.timestamp,
+                entity_parent_start_index: None,
                 id: p.id,
                 resource_type_id: ResourceTypeId {
                     owner: p.owner,
@@ -3086,8 +4245,12 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 level: p.level,
                 context: p.context,
                 message: p.message,
+                trace_context: p.trace_context,
             }),
             PublicOplogEntry::Restart(p) => Ok(OplogEntry::Restart {
+                timestamp: p.timestamp,
+            }),
+            PublicOplogEntry::Resumed(p) => Ok(OplogEntry::Resumed {
                 timestamp: p.timestamp,
             }),
             PublicOplogEntry::ActivatePlugin(p) => Ok(OplogEntry::ActivatePlugin {
@@ -3108,31 +4271,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     idempotency_key: p.idempotency_key,
                 })
             }
-            PublicOplogEntry::StartSpan(p) => Ok(OplogEntry::StartSpan {
-                timestamp: p.timestamp,
-                parent_start_index: None,
-                span_id: p.span_id,
-                parent: p.parent_id,
-                linked_context_id: p.linked_context,
-                attributes: p
-                    .attributes
-                    .into_iter()
-                    .map(|attr| (attr.key, attr.value.into()))
-                    .collect::<HashMap<_, _>>()
-                    .into(),
-            }),
-            PublicOplogEntry::FinishSpan(p) => Ok(OplogEntry::FinishSpan {
-                timestamp: p.timestamp,
-                parent_start_index: None,
-                span_id: p.span_id,
-            }),
-            PublicOplogEntry::SetSpanAttribute(p) => Ok(OplogEntry::SetSpanAttribute {
-                timestamp: p.timestamp,
-                parent_start_index: None,
-                span_id: p.span_id,
-                key: p.key,
-                value: p.value.into(),
-            }),
             PublicOplogEntry::BeginRemoteTransaction(_) => {
                 Err("Cannot convert BeginRemoteTransaction from public to raw oplog entry"
                     .to_string())
@@ -3213,8 +4351,16 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     mime_type,
                     active_cards: Vec::new(),
                     wallet_generation: 0,
+                    filesystem_snapshot: p
+                        .filesystem_snapshot
+                        .map(|name| name.parse())
+                        .transpose()?,
                 })
             }
+            PublicOplogEntry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {
+                timestamp: p.timestamp,
+                filesystem_snapshot: p.filesystem_snapshot.parse()?,
+            }),
             PublicOplogEntry::OplogProcessorCheckpoint(p) => {
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp: p.timestamp,
@@ -3227,14 +4373,17 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }
             PublicOplogEntry::SetRetryPolicy(p) => Ok(OplogEntry::SetRetryPolicy {
                 timestamp: p.timestamp,
-                policy: p.policy.into(),
+                entity_parent_start_index: None,
+                policy: Box::new(p.policy.into()),
             }),
             PublicOplogEntry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
                 timestamp: p.timestamp,
+                entity_parent_start_index: None,
                 name: p.name,
             }),
             PublicOplogEntry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
                 timestamp: p.timestamp,
+                entity_parent_start_index: None,
                 queued_event_index: p.queued_event_index,
                 card_id: p.card_id,
                 wallet_generation: p.wallet_generation,
@@ -3262,12 +4411,14 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }
             PublicOplogEntry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
                 timestamp: p.timestamp,
+                entity_parent_start_index: None,
                 queued_event_index: p.queued_event_index,
                 card_id: p.card_id,
                 reason: p.reason,
             }),
             PublicOplogEntry::CardExpired(p) => Ok(OplogEntry::CardExpired {
                 timestamp: p.timestamp,
+                entity_parent_start_index: None,
                 card_id: p.card_id,
                 wallet_generation: p.wallet_generation,
             }),
@@ -3286,45 +4437,75 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 use crate::schema::FromSchema as _;
                 Ok(OplogEntry::StreamRegistered {
                     timestamp: p.timestamp,
-                    record: OplogPayload::Inline(Box::new(StreamRegisteredRecordV1::from_value(
+                    entity_parent_start_index: None,
+                    summary: Some(DurableStreamEventSummary::Registered),
+                    record: OplogPayload::Inline(Box::new(StreamRegisteredRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
+                })
+            }
+            PublicOplogEntry::ToolAttachmentControl(p) => {
+                let (attachment, transition) = decode_attachment_control(&p.attachment, &p.transition)?;
+                Ok(OplogEntry::ToolAttachmentControl {
+                    timestamp: p.timestamp,
+                    entity_parent_start_index: None,
+                    attachment,
+                    transition,
+                })
+            }
+            PublicOplogEntry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(&p.observation)?;
+                observation.validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp: p.timestamp,
+                    entity_parent_start_index: None,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(|bytes| OplogPayload::Inline(Box::new(bytes))),
                 })
             }
             PublicOplogEntry::StreamItems(p) => {
                 use crate::schema::FromSchema as _;
+                let record = StreamItemsRecord::from_value(p.record.value())
+                    .map_err(|error| error.to_string())?;
                 Ok(OplogEntry::StreamItems {
                     timestamp: p.timestamp,
-                    record: OplogPayload::Inline(Box::new(StreamItemsRecordV1::from_value(
-                        p.record.value(),
-                    ).map_err(|error| error.to_string())?)),
+                    entity_parent_start_index: None,
+                    summary: Some(DurableStreamEventSummary::items(&record)),
+                    record: OplogPayload::Inline(Box::new(record)),
                 })
             }
             PublicOplogEntry::StreamEnd(p) => {
                 use crate::schema::FromSchema as _;
+                let record = StreamEndRecord::from_value(p.record.value())
+                    .map_err(|error| error.to_string())?;
                 Ok(OplogEntry::StreamEnd {
                     timestamp: p.timestamp,
-                    record: OplogPayload::Inline(Box::new(StreamEndRecordV1::from_value(
-                        p.record.value(),
-                    ).map_err(|error| error.to_string())?)),
+                    entity_parent_start_index: None,
+                    summary: Some(DurableStreamEventSummary::end(&record)),
+                    record: OplogPayload::Inline(Box::new(record)),
                 })
             }
             PublicOplogEntry::StreamCancel(p) => {
                 use crate::schema::FromSchema as _;
                 Ok(OplogEntry::StreamCancel {
                     timestamp: p.timestamp,
-                    record: OplogPayload::Inline(Box::new(StreamCancelRecordV1::from_value(
+                    entity_parent_start_index: None,
+                    summary: Some(DurableStreamEventSummary::Cancelled),
+                    record: OplogPayload::Inline(Box::new(StreamCancelRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
                 })
             }
             PublicOplogEntry::StreamSession(p) => {
                 use crate::schema::FromSchema as _;
+                let record = StreamSessionRecord::from_value(p.record.value())
+                    .map_err(|error| error.to_string())?;
                 Ok(OplogEntry::StreamSession {
                     timestamp: p.timestamp,
-                    record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::from_value(
-                        p.record.value(),
-                    ).map_err(|error| error.to_string())?)),
+                    entity_parent_start_index: None,
+                    summary: DurableStreamEventSummary::session(&record),
+                    record: OplogPayload::Inline(Box::new(record)),
                 })
             }
         }
@@ -3341,6 +4522,14 @@ fn public_agent_invocation_result_to_raw(
         PublicAgentInvocationResult::AgentMethod(params) => {
             Ok(AgentInvocationResult::AgentMethod {
                 output: params.output.into_parts().1,
+            })
+        }
+        PublicAgentInvocationResult::ExternalTool(params) => {
+            Ok(AgentInvocationResult::ExternalTool {
+                result: match params.result {
+                    PublicExternalToolResult::Success(result) => Ok(result),
+                    PublicExternalToolResult::Failure(error) => Err(error),
+                },
             })
         }
         PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
@@ -3576,37 +4765,21 @@ fn durable_function_type_to_proto(
         DurableFunctionType::ReadLocal => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::ReadLocal as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::WriteLocal => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::WriteLocal as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::ReadRemote => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::ReadRemote as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::WriteRemote => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::WriteRemote as i32,
-                oplog_index: None,
-            }
-        }
-        DurableFunctionType::WriteRemoteBatched(idx) => {
-            golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
-                oplog_index: idx.map(|i| i.into()),
-            }
-        }
-        DurableFunctionType::WriteRemoteTransaction(idx) => {
-            golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                r#type: wrapped_function_type::Type::WriteRemoteTransaction as i32,
-                oplog_index: idx.map(|i| i.into()),
             }
         }
     }
@@ -3616,17 +4789,11 @@ fn durable_function_type_from_proto(
     wft: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
 ) -> Result<DurableFunctionType, String> {
     use golem_api_grpc::proto::golem::worker::wrapped_function_type;
-    match wft.r#type() {
+    match wrapped_function_type::Type::try_from(wft.r#type).map_err(|err| err.to_string())? {
         wrapped_function_type::Type::ReadLocal => Ok(DurableFunctionType::ReadLocal),
         wrapped_function_type::Type::WriteLocal => Ok(DurableFunctionType::WriteLocal),
         wrapped_function_type::Type::ReadRemote => Ok(DurableFunctionType::ReadRemote),
         wrapped_function_type::Type::WriteRemote => Ok(DurableFunctionType::WriteRemote),
-        wrapped_function_type::Type::WriteRemoteBatched => Ok(
-            DurableFunctionType::WriteRemoteBatched(wft.oplog_index.map(OplogIndex::from_u64)),
-        ),
-        wrapped_function_type::Type::WriteRemoteTransaction => Ok(
-            DurableFunctionType::WriteRemoteTransaction(wft.oplog_index.map(OplogIndex::from_u64)),
-        ),
     }
 }
 
@@ -3635,22 +4802,69 @@ fn update_description_to_proto(
 ) -> Result<golem_api_grpc::proto::golem::worker::RawUpdateDescription, String> {
     use crate::model::oplog::raw_types::UpdateDescription;
     use golem_api_grpc::proto::golem::worker::raw_update_description::Description;
-    use golem_api_grpc::proto::golem::worker::{RawSnapshotBasedUpdate, RawUpdateDescription};
+    use golem_api_grpc::proto::golem::worker::{
+        RawSnapshotAssistedAutomaticUpdate, RawSnapshotBasedUpdate, RawUpdateDescription,
+    };
     match desc {
         UpdateDescription::Automatic { target_revision } => Ok(RawUpdateDescription {
             description: Some(Description::AutomaticTargetRevision(target_revision.into())),
+        }),
+        UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision,
+            source_component_revision,
+            source_revision_start_index,
+            snapshot_index,
+            snapshot_revision,
+            filesystem_snapshot,
+        } => Ok(RawUpdateDescription {
+            description: Some(Description::SnapshotAssistedAutomatic(
+                RawSnapshotAssistedAutomaticUpdate {
+                    target_revision: target_revision.into(),
+                    source_component_revision: source_component_revision.into(),
+                    source_revision_start_index: source_revision_start_index.into(),
+                    snapshot_index: snapshot_index.into(),
+                    snapshot_revision: snapshot_revision.into(),
+                    filesystem_snapshot: filesystem_snapshot.map(String::from),
+                },
+            )),
         }),
         UpdateDescription::SnapshotBased {
             target_revision,
             payload,
             mime_type,
+            filesystem_snapshot,
         } => Ok(RawUpdateDescription {
             description: Some(Description::SnapshotBased(RawSnapshotBasedUpdate {
                 target_revision: target_revision.into(),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 mime_type,
+                filesystem_snapshot: filesystem_snapshot.map(String::from),
             })),
         }),
+    }
+}
+
+fn raw_snapshot_fault_to_proto(
+    fault: crate::model::oplog::raw_types::SnapshotFault,
+) -> golem_api_grpc::proto::golem::worker::RawSnapshotFault {
+    use crate::model::oplog::raw_types::SnapshotFault;
+    use golem_api_grpc::proto::golem::worker::RawSnapshotFault;
+    match fault {
+        SnapshotFault::Unavailable => RawSnapshotFault::Unavailable,
+        SnapshotFault::Incompatible => RawSnapshotFault::Incompatible,
+    }
+}
+
+fn raw_snapshot_fault_from_proto(
+    value: i32,
+) -> Result<crate::model::oplog::raw_types::SnapshotFault, String> {
+    use crate::model::oplog::raw_types::SnapshotFault;
+    use golem_api_grpc::proto::golem::worker::RawSnapshotFault;
+    match RawSnapshotFault::try_from(value)
+        .map_err(|_| format!("Invalid snapshot fault: {value}"))?
+    {
+        RawSnapshotFault::Unavailable => Ok(SnapshotFault::Unavailable),
+        RawSnapshotFault::Incompatible => Ok(SnapshotFault::Incompatible),
     }
 }
 
@@ -3666,6 +4880,24 @@ fn update_description_from_proto(
         Description::AutomaticTargetRevision(rev) => Ok(UpdateDescription::Automatic {
             target_revision: rev.try_into().map_err(|e: String| e)?,
         }),
+        Description::SnapshotAssistedAutomatic(update) => {
+            Ok(UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: update.target_revision.try_into().map_err(|e: String| e)?,
+                source_component_revision: update
+                    .source_component_revision
+                    .try_into()
+                    .map_err(|e: String| e)?,
+                source_revision_start_index: OplogIndex::from_u64(
+                    update.source_revision_start_index,
+                ),
+                snapshot_index: OplogIndex::from_u64(update.snapshot_index),
+                snapshot_revision: update.snapshot_revision.try_into().map_err(|e: String| e)?,
+                filesystem_snapshot: update
+                    .filesystem_snapshot
+                    .map(|name| name.parse())
+                    .transpose()?,
+            })
+        }
         Description::SnapshotBased(snap) => Ok(UpdateDescription::SnapshotBased {
             target_revision: snap.target_revision.try_into().map_err(|e: String| e)?,
             payload: oplog_payload_from_proto(
@@ -3673,6 +4905,10 @@ fn update_description_from_proto(
                     .ok_or("Missing payload in SnapshotBasedUpdate")?,
             )?,
             mime_type: snap.mime_type,
+            filesystem_snapshot: snap
+                .filesystem_snapshot
+                .map(|name| name.parse())
+                .transpose()?,
         }),
     }
 }
@@ -3695,61 +4931,68 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCardTransferredParameters, RawCompletionDeliveredParameters,
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
             RawDeactivatePluginParameters, RawDropResourceParameters,
-            RawDurableStreamRecordParameters, RawEndAtomicRegionParameters, RawEndParameters,
-            RawEnvVar, RawErrorParameters, RawFailedUpdateParameters, RawFinishSpanParameters,
+            RawDurableStreamRecordParameters, RawEndParameters, RawEnvVar, RawErrorParameters,
+            RawFailedSnapshotAssistedUpdateDetails, RawFailedUpdateParameters,
             RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
             RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
             RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
-            RawRevertParameters, RawSetRetryPolicyParameters, RawSetSpanAttributeParameters,
-            RawSnapshotParameters, RawStartParameters, RawStartSpanParameters,
+            RawRevertParameters, RawSetRetryPolicyParameters, RawSnapshotAssistedUpdateDetails,
+            RawSnapshotConfirmedParameters, RawSnapshotParameters, RawStartParameters,
             RawSuccessfulUpdateParameters, RawTimestampOnly,
         };
 
         let timestamp = value.timestamp();
+        let entity_parent_start_index = value
+            .entity_parent_start_index()
+            .map(|index| index.as_u64());
         let proto_ts: prost_types::Timestamp = timestamp.into();
 
         let entry = match value {
-            OplogEntry::Create {
-                agent_id,
-                agent_mode,
-                component_revision,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                local_agent_config,
-                original_phantom_id,
-                instance_id,
-                ..
-            } => Entry::Create(RawCreateParameters {
-                agent_id: Some(agent_id.into()),
-                agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
-                    as i32,
-                component_revision: component_revision.into(),
-                env: env
-                    .into_iter()
-                    .map(|(k, v)| RawEnvVar { key: k, value: v })
-                    .collect(),
-                environment_id: Some(environment_id.into()),
-                created_by: Some(created_by.into()),
-                parent: parent.map(Into::into),
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins: initial_active_plugins
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                local_agent_config: local_agent_config
-                    .into_iter()
-                    .map(|e| crate::serialization::serialize(&e))
-                    .collect::<Result<Vec<_>, _>>()?,
-                original_phantom_id: original_phantom_id.map(Into::into),
-                instance_id: Some(instance_id.into()),
-            }),
+            OplogEntry::Create { parameters, .. } => {
+                let CreateParameters {
+                    agent_id,
+                    owner_kind,
+                    agent_mode,
+                    component_revision,
+                    env,
+                    environment_id,
+                    created_by,
+                    parent,
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins,
+                    local_agent_config,
+                    original_phantom_id,
+                    instance_id,
+                } = *parameters;
+                Entry::Create(RawCreateParameters {
+                    agent_id: Some(agent_id.into()),
+                    owner_kind: owner_kind.into(),
+                    agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
+                        as i32,
+                    component_revision: component_revision.into(),
+                    env: env
+                        .into_iter()
+                        .map(|(k, v)| RawEnvVar { key: k, value: v })
+                        .collect(),
+                    environment_id: Some(environment_id.into()),
+                    created_by: Some(created_by.into()),
+                    parent: parent.map(Into::into),
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins: initial_active_plugins
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    local_agent_config: local_agent_config
+                        .into_iter()
+                        .map(|e| crate::serialization::serialize(&e))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    original_phantom_id: original_phantom_id.map(Into::into),
+                    instance_id: Some(instance_id.into()),
+                })
+            }
             OplogEntry::Start {
                 parent_start_index,
                 function_name,
@@ -3757,6 +5000,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 observational_owner,
                 request,
                 durable_function_type,
+                span_started,
+                denial,
                 ..
             } => Entry::Start(RawStartParameters {
                 parent_start_index: parent_start_index.map(|id| id.as_u64()),
@@ -3765,24 +5010,32 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 observational_owner: observational_owner.map(|id| id.as_u64()),
                 request: request.map(oplog_payload_to_proto).transpose()?,
                 durable_function_type: Some(durable_function_type_to_proto(durable_function_type)),
+                span_started: span_started.map(|span| raw_span_started_to_proto(*span)),
+                denial,
             }),
             OplogEntry::End {
                 start_index,
                 response,
                 forced_commit,
+                span_finished,
+                span_attributes,
                 ..
             } => Entry::End(RawEndParameters {
                 start_index: start_index.as_u64(),
                 response: response.map(oplog_payload_to_proto).transpose()?,
                 forced_commit,
+                span_finished: span_finished.map(raw_span_finished_to_proto),
+                span_attributes: span_attributes.map(raw_span_attributes_to_proto),
             }),
             OplogEntry::Cancelled {
                 start_index,
                 partial,
+                span_finished,
                 ..
             } => Entry::Cancelled(RawCancelledParameters {
                 start_index: start_index.as_u64(),
                 partial: partial.map(oplog_payload_to_proto).transpose()?,
+                span_finished: span_finished.map(raw_span_finished_to_proto),
             }),
             OplogEntry::CompletionDiscarded { start_index, .. } => {
                 Entry::CompletionDiscarded(RawCompletionDiscardedParameters {
@@ -3811,7 +5064,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .into_iter()
                     .map(span_data_to_proto)
                     .collect(),
-                wallet_pin: wallet_pin.map(invocation_wallet_pin_to_proto),
+                wallet_pin: Some(invocation_wallet_pin_to_proto(*wallet_pin)),
             }),
             OplogEntry::AgentInvocationFinished {
                 result,
@@ -3827,20 +5080,20 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::Suspend { .. } => Entry::Suspend(RawTimestampOnly {}),
             OplogEntry::Error {
+                kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
+                kind: oplog_error_kind_to_proto(kind) as i32,
                 retry_from: retry_from.into(),
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
                     .transpose()?,
             }),
-            OplogEntry::NoOp { .. } => Entry::NoOp(RawTimestampOnly {}),
+            OplogEntry::RecoverySucceeded { .. } => Entry::RecoverySucceeded(RawTimestampOnly {}),
             OplogEntry::Jump { jump, .. } => Entry::Jump(RawJumpParameters {
                 jump: Some(RawOplogRegion {
                     start: jump.start.into(),
@@ -3849,13 +5102,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::Interrupted { .. } => Entry::Interrupted(RawTimestampOnly {}),
             OplogEntry::Exited { .. } => Entry::Exited(RawTimestampOnly {}),
-            OplogEntry::BeginAtomicRegion { .. } => Entry::BeginAtomicRegion(RawTimestampOnly {}),
-            OplogEntry::EndAtomicRegion { begin_index, .. } => {
-                Entry::EndAtomicRegion(RawEndAtomicRegionParameters {
-                    begin_index: begin_index.into(),
-                })
-            }
-
             OplogEntry::PendingAgentInvocation {
                 idempotency_key,
                 payload,
@@ -3873,30 +5119,56 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .map(span_data_to_proto)
                     .collect(),
             }),
-            OplogEntry::PendingUpdate { description, .. } => {
-                Entry::PendingUpdate(RawPendingUpdateParameters {
-                    description: Some(update_description_to_proto(description)?),
-                })
-            }
+            OplogEntry::PendingUpdate {
+                description,
+                update_attempt_index,
+                ..
+            } => Entry::PendingUpdate(RawPendingUpdateParameters {
+                description: Some(update_description_to_proto(description)?),
+                update_attempt_index: update_attempt_index.map(Into::into),
+            }),
             OplogEntry::SuccessfulUpdate {
                 target_revision,
                 new_component_size,
                 new_total_linear_memory_size,
                 new_active_plugins,
+                snapshot_assisted_details,
                 ..
             } => Entry::SuccessfulUpdate(RawSuccessfulUpdateParameters {
                 target_revision: target_revision.into(),
                 new_component_size,
                 new_total_linear_memory_size,
                 new_active_plugins: new_active_plugins.into_iter().map(Into::into).collect(),
+                snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                    RawSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index.into(),
+                        source_component_revision: details.source_component_revision.into(),
+                        source_revision_start_index: details.source_revision_start_index.into(),
+                        snapshot_index: details.snapshot_index.into(),
+                    }
+                }),
             }),
             OplogEntry::FailedUpdate {
                 target_revision,
                 details,
+                snapshot_assisted_details,
+                update_attempt_index,
+                snapshot_fault,
                 ..
             } => Entry::FailedUpdate(RawFailedUpdateParameters {
                 target_revision: target_revision.into(),
                 details,
+                snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                    RawFailedSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index.into(),
+                        source_component_revision: details.source_component_revision.into(),
+                        source_revision_start_index: details.source_revision_start_index.into(),
+                        snapshot_index: details.snapshot_index.into(),
+                    }
+                }),
+                update_attempt_index: update_attempt_index.map(Into::into),
+                snapshot_fault: snapshot_fault
+                    .map(|fault| raw_snapshot_fault_to_proto(fault) as i32),
             }),
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
@@ -3928,6 +5200,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 level,
                 context,
                 message,
+                trace_context,
                 ..
             } => Entry::Log(RawLogParameters {
                 level: Into::<golem_api_grpc::proto::golem::worker::OplogLogLevel>::into(level)
@@ -3935,8 +5208,10 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 context,
                 message,
                 parent_start_index: parent_start_index.map(|index| index.as_u64()),
+                trace_context: trace_context.map(Into::into),
             }),
             OplogEntry::Restart { .. } => Entry::Restart(RawTimestampOnly {}),
+            OplogEntry::Resumed { .. } => Entry::Resumed(RawTimestampOnly {}),
             OplogEntry::ActivatePlugin {
                 plugin_grant_id, ..
             } => Entry::ActivatePlugin(RawActivatePluginParameters {
@@ -3958,60 +5233,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             } => Entry::CancelPendingInvocation(RawCancelPendingInvocationParameters {
                 idempotency_key: Some(idempotency_key.into()),
             }),
-            OplogEntry::StartSpan {
-                parent_start_index,
-                span_id,
-                parent,
-                linked_context_id,
-                attributes,
-                ..
-            } => Entry::StartSpan(RawStartSpanParameters {
-                span_id: span_id.to_string(),
-                parent: parent.map(|id| id.to_string()),
-                linked_context_id: linked_context_id.map(|id: SpanId| id.to_string()),
-                attributes: attributes
-                    .0
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            match v {
-                                crate::model::invocation_context::AttributeValue::String(s) => s,
-                            },
-                        )
-                    })
-                    .collect(),
-                parent_start_index: parent_start_index.map(|index| index.as_u64()),
-            }),
-            OplogEntry::FinishSpan {
-                parent_start_index,
-                span_id,
-                ..
-            } => Entry::FinishSpan(RawFinishSpanParameters {
-                span_id: span_id.to_string(),
-                parent_start_index: parent_start_index.map(|index| index.as_u64()),
-            }),
-            OplogEntry::SetSpanAttribute {
-                parent_start_index,
-                span_id,
-                key,
-                value,
-                ..
-            } => Entry::SetSpanAttribute(RawSetSpanAttributeParameters {
-                span_id: span_id.to_string(),
-                key,
-                value: match value {
-                    crate::model::invocation_context::AttributeValue::String(s) => s,
-                },
-                parent_start_index: parent_start_index.map(|index| index.as_u64()),
-            }),
             OplogEntry::BeginRemoteTransaction {
                 transaction_id,
                 original_begin_index,
                 ..
             } => Entry::BeginRemoteTransaction(RawBeginRemoteTransactionParameters {
                 transaction_id: String::from(transaction_id),
-                original_begin_index: original_begin_index.map(|i: OplogIndex| i.into()),
+                original_begin_index: original_begin_index.into(),
             }),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. } => {
                 Entry::PreCommitRemoteTransaction(RawRemoteTransactionParameters {
@@ -4038,6 +5266,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 mime_type,
                 active_cards,
                 wallet_generation,
+                filesystem_snapshot,
                 ..
             } => Entry::Snapshot(RawSnapshotParameters {
                 data: Some(oplog_payload_to_proto(data)?),
@@ -4047,6 +5276,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .map(|card| crate::serialization::serialize(&card))
                     .collect::<Result<Vec<_>, _>>()?,
                 wallet_generation,
+                filesystem_snapshot: filesystem_snapshot.map(String::from),
+            }),
+            OplogEntry::SnapshotConfirmed {
+                filesystem_snapshot,
+                ..
+            } => Entry::SnapshotConfirmed(RawSnapshotConfirmedParameters {
+                filesystem_snapshot: filesystem_snapshot.into(),
             }),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
@@ -4064,7 +5300,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::SetRetryPolicy { policy, .. } => {
                 Entry::SetRetryPolicy(RawSetRetryPolicyParameters {
-                    policy: Some(policy.into()),
+                    policy: Some((*policy).into()),
                 })
             }
             OplogEntry::RemoveRetryPolicy { name, .. } => {
@@ -4075,23 +5311,25 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 queued_event_index,
                 card_id,
                 wallet_generation,
+                ..
             } => Entry::CardRevoked(RawCardRevokedParameters {
                 timestamp: Some(timestamp.into()),
                 queued_event_index: queued_event_index.into(),
                 card_id: Some(card_id.0.into()),
                 wallet_generation,
             }),
-            OplogEntry::CardEventQueued { timestamp, event } => {
-                Entry::CardEventQueued(RawCardEventQueuedParameters {
-                    timestamp: Some(timestamp.into()),
-                    event: Some(raw_queued_card_event_to_proto(event)?),
-                })
-            }
+            OplogEntry::CardEventQueued {
+                timestamp, event, ..
+            } => Entry::CardEventQueued(RawCardEventQueuedParameters {
+                timestamp: Some(timestamp.into()),
+                event: Some(raw_queued_card_event_to_proto(*event)?),
+            }),
             OplogEntry::CardInstalled {
                 timestamp,
                 queued_event_index,
                 card,
                 wallet_generation,
+                ..
             } => Entry::CardInstalled(RawCardInstalledParameters {
                 timestamp: Some(timestamp.into()),
                 queued_event_index: queued_event_index.map(Into::into),
@@ -4103,6 +5341,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 queued_event_index,
                 card_id,
                 reason,
+                ..
             } => Entry::CardInstallFailed(RawCardInstallFailedParameters {
                 timestamp: Some(timestamp.into()),
                 queued_event_index: queued_event_index.into(),
@@ -4113,6 +5352,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp,
                 card,
                 wallet_generation,
+                ..
             } => Entry::CardDerived(RawCardDerivedParameters {
                 timestamp: Some(timestamp.into()),
                 card: crate::serialization::serialize(&card)?,
@@ -4125,11 +5365,12 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 source_holder,
                 target_holder,
                 source_wallet_generation,
+                ..
             } => Entry::CardTransferStarted(RawCardTransferStartedParameters {
                 timestamp: Some(timestamp.into()),
                 transfer_id: Some(transfer_id.into()),
                 card_id: Some(card_id.0.into()),
-                source_holder: source_holder.map(card_holder_to_proto),
+                source_holder: Some(card_holder_to_proto(source_holder)),
                 target_holder: Some(card_holder_to_proto(target_holder)),
                 source_wallet_generation,
             }),
@@ -4141,6 +5382,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 target_holder,
                 card,
                 target_wallet_generation,
+                ..
             } => {
                 if card.card_id() != installed_card_id {
                     return Err(
@@ -4150,7 +5392,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 Entry::CardTransferred(RawCardTransferredParameters {
                     timestamp: Some(timestamp.into()),
                     transfer_id: Some(transfer_id.into()),
-                    source_card_id: source_card_id.map(|id| id.0.into()),
+                    source_card_id: Some(source_card_id.0.into()),
                     installed_card_id: Some(installed_card_id.0.into()),
                     target_holder: Some(card_holder_to_proto(target_holder)),
                     card: crate::serialization::serialize(&card)?,
@@ -4162,6 +5404,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 revoked_card_ids,
                 affected_wallets,
                 local_wallet_generation,
+                ..
             } => Entry::CardRevokedCascade(RawCardRevokedCascadeParameters {
                 timestamp: Some(timestamp.into()),
                 revoked_card_ids: revoked_card_ids.into_iter().map(|id| id.0.into()).collect(),
@@ -4169,7 +5412,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .into_iter()
                     .map(card_holder_to_proto)
                     .collect(),
-                generation_bumps: Vec::new(),
                 local_wallet_generation,
             }),
             OplogEntry::CardTransferConfirmed {
@@ -4178,6 +5420,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 source_card_id,
                 installed_card_id,
                 target_holder,
+                ..
             } => Entry::CardTransferConfirmed(RawCardTransferConfirmedParameters {
                 timestamp: Some(timestamp.into()),
                 transfer_id: Some(transfer_id.into()),
@@ -4189,6 +5432,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp,
                 card_id,
                 wallet_generation,
+                ..
             } => Entry::CardExpired(RawCardExpiredParameters {
                 timestamp: Some(timestamp.into()),
                 card_id: Some(card_id.0.into()),
@@ -4204,35 +5448,82 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 kind: host_stream_kind_to_proto(kind) as i32,
                 payload: Some(oplog_payload_to_proto(payload)?),
             }),
-            OplogEntry::StreamRegistered { record, .. } => {
-                Entry::StreamRegistered(RawDurableStreamRecordParameters {
-                    record: Some(oplog_payload_to_proto(record)?),
-                })
+            OplogEntry::StreamRegistered {
+                record, summary, ..
+            } => Entry::StreamRegistered(RawDurableStreamRecordParameters {
+                record: Some(oplog_payload_to_proto(record)?),
+                summary: summary.map(Into::into),
+            }),
+            OplogEntry::ToolAttachmentControl {
+                attachment,
+                transition,
+                ..
+            } => {
+                use crate::schema::IntoTypedSchemaValue as _;
+                Entry::ToolAttachmentControl(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentControlParameters {
+                        attachment: Some(
+                            attachment
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                        transition: Some(
+                            transition
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                    },
+                )
             }
-            OplogEntry::StreamItems { record, .. } => {
-                Entry::StreamItems(RawDurableStreamRecordParameters {
-                    record: Some(oplog_payload_to_proto(record)?),
-                })
+            OplogEntry::ToolAttachmentRead {
+                observation,
+                payload,
+                ..
+            } => {
+                use crate::schema::IntoTypedSchemaValue as _;
+                Entry::ToolAttachmentRead(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentReadParameters {
+                        observation: Some(
+                            (*observation)
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                        payload: payload.map(oplog_payload_to_proto).transpose()?,
+                    },
+                )
             }
-            OplogEntry::StreamEnd { record, .. } => {
-                Entry::StreamEnd(RawDurableStreamRecordParameters {
-                    record: Some(oplog_payload_to_proto(record)?),
-                })
-            }
-            OplogEntry::StreamCancel { record, .. } => {
-                Entry::StreamCancel(RawDurableStreamRecordParameters {
-                    record: Some(oplog_payload_to_proto(record)?),
-                })
-            }
-            OplogEntry::StreamSession { record, .. } => {
-                Entry::StreamSession(RawDurableStreamRecordParameters {
-                    record: Some(oplog_payload_to_proto(record)?),
-                })
-            }
+            OplogEntry::StreamItems {
+                record, summary, ..
+            } => Entry::StreamItems(RawDurableStreamRecordParameters {
+                record: Some(oplog_payload_to_proto(record)?),
+                summary: summary.map(Into::into),
+            }),
+            OplogEntry::StreamEnd {
+                record, summary, ..
+            } => Entry::StreamEnd(RawDurableStreamRecordParameters {
+                record: Some(oplog_payload_to_proto(record)?),
+                summary: summary.map(Into::into),
+            }),
+            OplogEntry::StreamCancel {
+                record, summary, ..
+            } => Entry::StreamCancel(RawDurableStreamRecordParameters {
+                record: Some(oplog_payload_to_proto(record)?),
+                summary: summary.map(Into::into),
+            }),
+            OplogEntry::StreamSession {
+                record, summary, ..
+            } => Entry::StreamSession(RawDurableStreamRecordParameters {
+                record: Some(oplog_payload_to_proto(record)?),
+                summary: summary.map(Into::into),
+            }),
         };
 
         Ok(golem_api_grpc::proto::golem::worker::RawOplogEntry {
             timestamp: Some(proto_ts),
+            entity_parent_start_index,
             entry: Some(entry),
         })
     }
@@ -4246,6 +5537,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
     ) -> Result<Self, String> {
         use golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry;
 
+        let entity_parent_start_index = match value.entity_parent_start_index {
+            Some(0) => return Err("Invalid entity parent Start index: 0".to_string()),
+            Some(index) => Some(OplogIndex::from_u64(index)),
+            None => None,
+        };
         let timestamp: crate::model::Timestamp = value
             .timestamp
             .ok_or("Missing timestamp in RawOplogEntry")?
@@ -4254,6 +5550,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
         match value.entry.ok_or("Missing entry in RawOplogEntry")? {
             Entry::Create(p) => {
                 let agent_id = p.agent_id.ok_or("Missing agent_id")?.try_into()?;
+                let owner_kind = crate::model::agent::OwnerKind::try_from(p.owner_kind)?;
                 let agent_mode: AgentMode =
                     golem_api_grpc::proto::golem::component::AgentMode::try_from(p.agent_mode)
                         .map_err(|e| format!("Invalid agent_mode: {e}"))?
@@ -4279,26 +5576,29 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .map(|bytes| crate::serialization::deserialize(&bytes))
                     .collect::<Result<Vec<_>, _>>()?;
                 let original_phantom_id: Option<uuid::Uuid> = p.original_phantom_id.map(|u| {
-                    let proto_uuid: golem_api_grpc::proto::golem::common::Uuid = u;
+                    let proto_uuid: golem_schema::proto::golem::common::Uuid = u;
                     uuid::Uuid::from(proto_uuid)
                 });
                 let instance_id = p.instance_id.ok_or("Missing instance_id")?.into();
 
                 Ok(OplogEntry::Create {
                     timestamp,
-                    agent_id,
-                    agent_mode,
-                    component_revision,
-                    env,
-                    environment_id,
-                    created_by,
-                    parent,
-                    component_size: p.component_size,
-                    initial_total_linear_memory_size: p.initial_total_linear_memory_size,
-                    initial_active_plugins,
-                    local_agent_config,
-                    original_phantom_id,
-                    instance_id,
+                    parameters: Box::new(CreateParameters {
+                        agent_id,
+                        owner_kind,
+                        agent_mode,
+                        component_revision,
+                        env,
+                        environment_id,
+                        created_by,
+                        parent,
+                        component_size: p.component_size,
+                        initial_total_linear_memory_size: p.initial_total_linear_memory_size,
+                        initial_active_plugins,
+                        local_agent_config,
+                        original_phantom_id,
+                        instance_id,
+                    }),
                 })
             }
             Entry::Start(p) => {
@@ -4323,6 +5623,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .map(crate::base_model::OplogIndex::from_u64),
                     request,
                     durable_function_type,
+                    span_started: p
+                        .span_started
+                        .map(raw_span_started_from_proto)
+                        .transpose()?
+                        .map(Box::new),
+                    denial: p.denial,
                 })
             }
             Entry::End(p) => {
@@ -4332,6 +5638,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
                     response,
                     forced_commit: p.forced_commit,
+                    span_finished: p
+                        .span_finished
+                        .map(raw_span_finished_from_proto)
+                        .transpose()?,
+                    span_attributes: p
+                        .span_attributes
+                        .map(raw_span_attributes_from_proto)
+                        .transpose()?,
                 })
             }
             Entry::Cancelled(p) => {
@@ -4340,6 +5654,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
                     partial,
+                    span_finished: p
+                        .span_finished
+                        .map(raw_span_finished_from_proto)
+                        .transpose()?,
                 })
             }
             Entry::CompletionDiscarded(p) => Ok(OplogEntry::CompletionDiscarded {
@@ -4366,10 +5684,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     trace_id,
                     trace_states: p.trace_states,
                     invocation_context,
-                    wallet_pin: p
-                        .wallet_pin
-                        .map(invocation_wallet_pin_from_proto)
-                        .transpose()?,
+                    wallet_pin: Box::new(invocation_wallet_pin_from_proto(
+                        p.wallet_pin.ok_or("Missing wallet_pin")?,
+                    )?),
                 })
             }
             Entry::AgentInvocationFinished(p) => {
@@ -4395,17 +5712,19 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .transpose()?;
                 Ok(OplogEntry::Error {
                     timestamp,
+                    entity_parent_start_index,
+                    kind: oplog_error_kind_from_proto(p.kind)?,
                     error,
                     retry_from,
-                    inside_atomic_region: p.inside_atomic_region,
                     retry_policy_state,
                 })
             }
-            Entry::NoOp(_) => Ok(OplogEntry::NoOp { timestamp }),
+            Entry::RecoverySucceeded(_) => Ok(OplogEntry::RecoverySucceeded { timestamp }),
             Entry::Jump(p) => {
                 let jump = p.jump.ok_or("Missing jump region")?;
                 Ok(OplogEntry::Jump {
                     timestamp,
+                    entity_parent_start_index,
                     jump: crate::model::regions::OplogRegion {
                         start: OplogIndex::from_u64(jump.start),
                         end: OplogIndex::from_u64(jump.end),
@@ -4414,11 +5733,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }
             Entry::Interrupted(_) => Ok(OplogEntry::Interrupted { timestamp }),
             Entry::Exited(_) => Ok(OplogEntry::Exited { timestamp }),
-            Entry::BeginAtomicRegion(_) => Ok(OplogEntry::BeginAtomicRegion { timestamp }),
-            Entry::EndAtomicRegion(p) => Ok(OplogEntry::EndAtomicRegion {
-                timestamp,
-                begin_index: OplogIndex::from_u64(p.begin_index),
-            }),
             Entry::PendingAgentInvocation(p) => {
                 let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
@@ -4444,6 +5758,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::PendingUpdate {
                     timestamp,
                     description,
+                    update_attempt_index: p.update_attempt_index.map(OplogIndex::from_u64),
                 })
             }
             Entry::SuccessfulUpdate(p) => {
@@ -4460,6 +5775,23 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     new_component_size: p.new_component_size,
                     new_total_linear_memory_size: p.new_total_linear_memory_size,
                     new_active_plugins,
+                    snapshot_assisted_details: p
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            Ok::<_, String>(SnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_revision_start_index: OplogIndex::from_u64(
+                                    details.source_revision_start_index,
+                                ),
+                                snapshot_index: OplogIndex::from_u64(details.snapshot_index),
+                            })
+                        })
+                        .transpose()?,
                 })
             }
             Entry::FailedUpdate(p) => {
@@ -4469,6 +5801,28 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     target_revision,
                     details: p.details,
+                    snapshot_assisted_details: p
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            Ok::<_, String>(FailedSnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_revision_start_index: OplogIndex::from_u64(
+                                    details.source_revision_start_index,
+                                ),
+                                snapshot_index: OplogIndex::from_u64(details.snapshot_index),
+                            })
+                        })
+                        .transpose()?,
+                    update_attempt_index: p.update_attempt_index.map(OplogIndex::from_u64),
+                    snapshot_fault: p
+                        .snapshot_fault
+                        .map(raw_snapshot_fault_from_proto)
+                        .transpose()?,
                 })
             }
             Entry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
@@ -4479,6 +5833,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 let rt = p.resource_type_id.ok_or("Missing resource_type_id")?;
                 Ok(OplogEntry::CreateResource {
                     timestamp,
+                    entity_parent_start_index,
                     id: AgentResourceId(p.id),
                     resource_type_id: ResourceTypeId {
                         name: rt.name,
@@ -4490,6 +5845,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 let rt = p.resource_type_id.ok_or("Missing resource_type_id")?;
                 Ok(OplogEntry::DropResource {
                     timestamp,
+                    entity_parent_start_index,
                     id: AgentResourceId(p.id),
                     resource_type_id: ResourceTypeId {
                         name: rt.name,
@@ -4508,9 +5864,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     level,
                     context: p.context,
                     message: p.message,
+                    trace_context: p.trace_context.map(TryInto::try_into).transpose()?,
                 })
             }
             Entry::Restart(_) => Ok(OplogEntry::Restart { timestamp }),
+            Entry::Resumed(_) => Ok(OplogEntry::Resumed { timestamp }),
             Entry::ActivatePlugin(p) => {
                 let plugin_grant_id = p
                     .plugin_grant_id
@@ -4548,50 +5906,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     idempotency_key,
                 })
             }
-            Entry::StartSpan(p) => {
-                let span_id = SpanId::from_string(p.span_id)?;
-                let parent = p.parent.map(SpanId::from_string).transpose()?;
-                let linked_context_id = p.linked_context_id.map(SpanId::from_string).transpose()?;
-                let attributes: HashMap<String, crate::model::invocation_context::AttributeValue> =
-                    p.attributes
-                        .into_iter()
-                        .map(|(k, v)| {
-                            (
-                                k,
-                                crate::model::invocation_context::AttributeValue::String(v),
-                            )
-                        })
-                        .collect();
-                Ok(OplogEntry::StartSpan {
-                    timestamp,
-                    parent_start_index: p.parent_start_index.map(OplogIndex::from_u64),
-                    span_id,
-                    parent,
-                    linked_context_id,
-                    attributes: crate::model::oplog::raw_types::AttributeMap(attributes),
-                })
-            }
-            Entry::FinishSpan(p) => {
-                let span_id = SpanId::from_string(p.span_id)?;
-                Ok(OplogEntry::FinishSpan {
-                    timestamp,
-                    parent_start_index: p.parent_start_index.map(OplogIndex::from_u64),
-                    span_id,
-                })
-            }
-            Entry::SetSpanAttribute(p) => {
-                let span_id = SpanId::from_string(p.span_id)?;
-                Ok(OplogEntry::SetSpanAttribute {
-                    timestamp,
-                    parent_start_index: p.parent_start_index.map(OplogIndex::from_u64),
-                    span_id,
-                    key: p.key,
-                    value: crate::model::invocation_context::AttributeValue::String(p.value),
-                })
-            }
             Entry::BeginRemoteTransaction(p) => {
                 let transaction_id = crate::model::TransactionId::from(p.transaction_id);
-                let original_begin_index = p.original_begin_index.map(OplogIndex::from_u64);
+                let original_begin_index = OplogIndex::from_u64(p.original_begin_index);
                 Ok(OplogEntry::BeginRemoteTransaction {
                     timestamp,
                     transaction_id,
@@ -4628,8 +5945,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .map(|card| deserialize_stored_card(&card, "active card"))
                         .collect::<Result<Vec<_>, _>>()?,
                     wallet_generation: p.wallet_generation,
+                    filesystem_snapshot: p
+                        .filesystem_snapshot
+                        .map(|name| name.parse())
+                        .transpose()?,
                 })
             }
+            Entry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {
+                timestamp,
+                filesystem_snapshot: p.filesystem_snapshot.parse()?,
+            }),
             Entry::OplogProcessorCheckpoint(p) => {
                 let plugin_grant_id = p
                     .plugin_grant_id
@@ -4651,30 +5976,41 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::SetRetryPolicy(p) => {
                 let policy: crate::model::retry_policy::NamedRetryPolicy =
                     p.policy.ok_or("Missing policy")?.try_into()?;
-                Ok(OplogEntry::SetRetryPolicy { timestamp, policy })
+                Ok(OplogEntry::SetRetryPolicy {
+                    timestamp,
+                    entity_parent_start_index,
+                    policy: Box::new(policy),
+                })
             }
             Entry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
                 timestamp,
+                entity_parent_start_index,
                 name: p.name,
             }),
             Entry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                entity_parent_start_index,
                 queued_event_index: OplogIndex::from_u64(p.queued_event_index),
                 card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
                 wallet_generation: p.wallet_generation,
             }),
             Entry::CardEventQueued(p) => Ok(OplogEntry::CardEventQueued {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
-                event: raw_queued_card_event_from_proto(p.event.ok_or("Missing event")?)?,
+                entity_parent_start_index,
+                event: Box::new(raw_queued_card_event_from_proto(
+                    p.event.ok_or("Missing event")?,
+                )?),
             }),
             Entry::CardInstalled(p) => Ok(OplogEntry::CardInstalled {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                entity_parent_start_index,
                 queued_event_index: p.queued_event_index.map(OplogIndex::from_u64),
-                card: deserialize_stored_card(&p.card, "installed card")?,
+                card: Box::new(deserialize_stored_card(&p.card, "installed card")?),
                 wallet_generation: p.wallet_generation,
             }),
             Entry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                entity_parent_start_index,
                 queued_event_index: OplogIndex::from_u64(p.queued_event_index),
                 card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
                 reason: raw_card_install_failure_from_proto(
@@ -4684,14 +6020,18 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }),
             Entry::CardDerived(p) => Ok(OplogEntry::CardDerived {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
-                card: deserialize_stored_card(&p.card, "derived card")?,
+                entity_parent_start_index,
+                card: Box::new(deserialize_stored_card(&p.card, "derived card")?),
                 wallet_generation: p.wallet_generation,
             }),
             Entry::CardTransferStarted(p) => Ok(OplogEntry::CardTransferStarted {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                entity_parent_start_index,
                 transfer_id: p.transfer_id.ok_or("Missing transfer_id")?.into(),
                 card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
-                source_holder: p.source_holder.map(card_holder_from_proto).transpose()?,
+                source_holder: card_holder_from_proto(
+                    p.source_holder.ok_or("Missing source_holder")?,
+                )?,
                 target_holder: card_holder_from_proto(
                     p.target_holder.ok_or("Missing target_holder")?,
                 )?,
@@ -4711,18 +6051,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 }
                 Ok(OplogEntry::CardTransferred {
                     timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                    entity_parent_start_index,
                     transfer_id: p.transfer_id.ok_or("Missing transfer_id")?.into(),
-                    source_card_id: p.source_card_id.map(|id| CardId(id.into())),
+                    source_card_id: CardId(
+                        p.source_card_id.ok_or("Missing source_card_id")?.into(),
+                    ),
                     installed_card_id,
                     target_holder: card_holder_from_proto(
                         p.target_holder.ok_or("Missing target_holder")?,
                     )?,
-                    card,
+                    card: Box::new(card),
                     target_wallet_generation: p.target_wallet_generation,
                 })
             }
             Entry::CardRevokedCascade(p) => Ok(OplogEntry::CardRevokedCascade {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                entity_parent_start_index,
                 revoked_card_ids: p
                     .revoked_card_ids
                     .into_iter()
@@ -4737,6 +6081,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }),
             Entry::CardTransferConfirmed(p) => Ok(OplogEntry::CardTransferConfirmed {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                entity_parent_start_index,
                 transfer_id: p.transfer_id.ok_or("Missing transfer_id")?.into(),
                 source_card_id: CardId(p.source_card_id.ok_or("Missing source_card_id")?.into()),
                 installed_card_id: CardId(
@@ -4750,6 +6095,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }),
             Entry::CardExpired(p) => Ok(OplogEntry::CardExpired {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                entity_parent_start_index,
                 card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
                 wallet_generation: p.wallet_generation,
             }),
@@ -4761,22 +6107,58 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }),
             Entry::StreamRegistered(p) => Ok(OplogEntry::StreamRegistered {
                 timestamp,
+                entity_parent_start_index,
+                summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
+            Entry::ToolAttachmentControl(p) => {
+                let (attachment, transition) = decode_attachment_control(
+                    &p.attachment.ok_or("Missing attachment")?.try_into()?,
+                    &p.transition.ok_or("Missing transition")?.try_into()?,
+                )?;
+                Ok(OplogEntry::ToolAttachmentControl {
+                    timestamp,
+                    entity_parent_start_index,
+                    attachment,
+                    transition,
+                })
+            }
+            Entry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(
+                    &p.observation.ok_or("Missing observation")?.try_into()?,
+                )?;
+                observation
+                    .validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp,
+                    entity_parent_start_index,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(oplog_payload_from_proto).transpose()?,
+                })
+            }
             Entry::StreamItems(p) => Ok(OplogEntry::StreamItems {
                 timestamp,
+                entity_parent_start_index,
+                summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
             Entry::StreamEnd(p) => Ok(OplogEntry::StreamEnd {
                 timestamp,
+                entity_parent_start_index,
+                summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
             Entry::StreamCancel(p) => Ok(OplogEntry::StreamCancel {
                 timestamp,
+                entity_parent_start_index,
+                summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
             Entry::StreamSession(p) => Ok(OplogEntry::StreamSession {
                 timestamp,
+                entity_parent_start_index,
+                summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
         }
@@ -4802,8 +6184,32 @@ fn host_stream_kind_from_proto(kind: i32) -> Result<HostStreamKind, String> {
     }
 }
 
+fn oplog_error_kind_to_proto(
+    kind: OplogErrorKind,
+) -> golem_api_grpc::proto::golem::worker::OplogErrorKind {
+    match kind {
+        OplogErrorKind::Invocation => {
+            golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation
+        }
+        OplogErrorKind::Recovery => golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery,
+    }
+}
+
+fn oplog_error_kind_from_proto(kind: i32) -> Result<OplogErrorKind, String> {
+    match golem_api_grpc::proto::golem::worker::OplogErrorKind::try_from(kind) {
+        Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation) => {
+            Ok(OplogErrorKind::Invocation)
+        }
+        Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery) => {
+            Ok(OplogErrorKind::Recovery)
+        }
+        Err(_) => Err(format!("Unknown oplog error kind: {kind}")),
+    }
+}
+
 #[cfg(test)]
 mod observational_start_proto_tests {
+    use super::*;
     use crate::model::OplogIndex;
     use crate::model::Timestamp;
     use crate::model::oplog::payload::host_functions::HostFunctionName;
@@ -4821,19 +6227,175 @@ mod observational_start_proto_tests {
             observational_owner: Some(OplogIndex::from_u64(7)),
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: None,
         };
 
         let proto: RawOplogEntry = original.clone().try_into().unwrap();
         let roundtrip = OplogEntry::try_from(proto).unwrap();
         assert_eq!(roundtrip, original);
     }
+
+    #[test]
+    fn denied_start_raw_protobuf_roundtrips() {
+        let original = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: None,
+            function_name: HostFunctionName::KeyvalueEventualSet,
+            invocation_id: None,
+            observational_owner: None,
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: Some("access denied".to_string()),
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn span_lifecycle_raw_protobuf_roundtrips() {
+        use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
+        use crate::model::oplog::raw_types::{
+            AttributeMap, SpanAttributes, SpanFinished, SpanKind, SpanLink, SpanOutcome,
+            SpanStarted,
+        };
+        use std::collections::HashMap;
+
+        let span_id = SpanId::generate();
+        let linked_span_id = SpanId::generate();
+        let started = SpanStarted {
+            span_id: span_id.clone(),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["origin=one".into()],
+            parent_span_id: Some(SpanId::generate()),
+            links: vec![SpanLink {
+                trace_id: TraceId::generate(),
+                span_id: linked_span_id,
+                trace_states: vec!["link=other-trace".into()],
+            }],
+            started_at: Timestamp::now_utc(),
+            attributes: AttributeMap(HashMap::from([(
+                "name".into(),
+                AttributeValue::String("rpc".into()),
+            )])),
+            kind: SpanKind::Client,
+        };
+        let start = OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::Custom("test".into()),
+            invocation_id: None,
+            observational_owner: None,
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: Some(Box::new(started)),
+            denial: None,
+        }
+        .rounded();
+        let end = OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(1),
+            response: None,
+            forced_commit: false,
+            span_finished: Some(SpanFinished {
+                span_id: span_id.clone(),
+                finished_at: Timestamp::now_utc(),
+                outcome: SpanOutcome::Failed,
+            }),
+            span_attributes: Some(SpanAttributes {
+                span_id: span_id.clone(),
+                attributes: AttributeMap(HashMap::from([(
+                    "result".into(),
+                    AttributeValue::String("error".into()),
+                )])),
+            }),
+        }
+        .rounded();
+        let cancelled = OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(1),
+            partial: None,
+            span_finished: Some(SpanFinished {
+                span_id,
+                finished_at: Timestamp::now_utc(),
+                outcome: SpanOutcome::Cancelled,
+            }),
+        }
+        .rounded();
+
+        for original in [start, end, cancelled] {
+            let proto: RawOplogEntry = original.clone().try_into().unwrap();
+            assert_eq!(OplogEntry::try_from(proto).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn span_lifecycle_public_protobuf_roundtrips() {
+        use crate::model::invocation_context::{SpanId, TraceId};
+
+        let span_id = SpanId::generate();
+        let started = PublicSpanStarted {
+            span_id: span_id.clone(),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["origin=one".into()],
+            parent_span_id: Some(SpanId::generate()),
+            links: vec![PublicSpanLink {
+                trace_id: TraceId::generate(),
+                span_id: SpanId::generate(),
+                trace_states: vec!["link=other-trace".into()],
+            }],
+            started_at: Timestamp::now_utc().rounded(),
+            attributes: vec![PublicAttribute {
+                key: "name".into(),
+                value: PublicAttributeValue::String(StringAttributeValue {
+                    value: "rpc".into(),
+                }),
+            }],
+            kind: PublicSpanKind::Client,
+        };
+        let finished = PublicSpanFinished {
+            span_id: span_id.clone(),
+            finished_at: Timestamp::now_utc().rounded(),
+            outcome: PublicSpanOutcome::Denied,
+        };
+        let attributes = PublicSpanAttributes {
+            span_id,
+            attributes: vec![PublicAttribute {
+                key: "result".into(),
+                value: PublicAttributeValue::String(StringAttributeValue {
+                    value: "denied".into(),
+                }),
+            }],
+        };
+
+        assert_eq!(
+            public_span_started_from_proto(public_span_started_to_proto(started.clone())).unwrap(),
+            started
+        );
+        assert_eq!(
+            public_span_finished_from_proto(public_span_finished_to_proto(finished.clone()))
+                .unwrap(),
+            finished
+        );
+        assert_eq!(
+            public_span_attributes_from_proto(public_span_attributes_to_proto(attributes.clone()))
+                .unwrap(),
+            attributes
+        );
+    }
 }
 
 #[cfg(test)]
 mod successful_update_proto_tests {
-    use crate::model::Timestamp;
     use crate::model::component::ComponentRevision;
-    use crate::model::oplog::OplogEntry;
+    use crate::model::oplog::{
+        FailedSnapshotAssistedUpdateDetails, FilesystemSnapshotName, OplogEntry,
+        SnapshotAssistedUpdateDetails, SnapshotFault, UpdateDescription,
+    };
+    use crate::model::{OplogIndex, Timestamp};
     use golem_api_grpc::proto::golem::worker::RawOplogEntry;
     use std::collections::HashSet;
     use test_r::test;
@@ -4846,12 +6408,159 @@ mod successful_update_proto_tests {
             new_component_size: 123,
             new_total_linear_memory_size: Some(456),
             new_active_plugins: HashSet::new(),
+            snapshot_assisted_details: Some(SnapshotAssistedUpdateDetails {
+                pending_update_index: OplogIndex::from_u64(5),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(3),
+            }),
         };
 
         let proto: RawOplogEntry = original.clone().try_into().unwrap();
         let roundtrip: OplogEntry = proto.try_into().unwrap();
 
         assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn raw_failed_update_preserves_assisted_provenance() {
+        let original = OplogEntry::FailedUpdate {
+            timestamp: Timestamp::now_utc(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            details: Some("suffix diverged".to_string()),
+            snapshot_assisted_details: Some(FailedSnapshotAssistedUpdateDetails {
+                pending_update_index: OplogIndex::from_u64(5),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(3),
+            }),
+            update_attempt_index: Some(OplogIndex::from_u64(5)),
+            snapshot_fault: Some(SnapshotFault::Incompatible),
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip: OplogEntry = proto.try_into().unwrap();
+
+        assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn raw_failed_update_preserves_every_snapshot_fault() {
+        [
+            None,
+            Some(SnapshotFault::Unavailable),
+            Some(SnapshotFault::Incompatible),
+        ]
+        .into_iter()
+        .for_each(|snapshot_fault| {
+            let original = OplogEntry::FailedUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: ComponentRevision::new(2).unwrap(),
+                details: None,
+                snapshot_assisted_details: None,
+                update_attempt_index: None,
+                snapshot_fault,
+            };
+
+            let proto: RawOplogEntry = original.clone().try_into().unwrap();
+            let roundtrip: OplogEntry = proto.try_into().unwrap();
+
+            assert_eq!(roundtrip, original);
+        });
+    }
+
+    #[test]
+    fn raw_snapshot_assisted_pending_update_preserves_the_filesystem_snapshot() {
+        [None, Some(FilesystemSnapshotName::periodic())]
+            .into_iter()
+            .for_each(|filesystem_snapshot| {
+                let original = OplogEntry::PendingUpdate {
+                    timestamp: Timestamp::now_utc(),
+                    description: UpdateDescription::SnapshotAssistedAutomatic {
+                        target_revision: ComponentRevision::new(2).unwrap(),
+                        source_component_revision: ComponentRevision::new(1).unwrap(),
+                        source_revision_start_index: OplogIndex::INITIAL,
+                        snapshot_index: OplogIndex::from_u64(3),
+                        snapshot_revision: ComponentRevision::new(1).unwrap(),
+                        filesystem_snapshot,
+                    },
+                    update_attempt_index: Some(OplogIndex::from_u64(2)),
+                };
+
+                let proto: RawOplogEntry = original.clone().try_into().unwrap();
+                let roundtrip: OplogEntry = proto.try_into().unwrap();
+
+                assert_eq!(roundtrip, original);
+            });
+    }
+}
+
+#[cfg(test)]
+mod public_tool_result_proto_tests {
+    use crate::base_model::oplog::{
+        ExternalToolResultParameters, PublicAgentInvocationResult, PublicExternalToolResult,
+    };
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+        SerializableToolRpcError,
+    };
+    use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use test_r::test;
+
+    fn typed(value: &str) -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::string()),
+            SchemaValue::String(value.to_string()),
+        )
+    }
+
+    fn assert_roundtrip(result: PublicExternalToolResult) {
+        let original =
+            PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters { result });
+        let proto: golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult =
+            original.clone().try_into().unwrap();
+        let decoded = PublicAgentInvocationResult::try_from(proto).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn public_external_tool_result_protobuf_preserves_success_and_every_error_variant() {
+        assert_roundtrip(PublicExternalToolResult::Success(
+            SerializableToolInvocationResult {
+                result: Some(Box::new(typed("output"))),
+            },
+        ));
+        for error in [
+            SerializableToolRpcError::ProtocolError("protocol".into()),
+            SerializableToolRpcError::Denied("denied".into()),
+            SerializableToolRpcError::NotFound("missing".into()),
+            SerializableToolRpcError::RemoteInternalError("internal".into()),
+            SerializableToolRpcError::Cancelled,
+            SerializableToolRpcError::ResourceExhausted("quota".into()),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidToolName("name".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidCommandPath(vec!["a".into(), "b".into()]),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidInput("input".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::ConstraintViolation("constraint".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidResult("result".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                    name: "custom".into(),
+                    payload: typed("custom"),
+                })),
+            )),
+        ] {
+            assert_roundtrip(PublicExternalToolResult::Failure(error));
+        }
     }
 }
 
@@ -4981,7 +6690,7 @@ mod queued_card_event_proto_tests {
         let source_card_id = CardId::new();
         let event = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id: Uuid::new_v4(),
-            source_card_id: Some(source_card_id),
+            source_card_id,
             card_id,
             card: Some(stored_card(card_id)),
         });
@@ -4997,7 +6706,7 @@ mod queued_card_event_proto_tests {
         let card_id = CardId::new();
         let event = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id: Uuid::new_v4(),
-            source_card_id: Some(CardId::new()),
+            source_card_id: CardId::new(),
             card_id,
             card: Some(stored_card(card_id)),
         });

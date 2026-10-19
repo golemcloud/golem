@@ -51,7 +51,7 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, Dep
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
-use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::ToolName;
 use golem_common::model::worker::{
@@ -60,7 +60,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
-use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::{ExternalSchemaValue, TypedSchemaValue};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -92,6 +92,7 @@ fn default_tool_deployment_configs(
                         files: BTreeMap::new(),
                     },
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             ))
@@ -120,6 +121,7 @@ fn default_tool_deployment_config_updates(
                         file_permission_updates: BTreeMap::new(),
                     }),
                     environment_binding: OptionalFieldUpdate::NoChange,
+                    component_bindings: None,
                     agent_bindings: None,
                 },
             ))
@@ -270,6 +272,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         name: &str,
         unique: bool,
         mut agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<
+            ToolName,
+            BTreeMap<AgentTypeName, golem_common::model::tool::ToolBindingInput>,
+        >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -286,6 +292,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let extracted_metadata = extract_component_metadata(&source_path, false, true).await?;
         let agent_types = extracted_metadata.agent_types;
         let tools = extracted_metadata.tools;
+        let tool_middlewares = extracted_metadata.tool_middlewares;
         for agent_type in &agent_types {
             agent_type_provision_configs
                 .entry(agent_type.type_name.clone())
@@ -306,15 +313,27 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             (None, None)
         };
 
+        let mut tool_deployment_configs = default_tool_deployment_configs(&tools)?;
+        for (tool_name, agent_bindings) in tool_agent_bindings {
+            let config = tool_deployment_configs
+                .get_mut(&tool_name)
+                .ok_or_else(|| anyhow!("Component does not declare tool {tool_name}"))?;
+            config.agent_bindings.extend(agent_bindings);
+        }
+
         let component = client
             .create_component(
                 &environment_id.0,
                 &ComponentCreation {
                     component_name,
+                    config_schema: Default::default(),
+                    component_provision_config: Default::default(),
                     agent_types,
                     agent_type_provision_configs,
-                    tool_deployment_configs: default_tool_deployment_configs(&tools)?,
+                    tool_deployment_configs,
                     tools,
+                    tool_middlewares,
+                    tool_middleware_provision_configs: BTreeMap::new(),
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
@@ -406,6 +425,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &component_id.0,
                 &ComponentUpdate {
                     current_revision: previous_revision,
+                    config_schema: None,
+                    component_provision_config: None,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| metadata.agent_types.clone()),
@@ -413,6 +434,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     tools: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| metadata.tools.clone()),
+                    tool_middlewares: updated_wasm
+                        .as_ref()
+                        .map(|(_wasm, metadata)| metadata.tool_middlewares.clone()),
+                    tool_middleware_provision_config_updates: None,
                     tool_deployment_config_updates: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| {
@@ -486,7 +511,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .resolve_env_name(&component.environment_id, &registry_client)
             .await?;
 
-        let method_parameters = params.value().clone();
+        let method_parameters = params.into_parts().1;
 
         let client = self
             .deps
@@ -500,11 +525,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.value().clone(),
+                    parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                        .map_err(anyhow::Error::msg)?,
                     phantom_id: agent_id.phantom_id,
                     config: None,
                     method_name: method_name.to_string(),
-                    method_parameters,
+                    method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                        .map_err(anyhow::Error::msg)?,
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
@@ -551,7 +578,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
-        let method_parameters = params.value().clone();
+        let method_parameters = params.into_parts().1;
 
         let client = self
             .deps
@@ -565,11 +592,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.value().clone(),
+                    parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                        .map_err(anyhow::Error::msg)?,
                     phantom_id: agent_id.phantom_id,
                     config: None,
                     method_name: method_name.to_string(),
-                    method_parameters,
+                    method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                        .map_err(anyhow::Error::msg)?,
                     mode: golem_client::model::AgentInvocationMode::Await,
                     schedule_at: None,
                     idempotency_key: None,
@@ -579,12 +608,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             )
             .await?;
 
+        let agent_id = result.agent_id;
         match result.result {
             Some(typed_output) => {
-                let (_graph, value) = typed_output.into_parts();
-                Ok(AgentResult::new(Some(value)))
+                let (_graph, value) = typed_output.into_inner().into_parts();
+                Ok(AgentResult::new(Some(value), agent_id))
             }
-            None => Ok(AgentResult::new(None)),
+            None => Ok(AgentResult::new(None, agent_id)),
         }
     }
 
@@ -627,7 +657,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 .await
                 .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
 
-            result.extend(response.entries);
+            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
             match response.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
@@ -635,6 +665,28 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         }
 
         Ok(result)
+    }
+
+    async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+
+        let response = client
+            .get_oplog(
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
+                Some(OplogIndex::INITIAL.as_u64()),
+                1,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
+
+        Ok(response.last_index)
     }
 
     async fn search_oplog(
@@ -666,7 +718,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     anyhow!("search_oplog failed for agent {agent_id}, query={query}: {e}")
                 })?;
 
-            result.extend(response.entries);
+            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
             match response.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
@@ -741,6 +793,31 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     }
 
     async fn auto_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .update_worker(
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
+                &UpdateWorkerRequest {
+                    mode: AgentUpdateMode::Automatic,
+                    target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn snapshot_assisted_update_worker(
         &self,
         agent_id: &AgentId,
         target_revision: ComponentRevision,
@@ -964,6 +1041,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                 &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: false,
+                    tool_compatibility_mode: Default::default(),
                     version_check: false,
                     security_overrides: false,
                 },
@@ -1006,6 +1084,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                 &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: environment_options.compatibility_check,
+                    tool_compatibility_mode: Default::default(),
                     version_check: environment_options.version_check,
                     security_overrides: environment_options.security_overrides,
                 },
@@ -1037,6 +1116,14 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             current_revision: plan.current_revision,
             expected_deployment_hash: plan.deployment_hash,
             version: DeploymentVersion(Uuid::new_v4().to_string()),
+            publish_tools: Vec::new(),
+            remote_tools: Vec::new(),
+            mcp_imports: Vec::new(),
+            publish_tool_middlewares: Vec::new(),
+            remote_tool_middlewares: Vec::new(),
+            universal_tool_middlewares: Vec::new(),
+            environment_tool_middleware_bindings: Default::default(),
+            agent_tool_middleware_bindings: Default::default(),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),
@@ -1076,17 +1163,29 @@ struct HttpWorkerLogEventStream {
     read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
+/// Gives the URL of the WebSocket that streams the events of the agent. The agent name is one
+/// segment of the path, so the function percent-encodes it.
+fn worker_connect_url(base_url: &url::Url, agent_id: &AgentId) -> String {
+    let scheme = if base_url.scheme() == "https" {
+        "wss"
+    } else {
+        "ws"
+    };
+    format!(
+        "{scheme}://{}:{}/v1/components/{}/workers/{}/connect",
+        base_url.host().unwrap(),
+        base_url.port_or_known_default().unwrap(),
+        agent_id.component_id.0,
+        agent_id.agent_name_encoded(),
+    )
+}
+
 impl HttpWorkerLogEventStream {
     async fn new(client: Arc<WorkerClientLive>, agent_id: &AgentId) -> anyhow::Result<Self> {
-        let url = format!(
-            "ws://{}:{}/v1/components/{}/workers/{}/connect",
-            client.context.base_url.host().unwrap(),
-            client.context.base_url.port_or_known_default().unwrap(),
-            agent_id.component_id.0,
-            agent_id.agent_id,
-        );
+        let url = worker_connect_url(&client.context.base_url, agent_id);
 
         let mut connection_request = url
+            .as_str()
             .into_client_request()
             .context("Failed to create request")?;
 
@@ -1102,7 +1201,11 @@ impl HttpWorkerLogEventStream {
             connection_request,
             None,
             false,
-            Some(Connector::Plain),
+            if url.starts_with("ws://") {
+                Some(Connector::Plain)
+            } else {
+                None
+            },
         )
         .await?;
         let (mut write, read) = stream.split();
@@ -1156,5 +1259,83 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
                 None => return Ok(None),
             }
         }
+    }
+}
+
+/// Reads each entry that an oplog page omitted in full. Tests then see the full oplog, like
+/// `golem agent oplog` without `--omit-payloads`.
+async fn full_oplog_entries(
+    client: &impl WorkerClient,
+    agent_id: &AgentId,
+    page_entries: Vec<PublicOplogPageEntry>,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    let mut result = Vec::with_capacity(page_entries.len());
+    for page_entry in page_entries {
+        match page_entry {
+            PublicOplogPageEntry::Included(entry) => result.push(entry),
+            PublicOplogPageEntry::Omitted(omitted) => result.push(
+                client
+                    .get_oplog_entry(
+                        &agent_id.component_id.0,
+                        &agent_id.agent_id,
+                        omitted.oplog_index.as_u64(),
+                        Some(omitted.component_revision.into()),
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow!(
+                            "get_oplog_entry failed for agent {agent_id}, oplog index {}: {e}",
+                            omitted.oplog_index
+                        )
+                    })?,
+            ),
+        }
+    }
+    Ok(result)
+}
+#[cfg(test)]
+mod tests {
+    use super::worker_connect_url;
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn the_connect_url_percent_encodes_the_agent_name() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: r#"counter("a/b?c#d%e")"#.to_string(),
+        };
+
+        assert_eq!(
+            worker_connect_url(
+                &url::Url::parse("http://localhost:9005").unwrap(),
+                &agent_id
+            ),
+            format!(
+                "ws://localhost:9005/v1/components/{}/workers/counter%28%22a%2Fb%3Fc%23d%25e%22%29/connect",
+                Uuid::nil()
+            )
+        );
+    }
+
+    #[test]
+    fn the_connect_url_uses_wss_for_an_https_gateway() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: "counter".to_string(),
+        };
+
+        assert_eq!(
+            worker_connect_url(
+                &url::Url::parse("https://release.dev-api.golem.cloud").unwrap(),
+                &agent_id
+            ),
+            format!(
+                "wss://release.dev-api.golem.cloud:443/v1/components/{}/workers/counter/connect",
+                Uuid::nil()
+            )
+        );
     }
 }

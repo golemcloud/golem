@@ -45,8 +45,8 @@ use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
 use golem_common::schema::{
-    AgentTypeSchema, MetadataEnvelope, ResultSpec, Role, SchemaGraph, SchemaType, SchemaTypeDef,
-    TypeId,
+    AgentTypeSchema, MetadataEnvelope, PermissionCardSpec, ResultSpec, Role, SchemaGraph,
+    SchemaType, SchemaTypeDef, TypeId,
 };
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -107,6 +107,23 @@ impl GeneratedPackage {
         assert!(
             output.status.success(),
             "moon check failed in {}:\nstdout:\n{}\nstderr:\n{}",
+            self.module_dir(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    fn test_native(&self) {
+        let output = std::process::Command::new("moon")
+            .arg("test")
+            .arg("--target")
+            .arg("native")
+            .current_dir(self.module_dir())
+            .output()
+            .expect("failed to run moon; is it installed?");
+        assert!(
+            output.status.success(),
+            "moon test failed in {}:\nstdout:\n{}\nstderr:\n{}",
             self.module_dir(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
@@ -175,6 +192,198 @@ fn moon_check_wasm(path: &std::path::Path) {
     );
 }
 
+#[test]
+fn guest_streams_compile_and_run_occurrence_codecs() {
+    let mut fixture = crate::bridge_gen::fixtures::guest_streaming_agent_type("moonbit");
+    fixture.schema.defs.push(def(
+        "FailureItem",
+        SchemaType::record(vec![
+            named_field("first", SchemaType::stream(Some(SchemaType::s32()))),
+            named_field("narrow", SchemaType::s8()),
+            named_field(
+                "last",
+                SchemaType::list(SchemaType::stream(Some(SchemaType::s32()))),
+            ),
+        ]),
+    ));
+    fixture.methods.push(method(
+        "failure",
+        vec![field(
+            "items",
+            SchemaType::stream(Some(ref_to("FailureItem"))),
+        )],
+        None,
+    ));
+    let guest = generate_without_check(fixture, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    for name in [
+        "consume",
+        "produce",
+        "exchange",
+        "forward",
+        "nested",
+        "recursive",
+        "shapes",
+    ] {
+        assert!(!source.contains(&format!("::trigger_{name}(")));
+        assert!(!source.contains(&format!("::schedule_{name}(")));
+        assert!(!source.contains(&format!("::schedule_cancelable_{name}(")));
+    }
+    assert!(source.contains("::trigger_status("));
+    assert!(source.contains("@agents.encode_invocation_input_async"));
+    assert!(source.contains("@schema.AgentStream[@schema.AgentStream[StreamItem]]"));
+    assert!(!source.contains("StreamEncodeContext"));
+    assert!(!source.contains("register_input_stream"));
+    moon_check_wasm(guest.path());
+    let manifest = guest.path().join("client/moon.pkg");
+    let mut imports = std::fs::read_to_string(&manifest).unwrap();
+    imports.push_str(
+        "\nimport {\n  \"golemcloud/golem_sdk/async-core\" @async_core,\n} for \"wbtest\"\n",
+    );
+    std::fs::write(manifest, imports).unwrap();
+    std::fs::write(guest.path().join("client/streams_wbtest.mbt"), r#"
+///|
+fn run_stream_test(body : async () -> Unit) -> Unit raise {
+  let mut callback = @async_core.with_waitableset(async fn() {
+    body()
+    @async_core.task_returned()
+  })
+  let mut steps = 0
+  while callback != 0 {
+    steps += 1
+    assert_true(steps < 1000)
+    assert_eq(callback & 0xf, 1)
+    callback = @async_core.cb(0, 0, 0)
+  }
+}
+
+///|
+test "erased schemas keep their occurrence codecs" {
+  assert_true(stream_encode_shapes_input_0(12) is @model.S8(12))
+  assert_true(stream_encode_shapes_input_1(12) is @model.S32(12))
+  assert_true(stream_encode_shapes_input_2(["a"]) is @model.List(_))
+  assert_true(stream_encode_shapes_input_3(["a", "b"]) is @model.FixedList(_))
+  assert_true(stream_encode_shapes_input_5("a") is @model.Tuple([@model.String("a")]))
+  try stream_encode_shapes_input_0(128) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected narrow integer failure") }
+  try stream_encode_shapes_input_3(["a"]) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected fixed-list failure") }
+  run_stream_test(async fn() {
+    let narrow = produce_shapes_input_0_stream(async fn(writer) {
+      assert_true(writer.write_one(12) is @schema.Accepted)
+    })
+    assert_eq(narrow.read(), Some(12))
+    assert_true(narrow.read() is None)
+    let single = produce_shapes_input_5_stream(async fn(writer) {
+      assert_true(writer.write_one("tuple") is @schema.Accepted)
+    })
+    assert_eq(single.read(), Some("tuple"))
+    assert_true(single.read() is None)
+  })
+}
+
+///|
+test "native custom streams are lazy recursive and directly forwardable" {
+  let calls = Ref(0)
+  let released = Ref(0)
+  let stream = produce_produce_output_stream(async fn(writer) {
+    calls.val += 1
+    assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
+  }, on_unstarted_drop=() => { released.val += 1 })
+  let bundle : StreamBundle = { optional: Some(stream), siblings: [], named: {}, outcome: Err("empty") }
+  let forwarded = decode_StreamBundle(encode_StreamBundle(bundle))
+  assert_eq(calls.val, 0)
+  release_StreamBundle(forwarded)
+  assert_eq(released.val, 1)
+  run_stream_test(async fn() {
+    let inner = produce_nested_input_0_0_stream(async fn(writer) {
+      assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
+    })
+    let inner = stream_decode_nested_input_0(stream_encode_nested_input_0(inner))
+    let item = inner.read().unwrap()
+    assert_eq(item.label, "root")
+    assert_eq(item.children[0].label, "child")
+    assert_true(inner.read() is None)
+  })
+}
+
+///|
+test "generated batch release traverses failing fields and unconverted items" {
+  let drops = Ref(0)
+  fn endpoint() -> @schema.AgentStream[Int] {
+    @schema.AgentStream::produce(async fn(_) { fail("must not pull") },
+      on_unstarted_drop=() => { drops.val += 1 })
+  }
+  run_stream_test(async fn() {
+    let (writer, stream) = new_failure_input_0_stream()
+    let items : Array[FailureItem] = [
+      { first: endpoint(), narrow: 128, last: [endpoint(), endpoint()] },
+      { first: endpoint(), narrow: 2, last: [endpoint()] },
+    ]
+    try writer.write_all(items) catch {
+      CodecError(message) => assert_eq(message, "s8 value out of range")
+      error => fail(repr(error))
+    } noraise { _ => fail("expected encoding failure") }
+    assert_eq(drops.val, 5)
+    writer.close()
+    stream.drop()
+  })
+  let value : @model.SchemaValue = @model.Record([endpoint().to_schema_value(), @model.String("bad"), @model.List([endpoint().to_schema_value()])])
+  try decode_FailureItem(value) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected decoding failure") }
+  assert_eq(drops.val, 7)
+}
+"#).unwrap();
+    let output = std::process::Command::new(
+        workspace_root()
+            .unwrap()
+            .join("sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh"),
+    )
+    .arg("client")
+    .current_dir(guest.path())
+    .output()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "generated runtime tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_streams_reject_missing_item_schema() {
+    let fixture = agent(
+        "Untyped",
+        "moonbit",
+        vec![],
+        vec![method("read", vec![], Some(SchemaType::stream(None)))],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let mut generator = MoonBitBridgeGenerator::new_with_mode(
+        fixture,
+        Utf8Path::from_path(dir.path()).unwrap(),
+        true,
+        MoonBitBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    assert!(
+        generator
+            .generate()
+            .unwrap_err()
+            .to_string()
+            .contains("require an element schema")
+    );
+}
+
 fn tool_doc(summary: &str) -> Doc {
     Doc {
         summary: summary.to_string(),
@@ -191,6 +400,7 @@ fn empty_tool_body() -> CommandBody {
         constraints: vec![],
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: vec![],
         annotations: None,
@@ -370,6 +580,7 @@ fn phase_eight_tool() -> Tool {
 
     Tool {
         version: "1".into(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![
                 root,
@@ -480,13 +691,16 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
     assert!(!source.contains("@runtime"));
     for expected in [
         "pub(all) struct NewClient",
-        "pub async fn NewClient::new_2(",
-        "pub async fn NewClient::drop_2(",
+        "pub fn NewClient::new_2(",
+        "pub fn NewClient::drop_2(",
+        "pub fn NewClient::new_3(",
         "pub async fn NewClient::client(",
+        "@tool.TypedToolInvocation[String, NewError]",
+        "@tool.TypedToolInvocation[Unit, @tool.NoToolError]",
+        ".client.start(",
+        "@tool.typed_invocation(invocation, true, false, fn(result)",
         "stdin : @asyncCore.Stream[Byte]?",
         "stdin : @asyncCore.Stream[Byte]",
-        "@asyncCore.Stream[Byte]?",
-        "@asyncCore.Stream[Byte]",
         "pub(all) enum NewError",
         "Error(String)",
         "Error_2(UnstructuredText)",
@@ -515,6 +729,21 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
         r#"pub async fn consume() -> Unit {
   let client = @client.NewClient::new()
   ignore(client.client())
+  match client.new_3() {
+    Ok(invocation) => {
+      ignore(invocation.stdout)
+      invocation.cancel()
+    }
+    Err(_) => ()
+  }
+  match client.new_3() {
+    Ok(invocation) => ignore(invocation.get())
+    Err(_) => ()
+  }
+  match client.new_3() {
+    Ok(invocation) => ignore(invocation.collect())
+    Err(_) => ()
+  }
   client.drop()
 }
 "#,
@@ -538,7 +767,46 @@ fn guest_tool_mode_moon_checks_fixed_codec_type_name_collision() {
     moon_check_wasm(dir.path());
 }
 
-// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn guest_tool_mode_generates_name_aware_error_decoder() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut tool = phase_eight_tool();
+    let errors = &mut tool.commands.nodes[0].body.as_mut().unwrap().errors;
+    errors[0].name = "first-text".into();
+    errors[1].name = "restricted-text".into();
+    errors.push(ErrorCase {
+        name: "second-text".into(),
+        doc: tool_doc("another text error"),
+        kind: ErrorKind::RuntimeError,
+        exit_code: 3,
+        payload: Some(SchemaType::string()),
+    });
+    errors.push(ErrorCase {
+        name: "empty".into(),
+        doc: tool_doc("empty error"),
+        kind: ErrorKind::RuntimeError,
+        exit_code: 4,
+        payload: None,
+    });
+    let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+    for expected in [
+        "(name : String, value : @types.TypedSchemaValue) -> Result[NewError, String]?",
+        "\"first-text\" => {",
+        "\"second-text\" => {",
+        "\"empty\" => {",
+        "return Some(Ok(NewError::Empty))",
+        "_ => None",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    assert!(!source.contains("payload did not match any declared error case"));
+    moon_check_wasm(dir.path());
+}
+
 #[test]
 fn guest_tool_mode_marks_substring_collision_parameter_used() {
     let dir = TempDir::new().unwrap();
@@ -622,6 +890,78 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
 }
 
 #[test]
+fn guest_mode_moon_checks_host_managed_capability_methods() {
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        ("secret", SchemaType::secret(Default::default())),
+        ("quota", SchemaType::quota_token(Default::default())),
+        (
+            "permission",
+            SchemaType::permission_card(Default::default()),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("capability-envelope"))],
+                Some(ref_to("capability-envelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("capability-envelope", envelope)],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    let package = std::fs::read_to_string(guest.path().join("client/moon.pkg")).unwrap();
+
+    assert!(source.contains("@model.GuestSecretHandle"));
+    assert!(source.contains("@quota.QuotaToken"));
+    assert!(source.contains("@permissions.PermissionCard"));
+    assert!(!source.contains("GuestPermissionCardHandle"));
+    assert!(source.contains("@schema.to_value_as"));
+    assert!(source.contains("@schema.from_value_as"));
+    assert!(package.contains("\"golemcloud/golem_sdk/quota\""));
+    assert!(package.contains("\"golemcloud/golem_sdk/permissions\""));
+    assert!(package.contains("\"golemcloud/golem_sdk/schema\""));
+    moon_check_wasm(guest.path());
+
+    let without_quota = generate_without_check(
+        agent(
+            "SecretAgent",
+            "moonbit",
+            vec![],
+            vec![method(
+                "transfer",
+                vec![field("secret", SchemaType::secret(Default::default()))],
+                Some(SchemaType::secret(Default::default())),
+            )],
+            vec![],
+            AgentMode::Durable,
+        ),
+        MoonBitBridgeMode::GuestWasmRpc,
+    );
+    let package = std::fs::read_to_string(without_quota.path().join("client/moon.pkg")).unwrap();
+    assert!(!package.contains("golemcloud/golem_sdk/quota"));
+}
+
+#[test]
 fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     let mut agent_type = agent(
         "ConfiguredCounter",
@@ -662,7 +1002,23 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     assert!(source.contains("pub fn ConfiguredCounterClient::get_agent_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::phantom_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::drop("));
-    assert!(source.contains("self.client.invoke_and_await(\"read\", input).value"));
+    assert!(source.contains("self.client.invoke_and_await(\"read\", input, scope_card?).value"));
+    assert!(source.contains(
+        "pub async fn ConfiguredCounterClient::read(self : ConfiguredCounterClient, delta : Int, scope_card? : @permissions.ScopeCard) -> Int64 {"
+    ));
+    assert!(source.contains(
+        "pub fn ConfiguredCounterClient::set_default_scope_card(self : ConfiguredCounterClient, card : @permissions.ScopeCard?) -> Unit {"
+    ));
+    // The scope card is checked before the input encoding moves any argument.
+    let read_body = &source[source
+        .find("pub async fn ConfiguredCounterClient::read(")
+        .unwrap()..];
+    let check = read_body
+        .find("self.client.check_scope_card(scope_card?)")
+        .unwrap();
+    let encode = read_body.find("@agents.encode_invocation_input").unwrap();
+    assert!(check < encode);
+    assert!(!source.contains("self.client.invoke(\"read\", input, scope_card"));
     assert!(source.contains("let _ = self.client.invoke(\"read\", input)"));
     assert!(
         source.contains("let _ = self.client.schedule_invocation(scheduled_at, \"read\", input)")
@@ -710,6 +1066,366 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
         "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_attaches_scope_cards_to_awaited_calls_only() {
+    let agent_type = agent(
+        "Delegate",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "forward",
+                vec![
+                    field("scope_card", SchemaType::string()),
+                    field("scope_card_2", SchemaType::u32()),
+                    field("card", SchemaType::permission_card(Default::default())),
+                ],
+                Some(SchemaType::permission_card(Default::default())),
+            ),
+            method("set_default_scope_card", vec![], None),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    // A user parameter named `scope_card` is renamed away from the label and
+    // from every other parameter.
+    assert!(source.contains(
+        "pub async fn DelegateClient::forward(self : DelegateClient, scope_card_2 : String, scope_card_2_2 : UInt, card : @permissions.PermissionCard, scope_card? : @permissions.ScopeCard) -> @permissions.PermissionCard {"
+    ));
+    // A user method cannot shadow the generated client default setter.
+    assert!(source.contains("pub async fn DelegateClient::set_default_scope_card_2("));
+    assert!(!source.contains("trigger_forward(self : DelegateClient, scope_card_2 : String, scope_card_2_2 : UInt, card : @permissions.PermissionCard, scope_card?"));
+
+    std::fs::create_dir(guest.path().join("consumer")).unwrap();
+    std::fs::write(
+        guest.path().join("consumer/moon.pkg"),
+        "import {\n  \"delegate-guest-client/client\" @client,\n  \"golemcloud/golem_sdk/permissions\",\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        guest.path().join("consumer/consumer.mbt"),
+        r#"pub async fn delegate(
+  scope : @permissions.ScopeCard,
+  card : @permissions.PermissionCard,
+) -> @permissions.PermissionCard {
+  let client = @client.DelegateClient::get()
+  defer client.drop()
+  client.set_default_scope_card(Some(scope))
+  client.set_default_scope_card_2(scope_card=scope)
+  client.set_default_scope_card(None)
+  client.forward("value", 2, card, scope_card=scope)
+}
+"#,
+    )
+    .unwrap();
+    moon_check_wasm(guest.path());
+}
+
+#[test]
+fn guest_mode_maps_polymorphic_permission_cards_to_template_cards() {
+    let template = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let concrete = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let agent_type = agent(
+        "TemplateHolder",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "exchange",
+                vec![field("template", template()), field("card", concrete())],
+                Some(template()),
+            ),
+            method(
+                "templates",
+                vec![field("cards", SchemaType::list(template()))],
+                Some(SchemaType::option(concrete())),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    assert!(source.contains(
+        "pub async fn TemplateHolderClient::exchange(self : TemplateHolderClient, template : @permissions.PolymorphicPermissionCard, card : @permissions.PermissionCard, scope_card? : @permissions.ScopeCard) -> @permissions.PolymorphicPermissionCard {"
+    ));
+    assert!(source.contains(
+        "pub async fn TemplateHolderClient::templates(self : TemplateHolderClient, cards : Array[@permissions.PolymorphicPermissionCard], scope_card? : @permissions.ScopeCard) -> @permissions.PermissionCard? {"
+    ));
+
+    // The typed client accepts each card only where its kind is declared.
+    std::fs::create_dir(guest.path().join("consumer")).unwrap();
+    let consumer_package = "import {\n  \"template-holder-guest-client/client\" @client,\n  \"golemcloud/golem_sdk/permissions\",\n}\n";
+    std::fs::write(guest.path().join("consumer/moon.pkg"), consumer_package).unwrap();
+    std::fs::write(
+        guest.path().join("consumer/consumer.mbt"),
+        r#"pub async fn exchange(
+  template : @permissions.PolymorphicPermissionCard,
+  card : @permissions.PermissionCard,
+) -> @permissions.PermissionCard? {
+  let client = @client.TemplateHolderClient::get()
+  defer client.drop()
+  let returned = client.exchange(template, card)
+  client.templates([returned])
+}
+"#,
+    )
+    .unwrap();
+    moon_check_wasm(guest.path());
+
+    std::fs::write(
+        guest.path().join("consumer/consumer.mbt"),
+        r#"pub async fn swap(
+  template : @permissions.PolymorphicPermissionCard,
+  card : @permissions.PermissionCard,
+) -> Unit {
+  ignore(@client.TemplateHolderClient::get().exchange(card, template))
+}
+"#,
+    )
+    .unwrap();
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && diagnostics.contains("Expr Type Mismatch"),
+        "swapped card kinds unexpectedly compiled:\n{diagnostics}"
+    );
+}
+
+#[test]
+fn guest_mode_consumers_cannot_forge_or_serialize_permission_cards() {
+    let agent_type = agent(
+        "CardHolder",
+        "moonbit",
+        vec![],
+        vec![method(
+            "keep",
+            vec![field(
+                "card",
+                SchemaType::permission_card(Default::default()),
+            )],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let forgery_dir = guest.path().join("forgery");
+    std::fs::create_dir(&forgery_dir).unwrap();
+
+    let check_forgery = |imports: &str, body: &str| -> String {
+        std::fs::write(
+            forgery_dir.join("moon.pkg"),
+            format!("import {{\n{imports}\n}}\n\nsupported_targets = \"+wasm\"\n"),
+        )
+        .unwrap();
+        std::fs::write(forgery_dir.join("forgery.mbt"), body).unwrap();
+        let output = std::process::Command::new("moon")
+            .arg("-C")
+            .arg(guest.path())
+            .arg("check")
+            .arg("--target")
+            .arg("wasm")
+            .output()
+            .expect("failed to run moon; is it installed?");
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !output.status.success(),
+            "forgery unexpectedly compiled:\n{body}\n{diagnostics}"
+        );
+        diagnostics
+    };
+    let assert_rejected = |imports: &str, body: &str, expected: &str| {
+        let diagnostics = check_forgery(imports, body);
+        assert!(
+            diagnostics.contains(expected),
+            "expected `{expected}` in the diagnostics:\n{diagnostics}"
+        );
+    };
+
+    let permissions = "  \"golemcloud/golem_sdk/permissions\",\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,";
+
+    // No struct literal builds a card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(raw : @types.PermissionCard) -> @permissions.PermissionCard {
+  { handle: raw }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.PermissionCard",
+    );
+    // No constructor turns a raw resource index into a card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge() -> @permissions.PermissionCard {
+  @permissions.PermissionCard::from_raw(@types.PermissionCard::PermissionCard(7))
+}
+"#,
+        "has no method from_raw",
+    );
+    // No constructor or parser builds a card ID.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(uuid : @types.Uuid) -> @permissions.CardId {
+  { uuid, }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.CardId",
+    );
+    // A card has no JSON codec.
+    assert_rejected(
+        permissions,
+        r#"pub fn serialize(card : @permissions.PermissionCard) -> Json {
+  card.to_json()
+}
+"#,
+        "has no method to_json",
+    );
+    // The take-once holder lives in an SDK-internal package that user code
+    // cannot import.
+    assert_rejected(
+        "  \"golemcloud/golem_sdk/internal/permission_card\" @card,\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,",
+        r#"pub fn forge() -> @card.GuestPermissionCardHandle {
+  @card.adopt(@types.PermissionCard::PermissionCard(7))
+}
+"#,
+        "Cannot import internal package golemcloud/golem_sdk/internal/permission_card",
+    );
+    // The holder that a card shares with its schema value hands out no raw
+    // handle: its package is internal, so no operation on it is callable.
+    let with_schema = "  \"golemcloud/golem_sdk/permissions\",\n  \"golemcloud/golem_sdk/schema\",\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,";
+    assert_rejected(
+        with_schema,
+        r#"pub fn steal(card : @permissions.PermissionCard) -> @types.PermissionCard? {
+  match @schema.to_value_as(card) {
+    PermissionCard(holder) => holder.take()
+    _ => None
+  }
+}
+"#,
+        "package golemcloud/golem_sdk/internal/permission_card is not imported",
+    );
+    // A template card is built only by the SDK, has no JSON codec, and is not
+    // a concrete card or a scope card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(card : @permissions.PermissionCard) -> @permissions.PolymorphicPermissionCard {
+  { handle: card.handle }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.PolymorphicPermissionCard",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn forge() -> @permissions.PolymorphicPermissionCard {
+  @permissions.PolymorphicPermissionCard::from_raw(@types.PermissionCard::PermissionCard(7))
+}
+"#,
+        "has no method from_raw",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn serialize(card : @permissions.PolymorphicPermissionCard) -> Json {
+  card.to_json()
+}
+"#,
+        "has no method to_json",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn convert(card : @permissions.PolymorphicPermissionCard) -> @permissions.PermissionCard {
+  card
+}
+"#,
+        "Expr Type Mismatch",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn scope(card : @permissions.PolymorphicPermissionCard) -> @permissions.ScopeCard raise {
+  @permissions.derive_scope([], @permissions.Bounds::new(), scope_parents=[card])
+}
+"#,
+        "Expr Type Mismatch",
+    );
+    // A wallet entry is built only by the SDK, so user code cannot label a
+    // card.
+    assert_rejected(
+        permissions,
+        r#"pub fn label(card : @permissions.PolymorphicPermissionCard) -> @permissions.WalletCard {
+  Template(card)
+}
+"#,
+        "Cannot create values of the read-only type: Template",
+    );
+    // A scope card is a different type: no struct literal builds one, it has
+    // no consuming operations and no schema support, and it is not a
+    // permission card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(card : @permissions.ScopeCard) -> @permissions.ScopeCard {
+  { handle: card.handle }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.ScopeCard",
+    );
+    for consuming in [
+        "revoke()",
+        "install(Agent(target))",
+        "derive_child(@permissions.Bounds::new())",
+    ] {
+        assert_rejected(
+            permissions,
+            &format!(
+                "pub fn consume(card : @permissions.ScopeCard, target : @types.AgentId) -> Unit {{\n  ignore(card.{consuming})\n}}\n"
+            ),
+            &format!("has no method {}", consuming.split('(').next().unwrap()),
+        );
+    }
+    assert_rejected(
+        with_schema,
+        r#"pub fn lower(card : @permissions.ScopeCard) -> Unit {
+  ignore(@schema.to_value_as(card))
+}
+"#,
+        "does not implement trait @golemcloud/golem_sdk/schema.IntoSchema",
+    );
+    assert_rejected(
+        "  \"golemcloud/golem_sdk/permissions\",\n  \"card-holder-guest-client/client\" @client,",
+        r#"pub async fn pass(card : @permissions.ScopeCard) -> Unit {
+  @client.CardHolderClient::get().keep(card)
+}
+"#,
+        "Expr Type Mismatch",
+    );
+    assert_rejected(
+        "  \"golemcloud/golem_sdk/permissions\",\n  \"card-holder-guest-client/client\" @client,",
+        r#"pub fn attach(card : @permissions.PermissionCard) -> Unit {
+  @client.CardHolderClient::get().set_default_scope_card(Some(card))
+}
+"#,
+        "Expr Type Mismatch",
     );
 }
 
@@ -910,9 +1626,9 @@ fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
     let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
     let expected_methods = [
-        "pub async fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient)",
-        "pub async fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient)",
-        "pub async fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient)",
+        "pub async fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
+        "pub async fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
+        "pub async fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
     ];
     let missing = expected_methods
         .iter()
@@ -1644,6 +2360,10 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
             .contains("@runtime.invoke_agent(self.resolved, \"f1\", parameters, \"await\", None)")
     );
     assert!(client.contains("decode_Location(value)"));
+    assert!(
+        client.contains(".encode(value))"),
+        "generated REST result must be validated against its local expected schema:\n{client}"
+    );
     assert!(client.contains("pub async fn Agent1::trigger_f1(self : Agent1) -> Unit raise {"));
     assert!(
         client.contains(
@@ -1880,6 +2600,7 @@ fn config_constructors_are_generated() {
     // Config entries are built from Some values, preserving the original path.
     assert!(client.contains("let agent_config : Array[@runtime.AgentConfigEntry] = []"));
     assert!(client.contains("agent_config.push(@runtime.AgentConfigEntry::{ path: [\"api-key\"]"));
+    assert!(client.contains(".encode_application(cfg0)"));
     assert!(client.contains("path: [\"max\", \"retries\"]"));
     assert!(client.contains("None => ()"));
     // create_agent receives the built config array.
@@ -1889,6 +2610,129 @@ fn config_constructors_are_generated() {
     assert!(client.contains(
         "ConfigAgent::get_phantom_with_config(name, @runtime.random_uuid(), config_api_key, config_max_retries)"
     ));
+}
+
+#[test]
+fn reflection_corpus_drives_generated_runtime_wire_regressions() {
+    let corpus: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            workspace_root()
+                .unwrap()
+                .join("test-data/reflection-conformance/v1.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let case = |id: &str| {
+        corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap()
+    };
+    let binary_expected = case("canonical/binary-mime")["expected"].to_string();
+    let config_expected = case("config/canonical-entry")["expected"].to_string();
+    let request_expected = format!(
+        "{{\"appName\":\"app\",\"envName\":\"env\",\"agentTypeName\":\"ConfigAgent\",\"parameters\":{{\"kind\":\"tuple\",\"value\":{{\"elements\":[]}}}},\"config\":[{config_expected},{{\"path\":[\"optional\"],\"value\":\"west\"}}]}}"
+    );
+
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "moonbit",
+        vec![],
+        vec![method("ping", vec![], None)],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(vec!["limits", "maximum"], SchemaType::s64())];
+    let pkg = GeneratedPackage::new(agent_type);
+    let source = r#"test "reflection corpus bridge wire cases" {
+  let mime_type = "application/octet-stream"
+  let binary_value = BinaryValue(b"\xfb\xff", Some(mime_type))
+  assert_eq(
+    schema_value_to_json(binary_value).stringify(),
+    "{\"kind\":\"binary\",\"value\":{\"bytes\":[251,255],\"mimeType\":\"application/octet-stream\"}}",
+  )
+  let binary_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"binary\",\"value\":{\"restrictions\":{}}}}",
+  )
+  assert_eq(
+    binary_codec.encode_application(binary_value).stringify(),
+    __BINARY_EXPECTED__,
+  )
+  let s64_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"s64\",\"value\":{}}}",
+  )
+  let entry = AgentConfigEntry::{
+    path: ["limits", "maximum"],
+    value: s64_codec.encode_application(S64Value(9223372036854775807L)),
+  }
+  let option_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"option\",\"value\":{\"inner\":{\"kind\":\"string\",\"value\":{}}}}}",
+  )
+  let option_value = OptionValue(Some(StringValue("west")))
+  assert_eq(
+    option_codec.encode(option_value).stringify(),
+    "{\"kind\":\"option\",\"value\":{\"inner\":{\"kind\":\"string\",\"value\":\"west\"}}}",
+  )
+  assert_eq(option_codec.encode_application(option_value).stringify(), "\"west\"")
+  let variant_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"variant\",\"value\":{\"cases\":[{\"name\":\"payload\",\"payload\":{\"kind\":\"string\",\"value\":{}}}]}}}",
+  )
+  assert_eq(
+    variant_codec
+    .encode_application(VariantValue(0, Some(StringValue("value"))))
+    .stringify(),
+    "{\"payload\":\"value\"}",
+  )
+  let result_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"result\",\"value\":{\"spec\":{\"ok\":{\"kind\":\"string\",\"value\":{}}}}}}",
+  )
+  assert_eq(
+    result_codec
+    .encode_application(ResultValue(ResultOk(Some(StringValue("ready")))))
+    .stringify(),
+    "{\"ok\":\"ready\"}",
+  )
+  let union_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"union\",\"value\":{\"spec\":{\"branches\":[{\"tag\":\"command\",\"body\":{\"kind\":\"string\",\"value\":{}},\"discriminator\":{\"rule\":\"prefix\",\"value\":{\"prefix\":\"cmd:\"}}}]}}}}",
+  )
+  assert_eq(
+    union_codec
+    .encode_application(UnionValue("command", StringValue("cmd:run")))
+    .stringify(),
+    "\"cmd:run\"",
+  )
+  let option_entry = AgentConfigEntry::{
+    path: ["optional"],
+    value: option_codec.encode_application(option_value),
+  }
+  let request = encode_create_agent_request(
+    "app",
+    "env",
+    "ConfigAgent",
+    TupleValue([]),
+    None,
+    [entry, option_entry],
+  )
+  assert_eq(request.stringify(), __REQUEST_EXPECTED__)
+}
+"#
+    .replace(
+        "__BINARY_EXPECTED__",
+        &serde_json::to_string(&binary_expected).unwrap(),
+    )
+    .replace(
+        "__REQUEST_EXPECTED__",
+        &serde_json::to_string(&request_expected).unwrap(),
+    );
+    std::fs::write(
+        pkg.module_dir().join("runtime/reflection_wire_wbtest.mbt"),
+        source,
+    )
+    .unwrap();
+    pkg.test_native();
 }
 
 /// An ephemeral agent must not get a `get_with_config` (no parameter-addressable
@@ -2109,4 +2953,429 @@ fn unstructured_text_and_binary_restrictions_are_enforced() {
     assert!(client.contains(
         "@runtime.unstructured_binary_from_schema_value(\"output\", value, [\"image/png\"])"
     ));
+}
+
+#[test]
+fn external_recursive_stream_client_compiles() {
+    let recursive = TypeId::new("streaming.Node");
+    let mut agent_type = agent(
+        "StreamingAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "exchange",
+            vec![field(
+                "roots",
+                SchemaType::list(SchemaType::ref_to(recursive.clone())),
+            )],
+            Some(SchemaType::option(SchemaType::stream(Some(
+                SchemaType::binary(BinaryRestrictions::default()),
+            )))),
+        )],
+        vec![def(
+            "streaming.Node",
+            SchemaType::record(vec![
+                named_field("name", SchemaType::string()),
+                named_field(
+                    "children",
+                    SchemaType::list(SchemaType::ref_to(TypeId::new("streaming.Node"))),
+                ),
+                named_field(
+                    "events",
+                    SchemaType::stream(Some(SchemaType::stream(Some(SchemaType::u8())))),
+                ),
+            ]),
+        )],
+        AgentMode::Durable,
+    );
+    agent_type.source_language = "rust".to_string();
+    let pkg = GeneratedPackage::new(agent_type);
+    let client = pkg.client_source();
+    assert!(client.contains("@runtime.invoke_streaming_agent"));
+    assert!(client.contains("wire_kind=\"u8\""));
+    assert!(!client.contains("trigger_exchange"));
+    assert!(!client.contains("schedule_exchange"));
+    let runtime_manifest =
+        std::fs::read_to_string(pkg.module_dir().join("runtime/moon.pkg")).unwrap();
+    assert!(runtime_manifest.contains("\"streaming-agent-client/runtime/ws_adapter\" @websocket"));
+    assert!(!runtime_manifest.contains("__GOLEM_MODULE__"));
+    assert!(
+        pkg.module_dir()
+            .join("runtime/ws_adapter/client.mbt")
+            .exists()
+    );
+    std::fs::copy(
+        workspace_root()
+            .unwrap()
+            .join("golem-client/tests/fixtures/stream-session-v1/binary-messages.json"),
+        pkg.module_dir().join("binary-messages.json"),
+    )
+    .unwrap();
+    for fixture in ["json-messages.json", "malformed.json", "schema-values.json"] {
+        std::fs::copy(
+            workspace_root()
+                .unwrap()
+                .join("golem-client/tests/fixtures/stream-session-v1")
+                .join(fixture),
+            pkg.module_dir().join(fixture),
+        )
+        .unwrap();
+    }
+    let mod_path = pkg.module_dir().join("moon.mod.json");
+    let mut module: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&mod_path).unwrap()).unwrap();
+    module["deps"]["moonbitlang/x"] = serde_json::json!("0.4.39");
+    std::fs::write(&mod_path, serde_json::to_string_pretty(&module).unwrap()).unwrap();
+    let manifest_path = pkg.module_dir().join("runtime/moon.pkg");
+    let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    manifest = manifest.replacen(
+        "import {",
+        "import {\n  \"moonbitlang/core/encoding/base64\",\n  \"moonbitlang/x/fs\" @fs,",
+        1,
+    );
+    std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::write(
+        pkg.module_dir().join("runtime/frozen_fixture_wbtest.mbt"),
+        r#"///|
+fn fixture_type(input : Json) -> Json raise {
+  let object = expect_object(input)
+  let kind = expect_string(get_field(object, "kind"))
+  let value = match kind {
+    "ref" => pvc_obj([("id", get_field(object, "name"))])
+    "text" => pvc_obj([("restrictions", pvc_obj([]))])
+    "binary" => {
+      let restrictions : Array[(String, Json)] = []
+      for name in ["mimeTypes", "minBytes", "maxBytes"] {
+        match object.get(name) {
+          Some(value) => restrictions.push((name, value))
+          None => ()
+        }
+      }
+      pvc_obj([("restrictions", pvc_obj(restrictions))])
+    }
+    "path" => pvc_obj([("spec", pvc_obj([]))])
+    "url" => pvc_obj([("restrictions", pvc_obj([]))])
+    "quantity" => pvc_obj([
+      ("spec", pvc_obj([
+        ("baseUnit", Json::string("kg")),
+        ("allowedSuffixes", Json::array([])),
+      ])),
+    ])
+    "record" => pvc_obj([
+      ("fields", Json::array(expect_array(get_field(object, "fields")).map(field => {
+        let field = expect_object(field)
+        pvc_obj([
+          ("name", get_field(field, "name")),
+          ("body", fixture_type(get_field(field, "type"))),
+        ])
+      }))),
+    ])
+    "tuple" => pvc_obj([
+      ("elements", Json::array(expect_array(get_field(object, "elements")).map(fixture_type))),
+    ])
+    "list" => pvc_obj([("element", fixture_type(get_field(object, "element")))])
+    "fixed-list" => pvc_obj([
+      ("element", fixture_type(get_field(object, "element"))),
+      ("length", get_field(object, "length")),
+    ])
+    "map" => pvc_obj([
+      ("key", fixture_type(get_field(object, "key"))),
+      ("value", fixture_type(get_field(object, "value"))),
+    ])
+    "enum" => pvc_obj([("cases", get_field(object, "cases"))])
+    "flags" => pvc_obj([("flags", get_field(object, "flags"))])
+    "variant" => pvc_obj([
+      ("cases", Json::array(expect_array(get_field(object, "cases")).map(case => {
+        let case = expect_object(case)
+        let fields = [("name", get_field(case, "name"))]
+        match case.get("type") {
+          Some(value) => fields.push(("payload", fixture_type(value)))
+          None => ()
+        }
+        pvc_obj(fields)
+      }))),
+    ])
+    "option" => pvc_obj([("inner", fixture_type(get_field(object, "inner")))])
+    "result" => {
+      let spec : Array[(String, Json)] = []
+      for name in ["ok", "err"] {
+        match object.get(name) {
+          Some(Json::Null) | None => ()
+          Some(value) => spec.push((name, fixture_type(value)))
+        }
+      }
+      pvc_obj([("spec", pvc_obj(spec))])
+    }
+    "union" => pvc_obj([
+      ("spec", pvc_obj([
+        ("branches", Json::array(expect_array(get_field(object, "branches")).map(branch => {
+          let branch = expect_object(branch)
+          let discriminator = expect_object(get_field(branch, "discriminator"))
+          pvc_obj([
+            ("tag", get_field(branch, "name")),
+            ("body", fixture_type(get_field(branch, "type"))),
+            ("discriminator", pvc_obj([
+              ("rule", Json::string("prefix")),
+              ("value", pvc_obj([("prefix", get_field(discriminator, "prefix"))])),
+            ])),
+          ])
+        }))),
+      ])),
+    ])
+    "stream" => {
+      let fields : Array[(String, Json)] = []
+      match object.get("inner") {
+        Some(Json::Null) | None => ()
+        Some(value) => fields.push(("inner", fixture_type(value)))
+      }
+      pvc_obj(fields)
+    }
+    _ => pvc_obj([])
+  }
+  pvc_obj([("kind", Json::string(kind)), ("value", value)])
+}
+
+///|
+fn fixture_graph(vector : Map[String, Json]) -> Json raise {
+  let defs : Array[Json] = []
+  match vector.get("definitions") {
+    Some(Json::Object(values)) =>
+      for id, body in values {
+        defs.push(pvc_obj([
+          ("id", Json::string(id)),
+          ("name", Json::string(id)),
+          ("body", fixture_type(body)),
+        ]))
+      }
+    _ => ()
+  }
+  pvc_obj([
+    ("defs", Json::array(defs)),
+    ("root", fixture_type(get_field(vector, "schema"))),
+  ])
+}
+
+///|
+test "binary codec matches every frozen public v1 frame" {
+  let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("binary-messages.json")))
+  let vectors = expect_array(get_field(fixture, "vectors"))
+  for vector in vectors {
+    let object = expect_object(vector)
+    ignore(expect_string(get_field(object, "name")))
+    let metadata = parse_strict_json(expect_string(get_field(object, "metadata")))
+    let payload_hex = expect_string(get_field(object, "payloadHex"))
+    let payload = Bytes::makei(payload_hex.length() / 2, i => {
+      let pair = payload_hex.substring(start=i * 2, end=i * 2 + 2)
+      @string.parse_int(pair[:], base=16).to_byte()
+    })
+    let actual = @base64.encode(encode_binary_envelope(metadata, payload), padding=true)
+    assert_true(actual == expect_string(get_field(object, "frameBase64")))
+  }
+}
+
+///|
+test "native value codec directly consumes the frozen schema-value fixtures" {
+  let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("schema-values.json")))
+  for vector in expect_array(get_field(fixture, "vectors")) {
+    let vector = expect_object(vector)
+    let canonical = expect_string(get_field(vector, "canonical"))
+    let codec = public_value_codec(fixture_graph(vector).stringify())
+    let encoded = codec.encode(codec.decode(parse_strict_json(canonical))).stringify()
+    assert_eq(encoded, canonical)
+  }
+}
+
+///|
+test "native value codec directly rejects the frozen malformed schema-value fixtures" {
+  let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
+  for vector in expect_array(get_field(fixture, "vectors")) {
+    let vector = expect_object(vector)
+    if expect_string(get_field(vector, "lane")) == "schema-value" {
+      let codec = public_value_codec(fixture_graph(vector).stringify())
+      assert_true(raises(() => {
+        ignore(codec.decode(parse_strict_json(expect_string(get_field(vector, "input")))))
+      }))
+    }
+  }
+}
+
+///|
+test "text codec directly consumes frozen canonical and malformed fixtures" {
+  let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
+  for vector in expect_array(get_field(messages, "vectors")) {
+    let canonical = expect_string(get_field(expect_object(vector), "canonical"))
+    assert_eq(parse_strict_json(canonical).stringify(), canonical)
+  }
+  let malformed = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
+  for vector in expect_array(get_field(malformed, "vectors")) {
+    let object = expect_object(vector)
+    if expect_string(get_field(object, "name")) == "invalid-json" {
+      assert_true((try? parse_strict_json(expect_string(get_field(object, "input")))) is Err(_))
+    }
+  }
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn accepted_streaming_invocation_recovers_with_takeover() {
+    use std::io::BufRead;
+    let pkg = GeneratedPackage::new(agent(
+        "RecoveryAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "run",
+            vec![],
+            Some(SchemaType::stream(Some(SchemaType::u8()))),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    for (mode, expected_error) in [
+        ("success", ""),
+        ("resume-retryable", ""),
+        ("initial", "terminal rejection"),
+        ("other", "terminal rejection"),
+        (
+            "mismatch",
+            "attempt-conflict: rejection attempt does not match",
+        ),
+        ("second", "terminal rejection"),
+        ("second-retryable", "terminal rejection"),
+        (
+            "takeover-mismatch",
+            "attempt-conflict: rejection attempt does not match",
+        ),
+    ] {
+        let mut server = std::process::Command::new("python3")
+            .arg("-u")
+            .arg(
+                workspace_root()
+                    .unwrap()
+                    .join("cli/golem-cli/tests/bridge_gen/moonbit_recovery.py"),
+            )
+            .arg(mode)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut port = String::new();
+        std::io::BufReader::new(server.stdout.take().unwrap())
+            .read_line(&mut port)
+            .unwrap();
+        std::fs::write(
+            pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
+            include_str!("moonbit_recovery.mbt")
+                .replace("__PORT__", port.trim())
+                .replace("__ERROR__", expected_error),
+        )
+        .unwrap();
+        let result = std::panic::catch_unwind(|| pkg.test_native());
+        if result.is_err() {
+            let _ = server.kill();
+        }
+        let status = server.wait().unwrap();
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+        assert!(status.success(), "WebSocket recovery assertions failed");
+    }
+}
+
+// GOL-100 requires input ownership to move into an invocation, so a stream
+// already consumed directly must not subsequently be registered as an input.
+#[test]
+fn provisional_consumed_stream_cannot_be_registered_as_invocation_input() {
+    let pkg = GeneratedPackage::new(agent(
+        "AffineStreamAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::write(
+        pkg.module_dir()
+            .join("runtime/provisional_affine_wbtest.mbt"),
+        r#"///|
+async test "consumed stream cannot move into an invocation" {
+  let stream = AgentStream::from_next(async fn() { None })
+  ignore(stream.next())
+  let context = StreamEncodeContext::new()
+  inspect(
+    (try? register_input_stream(
+      context,
+      stream,
+      async fn(value) { U8Value(value) },
+      u8_public_codec(),
+    )) is Err(_),
+    content="true",
+  )
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+// GOL-100 requires input ownership to move into an invocation, so application
+// code must not retain cancellation or drop authority after registration.
+#[test]
+fn provisional_invocation_owned_stream_rejects_application_cancel_and_drop() {
+    let pkg = GeneratedPackage::new(agent(
+        "MovedStreamAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::write(
+        pkg.module_dir()
+            .join("runtime/provisional_moved_cancel_wbtest.mbt"),
+        r#"///|
+async test "invocation-owned stream rejects application cancellation" {
+  let mut cancellations = 0
+  let cancel_stream = AgentStream::from_next(
+    async fn() { None },
+    on_cancel=async fn(_) { cancellations += 1 },
+  )
+  let drop_stream = AgentStream::from_next(
+    async fn() { None },
+    on_cancel=async fn(_) { cancellations += 1 },
+  )
+  let context = StreamEncodeContext::new()
+  ignore(register_input_stream(
+    context,
+    cancel_stream,
+    async fn(value) { U8Value(value) },
+    u8_public_codec(),
+  ))
+  ignore(register_input_stream(
+    context,
+    drop_stream,
+    async fn(value) { U8Value(value) },
+    u8_public_codec(),
+  ))
+  let cancel_rejected = (try? cancel_stream.cancel()) is Err(_)
+  let drop_rejected = (try? drop_stream.drop()) is Err(_)
+  inspect([cancel_rejected, drop_rejected], content="[true, true]")
+  inspect(cancellations, content="0")
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
 }

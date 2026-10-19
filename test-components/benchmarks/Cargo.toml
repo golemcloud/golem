@@ -1,5 +1,8 @@
 [workspace]
 members = ["common-rust/common-lib", "benchmark-agent-rust"]
 
+[profile.release]
+strip = "symbols"
+
 [workspace.dependencies]
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }

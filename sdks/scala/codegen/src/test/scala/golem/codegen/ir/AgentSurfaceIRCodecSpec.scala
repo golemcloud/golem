@@ -189,7 +189,7 @@ class AgentSurfaceIRCodecSpec extends munit.FunSuite {
          |    "simpleName": "Old",
          |    "typeName": "Old",
          |    "constructor": { "params": [] },
-         |    "metadata": { "description": null, "mode": "durable", "snapshotting": "disabled" }
+         |    "metadata": { "description": null, "kind": "regular", "mode": "durable", "snapshotting": "disabled" }
          |  }]
          |}""".stripMargin
     val result = AgentSurfaceIRCodec.decode(json)

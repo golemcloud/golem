@@ -14,16 +14,22 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
+import { makeAgentId, parseAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
 import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/defineAgent';
 import type { AgentSpec } from '../src/defineAgent';
 import { method } from '../src/method';
-import { clientFor, RemoteCallError } from '../src/client';
+import {
+  defineAgentClient,
+  isRemoteCallError,
+  RemoteCallError,
+  RemoteOutputError,
+} from '../src/client';
 import { compileSchema } from '../src/schema/adapter';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
 import { Uuid } from '../src/uuid';
+import { ParsedAgentId } from '../src/agentId';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
@@ -33,6 +39,15 @@ import {
   typedSchemaValueToWit,
   v,
 } from '../src/internal/schema-model';
+import { PermissionCard, PolymorphicPermissionCard } from '../src/host/permissions';
+import {
+  fakeRawCard,
+  permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
+  rawOfPermissionCard,
+  rawOfScopeCard,
+  scopeCardFromRaw,
+} from './permissionCardTestSupport';
 
 function remoteClientTypeChecks(): void {
   const def = defineAgent({
@@ -43,11 +58,14 @@ function remoteClientTypeChecks(): void {
       add: method({ input: { by: z.number() }, returns: z.number() }),
     },
   });
-  const factory = clientFor(def);
-  const client = factory({ name: 'counter' });
+  const factory = def.client;
+  const client = factory.get({ name: 'counter' });
+  const definitionClient = def.client.get({ name: 'counter' });
+  const agentId = def.agentId({ name: 'counter' });
   const controller = new AbortController();
   void client.ping({ signal: controller.signal });
   void client.add({ by: 1 }, { signal: controller.signal });
+  void definitionClient.ping();
   // @ts-expect-error cancellation is an option on the normal call, not a separate operation
   void client.ping.abortable(controller.signal);
   const at: Datetime = { seconds: 1n, nanoseconds: 0 };
@@ -65,20 +83,81 @@ function remoteClientTypeChecks(): void {
     id: { name: z.string() },
     methods: { ping: method({ input: {}, returns: z.string() }) },
   });
-  const ephemeralFactory = clientFor(ephemeralDef);
+  const ephemeralFactory = ephemeralDef.client;
   const ephemeral = ephemeralFactory.newPhantom({ name: 'counter' });
   void ephemeral.ping().then(({ metadata, value }) => ({ metadata, value }));
   const ephemeralMetadata = ephemeral.ping.trigger();
   const ephemeralReceipt = ephemeral.ping.schedule(at);
+  const knownEphemeral = ephemeralDef.client.getPhantom({ name: 'counter' }, new Uuid(1n, 2n));
+  const ephemeralAgentId = ephemeralDef.agentId({ name: 'counter' }, new Uuid(1n, 2n));
+  void knownEphemeral.ping();
   // @ts-expect-error ephemeral factories cannot address a stable agent directly
-  ephemeralFactory({ name: 'counter' });
+  ephemeralFactory.get({ name: 'counter' });
   // @ts-expect-error ephemeral clients have no reusable pre-invocation phantom id
   void ephemeral.phantomId;
   void pingToken;
   void addToken;
   void phantomId;
+  void agentId;
+  void ephemeralAgentId;
   void ephemeralMetadata;
   void ephemeralReceipt;
+
+  const fullEphemeralDefinition = defineAgentClient({
+    name: 'FullEphemeralClientTypeChecks',
+    mode: 'ephemeral',
+    id: { name: z.string() },
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  const fullEphemeralClient = fullEphemeralDefinition.client.newPhantom({ name: 'counter' });
+  void fullEphemeralClient.ping().then(({ metadata, value }) => ({
+    agentId: metadata.agentId,
+    idempotencyKey: metadata.idempotencyKey,
+    value,
+  }));
+
+  const methodDefinition = defineAgentClient({
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  void agentId.client(methodDefinition).ping();
+  void agentId.dynamicClient().method('ping');
+  // @ts-expect-error method-only clients cannot declare a name without an ID shape
+  defineAgentClient({ name: 'Named', methods: methodDefinition.methods });
+  // @ts-expect-error lifecycle mode belongs to full constructor definitions, not ID bindings
+  defineAgentClient({ mode: 'durable', methods: methodDefinition.methods });
+  // @ts-expect-error method-only clients cannot declare a name or lifecycle mode
+  defineAgentClient({ name: 'Named', mode: 'ephemeral', methods: methodDefinition.methods });
+  // @ts-expect-error binding definitions expose no synthetic lifecycle mode
+  void methodDefinition.mode;
+  // @ts-expect-error method-only clients do not construct target identities
+  methodDefinition.agentId({});
+  // @ts-expect-error method-only clients do not expose constructor-based factories
+  methodDefinition.client.get({});
+
+  const configuredDefinition = defineAgentClient({
+    name: 'ConfiguredRemoteClient',
+    id: {},
+    config: { greeting: z.string(), apiKey: s.secret(z.string()) },
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  configuredDefinition.client.get({}, { greeting: 'hello' });
+  agentId.client(configuredDefinition, { greeting: 'hello' });
+  // @ts-expect-error binding retains the declared value types
+  agentId.client(configuredDefinition, { greeting: 42 });
+  // @ts-expect-error binding cannot override a declared secret
+  agentId.client(configuredDefinition, { apiKey: 'secret' });
+  agentId.client(methodDefinition, [
+    {
+      path: ['greeting'],
+      value: { graph: compileSchema(z.string()).graph, value: v.string('hello') },
+    },
+  ]);
+  // @ts-expect-error method-only clients accept raw typed entries, not declaration-shaped objects
+  agentId.client(methodDefinition, { greeting: 'hello' });
+  // @ts-expect-error config overrides retain their declared value types
+  configuredDefinition.client.get({}, { greeting: 42 });
+  // @ts-expect-error secret configuration cannot be overridden by an RPC caller
+  configuredDefinition.client.get({}, { apiKey: 'secret' });
 
   const ephemeralId = { name: z.string() };
   const ephemeralMethods = { ping: method({ input: {}, returns: z.string() }) };
@@ -332,8 +411,30 @@ describe('schema markers', () => {
       spec: { polymorphic: true },
     });
 
-    const raw = { id: 'opaque-permission-card' } as never;
-    expect(codec.fromValue(codec.toValue(raw))).toBe(raw);
+    const raw = fakeRawCard({ id: 'opaque-permission-card' }) as never;
+    const card = polymorphicPermissionCardFromRaw(raw);
+    // A local decode of the card's own value would alias it into a second card.
+    expect(() => codec.fromValue(codec.toValue(card))).toThrow(/already held by another card/);
+    expect(card.isMoved()).toBe(false);
+    const decoded = codec.fromValue(schemaValueFromWit(schemaValueToWit(codec.toValue(card))));
+    expect(decoded).toBeInstanceOf(PolymorphicPermissionCard);
+    expect(rawOfPermissionCard(decoded)).toBe(raw);
+    expect(card.isMoved()).toBe(true);
+    expect(() => codec.toValue({ id: 'raw-host-resource' })).toThrow();
+
+    const concreteCodec = compileSchema(s.permissionCard({ polymorphic: false }));
+    expect(concreteCodec.graph.root.body).toEqual({
+      tag: 'permission-card',
+      spec: { polymorphic: false },
+    });
+    const concreteRaw = fakeRawCard({ id: 'concrete-permission-card' }) as never;
+    const concrete = concreteCodec.fromValue(
+      schemaValueFromWit(
+        schemaValueToWit(concreteCodec.toValue(permissionCardFromRaw(concreteRaw))),
+      ),
+    );
+    expect(concrete).toBeInstanceOf(PermissionCard);
+    expect(rawOfPermissionCard(concrete)).toBe(concreteRaw);
   });
 
   it('maps unstructuredText to a role-tagged variant and round-trips', () => {
@@ -402,6 +503,7 @@ describe('defineAgent', () => {
     const agentType = AgentTypeRegistry.get(new AgentClassName('counter'));
     expect(agentType).toBeDefined();
     expect(agentType!.typeName).toBe('counter');
+    expect(agentType!.kind).toBe('regular');
     expect(agentType!.sourceLanguage).toBe('typescript');
 
     // Constructor: single identity parameter `name`.
@@ -523,12 +625,361 @@ describe('RPC client', () => {
       scheduleCancelableInvocation: ReturnType<typeof vi.fn>;
     };
 
+  it('exposes a cached client factory on authored agent definitions', () => {
+    expect(clientDef.client).toBe(clientDef.client);
+    const client = clientDef.client.get({ name: 'counter' }, { greeting: 'hello' });
+
+    expect(client.ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toHaveLength(1);
+  });
+
+  it('borrows the client default or per-call scope card for awaited calls only', async () => {
+    const def = defineAgent({
+      name: 'ScopeCardClientAgent',
+      id: { name: z.string() },
+      methods: {
+        touch: method({ input: {}, returns: z.void() }),
+        echo: method({ input: { text: z.string() }, returns: z.string() }),
+      },
+    });
+    const defaultCard = scopeCardFromRaw({ id: 'default-scope' });
+    const callCard = scopeCardFromRaw({ id: 'call-scope' });
+    const client = def.client.get({ name: 'scoped' }, undefined, { scopeCard: defaultCard });
+    const rpc = latestRpc();
+    const scopeOfLastAwait = () => rpc.asyncInvokeAndAwait.mock.calls.at(-1)![2];
+    rpc.invoke.mockReturnValue({ agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' });
+    rpc.asyncInvokeAndAwait.mockImplementation(() => ({
+      metadata: { agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' },
+      future: {
+        get: vi
+          .fn()
+          .mockResolvedValue({ valueNodes: [{ tag: 'string-value', val: 'hi' }], root: 0 }),
+        cancel: vi.fn(),
+      },
+    }));
+
+    await expect(client.echo({ text: 'a' })).resolves.toBe('hi');
+    expect(scopeOfLastAwait()).toBe(rawOfScopeCard(defaultCard));
+    await expect(client.echo({ text: 'b' }, { scopeCard: callCard })).resolves.toBe('hi');
+    expect(scopeOfLastAwait()).toBe(rawOfScopeCard(callCard));
+    rpc.asyncInvokeAndAwait.mockImplementation(() => ({
+      metadata: { agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' },
+      future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
+    }));
+    await client.touch({ scopeCard: null });
+    expect(scopeOfLastAwait()).toBeUndefined();
+    client.touch.trigger();
+    expect(rpc.invoke.mock.calls.at(-1)![2]).toBeUndefined();
+    expect(defaultCard.isMoved()).toBe(false);
+    expect(callCard.isMoved()).toBe(false);
+
+    const awaited = rpc.asyncInvokeAndAwait.mock.calls.length;
+    defaultCard.release();
+    await expect(client.touch()).rejects.toThrow(/already been released/);
+    expect(rpc.asyncInvokeAndAwait.mock.calls.length).toBe(awaited);
+  });
+
+  it('builds a client-only definition from Standard Schema libraries without registration', () => {
+    const name = 'RuntimeBuiltClientOnlyAgent';
+    const before = AgentTypeRegistry.getRegisteredAgents().length;
+    const definition = defineAgentClient({
+      name,
+      id: { name: z.string() },
+      methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+    });
+    const client = definition.client.get({ name: 'counter' });
+
+    expect(client.ping).toBeTypeOf('function');
+    expect(AgentTypeRegistry.getRegisteredAgents()).toHaveLength(before);
+    expect(AgentTypeRegistry.exists(new AgentClassName(name))).toBe(false);
+  });
+
+  it('binds one method-only client to differently shaped existing agent identities', async () => {
+    const definition = defineAgentClient({
+      methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+    });
+    const first = new ParsedAgentId('FirstAgent(one)');
+    const second = new ParsedAgentId('SecondAgent(team,two)');
+    vi.mocked(parseAgentId)
+      .mockReturnValueOnce([
+        'FirstAgent',
+        {
+          graph: { typeNodes: [], defs: [], root: 0 },
+          value: schemaValueToWit(v.record([v.string('one')])),
+        },
+        undefined,
+      ])
+      .mockReturnValueOnce([
+        'SecondAgent',
+        {
+          graph: { typeNodes: [], defs: [], root: 0 },
+          value: schemaValueToWit(v.record([v.string('team'), v.string('two')])),
+        },
+        undefined,
+      ]);
+
+    expect(first.client(definition).ping).toBeTypeOf('function');
+    expect(second.client(definition).ping).toBeTypeOf('function');
+    expect(
+      vi
+        .mocked(WasmRpc.create)
+        .mock.calls.slice(-2)
+        .map((call) => call[0]),
+    ).toEqual(['FirstAgent', 'SecondAgent']);
+    expect(definition).not.toHaveProperty('mode');
+  });
+
+  it('forwards raw typed config entries when binding a method-only client', () => {
+    const definition = defineAgentClient({
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('ExistingAgent(one)');
+    const constructorValue = v.record([v.string('one')]);
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ExistingAgent',
+      { graph: { typeNodes: [], defs: [], root: 0 }, value: schemaValueToWit(constructorValue) },
+      undefined,
+    ]);
+    const entry = {
+      path: ['greeting'],
+      value: { graph: compileSchema(z.string()).graph, value: v.string('hello') },
+    };
+
+    expect(target.client(definition, [entry]).ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toEqual([
+      { path: ['greeting'], value: typedSchemaValueToWit(entry.value) },
+    ]);
+  });
+
+  it('validates declared config before binding a full client', () => {
+    const definition = defineAgentClient({
+      name: 'ConfiguredExistingAgent',
+      id: { name: z.string() },
+      config: { greeting: z.string(), apiKey: s.secret(z.string()) },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('ConfiguredExistingAgent(one)');
+    const parsed = [
+      'ConfiguredExistingAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ] as const;
+    vi.mocked(parseAgentId).mockReturnValue(parsed);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+    expect(() => target.client(definition, { greeting: 42 } as never)).toThrow();
+    expect(() => target.client(definition, { unknown: 'x' } as never)).toThrow(
+      "Unknown config path 'unknown'",
+    );
+    expect(() => target.client(definition, { apiKey: 'x' } as never)).toThrow(
+      "Cannot override secret config field 'apiKey'",
+    );
+    expect(vi.mocked(WasmRpc.create)).toHaveBeenCalledTimes(creates);
+
+    expect(target.client(definition, { greeting: 'hello' }).ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toHaveLength(1);
+  });
+
+  it('binds a method-only client to a durable phantom identity without discovery', () => {
+    const definition = defineAgentClient({
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const phantomId = new Uuid(1n, 2n);
+    const target = new ParsedAgentId('DurablePhantom(one)[00000000-0000-0001-0000-000000000002]');
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'DurablePhantom',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      phantomId,
+    ]);
+
+    expect(target.client(definition).ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBe(phantomId);
+  });
+
+  it('rejects lifecycle fields on a method-only JavaScript client', () => {
+    expect(() =>
+      defineAgentClient({
+        mode: 'durable',
+        methods: { ping: method({ input: {}, returns: z.string() }) },
+      } as any),
+    ).toThrow(
+      'A method-only client may define only methods; name, id, config, and mode require a fully defined client',
+    );
+  });
+
+  it('rejects a type name without an ID shape on a method-only client', () => {
+    expect(() =>
+      defineAgentClient({
+        name: 'NamedBinding',
+        methods: { ping: method({ input: {}, returns: z.string() }) },
+      } as any),
+    ).toThrow(
+      'A method-only client may define only methods; name, id, config, and mode require a fully defined client',
+    );
+  });
+
+  it('binds a full durable definition to its matching existing identity', () => {
+    const definition = defineAgentClient({
+      name: 'FullDurableAgent',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('FullDurableAgent(one)');
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'FullDurableAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+
+    expect(target.client(definition).ping).toBeTypeOf('function');
+  });
+
+  it('rejects binding a full client to an incompatible constructor value', () => {
+    const definition = defineAgentClient({
+      name: 'FullDurableAgent',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('FullDurableAgent(42)');
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'FullDurableAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.f64(42)])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(definition)).toThrow(
+      "Full agent client 'FullDurableAgent' cannot bind ParsedAgentId 'FullDurableAgent(42)': constructor value does not conform to the client ID schema",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
+  });
+
+  it('rejects binding a full ephemeral definition to an existing identity', () => {
+    const definition = defineAgentClient({
+      name: 'FullEphemeralAgent',
+      mode: 'ephemeral',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('FullEphemeralAgent(one)');
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'FullEphemeralAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(definition)).toThrow(
+      "Cannot bind existing ParsedAgentId 'FullEphemeralAgent(one)' to ephemeral agent type 'FullEphemeralAgent'; use its client.newPhantom(...) factory",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
+  });
+
+  it('checks a full client name locally before creating the remote client', () => {
+    const definition = defineAgentClient({
+      name: 'ExpectedAgent',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('OtherAgent(one)');
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'OtherAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(definition)).toThrow(
+      "Full agent client 'ExpectedAgent' cannot bind agent type 'OtherAgent'",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
+  });
+
+  it('surfaces an incompatible target method as a structured remote error', async () => {
+    const definition = defineAgentClient({
+      methods: { analyze: method({ input: { topic: z.string() }, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('ReportArchive(reports)');
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ReportArchive',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('reports')])),
+      },
+      undefined,
+    ]);
+    const client = target.client(definition);
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: target.value, idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockRejectedValue({
+          tag: 'remote-agent-error',
+          val: { tag: 'invalid-method', val: 'analyze is not defined' },
+        }),
+        cancel: vi.fn(),
+      },
+    });
+
+    await expect(client.analyze({ topic: 'demand' })).rejects.toMatchObject({
+      cause: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-method', details: 'analyze is not defined' },
+      },
+    });
+  });
+
+  it('surfaces client creation failures for runtime-built reflection definitions', () => {
+    const rpcError = { tag: 'not-found' as const, val: 'missing deployment' };
+    const definition = defineAgentClient({
+      name: 'FallibleClientDefinitionAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    vi.mocked(WasmRpc.create).mockImplementationOnce(() => {
+      throw rpcError;
+    });
+
+    expect(() => definition.client.get({})).toThrow(RemoteCallError);
+  });
+
+  it('constructs identity on the definition even when a method name would collide', () => {
+    const phantomId = new Uuid(1n, 2n);
+    const def = defineAgentClient({
+      name: 'ClientIdentityAgent',
+      id: {},
+      methods: { agentId: method({ input: {}, returns: z.string() }) },
+    });
+    const client = def.client.getPhantom({}, phantomId);
+
+    expect(client.agentId).toBeTypeOf('function');
+    expect(def.agentId({}, phantomId).value).toBe('MockAgent()');
+  });
+
   it('creates a fresh phantom client and exposes the generated id', () => {
     const phantomId = new Uuid(1n, 2n);
     const generate = vi.spyOn(Uuid, 'generate').mockReturnValue(phantomId);
-    const phantom = clientFor(clientDef).newPhantom({ name: 'counter' }, { greeting: 'hello' });
+    const phantom = clientDef.client.newPhantom({ name: 'counter' }, { greeting: 'hello' });
 
     expect(phantom.phantomId).toBe(phantomId);
+    expect(phantom.agentId).toEqual(clientDef.agentId({ name: 'counter' }, phantomId));
     expect(phantom.client.ping).toBeTypeOf('function');
     const constructorArgs = vi.mocked(WasmRpc).mock.calls.at(-1)!;
     expect(constructorArgs[2]).toBe(phantomId);
@@ -544,14 +995,14 @@ describe('RPC client', () => {
         phantomId: method({ input: {}, returns: z.string() }),
       },
     });
-    const phantom = clientFor(def).newPhantom({});
+    const phantom = def.client.newPhantom({});
 
     expect(typeof phantom.client.phantomId).toBe('function');
     expect(phantom.phantomId).toBeInstanceOf(Uuid);
   });
 
   it('returns cancellation tokens from schedule and removes the old operations', () => {
-    const client = clientFor(clientDef)({ name: 'counter' });
+    const client = clientDef.client.get({ name: 'counter' });
     const rpc = latestRpc();
     const token = { cancel: vi.fn() };
     rpc.scheduleCancelableInvocation.mockReturnValue({
@@ -568,20 +1019,52 @@ describe('RPC client', () => {
     expect('scheduleCancelable' in client.ping).toBe(false);
   });
 
+  it('rolls back client input record capability adoption when a later field fails', () => {
+    const def = defineAgent({
+      name: 'CapabilityInputAgent',
+      id: {},
+      methods: {
+        send: method({
+          input: { capability: s.secret(z.string()), later: z.string() },
+          returns: z.void(),
+        }),
+      },
+    });
+    const raw = { id: 'client-capability' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const client = def.client.get({});
+
+    expect(() =>
+      client.send.trigger({
+        capability: raw,
+        get later() {
+          throw new Error('client record failed');
+        },
+      }),
+    ).toThrow('client record failed');
+    expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+  });
+
   it('uses one logical client for ephemeral invocations and returns final identity metadata', async () => {
-    const ephemeralDef = defineAgent({
+    const ephemeralDef = defineAgentClient({
       name: 'EphemeralClientTestAgent',
       mode: 'ephemeral',
       id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
     const makeAgentIdCalls = vi.mocked(makeAgentId).mock.calls.length;
-    const client = clientFor(ephemeralDef).newPhantom({ name: 'counter' });
-    const rpc = latestRpc();
+    const client = ephemeralDef.client.newPhantom({ name: 'counter' });
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
+    let completeInvocation!: (value: undefined) => void;
     const future = {
       subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-      get: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockImplementation(
+        () =>
+          new Promise<undefined>((resolve) => {
+            completeInvocation = resolve;
+          }),
+      ),
       cancel: vi.fn(),
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({ metadata, future });
@@ -589,10 +1072,24 @@ describe('RPC client', () => {
     const receipt = { metadata, cancellationToken: { cancel: vi.fn() } };
     rpc.scheduleCancelableInvocation.mockReturnValue(receipt);
 
-    await expect(client.ping()).resolves.toEqual({ metadata, value: undefined });
-    expect(client.ping.trigger()).toBe(metadata);
-    expect(client.ping.schedule({ seconds: 1n, nanoseconds: 0 })).toBe(receipt);
-    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![2]).toBeUndefined();
+    const awaited = client.ping();
+    await vi.waitFor(() => expect(rpc.asyncInvokeAndAwait).toHaveBeenCalled());
+    metadata.agentId = 'mutated-after-start';
+    completeInvocation(undefined);
+    await expect(awaited).resolves.toEqual({
+      metadata: { agentId: 'final-agent-id', idempotencyKey: 'key' },
+      value: undefined,
+    });
+    metadata.agentId = 'final-agent-id';
+    const triggered = client.ping.trigger();
+    expect(triggered).toEqual(metadata);
+    expect(triggered).not.toBe(metadata);
+    expect(Object.isFrozen(triggered)).toBe(true);
+    const scheduled = client.ping.schedule({ seconds: 1n, nanoseconds: 0 });
+    expect(scheduled).toEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBeUndefined();
     expect(vi.mocked(makeAgentId).mock.calls).toHaveLength(makeAgentIdCalls);
   });
 
@@ -605,7 +1102,7 @@ describe('RPC client', () => {
     const phantomId = new Uuid(1n, 2n);
     const agentId = 'MissingSingleOutputAgent(1)[00000000-0000-0001-0000-000000000002]';
     vi.mocked(makeAgentId).mockReturnValueOnce(agentId);
-    const client = clientFor(def)({ id: 1n }, phantomId);
+    const client = def.client.getPhantom({ id: 1n }, phantomId);
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
@@ -626,6 +1123,25 @@ describe('RPC client', () => {
     );
   });
 
+  it('rejects an unexpected wire value for a declared unit output', async () => {
+    const def = defineAgentClient({
+      name: 'UnitOutputAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.void() }) },
+    });
+    const client = def.client.get({});
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
+      metadata: { agentId: 'UnitOutputAgent()', idempotencyKey: 'unit' },
+      future: {
+        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
+        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('unexpected'))),
+        cancel: vi.fn(),
+      },
+    });
+    await expect(client.ping()).rejects.toBeInstanceOf(RemoteOutputError);
+  });
+
   it('rejects a wire value whose schema tag does not match the declared output', async () => {
     const def = defineAgent({
       name: 'MismatchedSingleOutputAgent',
@@ -633,7 +1149,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     vi.mocked(makeAgentId).mockReturnValueOnce('MismatchedSingleOutputAgent()');
-    const client = clientFor(def)({});
+    const client = def.client.get({});
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
@@ -644,7 +1160,7 @@ describe('RPC client', () => {
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    await expect(client.ping()).rejects.toBeInstanceOf(RemoteOutputError);
   });
 
   it('preserves RemoteCallError when a remote custom error contains bigint values', async () => {
@@ -654,7 +1170,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     vi.mocked(makeAgentId).mockReturnValueOnce('BigintRemoteErrorAgent()');
-    const client = clientFor(def)({});
+    const client = def.client.get({});
     const rpc = latestRpc();
     const errorCodec = compileSchema(s.u64());
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -675,7 +1191,31 @@ describe('RPC client', () => {
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    try {
+      await client.ping();
+      throw new Error('expected the remote call to fail');
+    } catch (error) {
+      expect(isRemoteCallError(error)).toBe(true);
+      if (!isRemoteCallError(error)) throw error;
+      expect(error.cause).toMatchObject({
+        tag: 'remote-agent-error',
+        error: {
+          tag: 'custom-error',
+          value: { value: { tag: 'u64', value: 1n } },
+        },
+      });
+    }
+  });
+
+  it('narrows RemoteCallError structurally across package entry identities', () => {
+    expect(
+      isRemoteCallError({
+        _tag: 'RemoteCallError',
+        message: 'Remote call failed',
+        cause: { tag: 'denied', details: 'not allowed' },
+      }),
+    ).toBe(true);
+    expect(isRemoteCallError(new Error('not remote'))).toBe(false);
   });
 
   it('omits auto-injected principal fields from RPC constructor input', () => {
@@ -684,13 +1224,18 @@ describe('RPC client', () => {
       id: { tenant: z.string(), caller: s.principal() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
-    const factory = clientFor(def);
+    const factory = def.client;
 
-    expect(() =>
-      (factory as unknown as (id: { tenant: string }) => unknown)({ tenant: 'acme' }),
-    ).not.toThrow();
+    expect(() => factory.get({ tenant: 'acme' })).not.toThrow();
     const constructorTree = vi.mocked(WasmRpc).mock.calls.at(-1)![1];
     expect(schemaValueFromWit(constructorTree)).toEqual({
+      tag: 'record',
+      fields: [{ tag: 'string', value: 'acme' }],
+    });
+
+    expect(() => def.agentId({ tenant: 'acme' })).not.toThrow();
+    const identityTree = vi.mocked(makeAgentId).mock.calls.at(-1)![1];
+    expect(schemaValueFromWit(identityTree)).toEqual({
       tag: 'record',
       fields: [{ tag: 'string', value: 'acme' }],
     });
@@ -704,9 +1249,21 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
 
-    clientFor(def)({}, undefined, {});
+    def.client.get({}, {});
 
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toEqual([]);
+  });
+
+  it('rejects undeclared config override paths before creating the RPC', () => {
+    const def = defineAgentClient({
+      name: 'StrictConfigClientAgent',
+      id: {},
+      config: {},
+      methods: { ping: method({ input: {}, returns: z.void() }) },
+    });
+    const creates = vi.mocked(WasmRpc).mock.calls.length;
+    expect(() => def.client.get({}, { extra: 1 } as never)).toThrow("Unknown config path 'extra'");
+    expect(vi.mocked(WasmRpc).mock.calls).toHaveLength(creates);
   });
 
   it('rejects a non-object while traversing a nested RPC config override', () => {
@@ -717,11 +1274,11 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
 
-    expect(() => clientFor(def)({}, undefined, { nested: 'not-an-object' })).toThrow();
+    expect(() => def.client.get({}, { nested: 'not-an-object' })).toThrow();
   });
 
   it('accepts cancellation options on input and zero-input calls', async () => {
-    const client = clientFor(clientDef)({ name: 'counter' });
+    const client = clientDef.client.get({ name: 'counter' });
     const rpc = latestRpc();
     const controller = new AbortController();
     controller.abort('cancelled');

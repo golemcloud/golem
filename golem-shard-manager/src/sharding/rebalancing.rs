@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use super::model::{Assignments, ExecutorShards, ShardLeaseState, Unassignments};
-use golem_common::model::ShardId;
-use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tracing::trace;
@@ -49,10 +47,7 @@ impl Rebalance {
         let mut unassignments = Unassignments::new();
         let executor_count = shard_state.executor_count();
         if executor_count == 0 {
-            return Rebalance {
-                assignments,
-                unassignments,
-            };
+            return Rebalance::new(assignments, unassignments);
         }
 
         let mut executors: Vec<ExecutorShards> = shard_state.executor_shard_sets();
@@ -109,10 +104,7 @@ impl Rebalance {
         }
 
         if executor_count == 1 {
-            return Rebalance {
-                assignments,
-                unassignments,
-            };
+            return Rebalance::new(assignments, unassignments);
         };
 
         // We redistribute shards from each entry having more than the optimal count
@@ -170,10 +162,7 @@ impl Rebalance {
             }
         }
 
-        Rebalance {
-            assignments,
-            unassignments,
-        }
+        Rebalance::new(assignments, unassignments)
     }
 
     pub fn get_assignments(&self) -> &Assignments {
@@ -186,30 +175,6 @@ impl Rebalance {
 
     pub fn is_empty(&self) -> bool {
         self.assignments.assignments.is_empty() && self.unassignments.unassignments.is_empty()
-    }
-
-    pub fn remove_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for assigned_shard_ids in self.assignments.assignments.values_mut() {
-            assigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-        self.assignments
-            .assignments
-            .retain(|_, shards| !shards.is_empty());
-        for unassigned_shard_ids in self.unassignments.unassignments.values_mut() {
-            unassigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-        self.unassignments
-            .unassignments
-            .retain(|_, shards| !shards.is_empty());
-    }
-
-    pub fn remove_assignment_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for assigned_shard_ids in self.assignments.assignments.values_mut() {
-            assigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-        self.assignments
-            .assignments
-            .retain(|_, shards| !shards.is_empty());
     }
 }
 

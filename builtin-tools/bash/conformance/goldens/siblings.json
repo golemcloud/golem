@@ -1,0 +1,38 @@
+{
+ "cases": {
+  "siblings: concurrent calls keep their own statuses": {
+   "script": "5037a64e34d2aa08",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "a=127\nb=127\nbash: line 1: probe-tool: command not found\n"
+   }
+  },
+  "siblings: kill cancels one pending call and the other completes": {
+   "script": "80b8be9dabf39bc7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "killed=143\nother=127\nend\n"
+   }
+  },
+  "siblings: wait -n reports the first call to finish": {
+   "script": "4048d8e60f8089ae",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "first=127\nall=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

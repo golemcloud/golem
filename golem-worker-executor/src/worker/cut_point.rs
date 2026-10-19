@@ -16,32 +16,80 @@
 //!
 //! External fork and revert both split the oplog at a caller-chosen index (the *cut point*):
 //! entries at or before the cut survive, everything after it is dropped (revert) or never copied
-//! (fork). Paired durable constructs must not span such a cut — a durable call or scope whose
-//! `Start` survives but whose `End`/`Cancelled` is cut off replays as an *incomplete* call
-//! (re-executed when safe, hard error when not), and an open atomic region or remote transaction
-//! loses its committed/rolled-back outcome. Instead of silently degrading to those recovery
-//! semantics, the cut is validated up front and rejected with a clear error.
+//! (fork). A retained `Start` without its terminal uses ordinary incomplete-call recovery;
+//! a retained accessor `End` without its completion marker is delivered at the replay tail.
+//! Outcomes beyond the cut do not constrain these calls. Remote transactions still require a
+//! cut that preserves their committed/rolled-back outcome.
 
+use crate::worker::status::update_queue::UpdateQueue;
 use golem_common::base_model::OplogIndex;
+use golem_common::model::PendingUpdateKind;
 use golem_common::model::oplog::{OplogEntry, OplogIndexRange};
 use golem_common::model::regions::DeletedRegions;
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevertUpdateBoundaryError {
+    SplitSnapshotUpdate {
+        pending_index: OplogIndex,
+        outcome_index: OplogIndex,
+    },
+}
+
+impl Display for RevertUpdateBoundaryError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index,
+                outcome_index,
+            } => write!(
+                f,
+                "the cut point retains a snapshot-based PendingUpdate at oplog index {pending_index} but removes its outcome at oplog index {outcome_index}"
+            ),
+        }
+    }
+}
+
+/// Validates snapshot-update boundaries. Update outcomes are paired with pending updates by the
+/// update queue of the status fold. A cut may remove a snapshot-based update entirely or retain
+/// it entirely, including a pending update that does not have an outcome yet. A cut may split a
+/// snapshot-assisted automatic update, or a manual update invocation from its outcome when no
+/// `PendingUpdate` paired them, because no snapshot baseline exists before its outcome.
+pub fn validate_snapshot_update_boundaries(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    cut_point: OplogIndex,
+    deleted_regions: &DeletedRegions,
+) -> Result<(), RevertUpdateBoundaryError> {
+    // A manual update invocation changes only the manual admissions, and no queue element ends
+    // through one, so the check does not decode the invocation payloads.
+    entries
+        .iter()
+        .filter(|(_, entry)| !matches!(entry, OplogEntry::PendingAgentInvocation { .. }))
+        .try_fold(UpdateQueue::default(), |queue, (idx, entry)| {
+            let (queue, step) =
+                queue.after(*idx, entry, deleted_regions.is_in_deleted_region(*idx));
+            match step.ended() {
+                Some(paired)
+                    if matches!(paired.kind, PendingUpdateKind::SnapshotBased { .. })
+                        && paired.oplog_index <= cut_point
+                        && cut_point < *idx =>
+                {
+                    Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                        pending_index: paired.oplog_index,
+                        outcome_index: *idx,
+                    })
+                }
+                _ => Ok(queue),
+            }
+        })
+        .map(|_| ())
+}
 
 /// A paired durable construct whose two halves lie on opposite sides of a cut point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpanningConstruct {
-    /// A durable host call or durable scope: its `Start` is at or before the cut, while its
-    /// `End`/`Cancelled` terminal lies after it.
-    DurableCall {
-        start_index: OplogIndex,
-        terminal_index: OplogIndex,
-    },
-    /// An atomic region begun at or before the cut whose `EndAtomicRegion` lies after it.
-    AtomicRegion {
-        begin_index: OplogIndex,
-        end_index: OplogIndex,
-    },
     /// A remote transaction begun at or before the cut with a pre-commit/pre-rollback,
     /// committed/rolled-back, or retried-begin entry after it.
     RemoteTransaction {
@@ -53,20 +101,6 @@ pub enum SpanningConstruct {
 impl Display for SpanningConstruct {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SpanningConstruct::DurableCall {
-                start_index,
-                terminal_index,
-            } => write!(
-                f,
-                "an active durable call or scope (started at oplog index {start_index}, terminated at {terminal_index})"
-            ),
-            SpanningConstruct::AtomicRegion {
-                begin_index,
-                end_index,
-            } => write!(
-                f,
-                "an open atomic region (begun at oplog index {begin_index}, ended at {end_index})"
-            ),
             SpanningConstruct::RemoteTransaction {
                 begin_index,
                 reference_index,
@@ -78,51 +112,30 @@ impl Display for SpanningConstruct {
     }
 }
 
-/// Scans the oplog entries in `(cut_point, scan_end]` for evidence that a paired durable
-/// construct spans the cut: an entry after the cut that references its opening entry at or
-/// before the cut. Returns the first such construct found, or `None` when the cut is clean.
+/// Scans `(cut_point, scan_end]` for a remote-transaction outcome that
+/// references an opening entry at or before the cut. Ordinary call terminals and completion
+/// markers may lie beyond the cut: replay recovers from precisely the retained prefix.
 ///
 /// Entries inside `skipped_regions` are ignored on both sides: a terminal inside an
 /// already-deleted region is dead, and a terminal whose referenced opening entry lies in a
-/// deleted region is an orphan that replay drains without effect.
-pub async fn find_construct_spanning_cut_point<Read, ReadFut>(
+/// deleted region is an orphan that replay drains without effect. A failed `read` ends the scan
+/// with its error.
+pub async fn find_construct_spanning_cut_point<Read, ReadFut, E>(
     read: Read,
     cut_point: OplogIndex,
     scan_end: OplogIndex,
     skipped_regions: &DeletedRegions,
-) -> Option<SpanningConstruct>
+) -> Result<Option<SpanningConstruct>, E>
 where
     Read: Fn(OplogIndex) -> ReadFut,
-    ReadFut: Future<Output = OplogEntry>,
+    ReadFut: Future<Output = Result<OplogEntry, E>>,
 {
     for idx in OplogIndexRange::new(cut_point.next(), scan_end) {
         if skipped_regions.is_in_deleted_region(idx) {
             continue;
         }
-        let entry = read(idx).await;
+        let entry = read(idx).await?;
         let spanning = match &entry {
-            // Completion markers are hints, not second terminals, but they carry the delivery
-            // status and timing of their call's `End`. A cut between the `End` and its marker
-            // would leave a completed call that looks markerless, making replay tail-gate a
-            // delivery the recorded run actually consumed at the marker's position, so reject
-            // it the same way as one splitting a `Start` from its terminal.
-            OplogEntry::End { start_index, .. }
-            | OplogEntry::Cancelled { start_index, .. }
-            | OplogEntry::CompletionDiscarded { start_index, .. }
-            | OplogEntry::CompletionDelivered { start_index, .. } => Some((
-                *start_index,
-                SpanningConstruct::DurableCall {
-                    start_index: *start_index,
-                    terminal_index: idx,
-                },
-            )),
-            OplogEntry::EndAtomicRegion { begin_index, .. } => Some((
-                *begin_index,
-                SpanningConstruct::AtomicRegion {
-                    begin_index: *begin_index,
-                    end_index: idx,
-                },
-            )),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
             | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
             | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
@@ -134,7 +147,7 @@ where
                 },
             )),
             OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(original_begin_index),
+                original_begin_index,
                 ..
             } => Some((
                 *original_begin_index,
@@ -147,15 +160,18 @@ where
             // must be considered before it is allowed across a fork/snapshot cut point.
             OplogEntry::Create { .. }
             | OplogEntry::Start { .. }
+            | OplogEntry::End { .. }
+            | OplogEntry::Cancelled { .. }
+            | OplogEntry::CompletionDiscarded { .. }
+            | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
-            | OplogEntry::NoOp { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
             | OplogEntry::Exited { .. }
-            | OplogEntry::BeginAtomicRegion { .. }
             | OplogEntry::PendingAgentInvocation { .. }
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::SuccessfulUpdate { .. }
@@ -165,18 +181,13 @@ where
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
-            | OplogEntry::BeginRemoteTransaction {
-                original_begin_index: None,
-                ..
-            }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
@@ -191,6 +202,8 @@ where
             | OplogEntry::CardRevokedCascade { .. }
             | OplogEntry::CardTransferConfirmed { .. }
             | OplogEntry::HostStreamFrame { .. }
+            | OplogEntry::ToolAttachmentControl { .. }
+            | OplogEntry::ToolAttachmentRead { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
             | OplogEntry::StreamEnd { .. }
@@ -202,15 +215,88 @@ where
             && opening_index <= cut_point
             && !skipped_regions.is_in_deleted_region(opening_index)
         {
-            return Some(construct);
+            return Ok(Some(construct));
         }
     }
-    None
+    Ok(None)
+}
+
+/// A streaming acceptance owns its input registrations, preparation, queued invocation and
+/// attachment together. Retaining only part would leave an unstartable invocation or orphan inputs.
+pub(crate) async fn streaming_acceptance_spans_cut(
+    oplog: &dyn crate::services::oplog::Oplog,
+    cut: OplogIndex,
+    horizon: OplogIndex,
+) -> Result<bool, String> {
+    use crate::services::oplog::OplogOps;
+    use golem_common::model::durable_stream::StreamSessionRecord;
+
+    if cut >= horizon {
+        return Ok(false);
+    }
+    let left = oplog.read(cut).await.map_err(|error| error.to_string())?;
+    let right = oplog
+        .read(cut.next())
+        .await
+        .map_err(|error| error.to_string())?;
+    match (left, right) {
+        (OplogEntry::StreamRegistered { .. }, _) => {
+            for index in OplogIndexRange::new(cut.next(), horizon) {
+                match oplog.read(index).await.map_err(|error| error.to_string())? {
+                    OplogEntry::StreamRegistered { .. } => continue,
+                    OplogEntry::StreamSession { record, .. } => {
+                        return Ok(matches!(oplog.download_payload(record).await?,
+                        StreamSessionRecord::Prepared(prepared)
+                            if prepared.stream_mappings.iter().any(|mapping|
+                                matches!(mapping.source,
+                                    golem_common::model::durable_stream::StreamRecordReference::Local(id)
+                                        if id.0 == cut))));
+                    }
+                    _ => return Ok(false),
+                }
+            }
+            Ok(false)
+        }
+        (
+            OplogEntry::StreamSession { record, .. },
+            OplogEntry::PendingAgentInvocation {
+                idempotency_key, ..
+            },
+        ) => Ok(matches!(oplog.download_payload(record).await?,
+                StreamSessionRecord::Prepared(prepared) if prepared.attempt.session_key.idempotency_key == idempotency_key)),
+        (
+            OplogEntry::PendingAgentInvocation {
+                idempotency_key, ..
+            },
+            OplogEntry::StreamSession { record, .. },
+        ) => Ok(matches!(oplog.download_payload(record).await?,
+                StreamSessionRecord::Attached(attached) if attached.pending_invocation_oplog_index == cut
+                    && attached.session_key == idempotency_key)),
+        (
+            OplogEntry::StreamSession { record: left, .. },
+            OplogEntry::StreamSession { record: right, .. },
+        ) => {
+            let StreamSessionRecord::TopologyPrepared(right) =
+                oplog.download_payload(right).await?
+            else {
+                return Ok(false);
+            };
+            Ok(match oplog.download_payload(left).await? {
+                StreamSessionRecord::Attached(left) => {
+                    left.session_key == right.session_key.idempotency_key
+                }
+                StreamSessionRecord::TopologyPrepared(left) => {
+                    left.session_key == right.session_key
+                }
+                _ => false,
+            })
+        }
+        _ => Ok(false),
+    }
 }
 
 /// Returns the first durable stream entry in an inclusive raw oplog range.
-/// Fork and revert reject such histories until identities, offsets and cross-oplog dependencies
-/// can be rewritten without weakening their incarnation guarantees.
+/// Revert uses this to distinguish bare reverts from paired stream-lineage transitions.
 pub async fn find_stream_history_in_range<Read, ReadFut>(
     read: Read,
     start: OplogIndex,
@@ -240,12 +326,13 @@ mod tests {
     use super::*;
     use golem_common::model::Timestamp;
     use golem_common::model::card::{AccountCardHolder, CardHolder, CardId};
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::durable_stream::{
-        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecordV1, StreamSessionRecordV1,
+        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecord, StreamSessionRecord,
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogPayload;
+    use golem_common::model::oplog::UpdateDescription;
     use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
     use golem_common::model::{AgentFingerprint, AgentId, TransactionId};
     use std::collections::HashMap;
@@ -275,14 +362,15 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(OplogEntry::no_op);
-                async move { entry }
+                    .unwrap_or_else(|| OplogEntry::grow_memory(0));
+                async move { Ok::<_, std::convert::Infallible>(entry) }
             },
             idx(cut),
             idx(end),
             skipped,
         )
         .await
+        .unwrap()
     }
 
     async fn scan_stream_history(
@@ -295,7 +383,7 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(OplogEntry::no_op);
+                    .unwrap_or_else(|| OplogEntry::grow_memory(0));
                 async move { entry }
             },
             idx(start),
@@ -305,18 +393,307 @@ mod tests {
     }
 
     fn stream_entry() -> OplogEntry {
-        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
-            StreamSessionRecordV1::ConsumerDeleting(StreamConsumerDeletingRecordV1 {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
-                consumer: AgentId {
-                    component_id: ComponentId(Uuid::from_u128(2)),
-                    agent_id: "consumer".to_string(),
+        OplogEntry::stream_session(
+            None,
+            OplogPayload::Inline(Box::new(StreamSessionRecord::ConsumerDeleting(
+                StreamConsumerDeletingRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
+                    consumer: AgentId {
+                        component_id: ComponentId(Uuid::from_u128(2)),
+                        agent_id: "consumer".to_string(),
+                    },
+                    consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
+                    deleting_at_millis: 100,
                 },
-                consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
-                deleting_at_millis: 100,
-            }),
-        )))
+            ))),
+            None,
+        )
+    }
+
+    fn snapshot_update(revision: u64) -> UpdateDescription {
+        UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(revision).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
+        }
+    }
+
+    fn snapshot_assisted_update(revision: u64) -> UpdateDescription {
+        UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision: ComponentRevision::new(revision).unwrap(),
+            source_component_revision: ComponentRevision::new(revision - 1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: idx(2),
+            snapshot_revision: ComponentRevision::new(revision - 1).unwrap(),
+            filesystem_snapshot: None,
+        }
+    }
+
+    #[test]
+    fn successful_snapshot_update_boundary_is_validated() {
+        let update = snapshot_update(2);
+        let entries = BTreeMap::from([
+            (idx(3), OplogEntry::pending_update(update.clone(), None)),
+            (
+                idx(5),
+                OplogEntry::successful_update(
+                    *update.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                    None,
+                ),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index: idx(3),
+                outcome_index: idx(5),
+            })
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(4), &DeletedRegions::new()),
+            Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index: idx(3),
+                outcome_index: idx(5),
+            })
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(5), &DeletedRegions::new()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn failed_snapshot_update_boundary_is_rejected() {
+        let update = snapshot_update(2);
+        let entries = BTreeMap::from([
+            (idx(3), OplogEntry::pending_update(update.clone(), None)),
+            (
+                idx(5),
+                OplogEntry::failed_update(
+                    *update.target_revision(),
+                    Some("failed".to_string()),
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                pending_index: idx(3),
+                outcome_index: idx(5),
+            })
+        );
+    }
+
+    #[test]
+    fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
+        for outcome in [
+            OplogEntry::successful_update(
+                ComponentRevision::new(2).unwrap(),
+                100,
+                None,
+                Default::default(),
+                None,
+            ),
+            OplogEntry::failed_update(
+                ComponentRevision::new(2).unwrap(),
+                Some("failed".to_string()),
+                None,
+                None,
+                None,
+            ),
+        ] {
+            let entries = BTreeMap::from([
+                (
+                    idx(3),
+                    OplogEntry::pending_update(snapshot_assisted_update(2), None),
+                ),
+                (idx(5), outcome),
+            ]);
+            assert_eq!(
+                validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn unapplied_snapshot_update_can_be_fully_removed_or_retained() {
+        let update = snapshot_update(2);
+        let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update, None))]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
+        let snapshot = snapshot_update(2);
+        let automatic = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(3).unwrap(),
+        };
+        let entries = BTreeMap::from([
+            (idx(2), OplogEntry::pending_update(snapshot.clone(), None)),
+            (
+                idx(3),
+                OplogEntry::successful_update(
+                    *snapshot.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                    None,
+                ),
+            ),
+            (idx(5), OplogEntry::pending_update(automatic.clone(), None)),
+            (
+                idx(6),
+                OplogEntry::successful_update(
+                    *automatic.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                    None,
+                ),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(1), &deleted(vec![(2, 3)])),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_cut_between_a_manual_admission_and_its_failure_without_a_pending_update_is_accepted() {
+        let target_revision = ComponentRevision::new(2).unwrap();
+        let entries = BTreeMap::from([
+            (
+                idx(2),
+                OplogEntry::PendingAgentInvocation {
+                    timestamp: Timestamp::now_utc(),
+                    idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+                    payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::AgentInvocationPayload::ManualUpdate {
+                            target_revision,
+                        },
+                    )),
+                    trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                    trace_states: Vec::new(),
+                    invocation_context: Vec::new(),
+                },
+            ),
+            (
+                idx(3),
+                OplogEntry::failed_update(target_revision, None, None, Some(idx(2)), None),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
+        );
+    }
+
+    /// A snapshot-based update that pairs a manual update invocation gives the same boundaries
+    /// as one without that invocation, at each cut and with the invocation in a deleted region.
+    #[test]
+    fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update() {
+        let update = snapshot_update(2);
+        let admission = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+            payload: OplogPayload::Inline(Box::new(
+                golem_common::model::AgentInvocationPayload::ManualUpdate {
+                    target_revision: *update.target_revision(),
+                },
+            )),
+            trace_id: golem_common::model::invocation_context::TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+        };
+        let without = BTreeMap::from([
+            (
+                idx(3),
+                OplogEntry::pending_update(update.clone(), Some(idx(2))),
+            ),
+            (
+                idx(5),
+                OplogEntry::successful_update(
+                    *update.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                    None,
+                ),
+            ),
+        ]);
+        let with = without
+            .clone()
+            .into_iter()
+            .chain([(idx(2), admission)])
+            .collect::<BTreeMap<_, _>>();
+
+        (1..=6).for_each(|cut| {
+            [DeletedRegions::new(), deleted(vec![(2, 2)])]
+                .iter()
+                .for_each(|deleted| {
+                    assert_eq!(
+                        validate_snapshot_update_boundaries(&with, idx(cut), deleted),
+                        validate_snapshot_update_boundaries(&without, idx(cut), deleted),
+                        "cut {cut}"
+                    )
+                })
+        });
+        assert!(
+            validate_snapshot_update_boundaries(&with, idx(4), &DeletedRegions::new()).is_err()
+        );
+    }
+
+    #[test]
+    fn a_failure_whose_attempt_index_names_an_update_behind_the_head_ends_nothing() {
+        let manual = snapshot_update(3);
+        let automatic = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+        let failure = |target: u64, attempt: u64| {
+            OplogEntry::failed_update(
+                ComponentRevision::new(target).unwrap(),
+                None,
+                None,
+                Some(idx(attempt)),
+                None,
+            )
+        };
+        let entries = BTreeMap::from([
+            (idx(2), OplogEntry::pending_update(automatic, None)),
+            (idx(3), OplogEntry::pending_update(manual, None)),
+            (idx(4), failure(3, 3)),
+            (idx(5), failure(2, 2)),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+            Ok(())
+        );
     }
 
     #[test]
@@ -329,79 +706,44 @@ mod tests {
     #[test]
     async fn clean_cut_is_accepted() {
         let entries = HashMap::from([
-            (2, OplogEntry::end(idx(1), None, false)),
-            (4, OplogEntry::end(idx(3), None, false)),
+            (2, OplogEntry::end(idx(1), None, false, None, None)),
+            (4, OplogEntry::end(idx(3), None, false, None, None)),
         ]);
-        // Cut after a completed call: the End at 4 references 3, which is also after the cut
+        // Completed calls on either side do not constrain the cut.
         assert_eq!(scan(&entries, 2, 5, &deleted(vec![])).await, None);
     }
 
     #[test]
-    async fn end_after_cut_referencing_surviving_start_is_rejected() {
-        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false))]);
-        assert_eq!(
-            scan(&entries, 4, 6, &deleted(vec![])).await,
-            Some(SpanningConstruct::DurableCall {
-                start_index: idx(3),
-                terminal_index: idx(5),
-            })
-        );
+    async fn durable_call_cuts_use_the_retained_prefix_not_future_completion() {
+        for entries in [
+            HashMap::from([(5, OplogEntry::cancelled(idx(2), None, None))]),
+            HashMap::from([(5, OplogEntry::end(idx(2), None, false, None, None))]),
+            HashMap::from([
+                (5, OplogEntry::end(idx(2), None, false, None, None)),
+                (8, OplogEntry::completion_delivered(idx(2))),
+            ]),
+            HashMap::from([
+                (5, OplogEntry::end(idx(2), None, false, None, None)),
+                (8, OplogEntry::completion_discarded(idx(2))),
+            ]),
+        ] {
+            for cut in [2, 4, 5, 7, 8] {
+                assert_eq!(scan(&entries, cut, 8, &deleted(vec![])).await, None);
+            }
+        }
     }
 
     #[test]
-    async fn cancelled_after_cut_referencing_surviving_start_is_rejected() {
-        let entries = HashMap::from([(7, OplogEntry::cancelled(idx(2), None))]);
-        assert_eq!(
-            scan(&entries, 5, 8, &deleted(vec![])).await,
-            Some(SpanningConstruct::DurableCall {
-                start_index: idx(2),
-                terminal_index: idx(7),
-            })
-        );
-    }
-
-    #[test]
-    async fn cut_at_start_index_itself_is_rejected() {
-        // Adjacent Start(3)/End(4) pair: a cut at 3 keeps the Start but drops the End
-        let entries = HashMap::from([(4, OplogEntry::end(idx(3), None, false))]);
-        assert_eq!(
-            scan(&entries, 3, 4, &deleted(vec![])).await,
-            Some(SpanningConstruct::DurableCall {
-                start_index: idx(3),
-                terminal_index: idx(4),
-            })
-        );
-    }
-
-    #[test]
-    async fn completion_discarded_after_cut_referencing_surviving_start_is_rejected() {
-        // Start(2)/End(3) survive the cut at 4, but the CompletionDiscarded marker at 5 is cut
-        // off: the surviving prefix reflects the discarded completion while replay without the
-        // marker would deliver the response, so the cut is rejected.
+    async fn recoverable_call_does_not_hide_a_later_transaction_boundary() {
         let entries = HashMap::from([
-            (3, OplogEntry::end(idx(2), None, false)),
-            (5, OplogEntry::completion_discarded(idx(2))),
+            (5, OplogEntry::end(idx(2), None, false, None, None)),
+            (7, OplogEntry::committed_remote_transaction(idx(3))),
         ]);
         assert_eq!(
-            scan(&entries, 4, 6, &deleted(vec![])).await,
-            Some(SpanningConstruct::DurableCall {
-                start_index: idx(2),
-                terminal_index: idx(5),
-            })
-        );
-    }
-
-    #[test]
-    async fn completion_delivered_after_cut_referencing_surviving_start_is_rejected() {
-        let entries = HashMap::from([
-            (3, OplogEntry::end(idx(2), None, false)),
-            (5, OplogEntry::completion_delivered(idx(2))),
-        ]);
-        assert_eq!(
-            scan(&entries, 4, 6, &deleted(vec![])).await,
-            Some(SpanningConstruct::DurableCall {
-                start_index: idx(2),
-                terminal_index: idx(5),
+            scan(&entries, 4, 8, &deleted(vec![])).await,
+            Some(SpanningConstruct::RemoteTransaction {
+                begin_index: idx(3),
+                reference_index: idx(7),
             })
         );
     }
@@ -412,18 +754,6 @@ mod tests {
         // an abandoned timeline; it must not invalidate the cut.
         let entries = HashMap::from([(5, OplogEntry::completion_discarded(idx(2)))]);
         assert_eq!(scan(&entries, 4, 6, &deleted(vec![(2, 3)])).await, None);
-    }
-
-    #[test]
-    async fn end_atomic_region_after_cut_is_rejected() {
-        let entries = HashMap::from([(6, OplogEntry::end_atomic_region(idx(2)))]);
-        assert_eq!(
-            scan(&entries, 4, 6, &deleted(vec![])).await,
-            Some(SpanningConstruct::AtomicRegion {
-                begin_index: idx(2),
-                end_index: idx(6),
-            })
-        );
     }
 
     #[test]
@@ -454,7 +784,7 @@ mod tests {
     async fn retried_transaction_begin_after_cut_is_rejected() {
         let entries = HashMap::from([(
             10,
-            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), Some(idx(3))),
+            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), idx(3)),
         )]);
         assert_eq!(
             scan(&entries, 7, 10, &deleted(vec![])).await,
@@ -469,7 +799,7 @@ mod tests {
     async fn original_transaction_begin_after_cut_is_accepted() {
         let entries = HashMap::from([(
             10,
-            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), None),
+            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), idx(9)),
         )]);
         assert_eq!(scan(&entries, 7, 10, &deleted(vec![])).await, None);
     }
@@ -487,17 +817,19 @@ mod tests {
                 3,
                 OplogEntry::CardTransferStarted {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     transfer_id,
                     card_id: source_card_id,
-                    source_holder: None,
+                    source_holder: target_holder.clone(),
                     target_holder: target_holder.clone(),
-                    source_wallet_generation: Some(1),
+                    source_wallet_generation: 1,
                 },
             ),
             (
                 5,
                 OplogEntry::CardTransferConfirmed {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     transfer_id,
                     source_card_id,
                     installed_card_id,
@@ -511,35 +843,35 @@ mod tests {
 
     #[test]
     async fn terminal_inside_deleted_region_is_ignored() {
-        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false))]);
+        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false, None, None))]);
         assert_eq!(scan(&entries, 4, 6, &deleted(vec![(5, 6)])).await, None);
     }
 
     #[test]
     async fn orphan_terminal_with_deleted_start_is_ignored() {
         // The Start at 3 lies in a deleted region: its terminal is an orphan that replay drains
-        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false))]);
+        let entries = HashMap::from([(5, OplogEntry::end(idx(3), None, false, None, None))]);
         assert_eq!(scan(&entries, 4, 6, &deleted(vec![(2, 3)])).await, None);
     }
 
     #[test]
     async fn terminal_referencing_start_after_cut_is_accepted() {
         // Both halves after the cut: nothing spans it
-        let entries = HashMap::from([(6, OplogEntry::end(idx(5), None, false))]);
+        let entries = HashMap::from([(6, OplogEntry::end(idx(5), None, false, None, None))]);
         assert_eq!(scan(&entries, 4, 6, &deleted(vec![])).await, None);
     }
 
     #[test]
     async fn first_spanning_construct_is_reported() {
         let entries = HashMap::from([
-            (5, OplogEntry::end_atomic_region(idx(2))),
-            (6, OplogEntry::end(idx(3), None, false)),
+            (5, OplogEntry::pre_commit_remote_transaction(idx(2))),
+            (6, OplogEntry::committed_remote_transaction(idx(3))),
         ]);
         assert_eq!(
             scan(&entries, 4, 6, &deleted(vec![])).await,
-            Some(SpanningConstruct::AtomicRegion {
+            Some(SpanningConstruct::RemoteTransaction {
                 begin_index: idx(2),
-                end_index: idx(5),
+                reference_index: idx(5),
             })
         );
     }

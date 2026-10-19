@@ -23,6 +23,11 @@ use opentelemetry_sdk::trace::SdkTracer;
 use prometheus::Registry;
 use tracing::info;
 
+// As in worker-executor: worker-service allocates and frees small objects for every
+// request on many threads, where mimalloc is faster than the system allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         tokio::runtime::Builder::new_multi_thread()
@@ -37,7 +42,7 @@ fn main() -> anyhow::Result<()> {
         let tracer = init_tracing_with_default_env_filter(&config.tracing);
         info!("Using configuration:\n{}", config.to_safe_string_indented());
 
-        let prometheus_registry = prometheus::Registry::new();
+        let prometheus_registry = golem_worker_service::metrics::register_all();
 
         let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
             .without_counter_suffixes()
@@ -72,9 +77,14 @@ async fn async_main(
     prometheus: Registry,
     tracer: Option<SdkTracer>,
 ) -> anyhow::Result<()> {
-    let server = WorkerService::new(config, prometheus).await?;
-
     let mut join_set = tokio::task::JoinSet::new();
+    golem_service_base::observability::install_runtime_metrics(
+        tokio::runtime::Handle::current(),
+        prometheus.clone(),
+        config.runtime_metrics_sampling_interval,
+        &mut join_set,
+    );
+    let server = WorkerService::new(config, prometheus).await?;
 
     server.run(&mut join_set, tracer).await?;
 

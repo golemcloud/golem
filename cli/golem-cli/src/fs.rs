@@ -21,7 +21,8 @@ use std::fs::{Metadata, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
-use wax::{Glob, LinkBehavior, WalkBehavior};
+use wax::Glob;
+use wax::walk::{Entry, LinkBehavior, WalkBehavior};
 
 pub fn parent_or_err(path: &Path) -> anyhow::Result<&Path> {
     path.parent()

@@ -189,7 +189,7 @@ impl AdmissionController {
     /// the granted pages in at any later time.
     fn reserve(&self, request_bytes: u64) {
         self.granted
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
                 granted.checked_add(request_bytes)
             })
             .expect("committed memory reservation overflowed");
@@ -213,7 +213,7 @@ impl AdmissionController {
     pub(crate) fn release(&self, reserved_bytes: u64) {
         let previously_granted = self
             .granted
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
                 Some(granted.saturating_sub(reserved_bytes))
             })
             .expect("memory reservation release must always produce a value");

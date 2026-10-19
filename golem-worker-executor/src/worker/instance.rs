@@ -15,34 +15,38 @@
 use super::Worker;
 use super::entity_slot::{EntitySlot, EntitySlotRegistration};
 use super::owner_lane::OwnerLane;
+use super::owner_wallet::{OwnerWallet, WalletBaseline};
 use super::state_actor::OwnerCommitController;
+use super::tasks::RuntimeAppendTasks;
 use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::entity::{
-    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability, OwnerRuntime,
+    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
+    InvocationExecutionMode, OwnerRuntime,
 };
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
-use std::collections::HashSet;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
+#[cfg(feature = "test-utils")]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
-use tokio::sync::watch;
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
-use wasmtime::{Store, StoreMemory, UpdateDeadline};
+use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LinearMemoryEnumerationError {
@@ -109,22 +113,66 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> Drop for StoreFuelGuard<Ct
 
 /// The durable execution stream shared by every Store belonging to one owner.
 ///
-/// A replay generation is installed by the primary Store and cloned by entity Stores. Cloning a
-/// [`ReplayState`] shares its cursor; it does not create another cursor over the same oplog.
+/// A replay generation owns its cursor and live wallet together. Stores attach to the installed
+/// generation; cloning a [`ReplayState`] does not create another cursor over the same oplog.
 pub struct OwnerExecution {
     owner_id: OwnedAgentId,
+    suspension: Mutex<Arc<super::suspension::OwnerSuspension>>,
     oplog: Arc<dyn Oplog>,
-    replay: tokio::sync::RwLock<Option<ReplayState>>,
+    generation: tokio::sync::RwLock<Option<OwnerReplayGeneration>>,
+    card_interest_index: Arc<crate::services::card_interest::CardInterestIndex>,
+    card_boundary: Arc<tokio::sync::Mutex<()>>,
+    append_tasks: Arc<Mutex<Arc<RuntimeAppendTasks>>>,
     commit: Arc<OwnerCommitController>,
     lane: OwnerLane,
-    historical_reconstructions: watch::Sender<usize>,
-    historical_reconstruction_bodies: watch::Sender<HashSet<OplogIndex>>,
+    primary_tail_work: crate::durable_host::tail_work::TailWorkTracker,
+    tool_operations: Arc<OwnerToolOperations>,
+    deferred_tool_admission: Arc<DeferredAdmissionTable>,
+    #[cfg(feature = "test-utils")]
+    monotonic_clock_start_gate: Mutex<Option<Arc<ClockNowGate>>>,
 }
 
-pub(crate) struct HistoricalReconstruction {
-    active: watch::Sender<usize>,
-    active_bodies: watch::Sender<HashSet<OplogIndex>>,
-    body: Option<OplogIndex>,
+struct OwnerReplayGeneration {
+    replay: ReplayState,
+    wallet: Arc<OwnerWallet>,
+}
+
+#[cfg(feature = "test-utils")]
+struct ClockNowGate {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+    abort_as_restart: AtomicBool,
+}
+
+#[cfg(feature = "test-utils")]
+pub struct ClockNowGateHandle {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ClockNowGate>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ClockNowGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered)
+            .await
+            .expect("clock now gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+
+    pub fn abort_as_restart(&self) {
+        self.gate.abort_as_restart.store(true, Ordering::Release);
+        self.release();
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Drop for ClockNowGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
 }
 
 impl OwnerExecution {
@@ -132,23 +180,36 @@ impl OwnerExecution {
         owner_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         commit: Arc<OwnerCommitController>,
+        card_boundary: Arc<tokio::sync::Mutex<()>>,
+        append_tasks: Arc<Mutex<Arc<RuntimeAppendTasks>>>,
+        card_interest_index: Arc<crate::services::card_interest::CardInterestIndex>,
     ) -> Self {
         let lane = OwnerLane::new(owner_id.clone());
-        let (historical_reconstructions, _) = watch::channel(0);
-        let (historical_reconstruction_bodies, _) = watch::channel(HashSet::new());
+        let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
         Self {
             owner_id,
+            suspension: Mutex::new(super::suspension::OwnerSuspension::new()),
             oplog,
-            replay: tokio::sync::RwLock::new(None),
+            generation: tokio::sync::RwLock::new(None),
+            card_interest_index,
+            card_boundary,
+            append_tasks,
             commit,
             lane,
-            historical_reconstructions,
-            historical_reconstruction_bodies,
+            tool_operations: OwnerToolOperations::new(),
+            primary_tail_work,
+            deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
+            #[cfg(feature = "test-utils")]
+            monotonic_clock_start_gate: Mutex::new(None),
         }
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {
         &self.owner_id
+    }
+
+    pub(crate) fn suspension(&self) -> Arc<super::suspension::OwnerSuspension> {
+        self.suspension.lock().unwrap().clone()
     }
 
     pub fn oplog(&self) -> Arc<dyn Oplog> {
@@ -159,45 +220,22 @@ impl OwnerExecution {
         self.lane.clone()
     }
 
-    pub(crate) fn register_historical_reconstruction(
+    pub fn tool_operation_metadata(&self) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.metadata()
+    }
+
+    pub(crate) fn tool_operations(&self) -> Arc<OwnerToolOperations> {
+        self.tool_operations.clone()
+    }
+
+    pub(crate) fn primary_tail_work_tracker(
         &self,
-        start_index: OplogIndex,
-    ) -> HistoricalReconstruction {
-        self.historical_reconstructions
-            .send_modify(|active| *active += 1);
-        self.historical_reconstruction_bodies.send_modify(|active| {
-            assert!(
-                active.insert(start_index),
-                "entity body reconstruction at {start_index} was registered twice"
-            );
-        });
-        HistoricalReconstruction {
-            active: self.historical_reconstructions.clone(),
-            active_bodies: self.historical_reconstruction_bodies.clone(),
-            body: Some(start_index),
-        }
+    ) -> crate::durable_host::tail_work::TailWorkTracker {
+        self.primary_tail_work.clone()
     }
 
-    pub(crate) fn historical_reconstruction_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
-        self.historical_reconstruction_bodies.subscribe()
-    }
-
-    pub(crate) async fn wait_for_historical_reconstructions(&self) {
-        let mut active = self.historical_reconstructions.subscribe();
-        active
-            .wait_for(|active| *active == 0)
-            .await
-            .expect("owner execution retains the reconstruction tracker");
-    }
-
-    pub(crate) async fn begin_replay_generation(
-        &self,
-        deleted_regions: DeletedRegions,
-        initial_snapshot_skip_end: Option<OplogIndex>,
-    ) -> Result<ReplayState, WorkerExecutorError> {
-        self.install_replay_generation(deleted_regions, initial_snapshot_skip_end)
-            .await?;
-        self.replay().await
+    pub(crate) fn deferred_tool_admission(&self) -> Arc<DeferredAdmissionTable> {
+        self.deferred_tool_admission.clone()
     }
 
     /// Installs a fresh owner replay cursor. Lifecycle recovery uses the returned cursor through
@@ -208,58 +246,248 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        let replay = ReplayState::new(
+        let old_append_tasks = self.append_tasks.lock().unwrap().clone();
+        old_append_tasks.seal_and_wait().await;
+        let boundary = self.card_boundary.clone().lock_owned().await;
+        self.commit(CommitLevel::Always).await?;
+        let baseline = self
+            .wallet()
+            .await?
+            .baseline
+            .reselect(self.oplog.as_ref(), initial_snapshot_skip_end)
+            .await?;
+        let horizon = self.oplog.current_oplog_index().await;
+        self.install_replay_generation_locked(
+            deleted_regions,
+            initial_snapshot_skip_end,
+            baseline,
+            horizon,
+            self.wallet().await?.tasks.clone(),
+            &boundary,
+        )
+        .await
+    }
+
+    pub(crate) async fn install_replay_generation_locked(
+        &self,
+        deleted_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
+        baseline: WalletBaseline,
+        horizon: OplogIndex,
+        tasks: super::tasks::WorkerTasks,
+        _boundary: &tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<(), WorkerExecutorError> {
+        if let Some(generation) = self.generation.read().await.as_ref() {
+            generation.replay.ensure_reconstruction_claims_empty()?;
+        }
+        let append_tasks = Arc::new(RuntimeAppendTasks::default());
+        let wallet = OwnerWallet::new(
+            baseline,
+            append_tasks.clone(),
+            tasks,
+            self.card_boundary.clone(),
+            self.card_interest_index.clone(),
+        )
+        .await?;
+        self.tool_operations.join_owner_failure_cleanup().await?;
+        self.tool_operations.begin_generation()?;
+        self.deferred_tool_admission.begin_generation()?;
+        let mut generation = self.generation.write().await;
+        wallet.activate_interest().await;
+        if let Some(old) = generation.as_ref() {
+            old.wallet.retire();
+        }
+        let replay = ReplayState::new_for_owner(
             self.owner_id.clone(),
             self.oplog.clone(),
             deleted_regions,
             initial_snapshot_skip_end,
+            self.tool_operations.clone(),
+            horizon,
+            Some(wallet.clone()),
         )
-        .await?;
-        *self.replay.write().await = Some(replay.clone());
+        .await
+        .inspect_err(|_| wallet.retire())?;
+        *generation = Some(OwnerReplayGeneration { replay, wallet });
+        *self.append_tasks.lock().unwrap() = append_tasks;
+        // Observation state follows the existing replay generation. Old Store callbacks retain
+        // the old coordinator and cannot alter eligibility of the reconstructed generation.
+        *self.suspension.lock().unwrap() = super::suspension::OwnerSuspension::new();
         Ok(())
     }
 
-    pub(crate) async fn replay(&self) -> Result<ReplayState, WorkerExecutorError> {
-        self.replay.read().await.clone().ok_or_else(|| {
-            WorkerExecutorError::runtime(format!(
-                "Owner execution for {} has no active replay generation",
-                self.owner_id
+    /// Claims a staged entity boundary through the production replay claim path.
+    #[cfg(feature = "test-utils")]
+    pub async fn test_claim_entity_boundary(
+        &self,
+        parent: OplogIndex,
+    ) -> Result<crate::durable_host::TestEntityBoundaryClaim, WorkerExecutorError> {
+        use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
+        use golem_common::model::oplog::{DurableFunctionType, host_functions::HostFunctionName};
+        match self
+            .replay()
+            .await?
+            .claim_start_or_replay_end(StartClaim::tool_invocation(
+                &HostFunctionName::GolemEntityInvoke,
+                &HostFunctionName::GolemToolInvocationRejected,
+                &DurableFunctionType::WriteLocal,
+                parent,
             ))
-        })
-    }
-
-    pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
-        self.commit.commit_and_update_state(level).await.0
-    }
-
-    pub async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let index = self.oplog.add(entry).await;
-        self.commit(CommitLevel::Always).await;
-        index
-    }
-}
-
-impl Drop for HistoricalReconstruction {
-    fn drop(&mut self) {
-        self.body_settled();
-        self.active.send_modify(|active| {
-            *active = active
-                .checked_sub(1)
-                .expect("historical reconstruction count underflowed");
-        });
-    }
-}
-
-impl HistoricalReconstruction {
-    pub(crate) fn body_settled(&mut self) {
-        if let Some(start_index) = self.body.take() {
-            self.active_bodies.send_modify(|active| {
-                assert!(
-                    active.remove(&start_index),
-                    "entity body reconstruction at {start_index} was not registered"
-                );
-            });
+            .await?
+        {
+            ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                Ok(crate::durable_host::TestEntityBoundaryClaim(handle))
+            }
+            _ => Err(WorkerExecutorError::runtime(
+                "expected a staged entity boundary",
+            )),
         }
+    }
+
+    /// Settles a staged claim with the production terminal resolver, retaining its fence.
+    #[cfg(feature = "test-utils")]
+    pub async fn test_settle_entity_boundary(
+        &self,
+        mut handle: crate::durable_host::TestEntityBoundaryClaim,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut reconstruction = handle
+            .0
+            .take_historical_reconstruction()
+            .expect("entity reconstruction claim");
+        reconstruction.body_settled();
+        self.replay()
+            .await?
+            .await_resolution_outcome(handle.0)
+            .await?;
+        drop(reconstruction);
+        Ok(())
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn replay(&self) -> Result<ReplayState, WorkerExecutorError> {
+        self.generation
+            .read()
+            .await
+            .as_ref()
+            .map(|generation| generation.replay.clone())
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Owner execution for {} has no active replay generation",
+                    self.owner_id
+                ))
+            })
+    }
+
+    pub(crate) async fn wallet(&self) -> Result<Arc<OwnerWallet>, WorkerExecutorError> {
+        self.generation
+            .read()
+            .await
+            .as_ref()
+            .map(|generation| generation.wallet.clone())
+            .ok_or_else(|| WorkerExecutorError::runtime("owner wallet generation is not installed"))
+    }
+
+    pub(crate) async fn replay_and_wallet(
+        &self,
+    ) -> Result<(ReplayState, Arc<OwnerWallet>), WorkerExecutorError> {
+        self.generation
+            .read()
+            .await
+            .as_ref()
+            .map(|generation| (generation.replay.clone(), generation.wallet.clone()))
+            .ok_or_else(|| WorkerExecutorError::runtime("owner replay generation is not installed"))
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.is_live_published())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_pending_card_derivation(
+        &self,
+        card_id: golem_common::model::card::CardId,
+    ) -> Result<
+        (
+            OplogIndex,
+            OplogIndex,
+            Option<(golem_common::model::card::StoredCard, u64)>,
+        ),
+        WorkerExecutorError,
+    > {
+        let replay = self.replay().await?;
+        let pending = replay.pending_card_derivation(card_id).await;
+        Ok((
+            replay.replay_target(),
+            replay.last_replayed_index(),
+            pending,
+        ))
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_settling(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.test_is_settling())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_wait_for_tool_owner_failure(
+        &self,
+    ) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.wait_for_owner_failure().await;
+        self.tool_operation_metadata()
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_monotonic_clock_start(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+            abort_as_restart: AtomicBool::new(false),
+        });
+        *self.monotonic_clock_start_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_after_monotonic_clock_start(&self) -> Result<(), InterruptKind> {
+        let gate = self.monotonic_clock_start_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            // The gate is entered from inside a host call, where the fence surfaces as the
+            // interrupt that gives the agent up; a transient storage failure is fatal here as
+            // everywhere else.
+            match self.oplog.commit(CommitLevel::Always).await {
+                Ok(_) => {}
+                Err(crate::services::oplog::OplogError::Fenced(_)) => {
+                    return Err(InterruptKind::ShardLost);
+                }
+                Err(error) => panic!("oplog write: {error}"),
+            }
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("clock Start gate closed")
+                .forget();
+            if gate.abort_as_restart.load(Ordering::Acquire) {
+                return Err(InterruptKind::Restart);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogRefusal> {
+        self.commit
+            .commit_and_update_state(level)
+            .await
+            .map(|(index, _)| index)
     }
 }
 
@@ -363,6 +591,11 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         slot: Arc<EntitySlot>,
         owner_component_metadata: Arc<ComponentMetadata>,
     ) -> Result<Self, WorkerExecutorError> {
+        let executable = activation.executable_opt().ok_or_else(|| {
+            WorkerExecutorError::runtime(
+                "Component instance hosts cannot be constructed for native activations",
+            )
+        })?;
         if slot.entity_id().owner_id() != owner.owned_agent_id() {
             return Err(WorkerExecutorError::runtime(
                 "Entity slot does not belong to the instance owner",
@@ -371,7 +604,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         Ok(Self {
             owner_id: owner.owned_agent_id().clone(),
             runtime: OwnerRuntime::Entity(slot.entity().clone()),
-            executable: activation.executable().clone(),
+            executable: executable.clone(),
             filesystem: activation.filesystem(),
             owner_execution: owner.owner_execution(),
             owner_resources: owner.owner_runtime_resources(),
@@ -429,14 +662,16 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .await
     }
 
-    pub(crate) async fn instantiate(
-        &self,
-        context: Ctx,
-        component: &Component,
-    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
+    pub(crate) fn create_store(&self, context: Ctx) -> Result<Store<Ctx>, WorkerExecutorError> {
         let owner = self.owner()?;
         let engine = owner.engine();
         let mut store = Store::new(&engine, context);
+        let runtime = super::suspension::RuntimeStore::new(self.owner_execution.suspension());
+        store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
+        store
+            .as_context_mut()
+            .set_runtime_observer(runtime)
+            .map_err(anyhow::Error::from)?;
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
@@ -468,7 +703,16 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .set_fuel(u64::MAX)
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         store.limiter_async(|ctx| ctx.resource_limiter());
-        let mut store = StoreFuelGuard::new(store);
+        Ok(store)
+    }
+
+    pub(crate) async fn instantiate(
+        &self,
+        context: Ctx,
+        component: &Component,
+    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
+        let owner = self.owner()?;
+        let mut store = StoreFuelGuard::new(self.create_store(context)?);
 
         let linker = (*owner.linker()).clone();
         let instance_pre = linker
@@ -556,7 +800,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             // process crash can replay and persist the same instantiation growth again.
             owner
                 .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
-                .await;
+                .await?;
             owner
                 .startup_linear_memory_bytes
                 .store(allocated_bytes, Ordering::Release);
@@ -591,7 +835,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             };
             if scope.owner_id() != &self.owner_id
                 || scope.invocation_id().entity() != entity
-                || scope.activation().executable() != &self.executable
+                || scope.activation().executable_opt() != Some(&self.executable)
                 || scope.activation().filesystem() != self.filesystem
             {
                 return Err(WorkerExecutorError::runtime(
@@ -609,15 +853,26 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 component_metadata.component_size,
             )
             .await;
+        let authority_wallet = match scope {
+            Some(scope) => scope.authority_wallet().to_vec(),
+            None => owner.get_wallet_cards().await?,
+        };
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
+                scope
+                    .map(EntityInvocationScope::mode)
+                    .unwrap_or(InvocationExecutionMode::Live),
                 self.filesystem,
-                component_metadata,
-                self.activation.clone(),
+                crate::workerctx::WorkerCtxExecutable::Component(Box::new(component_metadata)),
+                self.activation
+                    .clone()
+                    .expect("Entity instance host must pin its activation"),
                 self.owner_component_metadata
                     .clone()
                     .expect("Entity instance host must pin its owner component metadata"),
+                authority_wallet,
+                scope.map(|scope| scope.invocation_id().start_index()),
             )
             .await?;
         if let Some(scope) = scope {
@@ -664,9 +919,60 @@ pub struct HostedInstance<Ctx: WorkerCtx> {
     _component_charge: Option<WorkerComponentCharge>,
 }
 
+pub trait EntityInvocationBody<Ctx: WorkerCtx, R>: Send + 'static {
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>;
+}
+
+pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
+
+impl<Ctx, R, F> EntityInvocationBody<Ctx, R> for ClosureEntityInvocationBody<F>
+where
+    Ctx: WorkerCtx,
+    F: Send + 'static,
+    F: for<'a> FnOnce(
+        &'a Instance,
+        &'a mut Store<Ctx>,
+    )
+        -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
+{
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>> {
+        self.0(instance, store)
+    }
+}
+
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     pub(crate) fn into_parts(self) -> (Instance, Store<Ctx>) {
         (self.instance, self.store.into_inner())
+    }
+
+    pub(crate) async fn prepare_tool_parent_end(
+        &mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::prepare_tool_parent_end(&mut self.store.as_context_mut(), parent)
+            .await
+    }
+
+    pub(crate) async fn settle_tool_children(
+        mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        let result = crate::durable_host::tool::settle_tool_children(
+            &mut self.store.as_context_mut(),
+            parent,
+        )
+        .await;
+        // A trapped Store is disposed of, not driven to normal guest EXIT.
+        drop(self);
+        result
     }
 
     /// Runs one entity export with an installed invocation scope and then destroys its Store.
@@ -688,12 +994,22 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         >,
     {
         tokio::spawn(async move {
+            let cancellation = tokio_util::sync::CancellationToken::new();
             let registration = self
                 .slot
                 .as_ref()
                 .ok_or_else(|| WorkerExecutorError::runtime("Entity instance has no slot"))?
-                .register(&scope)?;
-            self.invoke_scoped_inner(scope, &registration, invoke).await
+                .register(&scope, cancellation.clone())?;
+            tokio::select! {
+                result = self.invoke_scoped_inner(
+                    scope,
+                    &registration,
+                    ClosureEntityInvocationBody(invoke),
+                ) => result,
+                _ = cancellation.cancelled() => {
+                    Err(WorkerExecutorError::runtime("Entity body was cancelled"))
+                }
+            }
         })
         .await
         .map_err(|error| {
@@ -705,23 +1021,20 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         })?
     }
 
-    pub(crate) async fn invoke_scoped_registered<R, F>(
-        self,
+    pub(crate) async fn invoke_scoped_registered_retained<R, F>(
+        mut self,
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> (Result<R, WorkerExecutorError>, Self)
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
     {
-        self.invoke_scoped_inner(scope, registration, invoke).await
+        let result = self
+            .invoke_scoped_inner_retained(scope, registration, invoke)
+            .await;
+        (result, self)
     }
 
     async fn invoke_scoped_inner<R, F>(
@@ -732,13 +1045,21 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     ) -> Result<R, WorkerExecutorError>
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
+    {
+        self.invoke_scoped_inner_retained(scope, registration, invoke)
+            .await
+    }
+
+    async fn invoke_scoped_inner_retained<R, F>(
+        &mut self,
+        scope: EntityInvocationScope,
+        registration: &EntitySlotRegistration,
+        invoke: F,
+    ) -> Result<R, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: EntityInvocationBody<Ctx, R>,
     {
         let OwnerRuntime::Entity(entity) = &self.runtime else {
             return Err(WorkerExecutorError::runtime(
@@ -747,7 +1068,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         };
         if scope.owner_id() != &self.owner_id
             || scope.invocation_id().entity() != entity
-            || scope.activation().executable() != &self.executable
+            || scope.activation().executable_opt() != Some(&self.executable)
             || scope.activation().filesystem() != self.filesystem
         {
             return Err(WorkerExecutorError::runtime(
@@ -757,6 +1078,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
 
         registration
             .attach_linear_memory(self.store.data().durable_ctx().linear_memory_tracker())?;
+        let execution_mode = scope.mode();
+        let body_hook = self.store.data().entity_invocation_body_hook();
 
         match self.store.data().entity_invocation_scope() {
             Some(installed) if installed != &scope => {
@@ -770,9 +1093,27 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .data_mut()
                 .set_entity_invocation_scope(Some(scope))?,
         }
-        let result = std::panic::AssertUnwindSafe(invoke(&self.instance, &mut self.store))
-            .catch_unwind()
-            .await;
+        if let Some(hook) = body_hook.as_ref() {
+            hook.before_invocation(execution_mode).await;
+        }
+        let mut result =
+            std::panic::AssertUnwindSafe(invoke.invoke(&self.instance, &mut self.store))
+                .catch_unwind()
+                .await;
+        if result.is_ok()
+            && let Some(hook) = body_hook.as_ref()
+        {
+            hook.before_completion(execution_mode).await;
+        }
+        if execution_mode == InvocationExecutionMode::ReplayingCompleted
+            && let Ok(Ok(response)) = &mut result
+            && let Some(response) = (response as &mut dyn std::any::Any)
+                .downcast_mut::<golem_common::model::oplog::HostResponseEntityInvocation>(
+            )
+            && let Some(hook) = body_hook
+        {
+            hook.mutate_completed_reconstruction_response(response);
+        }
         let cleanup = self.finish_scoped_invocation();
 
         match result {
@@ -795,9 +1136,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     }
 
     fn finish_scoped_invocation(&mut self) -> Result<(), WorkerExecutorError> {
-        let scope_cleanup = self.store.data_mut().set_entity_invocation_scope(None);
-        self.store.data().set_suspended();
-        scope_cleanup
+        self.store.data_mut().set_entity_invocation_scope(None)
     }
 }
 

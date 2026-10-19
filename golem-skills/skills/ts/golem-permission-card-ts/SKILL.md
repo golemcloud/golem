@@ -1,0 +1,239 @@
+---
+name: golem-permission-card-ts
+description: "Managing permission cards in a TypeScript Golem agent: the wallet, deriving narrower cards, inspecting, revoking, installing cards on other agents, scope cards on RPC calls, and passing cards through agent and tool schemas. Use when delegated authority is created, narrowed, sent, or withdrawn."
+---
+
+# Permission cards in TypeScript
+
+A permission card is an unforgeable capability held by an agent. The `permissions` namespace of
+`@golemcloud/golem-ts-sdk` manages cards over `golem:permissions@0.1.0`:
+
+```typescript
+import { permissions, Duration, type PermissionCard } from '@golemcloud/golem-ts-sdk';
+```
+
+## Card types
+
+There are three card types, each with its own class. The SDK has no conversion API between them
+other than encoding and decoding a `PermissionCard` or `PolymorphicPermissionCard` through a
+schema: a decoded card takes the type that the schema declares, and the host keeps the card's real
+kind (see [Cards in agent and tool schemas](#cards-in-agent-and-tool-schemas)). A `ScopeCard`
+cannot be encoded:
+
+| Type | What it is |
+| --- | --- |
+| `PermissionCard` | A concrete card: every grant names concrete owners and resources. |
+| `PolymorphicPermissionCard` | A template card: its grants may contain slot variables (`?agent`, `?env`, ...), which resolve for each holder. An agent's initial card is a template. |
+| `ScopeCard` | An invocation-local card for one awaited RPC call. See [Scope cards](#scope-cards-on-rpc-calls). |
+
+`PermissionCard` and `PolymorphicPermissionCard` have the same operations. `derive` on either
+returns `PermissionCard | PolymorphicPermissionCard`, labelled by the host. A template card is a
+`derive` or `deriveScope` parent only while it is in this agent's wallet, where the host resolves
+it for this agent; a template card received from
+another agent returns `not-permitted` there.
+
+## Grants and bounds
+
+A `PatternGrant` is plain data: `{ class, owner, recipient, verb, resourceId }`, written in the
+manifest as `class(owner) @ recipient : verb : resourceId`.
+
+```typescript
+const readSecretEnv: permissions.PatternGrant = {
+  class: 'env',
+  owner: '*/*/*/*/*', // any agent
+  recipient: '*',
+  verb: 'read',
+  resourceId: 'API_TOKEN',
+};
+```
+
+`Bounds` replaces the four WIT grant lists: `{ lowerPositive?, lowerNegative?, upperPositive?,
+upperNegative? }`. An omitted list is empty. The meaning depends on the call:
+
+- `card.derive(bounds)`: the positive lists name the grants of `card` **to retain**; the negative
+  lists name the denials **to add**.
+- `permissions.deriveFromWallet(bounds)` and `permissions.deriveScope(parents, bounds)`: the lists
+  are the **full requested** lists.
+
+Derive inputs are requests. The host checks them against the parent card or the wallet.
+
+Persistent derivation accepts owner slot variables such as `?agent` and `?env`.
+Slots in resource IDs are not supported and fail with `invalid-pattern`.
+Child slots name the eventual installed holder, not the deriving caller.
+A template parent is still resolved for the
+caller in whose wallet it is installed. Every possible child instantiation must narrow that
+resolved parent. The host stores the original slots; the universal envelope is proof only.
+Explicit derivation inherits the parent's exact denials and adds the requested denials; wallet
+derivation takes complete bounds. Slot-bearing denials cannot prove universal attenuation, so
+the host may conservatively refuse a request; concrete inherited denials remain.
+Scope cards stay concrete: requested slots fail with `invalid-pattern` and an explicit message.
+For a slot-bearing tool owner, the host does not resolve aliases against caller metadata and
+rejects metadata-dependent short flags. Use primary names.
+
+## Operations
+
+Calls that can fail with an expected permission error return `Result<T, PermissionError>`
+(`kind` is one of `permissions.PERMISSION_ERROR_KINDS`, `details` is the host message). Host
+traps stay traps.
+
+| Call | Effect on the card |
+| --- | --- |
+| `permissions.wallet()` | Returns the owned cards in this agent's wallet as `WalletCard` entries. `release()` the ones you do not keep. |
+| `permissions.walletVersion()` | Wallet version; changes whenever the set of installed cards changes. |
+| `permissions.deriveFromWallet(bounds, lifespan?)` | New card from a single wallet card. |
+| `permissions.deriveScope(parents, bounds)` | New invocation-local `ScopeCard`. Borrows the parents (persistent or scope cards). |
+| `card.id()`, `card.parents()`, `card.expiresAt()` | Borrow. Trap when the host no longer knows the card, or when its card is revoked or expired. A scope card's `expiresAt()` is the earliest expiry of its root cards. |
+| `card.inspect()` | Borrow. Returns the `CardView` (four grant lists). Needs `card:inspect`. |
+| `card.derive(bounds, lifespan?)` | Borrow. New narrower child card. Needs `card:derive`. |
+| `card.revoke()` | **Moves** the card. Revokes it and every card derived from it; returns the revoked count. |
+| `card.install(holder)` | **Moves** the card into another agent's wallet. |
+| `card.release()` | **Moves** the card. Drops this agent's handle without revoking it. |
+| `permissions.listModules()`, `permissions.validateGrant(grant)` | Kernel classes, verbs and grant validation. |
+
+`inspect`, `derive`, `deriveScope` and `install` on a card that is revoked or expired return a
+`card-revoked` or `card-expired` `PermissionError`, so `inspect` detects revocation.
+
+`revoke` and `install` move the card before the host call, because the host drops the handle even
+when the call fails. Any later use of a moved card throws; check with `card.isMoved()`.
+
+## The wallet
+
+`permissions.wallet()` returns a list of `WalletCard`, a discriminated union on `tag`. Each case
+has its own card type:
+
+```typescript
+for (const entry of permissions.wallet()) {
+  switch (entry.tag) {
+    case 'concrete': // entry.card: PermissionCard
+    case 'template': // entry.card: PolymorphicPermissionCard
+    case 'scope': // entry.card: ScopeCard, the scope card lent to this invocation
+      entry.card.release();
+  }
+}
+```
+
+The `scope` entry is listed only during an invocation that received a scope card, and only when
+this agent holds `card:inspect`. It is valid only during the current invocation.
+
+```typescript
+const parent = permissions.deriveFromWallet({ lowerPositive: [readSecretEnv] }).unwrap();
+const child = parent
+  .derive({ lowerPositive: [readSecretEnv] }, permissions.Lifespan.of(Duration.hours(1)))
+  .unwrap();
+console.log(child.parents()[0] === parent.id()); // true
+
+const revoked = parent.revoke(); // Result<number, PermissionError>; parent and child are revoked
+child.release(); // the local handle stays open until released, even after the cascade
+```
+
+`Lifespan.of(duration)` takes a positive SDK `Duration`; `Lifespan.iso8601('PT30M')` takes an
+ISO-8601 string. The host accepts only the `PnDTnHnMnS` form (days, hours, minutes, seconds);
+year, month and week units are rejected.
+
+`CardId` is opaque: no UUID, no string form, no constructor. Printing or serializing one gives
+the placeholder `CardId(<redacted>)`. The SDK interns IDs, so compare them with `===` or `equals`
+and use them as `Map` / `Set` keys.
+
+## Installing a card on another agent
+
+```typescript
+import { getSelfMetadata } from '@golemcloud/golem-ts-sdk';
+
+const target = permissions.Holder.agent({
+  componentId: getSelfMetadata().agentId.componentId,
+  agentId: Worker.agentId({ name: 'w1' }).value,
+});
+const installed = card.install(target); // card is moved, even on error
+if (installed.isErr() && installed.unwrapErr().kind === 'install-recipient-mismatch') {
+  // the card's recipient patterns do not cover the target agent
+}
+```
+
+The caller needs `card:install` for the target. The host supports only agent holders today:
+`Holder.account` and `Holder.app` targets return `not-permitted`.
+
+## Scope cards on RPC calls
+
+`deriveScope` returns a `ScopeCard`, a separate type from `PermissionCard`. A scope card adds
+authority to the callee for one awaited invocation and is removed when that invocation ends.
+Only awaited calls carry a scope card; `trigger` and `schedule` never do. The call **borrows**
+the card, so it stays usable.
+
+A scope card is valid only during the invocation that derived it. Do not keep it, or a client
+whose default is it, in agent state: in a later invocation the awaited calls fail with a
+`denied` `RemoteCallError`. It also stops authorizing at `scope.expiresAt()`, the earliest expiry
+of its root cards. A scope card has `id`, `parents`, `expiresAt`, `inspect` and `release`; it
+cannot be revoked, installed, used as the parent of a persistent card, or sent as an RPC argument.
+
+```typescript
+// Keep the template wallet card that carries the grant and release the others.
+const wallet = permissions.wallet();
+const entry = wallet.find(
+  (entry) =>
+    entry.tag === 'template' &&
+    entry.card.inspect().match(
+      (view) => view.lowerPositive.some((grant) => grant.resourceId === readSecretEnv.resourceId),
+      () => false,
+    ),
+);
+for (const other of wallet) if (other !== entry) other.card.release();
+if (entry?.tag !== 'template') throw new Error('no template wallet card grants API_TOKEN');
+const template = entry.card;
+
+const scope = permissions.deriveScope([template], { lowerPositive: [readSecretEnv] }).unwrap();
+
+// Per call:
+await Worker.client.get({ name: 'w1' }).run({ job }, { scopeCard: scope });
+
+// As the client default; `scopeCard: null` on a call sends no scope card:
+const scoped = Worker.client.get({ name: 'w1' }, undefined, { scopeCard: scope });
+await scoped.run({ job });
+await scoped.run({ job }, { scopeCard: null });
+
+scope.release();
+template.release();
+```
+
+Reflected and dynamic clients take the scope card as a trailing argument:
+`method.invokeValue(input, signal, scope)`. `agentId.client(Def, config, { scopeCard })` sets a
+default on a client bound to an existing identity.
+
+## Cards in agent and tool schemas
+
+Narrow a persistent derivation result before sending it through a concrete card schema:
+
+```typescript
+const derived = permissions.deriveFromWallet({ lowerPositive: [readSecretEnv] }).unwrap();
+if (!(derived instanceof permissions.PermissionCard)) {
+  derived.release();
+  throw new Error('expected a concrete card');
+}
+// `derived` now has the type for s.permissionCard({ polymorphic: false }).
+```
+
+Declare a card parameter or result with `s.permissionCard`.
+`s.permissionCard({ polymorphic: false })` carries a `PermissionCard`, and
+`s.permissionCard({ polymorphic: true })` carries a `PolymorphicPermissionCard`. Use a literal
+`true` or `false`, so the card type is known. A card that goes through a schema (sent, then
+received) takes the type that the receiving schema declares; the host keeps the card's real kind,
+so the declared type gives no extra authority. A `ScopeCard` cannot be in a schema.
+Sending a card as an argument or returning it **moves** it to the receiver.
+
+```typescript
+import { s, toolDefinition } from '@golemcloud/golem-ts-sdk';
+
+const delegate = toolDefinition('delegate').body((body) =>
+  body
+    .positional('card', s.permissionCard({ polymorphic: false }))
+    .returns(s.permissionCard({ polymorphic: false })),
+);
+```
+
+## Rules
+
+- Never import `golem:permissions/*` directly; use the `permissions` namespace.
+- A card has no public constructor and cannot be serialized: `JSON.stringify(card)` throws.
+  Nothing turns a `CardId`, a grant or other data into a card.
+- Switch on `WalletCard.tag` to get each card with its own type; do not cast one card type to
+  another.
+- Do not keep a card after `revoke`, `install`, `release`, or after sending it to another agent.

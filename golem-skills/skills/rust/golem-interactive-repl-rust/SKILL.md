@@ -73,4 +73,4 @@ No Rust REPL is available. The TypeScript REPL is recommended for interacting wi
 ## Prerequisites
 
 - The Golem server must be running (`golem server run`)
-- Components must be deployed (`golem deploy`)
+- Run from the application directory — `golem repl` builds the components and deploys them automatically if they are not deployed yet

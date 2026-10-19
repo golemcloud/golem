@@ -18,9 +18,26 @@ import { AgentClassName } from '../src/agentClassName';
 // The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock its
 // registry and RPC surfaces; tests that inspect an agent ID configure the exact
 // canonical host result they expect.
+const makeWasmRpc = () => ({
+  invokeAndAwait: vi.fn(),
+  invoke: vi.fn(),
+  asyncInvokeAndAwait: vi.fn(),
+  scheduleInvocation: vi.fn(),
+  scheduleCancelableInvocation: vi.fn(),
+});
+
+const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
+  create: vi.fn(makeWasmRpc),
+});
+
+vi.mock('golem:agent/durable-streams@2.0.0', () => ({
+  DurableStreamReader: vi.fn(),
+  DurableStreamWriter: vi.fn(),
+}));
+
 vi.mock('golem:agent/host@2.0.0', () => ({
-  getAllAgentTypes: () => [],
-  getAgentType: (agentTypeName: string) => {
+  getAllAgentTypes: vi.fn(() => []),
+  getAgentType: vi.fn((agentTypeName: string) => {
     if (agentTypeName === 'FooAgent') {
       const agentType = AgentTypeRegistry.get(new AgentClassName('FooAgent'));
       if (!agentType) {
@@ -32,9 +49,10 @@ vi.mock('golem:agent/host@2.0.0', () => ({
       };
     }
     return undefined;
-  },
+  }),
+  getAgentTypeByAgentId: vi.fn(() => undefined),
   makeAgentId: vi.fn(() => 'MockAgent()'),
-  parseAgentId: (agentId: string) => {
+  parseAgentId: vi.fn((agentId: string) => {
     const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?$/);
     if (!match) {
       throw new Error(`Invalid agent ID: ${agentId}`);
@@ -51,29 +69,31 @@ vi.mock('golem:agent/host@2.0.0', () => ({
       phantomId = { highBits: BigInt(hiBits), lowBits: BigInt(loBits) };
     }
     return [typeName, typed, phantomId];
-  },
-  getConfigValue: () => {
+  }),
+  getConfigValue: vi.fn(() => {
     throw new Error('getConfigValue is not mocked in this test setup');
-  },
+  }),
   createWebhook: () => 'https://example.com/webhook',
-  WasmRpc: vi.fn().mockImplementation(() => ({
-    invokeAndAwait: vi.fn(),
-    invoke: vi.fn(),
-    asyncInvokeAndAwait: vi.fn(),
-    scheduleInvocation: vi.fn(),
-    scheduleCancelableInvocation: vi.fn(),
-  })),
+  WasmRpc: MockWasmRpc,
 }));
 
-vi.mock('golem:tool/host@0.1.0', () => ({
-  ToolRpc: vi.fn().mockImplementation(() => ({
+vi.mock('golem:tool/host@0.1.0', () => {
+  const rpc = vi.fn().mockImplementation(() => ({
     invokeAndAwait: vi.fn(),
     invoke: vi.fn(),
     asyncInvokeAndAwait: vi.fn(),
-  })),
-}));
+  }));
+  return {
+    createStdin: vi.fn(),
+    createOutput: vi.fn(),
+    ToolRpc: Object.assign(rpc, { create: rpc }),
+  };
+});
 
 vi.mock('golem:core/types@2.0.0', () => ({
+  // The host permission-card resource class. Wire lifting accepts only its
+  // instances; tests build fakes with `fakeRawCard`.
+  PermissionCard: class PermissionCard {},
   SchemaValueStream: {
     unwrap: async (value: { reader: AsyncIterable<unknown> }) => value.reader,
     wrap: async (
@@ -98,6 +118,22 @@ vi.mock('golem:core/types@2.0.0', () => ({
   },
 }));
 
+vi.mock('golem:api/host@1.5.0', () => ({
+  getSelfMetadata: vi.fn(() => ({
+    agentId: {
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'TestAgent()',
+    },
+    args: [],
+    env: [],
+    config: [],
+    status: 'idle',
+    componentRevision: 0n,
+    retryCount: 0n,
+    environmentId: { uuid: { highBits: 0n, lowBits: 2n } },
+  })),
+}));
+
 vi.mock('golem:api/oplog@1.5.0', () => ({
   GetOplog: vi.fn(),
   SearchOplog: vi.fn(),
@@ -105,11 +141,17 @@ vi.mock('golem:api/oplog@1.5.0', () => ({
 }));
 
 vi.mock('golem:quota/types@1.5.0', () => ({}));
+vi.mock('golem:permissions/types@0.1.0', () => ({}));
+vi.mock('golem:permissions/inspect@0.1.0', () => ({}));
+vi.mock('golem:permissions/derive@0.1.0', () => ({}));
+vi.mock('golem:permissions/revoke@0.1.0', () => ({}));
+vi.mock('golem:permissions/wallet@0.1.0', () => ({}));
+vi.mock('golem:permissions/kernel-introspection@0.1.0', () => ({}));
 
 vi.mock('golem:secrets/reveal@0.1.0', () => ({
-  reveal: () => {
+  reveal: vi.fn(() => {
     throw new Error('reveal is not mocked in this test setup');
-  },
+  }),
 }));
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';

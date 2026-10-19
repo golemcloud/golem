@@ -6,6 +6,58 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## Persistent permission derivation
+
+`@permissions.derive_from_wallet` and both typed cards' `derive_child` methods
+return `PersistentCard`. Match `Concrete(PermissionCard)` or
+`Template(PolymorphicPermissionCard)` to transfer a typed card. The host supplies
+the tag; the SDK does not infer it from request strings or call `inspect`.
+Both cases support `id`, `parents`, `expires_at`, `inspect`, `derive_child`,
+`install`, `revoke`, `drop`, and `is_moved` directly on the result.
+
+Slots in persistent bounds name the eventual holder. The host checks attenuation
+for every holder. A template parent still contributes only the authority resolved
+for the caller, and must be in the caller's wallet. Slot-bearing tool owners are
+not aliases for the caller's metadata. In contrast, `derive_scope` returns only a
+concrete `ScopeCard`; slots in scope bounds fail with `InvalidPattern`.
+
+## Host retry evaluation
+
+`@api.next_retry_delay(policy, state, elapsed, verb, noun_uri, properties)` exposes
+the host retry evaluator. Start a sequence with an empty `FixedArray[Byte]` and
+pass the returned `RetryDecision.state` unchanged after each failed, compensated
+attempt. `elapsed` is nanoseconds since before the first attempt, including work,
+compensation, and waiting. Supply the same operation context used to resolve the
+policy. `None` selects `config.retry`.
+
+`Ok(decision)` with `decision.delay == None` means exhaustion. A delay is in
+nanoseconds; wait with a durable timer before the next attempt. `Err(reason)`
+reports evaluation errors, including policy changes or unbounded saga policies.
+The host records decisions, jitter, and errors for replay. The token is opaque:
+do not decode it or replace it with an attempt counter. MoonBit provides this
+host API, not a public saga helper.
+
+## Self metadata and authority
+
+`@api.get_self_metadata()` calls the host operation `get-self-metadata`. It requires
+the self-view permission in the effective permission card. The agent's
+`initialCard` is an upper bound on that authority; an invocation cannot grant a
+permission outside that bound. This convenience API unwraps the host result and
+traps on failure. It does not retry with broader permissions.
+
+Pure initialization does not implicitly read self metadata. Keep metadata reads out
+of an untrusted evaluator instead of granting self-view for bootstrap. Declare no
+tools or secrets and admit only the host operations the evaluator needs.
+Self metadata is a host operation, not a pure source of identity. Snapshot restoration reads
+`GOLEM_AGENT_ID` through the WASI environment API rather than self metadata, so it
+requires the separate environment-read permission for that variable. Granting
+self-view does not grant environment-read permission, and granting environment-read
+permission does not grant self-view.
+
+Self metadata contains the full stored environment and configuration. Those fields
+are not filtered per key like WASI environment reads. Treat self-view as authority
+to read those complete fields, and do not log the metadata to diagnose a denial.
+
 ## Quick Start
 
 Golem CLI 1.6.0 includes built-in MoonBit templates for ordinary agent components, pure tool
@@ -94,7 +146,113 @@ pub(all) struct TaskInfo {
 }
 ```
 
-### 3. Define an agent tool
+For a unit-case enum that should appear directly in every generated schema rather than as a named
+schema definition, use `#derive.golem_schema(inline=true)`. Add `#derive.case(name="...")` to a
+case when its authored schema value differs from the MoonBit constructor name.
+
+#### Unstructured text and binary
+
+`@schema.UnstructuredText[L]` and `@schema.UnstructuredBinary[M]` hold inline content or a URL
+reference. The type argument restricts the inline language codes or MIME types; use
+`@schema.AnyLanguage` / `@schema.AnyMimeType` for no restriction. They work as parameters and as
+return types, also inside `T?` and `Result[T, E]`. An HTTP endpoint that returns one of them
+responds with the raw body; `None` responds with 404 and `Err` with 500:
+
+```moonbit nocheck
+///|
+pub(all) struct ReportMimeTypes {}
+
+///|
+impl @schema.AllowedMimeTypes for ReportMimeTypes with fn mime_types() {
+  ["text/csv"]
+}
+
+///|
+#derive.endpoint(get="/report")
+pub fn ReportAgent::report(
+  self : Self,
+) -> Result[@schema.UnstructuredBinary[ReportMimeTypes]?, String] {
+  Ok(Some(@schema.UnstructuredBinary::inline(self.csv, mime_type="text/csv")))
+}
+```
+
+### 3. Stream typed agent data
+
+Use `@schema.AgentStream[T]` in agent method parameters and results. Create a demand-driven
+producer with `AgentStream::produce`, and consume it one item at a time with `read`:
+
+```moonbit nocheck
+///|
+fn stream_values(values : Array[UInt]) -> @schema.AgentStream[UInt] {
+  @schema.AgentStream::produce(async fn(writer) {
+    for value in values {
+      match writer.write_one(value) {
+        @schema.Accepted => ()
+        @schema.PeerDropped => return
+      }
+    }
+  })
+}
+
+///|
+pub async fn Counter::sum(
+  self : Self,
+  input : @schema.AgentStream[UInt],
+) -> UInt {
+  let _ = self
+  defer input.drop()
+  let mut total = 0U
+  for ;; {
+    match input.read() {
+      Some(value) => total += value
+      None => return total
+    }
+  }
+}
+```
+
+A producer's normal return closes the writer, and `read` returns `None` only for that clean EOF or
+an explicit writer close. Each `Accepted` write waits for transport acceptance and therefore
+applies back-pressure; it does not mean the consumer has already processed the value. `write_one`
+and `write_all` consume all supplied values. If the consumer calls `drop`, unread values and their
+nested capabilities are released, and a later producer write returns `PeerDropped`. Peer drop is
+cooperative: it does not guarantee that unrelated pending producer work is interrupted.
+
+Stream endpoints have affine, send-once ownership even though MoonBit does not enforce affinity in
+its type system. An owner may read repeatedly, but encoding the stream as an invocation input or
+result transfers that endpoint. After clean EOF, `drop`, or transfer, do not read or send it again;
+repeated `drop` calls are harmless. Returning an unread input stream directly forwards the original
+endpoint without copying or pumping it; a partially read stream cannot be forwarded directly.
+Cancellation while producing, reading, writing, or forwarding propagates as canonical operation
+cancellation rather than EOF or an ordinary decode error.
+
+A producer failure traps the active operation; bare component-model streams do not have a
+recoverable error terminal. For recoverable application errors, stream `Result` values such as
+`@schema.AgentStream[Result[Reading, SensorError]]` and keep producing subsequent items as needed.
+
+Generated native RPC clients expose awaited methods for direct or recursively stream-bearing
+signatures. They do not generate `trigger_*`, `schedule_*`, or `schedule_cancelable_*` variants for
+those methods, and reject stream-bearing agent constructors because native client construction is
+synchronous.
+
+Guest bridges generated by `golem build` also emit schema-specific stream factories. For example,
+the first input of `consume` has `new_consume_input_0_stream()` (writer and reader endpoints) and
+`produce_consume_input_0_stream(producer, on_unstarted_drop?)` (a lazy producer). Output factories
+use `produce_<method>_output_stream`; nested occurrences append child indices. All factories
+return the native `@schema.AgentStream[T]`, including generated record/variant items and streams
+of streams. Use the factory for the target schema occurrence: MoonBit `Int` alone cannot tell
+`s8` from `s32`, `Array` cannot tell a fixed list from a list, and a single-element tuple is
+represented by its bare element. The factory binds the correct fallible item encoder and decoder
+without relying on a global trait implementation for that MoonBit type.
+
+Generated factories use `AgentStream::new_with_codec` / `produce_with_codec`. These low-level APIs
+take an encoder, a decoder, and an infallible typed release callback. The release callback must
+traverse owned endpoints directly, never rerun the encoder. If a batch conversion fails, the SDK
+releases converted values, the failing item, and the unconverted suffix. Generated RPC result
+decoders use `from_value_with_codec` for lazy reading; `to_schema_value` preserves the original
+affine holder for unread forwarding without executing either item codec.
+
+### 4. Define an agent tool
 
 An empty struct annotated with `#derive.tool` defines a tool. Its public static methods become the
 root command and subcommands. The method whose lower-kebab-case name matches the tool name is the
@@ -142,13 +300,63 @@ let current : Result[String, @tool.ToolError[WeatherError]] =
 client.drop()
 ```
 
-Parameters typed as `@tool.Principal`, `@streams.InputStream`, or `@streams.OutputStream` are
-provided by the runtime and omitted from typed client inputs. An input stream becomes a client
-parameter. A declared output stream becomes part of the generated result type. See the
+Parameters typed as `@tool.Principal` or `@tool.ProviderOutput` are provided by the runtime and
+omitted from typed client inputs; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
+An `@asyncCore.Stream[Byte]` input becomes a client parameter. Either declared output selects the
+started-invocation result shape, with independent optional stdout/stderr streams, structured result,
+collection, and cancellation. Providers can write with `write_all`/`write_all_bytes`, select
+successful completion with `finish`, or select a typed `@tool.ToolStreamError` terminal with
+`fail`. Returning normally attempts to finish each open output independently, including returned
+declared errors and invalid-result errors. An ordinary implicit finish error cannot replace the
+structured outcome or prevent cleanup of the other output. Explicit terminals remain unchanged.
+An unhandled error raised by the handler (including an explicit output operation) follows the
+failure path and is rethrown; it is not a returned invalid-result error. Task cancellation remains
+cancellation. Dropping an open provider output selects `Abandoned` for that channel.
+
+On the caller, closing or dropping an output permanently closes only that reader. It does not cancel
+the invocation or close the sibling output. There is no guarantee that a cancelled pending read can
+resume. `detach_result_observer()` stops delivery of the structured result without cancelling the
+invocation or closing either output. It releases unclaimed cached and late result capabilities.
+Capabilities already delivered by `get()` remain the caller's responsibility. If a host `get` is
+active, physical disposal waits for it to settle. `cancel()` still requests invocation cancellation
+until physical disposal; after disposal it is a no-op. `drop()` detaches the result and closes both
+readers, but does not cancel the invocation. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 
-### 4. Define a tool middleware component
+#### Call a tool discovered at runtime
+
+`@reflection.get_tool_type(name)` returns the tool descriptor visible to the caller. Select a
+command with `tool.command(path)`; path segments may use command aliases, and the returned
+`ToolCommand.path()` contains their canonical names. Its `arguments()`, `input_schema()`, and `result()`
+describe the selected command. Supply every canonical input field in declaration order. An absent
+optional argument is an option value of `None`, while a defaulted argument carries its default.
+
+Discovery returns opaque immutable snapshots. Array and graph accessors return defensive copies,
+and a snapshot changes only after explicit rediscovery. Use `SchemaRef::typed_value` to validate a
+schema-native value and create the self-contained graph required by a fully dynamic invocation.
+
+Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
+`command.invoke_value(input)` for schema-native values. Canonical JSON may omit a scalar option or a
+fixed positional that declares a default, and any flag; packing fills each omitted argument with its
+declared default (a count flag defaults to `0`) and leaves the canonical input record unchanged.
+Repeatable options and tails are not filled. `command.input_schema().to_json_schema()` leaves these
+arguments out of `required` and adds their `default` when it has a canonical JSON form. For rejected
+JSON, `SchemaRef::pack_json` raises `ReflectError::Json(message, path~)`, where `path` locates the
+rejected value, for example `["script"]` for a missing `script` argument; `command.pack_json`
+returns the same failure as an invalid-input tool error. The command validates inputs locally before
+opening RPC and validates declared results after invocation. `start_value` returns an invocation
+whose `stdout`, `stderr`, `collect`, `get`, and `cancel` methods handle pending and streaming calls.
+A command with either required output must use `start_value`; `collect` drains both outputs
+concurrently while awaiting its result. `trigger_value` is available only when the command does not
+require caller-readable stdout or stderr.
+
+`@reflection.DynamicToolClient::new(name)` accepts a caller-packed `TypedSchemaValue` and a
+command path when no descriptor is available. It cannot validate the input or output against a
+deployed schema. Reflected and dynamic calls return `Result` errors, including malformed remote
+output; generated `WeatherClient` methods keep their ordinary typed call behavior.
+
+### 5. Define a tool middleware component
 
 A **monomorphic middleware** presents one statically declared `#derive.tool` shape. Its generated
 typed underlying wrapper follows the expected tool shape. Omitting `expected` makes it equal to
@@ -194,12 +402,20 @@ fn main {
 
 In a pure middleware component, the `#derive.tool` declarations, signatures, and annotations
 describe the typed tool shape for code generation. Their method bodies are not registered or
-invoked as ordinary tool implementations. A handler may make zero, one, or multiple
-**sequential** calls through its `underlying` argument. For example, a retry can call the same
-generated method again after an error. Overlapping calls are rejected.
+invoked as ordinary tool implementations. A handler may make zero, one, or multiple calls through
+its `underlying` argument. The awaited generated methods are convenient for forwarding and retry.
+For overlap/fan-out, generated `start_<command>` methods return independent
+`@toolMiddleware.UnderlyingInvocation` values: call `get()` for the typed result, inspect
+`stdout()`, call `cancel()` explicitly to cancel, and call `drop()` only to release observation.
 
 A **universal middleware** handles any runtime-provided tool shape and forwards the opaque wire
 carriers without rebuilding them:
+
+Both middleware forms support typed static installation parameters. Add `parameters="Type"` to
+the derive annotation; `Type` must implement `IntoSchema` and `FromSchema`. A monomorphic handler
+then receives `parameters : Type` immediately after `underlying`, while a universal handler receives
+it before `invocation`. Without the option, the installation schema is the normalized empty record
+and no handler parameter is added.
 
 ```moonbit nocheck
 ///|
@@ -238,25 +454,40 @@ options(
 )
 ```
 
-Select the pure component template in `golem.yaml`:
+Select the default component template in `golem.yaml`:
 
 ```yaml
 components:
   myorg:message-middlewares:
-    templates: moonbit-tool-middleware
+    templates: moonbit
     dir: message_middlewares
 ```
 
-Then run `golem build`. The build uses the `tool-middleware` code-generation role, embeds the
-`tool-middleware-guest` world, and creates a `.tool-middleware.wasm` component. Generated startup
-code registers every declared middleware when the component loads. Do not import `tool` or use
-`ToolClient` in a pure package: pure middleware has no ambient `golem:tool/host` dispatch, and the
-runtime-provided `underlying` capability is its only path to the next inner layer.
+Then run `golem build`. The build uses the single code-generation path and `agent-guest` world.
+Generated startup code registers every declared middleware when the component loads, while unused
+agent and tool discovery returns empty lists. The world imports ambient `golem:tool/host`, but the
+runtime-provided `underlying` capability remains the only path to the next pinned middleware layer;
+ambient calls remain subject to runtime permissions.
 
 The underlying capability and invocation streams belong to one middleware invocation. Generated
-wrappers enforce once-only transfer, sequential use, cleanup, and revocation when the handler
-returns, but MoonBit itself does not provide affine type-system guarantees. Return only the final
-stdout stream; abandoned or unforwarded streams are cleaned up by the SDK.
+wrappers enforce once-only transfer, cleanup, and revocation when the handler returns, but MoonBit
+itself does not provide affine type-system guarantees. Return only the final stdout stream;
+abandoned or unforwarded streams are cleaned up by the SDK.
+
+Sequential and concurrent `get()` calls on an underlying observer share one host observation and
+return the cached terminal result, including errors. This does not duplicate or rewind stdout.
+`Cancelled` and `ResourceExhausted` remain distinguishable to middleware code; they become
+`ConstraintViolation` only when forwarded as the middleware's own wire result.
+
+For structural-subtype and nominal compatibility, every inner tool error must be declared by the
+expected tool with a compatible payload. Expected-only errors are allowed; inner-only errors are
+rejected. Strict equality requires matching error vocabularies.
+
+Handler return revokes new underlying admissions but does not implicitly cancel admitted calls;
+observer disposal is likewise not cancellation. Commands declaring stdout receive a host writer at
+the guest boundary. Generated dispatch forwards the selected readable stdout into it concurrently
+with the result, finishes it after clean EOF, and fails it on forwarding errors; middleware authors
+return the readable stream and never operate the writer directly.
 
 Presented and expected tool declarations must currently be in the middleware's own MoonBit
 package. A qualified or cross-package reference is rejected with:
@@ -289,28 +520,56 @@ runtime chain traversal and manifest placement are separate platform concerns.
 See `golem_sdk_example1/golem_tool_middleware_examples` for a complete pure component containing
 the policy, universal, and adapter forms above.
 
-### 5. Build and deploy
+### 6. Build and deploy
 
 Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. See the [example project](https://github.com/golemcloud/moonbit-sdk/tree/main/golem_sdk_example1) for a complete setup.
 
 ## Features
 
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
+- **HTTP routers** — named ephemeral routers, incremental byte streams, immutable files, and OpenAPI providers; ordinary durable agents can expose live files
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
-- **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`) with awaited, fire-and-forget, and scheduled invocations
+- **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`); stream-bearing methods are awaited, while stream-free methods also support fire-and-forget and scheduled invocations
+- **Runtime reflection** — discover agent types, pack reflected schemas, define caller-codec clients, or invoke direct `SchemaValue`s
 - **Agent tools** — code-first tool descriptors, command trees, constraints, custom errors, runtime dispatch, and typed tool RPC clients via `#derive.tool`
 - **Tool middleware** — monomorphic policy/adapter middleware and universal transparent middleware with invocation-scoped underlying capabilities
 - **Multimodal input** — accept mixed text, binary, and custom modality data via `#derive.multimodal` and `@multimodal.Multimodal[T]`
 - **Logging** — structured logging via `@logging.with_name("my-agent")` with level filtering
 - **Tracing** — span-based tracing via `@context.with_span(...)` with attributes
 - **Host API** - exports Golem's host API
+- **Semantic retries** — install policies in the host or interpret them around user code locally
+
+### Local semantic retries
+
+`@api.retry_local` interprets a Golem `RetryPolicy` around arbitrary asynchronous code without
+installing it as an executor policy. The property callback runs for every failure, and the final
+operation error is returned unchanged when the policy gives up:
+
+```moonbit nocheck
+///|
+let policy = try! @api.Policy::exponential(@api.Duration::millis(100), 2.0)
+  .max_retries(4)
+  .only_when(
+    @api.Predicate::eq(@api.Props::error_type(), @api.Value::text("transient")),
+  )
+  .to_raw()
+
+///|
+let result = @api.retry_local(policy, () => call_remote_service(), properties=error => {
+  [("error-type", @api.PredicateValue::Text(error.kind()))]
+})
+```
+
+Unlike retry policies installed with `set_named_policy`, local retries are ordinary user-space
+attempts. They do not create executor `RetryAttempt` oplog entries and do not survive recovery as
+one host-managed retry sequence.
 
 ## Packages
 
 | Package | Description |
 |---|---|
 | `agents` | Agent registry, `RawAgent` trait, `register_agent`, dispatch runtime |
-| `schema` | `IntoSchema` / `FromSchema` traits and impls for primitives, `Option`, `Array`, `Result`, records/enums/variants |
+| `schema` | `IntoSchema` / `FromSchema` traits and impls for primitives, `Option`, `Array`, `Result`, records/enums/variants, rich types, and `UnstructuredText` / `UnstructuredBinary` |
 | `schema_model` | The recursive `SchemaType` / `SchemaValue` model + `SchemaGraph` / `SchemaBuilder` and WIT (`golem:core/types@2.0.0`) conversions |
 | `multimodal` | `Multimodal[T]` + `MultimodalModality` trait (schema-native `list<variant>` with `role = multimodal`) |
 | `config` | Code-first configuration (`Config[T]`, `Secret[T]`, `#derive.config`) |
@@ -318,6 +577,8 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |
+| `http` | Canonical `HttpRequest`, `HttpResponse`, `HttpHeader`, `openapi_json`, and outbound WASI HTTP |
+| `reflection` | Runtime discovery, reflected JSON packing, caller-defined static clients, and fully dynamic value invocation |
 | `tool-core` | Host-neutral tool descriptors, schemas, canonical input handling, and error model |
 | `tool` | Ordinary tool registry, dispatch, help rendering, and ambient typed RPC client runtime |
 | `tool-middleware` | Host-neutral middleware registry, opaque invocation carriers, typed/universal underlying capabilities, and ownership enforcement |

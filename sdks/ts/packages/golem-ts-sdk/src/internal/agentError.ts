@@ -13,15 +13,17 @@
 // limitations under the License.
 
 import { AgentError } from 'golem:agent/common@2.0.0';
-import { SchemaGraph, schemaGraphToWit, schemaValueToWit, t, v } from './schema-model';
 
 export function createCustomError(error: string): AgentError {
-  const graph: SchemaGraph = { defs: new Map(), root: t.string() };
   return {
     tag: 'custom-error',
     val: {
-      graph: schemaGraphToWit(graph),
-      value: schemaValueToWit(v.string(error)),
+      graph: {
+        defs: [],
+        typeNodes: [{ body: { tag: 'string-type' }, metadata: { aliases: [], examples: [] } }],
+        root: 0,
+      },
+      value: { valueNodes: [{ tag: 'string-value', val: error }], root: 0 },
     },
   };
 }

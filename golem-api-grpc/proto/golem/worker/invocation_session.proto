@@ -13,6 +13,7 @@ import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/public_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/worker_id.proto";
@@ -36,20 +37,21 @@ message InvocationStart {
   golem.common.UUID expected_callee_fingerprint = 15;
   repeated DurableStreamMapping durable_input_mappings = 16;
   optional golem.worker.EncodedScopeCard scope_card = 17;
+  // Executor-authored RPC provenance. Public invocation adapters must clear this field.
+  // Forks retain the authoring invocation even when their local stream producers diverge.
+  StreamInvocationIdentity origin_invocation = 19;
+  optional ExternalToolInvocation external_tool = 18;
 }
 
-message PublicInvocationStart {
-  string application_name = 1;
-  string environment_name = 2;
-  string agent_type_name = 3;
-  golem.schema.SchemaValue constructor_parameters = 4;
-  optional golem.common.UUID phantom_id = 5;
-  repeated golem.worker.AgentConfigEntryDto config = 6;
-  string method_name = 7;
-  golem.schema.SchemaValue method_parameters = 8;
-  golem.worker.IdempotencyKey idempotency_key = 9;
-  golem.common.UUID attempt_id = 10;
-  golem.common.UUID expected_callee_fingerprint = 11;
+message ExternalToolInvocation {
+  string tool_name = 1;
+  repeated string command_path = 2;
+  golem.schema.TypedSchemaValue input = 3;
+  bool stdin = 4;
+  bool stdout = 5;
+  bool fresh_owner = 6;
+  optional uint64 expected_deployment_revision = 7;
+  bool stderr = 8;
 }
 
 message ResumeAttach {
@@ -93,6 +95,7 @@ message DurableStreamHandle {
   StreamInvocationIdentity source_invocation = 6;
   optional uint64 component_revision = 7;
   bytes element_schema_fingerprint = 8;
+  uint64 producer_generation = 9;
 }
 
 message DurableStreamMapping {
@@ -100,6 +103,7 @@ message DurableStreamMapping {
   DurableStreamHandle handle = 2;
   InputStreamHighWater high_water = 3;
   StreamMappingRole role = 4;
+  optional ToolByteStreamRole tool_byte_stream_role = 5;
 }
 
 message InputStreamHighWater {
@@ -112,6 +116,12 @@ enum StreamMappingRole {
   STREAM_MAPPING_ROLE_UNSPECIFIED = 0;
   STREAM_MAPPING_ROLE_INPUT = 1;
   STREAM_MAPPING_ROLE_OUTPUT = 2;
+}
+
+enum ToolByteStreamRole {
+  TOOL_BYTE_STREAM_ROLE_STDIN = 0;
+  TOOL_BYTE_STREAM_ROLE_STDOUT = 1;
+  TOOL_BYTE_STREAM_ROLE_STDERR = 2;
 }
 
 enum InvocationFreshnessDisposition {
@@ -145,6 +155,8 @@ message OutputStreamItem {
   bytes durable_offset = 5;
   uint64 epoch = 6;
   repeated DurableStreamMapping new_stream_mappings = 7;
+  bytes packed_u8 = 8;
+  uint64 logical_item_count = 9;
 }
 
 message OutputStreamEnd {
@@ -180,6 +192,8 @@ enum StreamCancelReason {
   STREAM_CANCEL_REASON_PROTOCOL = 3;
   STREAM_CANCEL_REASON_SOURCE_UNAVAILABLE = 4;
   STREAM_CANCEL_REASON_PRODUCER_DELETING = 5;
+  STREAM_CANCEL_REASON_CONSUMER_DROP = 6;
+  STREAM_CANCEL_REASON_INVOCATION_FAILED = 7;
 }
 
 message StreamCancel {
@@ -213,12 +227,23 @@ message InvocationAccepted {
   repeated DurableStreamMapping stream_mappings = 7;
   golem.common.EnvironmentId environment_id = 8;
   golem.common.UUID callee_fingerprint = 9;
+  optional string method_name = 10;
+  // A validated same-origin caller observes the existing invocation without owning
+  // its attachment. Mappings are read out of band; no stream control frames are allowed.
+  // Result and Finished retain their ordinary durable publication boundaries.
+  bool joined_origin_observer = 13;
+  optional string tool_name = 11;
+  repeated string command_path = 12;
+  // Requested output cursors verified against durable history to already name a terminal.
+  // No suffix or repeated terminal is sent for these streams on this attachment.
+  repeated golem.common.UUID terminal_cursor_stream_ids = 14;
 }
 
 message InvocationSessionResult {
   oneof result {
     golem.schema.SchemaValue method_result = 1;
     golem.common.Empty no_result = 2;
+    golem.worker.PublicExternalToolResult tool_result = 11;
   }
   optional uint64 component_revision = 3;
   golem.worker.AgentId agent_id = 4;
@@ -255,6 +280,7 @@ message InvocationRejected {
   golem.worker.IdempotencyKey idempotency_key = 3;
   golem.worker.AgentId agent_id = 4;
   optional uint64 component_revision = 5;
+  golem.worker.v1.WorkerExecutionError worker_error = 6;
 }
 
 message AttachmentRevoked {
@@ -280,16 +306,6 @@ message InvocationSessionCompletion {
   oneof outcome {
     golem.common.Empty success = 1;
     InvocationFailure failure = 2;
-  }
-}
-
-message PublicInvocationRequest {
-  oneof request {
-    PublicInvocationStart start = 1;
-    ResumeAttach resume_attach = 2;
-    InputStreamItem input_item = 3;
-    InputStreamEnd input_end = 4;
-    StreamCancel stream_cancel = 5;
   }
 }
 

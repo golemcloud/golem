@@ -84,7 +84,7 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
     }
 }
 
-pub(super) fn insecure_connector() -> anyhow::Result<Connector> {
+pub(crate) fn insecure_connector() -> anyhow::Result<Connector> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = InsecureServerCertVerifier {
         signature_algorithms: provider.signature_verification_algorithms,
@@ -102,7 +102,7 @@ pub struct AgentConnection {
     connector: Option<Connector>,
     output: AgentStreamOutput,
     idempotency_key: Option<IdempotencyKey>,
-    last_seen_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
+    active_target_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
     goal_reached: Arc<AtomicBool>,
     ping_interval: Duration,
 }
@@ -129,7 +129,7 @@ impl AgentConnection {
         )?;
         let output = AgentStreamOutput::new(connect_options, format);
 
-        let last_seen_idempotency_key = Arc::new(Mutex::new(None));
+        let active_target_idempotency_key = Arc::new(Mutex::new(None));
         let goal_reached = Arc::new(AtomicBool::new(false));
 
         Ok(Self {
@@ -137,7 +137,7 @@ impl AgentConnection {
             connector,
             output,
             idempotency_key,
-            last_seen_idempotency_key,
+            active_target_idempotency_key,
             goal_reached,
             ping_interval,
         })
@@ -146,12 +146,20 @@ impl AgentConnection {
     /// Creates a new worker connection and every time the connection is dropped tries to
     /// reconnect. If there was an idempotency_key goal, and it has been reached, the loop
     /// exits.
-    pub async fn run_forever(self) {
+    pub async fn run_forever(self) -> anyhow::Result<()> {
         while !self.goal_reached.load(Ordering::Acquire) {
-            let _ = self.run().await;
+            if let Err(error) = self.run().await
+                && error
+                    .downcast_ref::<crate::error::service::ServiceError>()
+                    .is_some_and(|error| error.is_previous_invocation_failed())
+            {
+                return Err(error);
+            }
             self.output.flush().await;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+
+        Ok(())
     }
 
     /// Connects to the worker event stream and outputs incoming messages until the connection is dropped
@@ -180,14 +188,14 @@ impl AgentConnection {
         let pings = task::spawn(async move { Self::ping_loop(write, ping_interval).await });
 
         let output = self.output.clone();
-        let last_seen_idempotency_key = self.last_seen_idempotency_key.clone();
+        let active_target_idempotency_key = self.active_target_idempotency_key.clone();
         let idempotency_key = self.idempotency_key.clone();
         let goal_reached = self.goal_reached.clone();
         let read_messages = task::spawn(async move {
             Self::read_loop(
                 read,
                 output,
-                last_seen_idempotency_key,
+                active_target_idempotency_key,
                 idempotency_key,
                 goal_reached,
             )
@@ -244,6 +252,7 @@ impl AgentConnection {
         } else {
             None
         };
+        let connector = golem_client::tls::connector_for(request.uri(), connector)?;
 
         Ok((request, connector))
     }
@@ -274,7 +283,7 @@ impl AgentConnection {
     async fn read_loop(
         read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         output: AgentStreamOutput,
-        last_seen_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
+        active_target_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
         idempotency_key_to_look_for: Option<IdempotencyKey>,
         goal_reached: Arc<AtomicBool>,
     ) {
@@ -282,14 +291,14 @@ impl AgentConnection {
             .try_for_each(|message| {
                 let output = output.clone();
                 let idempotency_key_to_look_for = idempotency_key_to_look_for.clone();
-                let last_seen_idempotency_key = last_seen_idempotency_key.clone();
+                let active_target_idempotency_key = active_target_idempotency_key.clone();
                 let goal_reached = goal_reached.clone();
                 async move {
-                    let mut last_seen_idempotency_key = last_seen_idempotency_key.lock().await;
+                    let mut active_target_idempotency_key = active_target_idempotency_key.lock().await;
                     let matching = match &idempotency_key_to_look_for {
                         Some(idempotency_key_to_look_for) => {
-                            if let Some(last_seen_idempotency_key) = &*last_seen_idempotency_key {
-                                idempotency_key_to_look_for == last_seen_idempotency_key
+                            if let Some(active_target_idempotency_key) = &*active_target_idempotency_key {
+                                idempotency_key_to_look_for == active_target_idempotency_key
                             } else {
                                 false
                             }
@@ -340,7 +349,9 @@ impl AgentConnection {
                                     || idempotency_key_to_look_for.as_ref()
                                         == Some(&idempotency_key)
                                 {
-                                    *last_seen_idempotency_key = Some(idempotency_key.clone());
+                                    if idempotency_key_to_look_for.as_ref() == Some(&idempotency_key) {
+                                        *active_target_idempotency_key = Some(idempotency_key.clone());
+                                    }
                                     output
                                         .emit_invocation_start(timestamp, function, idempotency_key)
                                         .await;
@@ -360,8 +371,8 @@ impl AgentConnection {
                                         )
                                         .await;
 
-                                    last_seen_idempotency_key.take();
                                     if idempotency_key_to_look_for == Some(idempotency_key) {
+                                        active_target_idempotency_key.take();
                                         goal_reached.store(true, Ordering::Release);
                                     }
                                 }
@@ -496,5 +507,116 @@ impl AgentConnection {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    #[test]
+    async fn invocation_stream_waits_for_target_finish_after_nested_calls() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let target = IdempotencyKey::fresh();
+        let child = IdempotencyKey::fresh();
+        let grandchild = IdempotencyKey::fresh();
+        let unrelated = IdempotencyKey::fresh();
+        let timestamp = Timestamp::now_utc();
+        let events = [
+            AgentEvent::InvocationStart {
+                timestamp,
+                function: "unrelated".into(),
+                idempotency_key: unrelated.clone(),
+            },
+            AgentEvent::StdOut {
+                timestamp,
+                bytes: b"unrelated output must be filtered\n".to_vec(),
+            },
+            AgentEvent::InvocationFinished {
+                timestamp,
+                function: "unrelated".into(),
+                idempotency_key: unrelated,
+            },
+            AgentEvent::InvocationStart {
+                timestamp,
+                function: "hello".into(),
+                idempotency_key: target.clone(),
+            },
+            AgentEvent::InvocationStart {
+                timestamp,
+                function: "child".into(),
+                idempotency_key: child.clone(),
+            },
+            AgentEvent::InvocationStart {
+                timestamp,
+                function: "grandchild".into(),
+                idempotency_key: grandchild,
+            },
+            AgentEvent::StdOut {
+                timestamp,
+                bytes: b"nested stdout\n".to_vec(),
+            },
+            AgentEvent::StdErr {
+                timestamp,
+                bytes: b"nested stderr\n".to_vec(),
+            },
+            AgentEvent::InvocationFinished {
+                timestamp,
+                function: "child".into(),
+                idempotency_key: child,
+            },
+            AgentEvent::Log {
+                timestamp,
+                level: LogLevel::Info,
+                context: "hello".into(),
+                message: "summary after nested calls".into(),
+            },
+            // Terminal events can use a different function name from the start.
+            AgentEvent::InvocationFinished {
+                timestamp,
+                function: "interrupted during retry".into(),
+                idempotency_key: target.clone(),
+            },
+        ];
+        let server = async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(socket).await.unwrap();
+            for event in events {
+                websocket
+                    .send(Message::Text(serde_json::to_string(&event).unwrap().into()))
+                    .await
+                    .unwrap();
+            }
+            websocket.close(None).await.unwrap();
+        };
+        let connection = AgentConnection::new(
+            url,
+            TokenSecret::new(),
+            &ComponentId(Uuid::new_v4()),
+            "test-agent".into(),
+            AgentLogStreamOptions {
+                colors: false,
+                show_timestamp: false,
+                show_level: false,
+                logs_only: false,
+            },
+            false,
+            Format::Json,
+            Duration::from_secs(60),
+            Some(target),
+        )
+        .await
+        .unwrap();
+
+        time::timeout(Duration::from_secs(5), async {
+            let (result, ()) = tokio::join!(connection.run_forever(), server);
+            result.unwrap();
+        })
+        .await
+        .expect("the stream must exit after the target finish, even with unfinished nested calls");
     }
 }

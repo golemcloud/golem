@@ -47,14 +47,39 @@ import {
   type NumericBound,
   emptyMetadata,
 } from './model';
-import { GuestSecretHandle } from './secretHandle';
+import {
+  assertGuestSecretHandleCanLiftFromWire,
+  GuestSecretHandle,
+  liftGuestSecretHandleFromWire,
+  peekGuestSecretHandle,
+  releaseGuestSecretHandle,
+  takeGuestSecretHandleToWire,
+} from './secretHandle';
 import { SECRET_INTERNAL } from './secretInternal';
-import { GuestQuotaTokenHandle } from './quotaTokenHandle';
+import {
+  abandonGuestQuotaTokenWireHandle,
+  assertGuestQuotaTokenHandleCanLiftFromWire,
+  GuestQuotaTokenHandle,
+  liftGuestQuotaTokenHandleFromWire,
+  peekGuestQuotaTokenHandle,
+  takeGuestQuotaTokenHandle,
+  takeGuestQuotaTokenHandleToWire,
+} from './quotaTokenHandle';
 import { QUOTA_INTERNAL } from './quotaInternal';
 import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
-import { GuestPermissionCardHandle } from './permissionCardHandle';
+import {
+  abandonGuestPermissionCardWireHandle,
+  assertGuestPermissionCardHandleCanLiftFromWire,
+  GuestPermissionCardHandle,
+  isHostPermissionCardResource,
+  liftGuestPermissionCardHandleFromWire,
+  peekGuestPermissionCardHandle,
+  takeGuestPermissionCardHandle,
+  takeGuestPermissionCardHandleToWire,
+} from './permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from './permissionCardInternal';
 import { SchemaDecodeError, SchemaEncodeError } from './errors';
+import { Uuid } from '../../uuid';
 
 // ============================================================
 // Schema type / graph
@@ -184,6 +209,8 @@ export class GraphEncoder {
         return { tag: 'char-type' };
       case 'string':
         return { tag: 'string-type' };
+      case 'uuid':
+        return { tag: 'uuid-type' };
       case 'record':
         return {
           tag: 'record-type',
@@ -302,8 +329,17 @@ export function schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph {
   return new GraphEncoder(graph.defs).encodeGraphRoot(graph.root);
 }
 
-/** Decode a Component Model carrier into the recursive SDK model. */
-export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
+/** Definitions and selected roots decoded from one Component Model graph. */
+export interface DecodedSchemaGraphRoots {
+  readonly defs: Map<TypeId, SchemaTypeDef>;
+  readonly roots: readonly SchemaType[];
+}
+
+/** Decode one WIT graph and any number of roots while sharing decoded nodes and definitions. */
+export function schemaGraphRootsFromWit(
+  wit: WitSchemaGraph,
+  roots: readonly TypeNodeIndex[],
+): DecodedSchemaGraphRoots {
   const nodes = wit.typeNodes;
   const witDefs = wit.defs;
   // See `schemaValueFromWit`: a flat on-path `Uint8Array` (`1` = on the current
@@ -312,6 +348,7 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
   // (which resolves to a def id without recursing here), so only a structural
   // back-edge in raw type-node indices is reported as a cycle.
   const onPath = new Uint8Array(nodes.length);
+  const decoded = new Array<SchemaType | undefined>(nodes.length);
 
   function idByDefIndex(di: DefIndex): TypeId {
     if (di < 0 || di >= witDefs.length) {
@@ -327,10 +364,13 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     if (onPath[idx] === 1) {
       throw new SchemaDecodeError(`cyclic type node reference at index ${idx}`);
     }
+    const cached = decoded[idx];
+    if (cached !== undefined) return cached;
     onPath[idx] = 1;
     const node = nodes[idx];
     const result = { body: fromBody(node.body), metadata: node.metadata };
     onPath[idx] = 0;
+    decoded[idx] = result;
     return result;
   }
 
@@ -364,6 +404,8 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
         return { tag: 'char' };
       case 'string-type':
         return { tag: 'string' };
+      case 'uuid-type':
+        return { tag: 'uuid' };
       case 'record-type':
         return {
           tag: 'record',
@@ -454,8 +496,13 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     }
     defs.set(d.id, { name: d.name, body: fromType(d.body) });
   }
-  const root = fromType(wit.root);
-  return { defs, root };
+  return { defs, roots: roots.map(fromType) };
+}
+
+/** Decode a Component Model carrier into the recursive SDK model. */
+export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
+  const decoded = schemaGraphRootsFromWit(wit, [wit.root]);
+  return { defs: decoded.defs, root: decoded.roots[0] };
 }
 
 // ============================================================
@@ -485,7 +532,7 @@ function checkIntRange(tag: keyof typeof INT_RANGES, value: number): void {
   }
 }
 
-function assertDenseModelArray(value: unknown, name: string): asserts value is unknown[] {
+export function assertDenseModelArray(value: unknown, name: string): asserts value is unknown[] {
   if (!Array.isArray(value)) {
     throw new SchemaEncodeError(`${name} must be an array`);
   }
@@ -509,249 +556,259 @@ function assertDenseModelArray(value: unknown, name: string): asserts value is u
  * appears more than once. Handles are deduplicated by the identity of the
  * underlying owned resource (peeked without consuming), not merely by holder
  * identity, so two holders that somehow wrap the same resource are also rejected.
+ * Recurse through this module-level function: a self-referential local visitor
+ * creates collectible cycles even for each scalar encoded by a direct codec.
  */
 export function assertSchemaValueRepresentable(
-  value: SchemaValue,
+  v: SchemaValue,
   allowNativeStreams = false,
+  seen = new Set<unknown>(),
 ): void {
-  const seen = new Set<unknown>();
-  const visit = (v: SchemaValue): void => {
-    switch (v.tag) {
-      case 's8':
-      case 's16':
-      case 's32':
-      case 'u8':
-      case 'u16':
-      case 'u32':
-        checkIntRange(v.tag, v.value);
-        return;
-      case 's64':
-        if (typeof v.value !== 'bigint' || v.value < S64_MIN || v.value > S64_MAX) {
-          throw new SchemaEncodeError(`s64 value out of range: ${v.value}`);
-        }
-        return;
-      case 'u64':
-        if (typeof v.value !== 'bigint' || v.value < 0n || v.value > U64_MAX) {
-          throw new SchemaEncodeError(`u64 value out of range: ${v.value}`);
-        }
-        return;
-      case 'bool':
-        if (typeof (v as { value: unknown }).value !== 'boolean') {
-          throw new SchemaEncodeError(
-            `bool value must be a boolean: ${String((v as { value: unknown }).value)}`,
-          );
-        }
-        return;
-      case 'f32':
-      case 'f64':
-        if (typeof (v as { value: unknown }).value !== 'number') {
-          throw new SchemaEncodeError(
-            `${v.tag} value must be a number: ${String((v as { value: unknown }).value)}`,
-          );
-        }
-        return;
-      case 'char': {
-        const codePoints = [...v.value];
-        const cp = codePoints.length === 1 ? codePoints[0]!.codePointAt(0)! : undefined;
-        if (cp === undefined || (cp >= 0xd800 && cp <= 0xdfff)) {
-          throw new SchemaEncodeError(
-            `char value must be a single Unicode scalar value: ${JSON.stringify(v.value)}`,
-          );
-        }
-        return;
+  switch (v.tag) {
+    case 's8':
+    case 's16':
+    case 's32':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+      checkIntRange(v.tag, v.value);
+      return;
+    case 's64':
+      if (typeof v.value !== 'bigint' || v.value < S64_MIN || v.value > S64_MAX) {
+        throw new SchemaEncodeError(`s64 value out of range: ${v.value}`);
       }
-      case 'string':
-      case 'path':
-      case 'url':
-        if (typeof (v as { value: unknown }).value !== 'string') {
-          throw new SchemaEncodeError(
-            `${v.tag} value must be a string: ${String((v as { value: unknown }).value)}`,
-          );
-        }
-        return;
-      case 'datetime': {
-        const ns = v.value.nanoseconds;
-        if (!Number.isInteger(ns) || ns < 0 || ns >= 1_000_000_000) {
-          throw new SchemaEncodeError(
-            `invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${ns}`,
-          );
-        }
-        if (
-          typeof v.value.seconds !== 'bigint' ||
-          v.value.seconds < S64_MIN ||
-          v.value.seconds > S64_MAX
-        ) {
-          throw new SchemaEncodeError(`datetime seconds out of range: ${v.value.seconds}`);
-        }
-        return;
+      return;
+    case 'u64':
+      if (typeof v.value !== 'bigint' || v.value < 0n || v.value > U64_MAX) {
+        throw new SchemaEncodeError(`u64 value out of range: ${v.value}`);
       }
-      case 'duration':
-        if (
-          typeof v.nanoseconds !== 'bigint' ||
-          v.nanoseconds < S64_MIN ||
-          v.nanoseconds > S64_MAX
-        ) {
-          throw new SchemaEncodeError(`duration nanoseconds out of range: ${v.nanoseconds}`);
-        }
-        return;
-      case 'secret': {
-        if (!(v.handle instanceof GuestSecretHandle)) {
-          throw new SchemaEncodeError('secret value contains an invalid secret handle');
-        }
-        const raw = v.handle.withHandle((r) => r);
-        if (raw === undefined) {
-          throw new SchemaEncodeError(
-            'secret handle was already transferred; an owned secret can only be sent once',
-          );
-        }
-        if (seen.has(raw)) {
-          throw new SchemaEncodeError(
-            'the same secret handle appeared more than once in one value tree',
-          );
-        }
-        seen.add(raw);
-        return;
+      return;
+    case 'bool':
+      if (typeof (v as { value: unknown }).value !== 'boolean') {
+        throw new SchemaEncodeError(
+          `bool value must be a boolean: ${String((v as { value: unknown }).value)}`,
+        );
       }
-      case 'quota-token': {
-        if (!(v.handle instanceof GuestQuotaTokenHandle)) {
-          throw new SchemaEncodeError('quota-token value contains an invalid quota-token handle');
-        }
-        // Peek the underlying owned resource without consuming it, so two
-        // distinct holders wrapping the same raw resource are also rejected, not
-        // only the same holder used twice.
-        const raw = v.handle.withHandle((r) => r);
-        if (raw === undefined) {
-          throw new SchemaEncodeError(
-            'quota-token handle was already transferred; an owned quota-token can only be sent once',
-          );
-        }
-        if (seen.has(raw)) {
-          throw new SchemaEncodeError(
-            'the same quota-token handle appeared more than once in one value tree',
-          );
-        }
-        seen.add(raw);
-        return;
+      return;
+    case 'f32':
+    case 'f64':
+      if (typeof (v as { value: unknown }).value !== 'number') {
+        throw new SchemaEncodeError(
+          `${v.tag} value must be a number: ${String((v as { value: unknown }).value)}`,
+        );
       }
-      case 'stream': {
-        if (!(v.handle instanceof GuestSchemaValueStreamHandle)) {
-          throw new SchemaEncodeError('stream value contains an invalid stream handle');
-        }
-        const stream = v.handle.peek();
-        if (stream === undefined) {
-          throw new SchemaEncodeError('schema value stream was already transferred');
-        }
-        if (stream.kind === 'native' && !allowNativeStreams) {
-          throw new SchemaEncodeError('native schema value streams require asynchronous encoding');
-        }
-        if (seen.has(stream.value)) {
-          throw new SchemaEncodeError('the same schema value stream appeared more than once');
-        }
-        seen.add(stream.value);
-        return;
+      return;
+    case 'char': {
+      const codePoints = [...v.value];
+      const cp = codePoints.length === 1 ? codePoints[0]!.codePointAt(0)! : undefined;
+      if (cp === undefined || (cp >= 0xd800 && cp <= 0xdfff)) {
+        throw new SchemaEncodeError(
+          `char value must be a single Unicode scalar value: ${JSON.stringify(v.value)}`,
+        );
       }
-      case 'permission-card': {
-        if (!(v.handle instanceof GuestPermissionCardHandle)) {
-          throw new SchemaEncodeError(
-            'permission-card value contains an invalid permission-card handle',
-          );
-        }
-        const raw = v.handle.withHandle((r) => r);
-        if (raw === undefined) {
-          throw new SchemaEncodeError(
-            'permission-card handle was already transferred; an owned permission-card can only be sent once',
-          );
-        }
-        if (seen.has(raw)) {
-          throw new SchemaEncodeError(
-            'the same permission-card handle appeared more than once in one value tree',
-          );
-        }
-        seen.add(raw);
-        return;
-      }
-      case 'record':
-        assertDenseModelArray(v.fields, 'record fields');
-        v.fields.forEach(visit);
-        return;
-      case 'variant':
-        checkIntRange('u32', v.caseIndex);
-        if (v.payload !== undefined) visit(v.payload);
-        return;
-      case 'enum':
-        checkIntRange('u32', v.caseIndex);
-        return;
-      case 'flags':
-        assertDenseModelArray(v.flags, 'flags');
-        if (v.flags.some((flag) => typeof flag !== 'boolean')) {
-          throw new SchemaEncodeError('flags value must be a boolean array');
-        }
-        return;
-      case 'tuple':
-      case 'list':
-      case 'fixed-list':
-        assertDenseModelArray(v.elements, `${v.tag} elements`);
-        v.elements.forEach(visit);
-        return;
-      case 'map':
-        assertDenseModelArray(v.entries, 'map entries');
-        v.entries.forEach((e) => {
-          visit(e.key);
-          visit(e.value);
-        });
-        return;
-      case 'option':
-        if (v.value !== undefined) visit(v.value);
-        return;
-      case 'result':
-        if (v.result.value !== undefined) visit(v.result.value);
-        return;
-      case 'union':
-        if (typeof v.unionTag !== 'string') {
-          throw new SchemaEncodeError(`union tag must be a string: ${String(v.unionTag)}`);
-        }
-        visit(v.body);
-        return;
-      case 'text':
-        if (
-          typeof v.text !== 'string' ||
-          (v.language !== undefined && typeof v.language !== 'string')
-        ) {
-          throw new SchemaEncodeError('text value must contain string text and language values');
-        }
-        return;
-      case 'binary':
-        if (
-          !(v.bytes instanceof Uint8Array) ||
-          (v.mimeType !== undefined && typeof v.mimeType !== 'string')
-        ) {
-          throw new SchemaEncodeError(
-            'binary value must contain Uint8Array bytes and a string MIME type',
-          );
-        }
-        return;
-      case 'quantity':
-        if (
-          typeof v.value !== 'object' ||
-          v.value === null ||
-          typeof v.value.mantissa !== 'bigint' ||
-          v.value.mantissa < S64_MIN ||
-          v.value.mantissa > S64_MAX ||
-          !Number.isInteger(v.value.scale) ||
-          v.value.scale < INT_RANGES.s32[0] ||
-          v.value.scale > INT_RANGES.s32[1] ||
-          typeof v.value.unit !== 'string'
-        ) {
-          throw new SchemaEncodeError(
-            'quantity value is not representable as s64, s32, and string',
-          );
-        }
-        return;
-      default:
-        throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
+      return;
     }
-  };
-  visit(value);
+    case 'string':
+    case 'path':
+    case 'url':
+      if (typeof (v as { value: unknown }).value !== 'string') {
+        throw new SchemaEncodeError(
+          `${v.tag} value must be a string: ${String((v as { value: unknown }).value)}`,
+        );
+      }
+      return;
+    case 'uuid':
+      if (!(v.value instanceof Uuid)) {
+        throw new SchemaEncodeError('uuid value must be a Uuid');
+      }
+      if (
+        v.value.highBits < 0n ||
+        v.value.highBits >= 1n << 64n ||
+        v.value.lowBits < 0n ||
+        v.value.lowBits >= 1n << 64n
+      ) {
+        throw new SchemaEncodeError('uuid bits must be in the u64 range');
+      }
+      return;
+    case 'datetime': {
+      const ns = v.value.nanoseconds;
+      if (!Number.isInteger(ns) || ns < 0 || ns >= 1_000_000_000) {
+        throw new SchemaEncodeError(
+          `invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${ns}`,
+        );
+      }
+      if (
+        typeof v.value.seconds !== 'bigint' ||
+        v.value.seconds < S64_MIN ||
+        v.value.seconds > S64_MAX
+      ) {
+        throw new SchemaEncodeError(`datetime seconds out of range: ${v.value.seconds}`);
+      }
+      return;
+    }
+    case 'duration':
+      if (typeof v.nanoseconds !== 'bigint' || v.nanoseconds < S64_MIN || v.nanoseconds > S64_MAX) {
+        throw new SchemaEncodeError(`duration nanoseconds out of range: ${v.nanoseconds}`);
+      }
+      return;
+    case 'secret': {
+      if (!(v.handle instanceof GuestSecretHandle)) {
+        throw new SchemaEncodeError('secret value contains an invalid secret handle');
+      }
+      const raw = peekGuestSecretHandle(SECRET_INTERNAL, v.handle);
+      if (raw === undefined) {
+        throw new SchemaEncodeError(
+          'secret handle was already transferred; an owned secret can only be sent once',
+        );
+      }
+      if (seen.has(raw)) {
+        throw new SchemaEncodeError(
+          'the same secret handle appeared more than once in one value tree',
+        );
+      }
+      seen.add(raw);
+      return;
+    }
+    case 'quota-token': {
+      if (!(v.handle instanceof GuestQuotaTokenHandle)) {
+        throw new SchemaEncodeError('quota-token value contains an invalid quota-token handle');
+      }
+      // Peek the underlying owned resource without consuming it, so two
+      // distinct holders wrapping the same raw resource are also rejected, not
+      // only the same holder used twice.
+      const raw = peekGuestQuotaTokenHandle(QUOTA_INTERNAL, v.handle);
+      if (raw === undefined) {
+        throw new SchemaEncodeError(
+          'quota-token handle was already transferred; an owned quota-token can only be sent once',
+        );
+      }
+      if (seen.has(raw)) {
+        throw new SchemaEncodeError(
+          'the same quota-token handle appeared more than once in one value tree',
+        );
+      }
+      seen.add(raw);
+      return;
+    }
+    case 'stream': {
+      if (!(v.handle instanceof GuestSchemaValueStreamHandle)) {
+        throw new SchemaEncodeError('stream value contains an invalid stream handle');
+      }
+      const stream = v.handle.peek();
+      if (stream === undefined) {
+        throw new SchemaEncodeError('schema value stream was already transferred');
+      }
+      if (stream.kind === 'native' && !allowNativeStreams) {
+        throw new SchemaEncodeError('native schema value streams require asynchronous encoding');
+      }
+      if (seen.has(stream.value)) {
+        throw new SchemaEncodeError('the same schema value stream appeared more than once');
+      }
+      seen.add(stream.value);
+      return;
+    }
+    case 'permission-card': {
+      if (!(v.handle instanceof GuestPermissionCardHandle)) {
+        throw new SchemaEncodeError(
+          'permission-card value contains an invalid permission-card handle',
+        );
+      }
+      const raw = peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, v.handle);
+      if (raw === undefined) {
+        throw new SchemaEncodeError(
+          'permission-card handle was already transferred; an owned permission-card can only be sent once',
+        );
+      }
+      if (seen.has(raw)) {
+        throw new SchemaEncodeError(
+          'the same permission-card handle appeared more than once in one value tree',
+        );
+      }
+      seen.add(raw);
+      return;
+    }
+    case 'record':
+      assertDenseModelArray(v.fields, 'record fields');
+      v.fields.forEach((field) => assertSchemaValueRepresentable(field, allowNativeStreams, seen));
+      return;
+    case 'variant':
+      checkIntRange('u32', v.caseIndex);
+      if (v.payload !== undefined)
+        assertSchemaValueRepresentable(v.payload, allowNativeStreams, seen);
+      return;
+    case 'enum':
+      checkIntRange('u32', v.caseIndex);
+      return;
+    case 'flags':
+      assertDenseModelArray(v.flags, 'flags');
+      if (v.flags.some((flag) => typeof flag !== 'boolean')) {
+        throw new SchemaEncodeError('flags value must be a boolean array');
+      }
+      return;
+    case 'tuple':
+    case 'list':
+    case 'fixed-list':
+      assertDenseModelArray(v.elements, `${v.tag} elements`);
+      v.elements.forEach((element) =>
+        assertSchemaValueRepresentable(element, allowNativeStreams, seen),
+      );
+      return;
+    case 'map':
+      assertDenseModelArray(v.entries, 'map entries');
+      v.entries.forEach((e) => {
+        assertSchemaValueRepresentable(e.key, allowNativeStreams, seen);
+        assertSchemaValueRepresentable(e.value, allowNativeStreams, seen);
+      });
+      return;
+    case 'option':
+      if (v.value !== undefined) assertSchemaValueRepresentable(v.value, allowNativeStreams, seen);
+      return;
+    case 'result':
+      if (v.result.value !== undefined)
+        assertSchemaValueRepresentable(v.result.value, allowNativeStreams, seen);
+      return;
+    case 'union':
+      if (typeof v.unionTag !== 'string') {
+        throw new SchemaEncodeError(`union tag must be a string: ${String(v.unionTag)}`);
+      }
+      assertSchemaValueRepresentable(v.body, allowNativeStreams, seen);
+      return;
+    case 'text':
+      if (
+        typeof v.text !== 'string' ||
+        (v.language !== undefined && typeof v.language !== 'string')
+      ) {
+        throw new SchemaEncodeError('text value must contain string text and language values');
+      }
+      return;
+    case 'binary':
+      if (
+        !(v.bytes instanceof Uint8Array) ||
+        (v.mimeType !== undefined && typeof v.mimeType !== 'string')
+      ) {
+        throw new SchemaEncodeError(
+          'binary value must contain Uint8Array bytes and a string MIME type',
+        );
+      }
+      return;
+    case 'quantity':
+      if (
+        typeof v.value !== 'object' ||
+        v.value === null ||
+        typeof v.value.mantissa !== 'bigint' ||
+        v.value.mantissa < S64_MIN ||
+        v.value.mantissa > S64_MAX ||
+        !Number.isInteger(v.value.scale) ||
+        v.value.scale < INT_RANGES.s32[0] ||
+        v.value.scale > INT_RANGES.s32[1] ||
+        typeof v.value.unit !== 'string'
+      ) {
+        throw new SchemaEncodeError('quantity value is not representable as s64, s32, and string');
+      }
+      return;
+    default:
+      throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
+  }
 }
 
 export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
@@ -791,6 +848,8 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: 'char-value', val: v.value };
       case 'string':
         return { tag: 'string-value', val: v.value };
+      case 'uuid':
+        return { tag: 'uuid-value', val: v.value };
       case 'record':
         return { tag: 'record-value', val: v.fields.map((f) => emit(f)) };
       case 'variant':
@@ -849,25 +908,35 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
       case 'union':
         return { tag: 'union-value', val: { tag: v.unionTag, body: emit(v.body) } };
       case 'secret': {
-        const raw = v.handle.take();
+        const node = { tag: 'secret-value', val: undefined } as unknown as Extract<
+          WitSchemaValueNode,
+          { tag: 'secret-value' }
+        >;
+        const raw = takeGuestSecretHandleToWire(SECRET_INTERNAL, v.handle, node);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'secret handle was already transferred; an owned secret can only be sent once',
           );
         }
-        return { tag: 'secret-value', val: raw };
+        node.val = raw;
+        return node;
       }
       case 'quota-token': {
         // Move the owned `own<quota-token>` resource out of the take-once cell.
         // The preflight above guarantees the handle is present and unique, so
         // this take always succeeds; the guard is defensive only.
-        const raw = v.handle.take();
+        const node = { tag: 'quota-token-handle', val: undefined } as unknown as Extract<
+          WitSchemaValueNode,
+          { tag: 'quota-token-handle' }
+        >;
+        const raw = takeGuestQuotaTokenHandleToWire(QUOTA_INTERNAL, v.handle, node);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'quota-token handle was already transferred; an owned quota-token can only be sent once',
           );
         }
-        return { tag: 'quota-token-handle', val: raw };
+        node.val = raw;
+        return node;
       }
       case 'stream': {
         const stream = v.handle.take();
@@ -880,13 +949,18 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: 'stream-value', val: stream.value };
       }
       case 'permission-card': {
-        const raw = v.handle.take();
+        const node = { tag: 'permission-card-handle', val: undefined } as unknown as Extract<
+          WitSchemaValueNode,
+          { tag: 'permission-card-handle' }
+        >;
+        const raw = takeGuestPermissionCardHandleToWire(PERMISSION_CARD_INTERNAL, v.handle, node);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'permission-card handle was already transferred; an owned permission-card can only be sent once',
           );
         }
-        return { tag: 'permission-card-handle', val: raw };
+        node.val = raw;
+        return node;
       }
       default:
         throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
@@ -903,56 +977,44 @@ export async function schemaValueToWitAsync(value: SchemaValue): Promise<WitSche
   // aliased capabilities anywhere else in the tree have been rejected.
   assertSchemaValueRepresentable(value, true);
 
-  const newlyWrapped: Array<{ handle: GuestSchemaValueStreamHandle; value: unknown }> = [];
+  const newlyWrapped: Array<{
+    handle: Pick<GuestSchemaValueStreamHandle, 'peek' | 'take'>;
+    value: unknown;
+  }> = [];
+  const streams: Array<Extract<SchemaValue, { tag: 'stream' }>> = [];
 
-  async function prepare(current: SchemaValue): Promise<void> {
+  function collectStreams(current: SchemaValue): void {
     switch (current.tag) {
-      case 'stream': {
-        const stream = current.handle.peek();
-        if (stream === undefined) {
-          throw new SchemaEncodeError('schema value stream was already transferred');
-        }
-        if (stream.kind === 'wrapped') return;
-
-        // Capability movement is intentionally serialized. Besides preserving
-        // deterministic ownership, this avoids starting sibling wraps after an
-        // earlier wrap has already failed.
-        current.handle.take();
-        const wrapped = await SchemaValueStream.wrap(stream.value);
-        current.handle = new GuestSchemaValueStreamHandle({
-          kind: 'wrapped',
-          value: wrapped,
-        });
-        newlyWrapped.push({ handle: current.handle, value: wrapped });
+      case 'stream':
+        streams.push(current);
         return;
-      }
       case 'record': {
-        for (const field of current.fields) await prepare(field);
+        for (const field of current.fields) collectStreams(field);
         return;
       }
       case 'tuple':
       case 'list':
       case 'fixed-list': {
-        for (const element of current.elements) await prepare(element);
+        for (const element of current.elements) collectStreams(element);
         return;
       }
       case 'variant':
-        if (current.payload !== undefined) await prepare(current.payload);
+        if (current.payload !== undefined) collectStreams(current.payload);
         return;
       case 'map':
         for (const entry of current.entries) {
-          await prepare(entry.key);
-          await prepare(entry.value);
+          collectStreams(entry.key);
+          collectStreams(entry.value);
         }
         return;
       case 'option':
-        if (current.value !== undefined) await prepare(current.value);
+        if (current.value !== undefined) collectStreams(current.value);
         return;
       case 'result':
-        if (current.result.value !== undefined) await prepare(current.result.value);
+        if (current.result.value !== undefined) collectStreams(current.result.value);
         return;
       case 'union':
-        await prepare(current.body);
+        collectStreams(current.body);
         return;
       default:
         return;
@@ -960,7 +1022,21 @@ export async function schemaValueToWitAsync(value: SchemaValue): Promise<WitSche
   }
 
   try {
-    await prepare(value);
+    collectStreams(value);
+    for (const current of streams) {
+      const stream = current.handle.peek();
+      if (stream === undefined) {
+        throw new SchemaEncodeError('schema value stream was already transferred');
+      }
+      if (stream.kind === 'wrapped') continue;
+
+      // Only native streams need asynchronous preparation. Keep their movement
+      // serialized so a failed wrap never starts a later sibling wrap.
+      current.handle.take();
+      const wrapped = await SchemaValueStream.wrap(stream.value);
+      current.handle = new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: wrapped });
+      newlyWrapped.push({ handle: current.handle, value: wrapped });
+    }
     return schemaValueToWit(value);
   } catch (error) {
     // A successful wrap creates an owned WIT resource. If a subsequent wrap or
@@ -1111,6 +1187,10 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
           fail('char-value.val must contain one Unicode scalar');
         }
         return;
+      case 'uuid-value':
+        rangedBigint(n.val.highBits, 'uuid-value.val.highBits', 0n, (1n << 64n) - 1n);
+        rangedBigint(n.val.lowBits, 'uuid-value.val.lowBits', 0n, (1n << 64n) - 1n);
+        return;
       case 'string-value':
       case 'path-value':
       case 'url-value':
@@ -1174,6 +1254,11 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         }
         if (seenRaw.has(raw)) {
           throw new SchemaDecodeError('the same secret resource appeared more than once');
+        }
+        try {
+          assertGuestSecretHandleCanLiftFromWire(SECRET_INTERNAL, raw, n);
+        } catch (error) {
+          throw new SchemaDecodeError(error instanceof Error ? error.message : String(error));
         }
         seenRaw.add(raw);
         secretReached.add(idx);
@@ -1240,6 +1325,11 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         if (seenRaw.has(raw)) {
           throw new SchemaDecodeError('the same quota-token resource appeared more than once');
         }
+        try {
+          assertGuestQuotaTokenHandleCanLiftFromWire(QUOTA_INTERNAL, raw, n);
+        } catch (error) {
+          throw new SchemaDecodeError(error instanceof Error ? error.message : String(error));
+        }
         seenRaw.add(raw);
         ownedHandleReached.add(idx);
         return;
@@ -1254,6 +1344,16 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         }
         if (seenRaw.has(raw)) {
           throw new SchemaDecodeError('the same permission-card resource appeared more than once');
+        }
+        if (!isHostPermissionCardResource(raw)) {
+          throw new SchemaDecodeError(
+            'permission-card handle is not a host permission-card resource',
+          );
+        }
+        try {
+          assertGuestPermissionCardHandleCanLiftFromWire(PERMISSION_CARD_INTERNAL, raw, n);
+        } catch (error) {
+          throw new SchemaDecodeError(error instanceof Error ? error.message : String(error));
         }
         seenRaw.add(raw);
         ownedHandleReached.add(idx);
@@ -1338,7 +1438,11 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   // thrown error the whole decode is aborted and this local array is discarded,
   // so leaving stale `1`s during unwinding is harmless.
   const onPath = new Uint8Array(nodes.length);
-  const liftedSecrets: { node: { val: unknown }; raw: unknown }[] = [];
+  const liftedCapabilities: (
+    | { tag: 'secret'; node: { val: unknown }; handle: GuestSecretHandle }
+    | { tag: 'quota-token'; handle: GuestQuotaTokenHandle }
+    | { tag: 'permission-card'; handle: GuestPermissionCardHandle }
+  )[] = [];
 
   function fromIdx(idx: ValueNodeIndex): SchemaValue {
     if (idx < 0 || idx >= nodes.length) {
@@ -1381,6 +1485,8 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
         return { tag: 'char', value: n.val };
       case 'string-value':
         return { tag: 'string', value: n.val };
+      case 'uuid-value':
+        return { tag: 'uuid', value: Uuid.from(n.val) };
       case 'record-value':
         return { tag: 'record', fields: n.val.map((i) => fromIdx(i)) };
       case 'variant-value':
@@ -1457,8 +1563,15 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
           throw new SchemaDecodeError('secret handle referenced more than once');
         }
         (n as { val: unknown }).val = undefined;
-        liftedSecrets.push({ node: n as { val: unknown }, raw });
-        return { tag: 'secret', handle: GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw) };
+        let handle: GuestSecretHandle;
+        try {
+          handle = liftGuestSecretHandleFromWire(SECRET_INTERNAL, raw, n);
+        } catch (error) {
+          (n as { val: unknown }).val = raw;
+          throw error;
+        }
+        liftedCapabilities.push({ tag: 'secret', node: n as { val: unknown }, handle });
+        return { tag: 'secret', handle };
       }
       case 'quota-token-handle': {
         // Lift the owned `own<quota-token>` resource into an opaque take-once
@@ -1471,7 +1584,9 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
           throw new SchemaDecodeError('quota-token handle referenced more than once');
         }
         (n as { val: unknown }).val = undefined;
-        return { tag: 'quota-token', handle: GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw) };
+        const handle = liftGuestQuotaTokenHandleFromWire(QUOTA_INTERNAL, raw, n);
+        liftedCapabilities.push({ tag: 'quota-token', handle });
+        return { tag: 'quota-token', handle };
       }
       case 'stream-value': {
         const raw = n.val as typeof n.val | undefined;
@@ -1490,10 +1605,9 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
           throw new SchemaDecodeError('permission-card handle referenced more than once');
         }
         (n as { val: unknown }).val = undefined;
-        return {
-          tag: 'permission-card',
-          handle: GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, raw),
-        };
+        const handle = liftGuestPermissionCardHandleFromWire(PERMISSION_CARD_INTERNAL, raw, n);
+        liftedCapabilities.push({ tag: 'permission-card', handle });
+        return { tag: 'permission-card', handle };
       }
       default:
         throw new SchemaDecodeError(
@@ -1506,8 +1620,19 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   try {
     result = fromIdx(wit.root);
   } catch (e) {
-    for (const lifted of liftedSecrets) {
-      lifted.node.val = lifted.raw;
+    for (let i = liftedCapabilities.length - 1; i >= 0; i--) {
+      const lifted = liftedCapabilities[i]!;
+      switch (lifted.tag) {
+        case 'secret':
+          lifted.node.val = releaseGuestSecretHandle(SECRET_INTERNAL, lifted.handle);
+          break;
+        case 'quota-token':
+          takeGuestQuotaTokenHandle(QUOTA_INTERNAL, lifted.handle);
+          break;
+        case 'permission-card':
+          takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, lifted.handle);
+          break;
+      }
     }
     // On failure, release any handles still owned by the wire tree so a caught
     // error cannot leave live owned quota-token or permission-card resources dangling in the
@@ -1546,7 +1671,17 @@ export function drainUnconsumedQuotaAndPermissionCardHandles(
       (node as { val: unknown }).val !== undefined
     ) {
       if (first === undefined) first = i;
-      (node as { val: unknown }).val = undefined;
+      if (node.tag === 'quota-token-handle') {
+        abandonGuestQuotaTokenWireHandle(QUOTA_INTERNAL, node.val, node);
+      } else if (node.tag === 'permission-card-handle') {
+        abandonGuestPermissionCardWireHandle(PERMISSION_CARD_INTERNAL, node.val, node);
+      }
+      try {
+        (node as { val: unknown }).val = undefined;
+      } catch {
+        // The ownership ledger still marks the raw handle transferred even if
+        // a malformed non-writable carrier prevents clearing its last JS reference.
+      }
     }
   }
   return first;
@@ -1558,6 +1693,12 @@ export function drainUnconsumedQuotaAndPermissionCardHandles(
 
 export function typedSchemaValueToWit(tv: TypedSchemaValue): WitTypedSchemaValue {
   return { graph: schemaGraphToWit(tv.graph), value: schemaValueToWit(tv.value) };
+}
+
+export async function typedSchemaValueToWitAsync(
+  tv: TypedSchemaValue,
+): Promise<WitTypedSchemaValue> {
+  return { graph: schemaGraphToWit(tv.graph), value: await schemaValueToWitAsync(tv.value) };
 }
 
 /**

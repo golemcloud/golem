@@ -1,0 +1,1248 @@
+{
+ "cases": {
+  "special paths: b2sum /dev/null": {
+   "script": "95990bb041e7fbfc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce  /dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: b2sum /dev/stdin": {
+   "script": "86e8df55a031ccff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b093194d3654663d56f58155a2d20ab80e17ec6a11bab7ba2e0f776c1cb5ebde1a516c6f359c6e478980619cf3ac740c363b20bed90cf2ebbb11d4c5334a04f1  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "special paths: b2sum dash": {
+   "script": "af31128ddae922e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b093194d3654663d56f58155a2d20ab80e17ec6a11bab7ba2e0f776c1cb5ebde1a516c6f359c6e478980619cf3ac740c363b20bed90cf2ebbb11d4c5334a04f1  -\nstatus=0\n"
+   }
+  },
+  "special paths: base32 /dev/null": {
+   "script": "3afce505a2fea2b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: base32 /dev/stdin": {
+   "script": "8593acc3b702db14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MIFGCCTCBI======\nstatus=0\n"
+   }
+  },
+  "special paths: base32 dash": {
+   "script": "f62e3bc84f428969",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MIFGCCTCBI======\nstatus=0\n"
+   }
+  },
+  "special paths: base64 /dev/null": {
+   "script": "7eb1f671aa1fcbd7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: base64 /dev/stdin": {
+   "script": "08ce689a1811cb7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "special paths: base64 dash": {
+   "script": "d763160da167f92c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "special paths: basenc /dev/null": {
+   "script": "baf4321ab74d19a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: basenc /dev/stdin": {
+   "script": "b57a7ff47a4d27dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "special paths: basenc dash": {
+   "script": "22a35729f23f77e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "special paths: cat /dev/fd/0": {
+   "script": "e152c969b1385c1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: cat /dev/null": {
+   "script": "86dd45df1f354efe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: cat /dev/stdin": {
+   "script": "398da0af70e8874d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: cat dash": {
+   "script": "b85f71bdc13d63f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: cksum /dev/null": {
+   "script": "884611cb43d4e250",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4294967295 0 /dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: cksum /dev/stdin": {
+   "script": "2184bbc2de421197",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2769090629 6 /dev/stdin\nstatus=0\n"
+   }
+  },
+  "special paths: cksum dash": {
+   "script": "4355642360a653fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2769090629 6 -\nstatus=0\n"
+   }
+  },
+  "special paths: cmp /dev/null twice": {
+   "script": "6392c8853c29b0a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: cmp stdin and a file": {
+   "script": "0728953efbbed939",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "- /tmp/f differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "special paths: comm /dev/null twice": {
+   "script": "7808570cfc3d0662",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: comm stdin and a file": {
+   "script": "97482bd029aaeab0",
+   "status": 0,
+   "stderr": {
+    "text": "comm: file 1 is not in sorted order\ncomm: input is not in sorted order\n"
+   },
+   "stdout": {
+    "text": "\ta\nb\na\nb\nstatus=1\n"
+   }
+  },
+  "special paths: cp to /dev/stdout": {
+   "script": "0f7e1fb6f629fd49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "special paths: csplit /dev/null": {
+   "script": "4ded27724bb28f0e",
+   "status": 0,
+   "stderr": {
+    "text": "csplit: missing operand after ‘/dev/null’\nTry 'csplit --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "special paths: csplit /dev/stdin": {
+   "script": "b9bbbc4173dd99f0",
+   "status": 0,
+   "stderr": {
+    "text": "csplit: missing operand after ‘/dev/stdin’\nTry 'csplit --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "special paths: csplit dash": {
+   "script": "6f6023d4263fa2a5",
+   "status": 0,
+   "stderr": {
+    "text": "csplit: missing operand after ‘-’\nTry 'csplit --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "special paths: cut /dev/null": {
+   "script": "2b41311a6aab6254",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: cut /dev/stdin": {
+   "script": "a9df47e0aa68a871",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: cut dash": {
+   "script": "2669db770d0c399c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: diff /dev/null twice": {
+   "script": "828091ca6cd250f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: diff stdin and a file": {
+   "script": "0505fd1d0a33b4ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1d0\n< b\n3d1\n< b\nstatus=1\n"
+   }
+  },
+  "special paths: expand /dev/null": {
+   "script": "3b9bd4dc5d0b6854",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: expand /dev/stdin": {
+   "script": "dd188ed060a5714c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: expand dash": {
+   "script": "9b22ee3c436733a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: file /dev/null": {
+   "script": "9c68f362879c6584",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "character special (1/3)\nstatus=0\n"
+   }
+  },
+  "special paths: file /dev/stdin": {
+   "script": "5f147eebbaa728d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "symbolic link to /proc/self/fd/0\nstatus=0\n"
+   }
+  },
+  "special paths: file dash": {
+   "script": "8b4097dc1273f359",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ASCII text\nstatus=0\n"
+   }
+  },
+  "special paths: find /dev/null": {
+   "script": "b3160b2a92815e68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: fmt /dev/null": {
+   "script": "41d52c907264a537",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: fmt /dev/stdin": {
+   "script": "3a672da40e7f1b73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a b\nstatus=0\n"
+   }
+  },
+  "special paths: fmt dash": {
+   "script": "5a048000dc96efd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a b\nstatus=0\n"
+   }
+  },
+  "special paths: fold /dev/null": {
+   "script": "eec8a494308a31e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: fold /dev/stdin": {
+   "script": "11c9bd35a0290093",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: fold dash": {
+   "script": "1110baae1e58345a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: grep /dev/null": {
+   "script": "c2118e5e0167bca6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "special paths: grep /dev/stdin": {
+   "script": "ff6b0929af352409",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "special paths: grep dash": {
+   "script": "0dc4ead229f48ff1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "special paths: head /dev/null": {
+   "script": "2bfb912e94b39a81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: head /dev/stdin": {
+   "script": "f0159da15515b9d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "special paths: head dash": {
+   "script": "e2f8b27b23649d6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "special paths: join /dev/null twice": {
+   "script": "bf8a2652a8db0e15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: join stdin and a file": {
+   "script": "fd24836291c450ee",
+   "status": 0,
+   "stderr": {
+    "text": "join: -:2: is not sorted: a\njoin: input is not in sorted order\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "special paths: jq /dev/null": {
+   "script": "9b94a5fb62b41dd7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: jq /dev/stdin": {
+   "script": "88a237829e0d3009",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "special paths: jq dash": {
+   "script": "cef8b3de04f2f592",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "special paths: ls /dev/null": {
+   "script": "ac5c362a70a5dfcd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: md5sum /dev/null": {
+   "script": "43351d4c1bb8612b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d41d8cd98f00b204e9800998ecf8427e  /dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: md5sum /dev/stdin": {
+   "script": "3bab6ffc5f47fea7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "special paths: md5sum dash": {
+   "script": "e956e7a4f3e0be78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  -\nstatus=0\n"
+   }
+  },
+  "special paths: nl /dev/null": {
+   "script": "d273db75f7077a34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: nl /dev/stdin": {
+   "script": "f6131f741a23d10c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "special paths: nl dash": {
+   "script": "a62170d513f3990c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "special paths: od /dev/null": {
+   "script": "1ae304cda15bacc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000\nstatus=0\n"
+   }
+  },
+  "special paths: od /dev/stdin": {
+   "script": "aef1f80e1420208a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   b  \\n   a  \\n   b  \\n\n0000006\nstatus=0\n"
+   }
+  },
+  "special paths: od dash": {
+   "script": "1ed1b1791f4359e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   b  \\n   a  \\n   b  \\n\n0000006\nstatus=0\n"
+   }
+  },
+  "special paths: paste /dev/null twice": {
+   "script": "f24641db0b835dc0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: paste stdin and a file": {
+   "script": "002b6fd053785851",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\ta\na\t\nb\t\nstatus=0\n"
+   }
+  },
+  "special paths: readlink /dev/null": {
+   "script": "5020fd7a17a037ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: readlink /dev/stdin": {
+   "script": "933c29fdf2c1792e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "match\nstatus=0\n"
+   }
+  },
+  "special paths: readlink dash": {
+   "script": "2cfbeb5d7faad346",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/-\nstatus=0\n"
+   }
+  },
+  "special paths: realpath /dev/null": {
+   "script": "b07c757cb51ccaf1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: realpath /dev/stdin": {
+   "script": "5246dc413dd3a709",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "match\nstatus=0\n"
+   }
+  },
+  "special paths: realpath dash": {
+   "script": "cd5c30bf66cddfe9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/-\nstatus=0\n"
+   }
+  },
+  "special paths: redirect into /dev/stdout": {
+   "script": "f7aa9271e7eb9996",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\n"
+   }
+  },
+  "special paths: rev /dev/null": {
+   "script": "322102c6590865b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: rev /dev/stdin": {
+   "script": "b2587c1071ea6f99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: rev dash": {
+   "script": "5eb9fb5e3905f25f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: sed /dev/null": {
+   "script": "ae782217a0a83d5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: sed /dev/stdin": {
+   "script": "724804f28977dd39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\na\na\nb\nb\nstatus=0\n"
+   }
+  },
+  "special paths: sed dash": {
+   "script": "461b8c2a1c787289",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\na\na\nb\nb\nstatus=0\n"
+   }
+  },
+  "special paths: sed w /dev/stdout": {
+   "script": "edc16eb3e89d7929",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: sha1sum /dev/null": {
+   "script": "7acee1677e1d09a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "da39a3ee5e6b4b0d3255bfef95601890afd80709  /dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: sha1sum /dev/stdin": {
+   "script": "66f517461ea79bf7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a4f83b5533447266c730d1e50fd55ad202b94a1  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "special paths: sha1sum dash": {
+   "script": "714771543556aa89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a4f83b5533447266c730d1e50fd55ad202b94a1  -\nstatus=0\n"
+   }
+  },
+  "special paths: sha256sum /dev/null": {
+   "script": "4e97185c9d60c072",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  /dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: sha256sum /dev/stdin": {
+   "script": "3ca6311bd6f90a88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7cafa1b24cf9d8d1f03cdc8c03cbe7343e2c7345af2dccce72a830042858a984  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "special paths: sha256sum dash": {
+   "script": "1004f9a18760aa0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7cafa1b24cf9d8d1f03cdc8c03cbe7343e2c7345af2dccce72a830042858a984  -\nstatus=0\n"
+   }
+  },
+  "special paths: sha512sum /dev/null": {
+   "script": "bb803b683088011b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e  /dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: sha512sum /dev/stdin": {
+   "script": "0fd7b86fde8b6312",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20760b0b76931af9e935bf71b32bca388c9af29d2cd587088817cce7be5629167adea14ccb2d769227d25213206e7bd3eba63414fa95d57254acb0252efc14cd  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "special paths: sha512sum dash": {
+   "script": "8e4685bdb4d9c8b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20760b0b76931af9e935bf71b32bca388c9af29d2cd587088817cce7be5629167adea14ccb2d769227d25213206e7bd3eba63414fa95d57254acb0252efc14cd  -\nstatus=0\n"
+   }
+  },
+  "special paths: shuf /dev/null": {
+   "script": "bf904641b66b249c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: shuf /dev/stdin": {
+   "script": "f4c7b22aa9d6678b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: shuf dash": {
+   "script": "005241c6a3b07f29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: sort -o /dev/stdout": {
+   "script": "52eb6978d917e645",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "special paths: sort /dev/null": {
+   "script": "83d1ff6112f521dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: sort /dev/stdin": {
+   "script": "44cecb77851a1b19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "special paths: sort dash": {
+   "script": "4b89c71164f1b50f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "special paths: split /dev/null": {
+   "script": "62d759e027b2c877",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: split /dev/stdin": {
+   "script": "154289db7295b83b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: split dash": {
+   "script": "ffda1903513ff538",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: stat /dev/null": {
+   "script": "a0ccc57727b27bad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "character special file\nstatus=0\n"
+   }
+  },
+  "special paths: stat /dev/stdin": {
+   "script": "1b8a8eed7cc00ed1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "symbolic link\nstatus=0\n"
+   }
+  },
+  "special paths: stat dash": {
+   "script": "84f6fd1743381d18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fifo\nstatus=0\n"
+   }
+  },
+  "special paths: tac /dev/null": {
+   "script": "0ff91ab93f3b2fee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: tac /dev/stdin": {
+   "script": "ea910805f1cbd0b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: tac dash": {
+   "script": "0f165b7e4e09e928",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: tail /dev/null": {
+   "script": "0c3c5e1b36e84ee9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: tail /dev/stdin": {
+   "script": "220caa168fb5d1ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "special paths: tail dash": {
+   "script": "59b6573550267789",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "special paths: tee /dev/stderr": {
+   "script": "6488d272b31b2db6",
+   "status": 0,
+   "stderr": {
+    "text": "b\na\nb\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: test on /dev/stdin": {
+   "script": "ae0e7c63d98e7b06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "stdin\nfd1\n"
+   }
+  },
+  "special paths: tsort /dev/null": {
+   "script": "66d3ba5ca8a34272",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: tsort /dev/stdin": {
+   "script": "c5fecb70d290d5bf",
+   "status": 0,
+   "stderr": {
+    "text": "tsort: /dev/stdin: input contains an odd number of tokens\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "special paths: tsort dash": {
+   "script": "9a6eaa1f619cff7f",
+   "status": 0,
+   "stderr": {
+    "text": "tsort: -: input contains an odd number of tokens\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "special paths: unexpand /dev/null": {
+   "script": "9b860b583dc7e16a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: unexpand /dev/stdin": {
+   "script": "4e2887215121db42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: unexpand dash": {
+   "script": "6f0a109caa90c81a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: uniq /dev/null": {
+   "script": "7d126fc8572ffb24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "special paths: uniq /dev/stdin": {
+   "script": "e9ac9780cbcf4a9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: uniq dash": {
+   "script": "0d1434ae4e698411",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "special paths: wc /dev/null": {
+   "script": "2673193d454f609a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      0       0       0 /dev/null\nstatus=0\n"
+   }
+  },
+  "special paths: wc /dev/stdin": {
+   "script": "97b857d20cfe5678",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      3       3       6 /dev/stdin\nstatus=0\n"
+   }
+  },
+  "special paths: wc dash": {
+   "script": "98953beefd5d08e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      3       3       6 -\nstatus=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

@@ -100,7 +100,7 @@ impl ReplHandler {
                         app_ctx
                             .application()
                             .component(component_name)
-                            .guess_language()
+                            .guest_language()
                     })
                     .map(ReplLanguage::recommended_for_guest_language)
                     .collect::<BTreeSet<_>>();

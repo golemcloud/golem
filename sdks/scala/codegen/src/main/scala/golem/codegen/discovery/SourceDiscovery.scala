@@ -60,7 +60,8 @@ object SourceDiscovery {
     descriptionValue: Option[String],
     mode: Option[String],
     methods: List[DiscoveredMethod],
-    configFields: List[ConfigField] = Nil
+    configFields: List[ConfigField] = Nil,
+    kind: String = "regular"
   )
 
   final case class ConstructorParam(name: String, typeExpr: String)
@@ -106,6 +107,7 @@ object SourceDiscovery {
     presentedToolType: String,
     expectedToolType: String,
     transparent: Boolean,
+    parameterType: Option[String],
     parentType: String,
     imports: Map[String, String],
     wildcardImports: List[WildcardImport],
@@ -121,6 +123,7 @@ object SourceDiscovery {
     middlewareName: String,
     aliases: List[String],
     description: Option[String],
+    parameterType: Option[String],
     parentType: String,
     imports: Map[String, String],
     wildcardImports: List[WildcardImport],
@@ -134,6 +137,7 @@ object SourceDiscovery {
     aliases: List[String],
     scope: Option[String],
     kind: Option[String],
+    channel: Option[String],
     syntax: String
   )
 
@@ -304,7 +308,7 @@ object SourceDiscovery {
     }
 
   private def hasAgentDefinition(mods: List[Mod]): Boolean =
-    hasAnnotation(mods, "agentDefinition")
+    hasAnnotation(mods, "agentDefinition") || hasAnnotation(mods, "httpRouter")
 
   private def hasAgentImplementation(mods: List[Mod]): Boolean =
     hasAnnotation(mods, "agentImplementation")
@@ -333,7 +337,9 @@ object SourceDiscovery {
     mods.collectFirst {
       case Mod.Annot(init) if {
             val full = init.tpe.syntax
-            full == "agentDefinition" || full.endsWith(".agentDefinition")
+            full == "agentDefinition" || full.endsWith(".agentDefinition") || full == "httpRouter" || full.endsWith(
+              ".httpRouter"
+            )
           } =>
         init
     }.flatMap { init =>
@@ -553,6 +559,7 @@ object SourceDiscovery {
           aliases = namedArg(args, "aliases").map(stringArrayTerm).getOrElse(Nil),
           scope = namedArg(args, "scope").flatMap(stringLit).filter(_.nonEmpty),
           kind = namedArg(args, "kind").flatMap(stringLit).filter(_.nonEmpty),
+          channel = namedArg(args, "channel").flatMap(stringLit).filter(_.nonEmpty),
           syntax = init.syntax
         )
       }
@@ -756,10 +763,11 @@ object SourceDiscovery {
         )
 
       case t: Defn.Trait if hasAgentDefinition(t.mods) =>
+        val router             = hasAnnotation(t.mods, "httpRouter")
         val typeName           = extractTypeName(t.mods)
         val (hasDesc, descVal) = extractDescription(t.mods)
         val ctorParams         = extractConstructorParams(t.templ)
-        val modeValue          = extractMode(t.mods)
+        val modeValue          = if (router) Some("ephemeral") else extractMode(t.mods)
         val discoveredMethods  = extractMethods(t.templ)
         val cfgFields          = extractAgentConfigType(t.templ, pkg)
           .flatMap(cfgType => extractConfigFields(cfgType, pkg, caseClassIndex, Nil))
@@ -774,7 +782,8 @@ object SourceDiscovery {
           descriptionValue = descVal,
           mode = modeValue,
           methods = discoveredMethods,
-          configFields = cfgFields
+          configFields = cfgFields,
+          kind = if (router) "http-router" else "regular"
         )
 
       case cls: Defn.Class if hasAgentImplementation(cls.mods) =>
@@ -849,6 +858,7 @@ object SourceDiscovery {
     presented: GeneratedToolRef,
     expected: GeneratedToolRef,
     transparent: Boolean,
+    parameterType: Option[String],
     syntax: String
   )
 
@@ -1106,6 +1116,7 @@ object SourceDiscovery {
         presentedToolType = presentedTool,
         expectedToolType = expectedTool,
         transparent = parsed.transparent,
+        parameterType = parsed.parameterType,
         parentType = parsed.syntax,
         imports = imports,
         wildcardImports = wildcardImports,
@@ -1167,6 +1178,7 @@ object SourceDiscovery {
         middlewareName = middlewareName,
         aliases = aliases,
         description = description,
+        parameterType = universalMiddlewareParameterType(parents.head.tpe),
         parentType = parentType,
         imports = imports,
         wildcardImports = wildcardImports,
@@ -1231,7 +1243,18 @@ object SourceDiscovery {
           presented = presentedTool,
           expected = expectedTool,
           transparent = false,
+          parameterType = None,
           syntax = tpe.syntax
+        )
+      case Type.Apply.After_4_6_0(Type.Select(presented, Type.Name("AdapterWithParameters")), args)
+          if args.values.size == 2 =>
+        for {
+          presentedTool <- generatedToolRef(presented.syntax, "Middleware", imports)
+          expectedTool  <- generatedToolRef(args.values.head.syntax, "Underlying", imports)
+        } yield ParsedMiddlewareParent(presentedTool, expectedTool, false, Some(args.values(1).syntax), tpe.syntax)
+      case Type.Apply.After_4_6_0(Type.Select(presented, Type.Name("WithParameters")), args) if args.values.size == 1 =>
+        generatedToolRef(presented.syntax, "Middleware", imports).map(ref =>
+          ParsedMiddlewareParent(ref, ref, true, Some(args.values.head.syntax), tpe.syntax)
         )
       case _ =>
         generatedToolRef(tpe.syntax, "Middleware", imports).map { presented =>
@@ -1239,6 +1262,7 @@ object SourceDiscovery {
             presented = presented,
             expected = presented,
             transparent = true,
+            parameterType = None,
             syntax = tpe.syntax
           )
         }
@@ -1309,12 +1333,21 @@ object SourceDiscovery {
     val rooted     = raw.startsWith("_root_.")
     val normalized = normalizeTypeRef(raw)
     val expanded   = if (rooted) normalized else expandImportedTypeRef(normalized, imports)
-    expanded == "golem.tool.UniversalToolMiddleware" ||
+    expanded == "golem.tool.UniversalToolMiddleware" || expanded.startsWith(
+      "golem.tool.UniversalToolMiddleware.WithParameters["
+    ) ||
     (expanded == "UniversalToolMiddleware" &&
       wildcardImports.exists(wildcard =>
         wildcard.pkg == "golem.tool" && !wildcard.excludes.contains("UniversalToolMiddleware")
       ))
   }
+
+  private def universalMiddlewareParameterType(tpe: Type): Option[String] =
+    tpe match {
+      case Type.Apply.After_4_6_0(Type.Select(_, Type.Name("WithParameters")), args) if args.values.size == 1 =>
+        Some(args.values.head.syntax)
+      case _ => None
+    }
 
   private def expandImportedTypeRef(tpe: String, imports: Map[String, String]): String = {
     val dot = tpe.indexOf('.')

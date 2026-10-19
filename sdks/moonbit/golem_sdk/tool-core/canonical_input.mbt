@@ -189,7 +189,11 @@ pub fn ToolDef::canonical_input_fields(
         name: positional.name,
         aliases: [],
         short: None,
-        type_: positional.type_,
+        type_: if !positional.required && positional.default is None {
+          option_graph(positional.type_)
+        } else {
+          positional.type_
+        },
       })
     }
     if body.positionals.tail is Some(tail) {
@@ -237,7 +241,12 @@ fn identity_collides(
 ///|
 fn OptionSpecDef::canonical_field(self : OptionSpecDef) -> CanonicalInputField {
   let type_ = match self.shape {
-    Scalar(graph) | OptionalScalar(graph) => graph
+    Scalar(graph) | OptionalScalar(graph) =>
+      if !self.required && self.default is None {
+        option_graph(graph)
+      } else {
+        graph
+      }
     RepeatableList(shape) => list_graph(shape.item_type)
     RepeatableMap(shape) => shape.map_type
   }
@@ -271,6 +280,17 @@ fn list_graph(item : @model.SchemaGraph) -> @model.SchemaGraph {
 }
 
 ///|
+fn option_graph(item : @model.SchemaGraph) -> @model.SchemaGraph {
+  if @model.schema_root_is_option(item) {
+    return item
+  }
+  {
+    defs: item.defs,
+    root: @model.schema_type(@model.SchemaTypeBody::Option(item.root)),
+  }
+}
+
+///|
 pub fn ToolDef::canonical_input_model(
   self : ToolDef,
   command_index : Int,
@@ -299,7 +319,7 @@ pub fn decode_canonical_input(
   command_index : Int,
   input : @types.TypedSchemaValue,
   context : String,
-) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+) -> Array[CanonicalInputValue] raise @types.ToolError {
   decode_canonical_input_with_resource_drops(
     def,
     command_index,
@@ -316,10 +336,10 @@ fn decode_canonical_input_with_resource_drops(
   input : @types.TypedSchemaValue,
   context : String,
   drops : @model.SchemaValueResourceDrops,
-) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+) -> Array[CanonicalInputValue] raise @types.ToolError {
   let typed = @model.typed_schema_value_from_wit(input, drops) catch {
     error =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "\{context}: invalid typed schema value input: \{Repr(error)}",
       )
   }
@@ -337,7 +357,7 @@ pub fn decode_canonical_input_value(
   command_index : Int,
   typed : @model.TypedSchemaValue,
   context : String,
-) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+) -> Array[CanonicalInputValue] raise @types.ToolError {
   decode_canonical_input_value_with_resource_drops(
     def,
     command_index,
@@ -354,16 +374,16 @@ fn decode_canonical_input_value_with_resource_drops(
   typed : @model.TypedSchemaValue,
   context : String,
   drops : @model.SchemaValueResourceDrops,
-) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+) -> Array[CanonicalInputValue] raise @types.ToolError {
   errdefer typed.value.release_resources(drops)
   let model = def.canonical_input_model(command_index) catch {
     error =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "\{context}: invalid canonical input model: \{Repr(error)}",
       )
   }
   if typed.graph != model.record_graph {
-    raise @toolCommon.ToolError::InvalidInput(
+    raise @types.ToolError::InvalidInput(
       "\{context}: input schema does not match the canonical input schema",
     )
   }
@@ -372,12 +392,12 @@ fn decode_canonical_input_value_with_resource_drops(
       model.record_graph.root,
       typed.value,
     ) {
-    raise @toolCommon.ToolError::InvalidInput(
+    raise @types.ToolError::InvalidInput(
       "\{context}: input value does not match the canonical input schema",
     )
   }
   guard typed.value is @model.SchemaValue::Record(values) else {
-    raise @toolCommon.ToolError::InvalidInput(
+    raise @types.ToolError::InvalidInput(
       "\{context}: canonical input must be a record",
     )
   }
@@ -400,7 +420,7 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(
   fields : Array[CanonicalInputValue],
   name : String,
   context : String,
-) -> T raise @toolCommon.ToolError {
+) -> T raise @types.ToolError {
   decode_canonical_field_with_resource_drops(
     fields,
     name,
@@ -415,14 +435,14 @@ fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_with_reso
   name : String,
   context : String,
   drops : @model.SchemaValueResourceDrops,
-) -> T raise @toolCommon.ToolError {
+) -> T raise @types.ToolError {
   for field in fields {
     if field.name == name || field.aliases.contains(name) {
       let tag : @schema.TypeTag[T] = @schema.type_tag()
       let expected = @schema.into_schema_graph(tag) catch {
         error => {
           release_canonical_input_values(fields, drops)
-          raise @toolCommon.ToolError::InvalidInput(
+          raise @types.ToolError::InvalidInput(
             "\{context}: failed building the SDK schema for canonical field `\{name}`: \{error}",
           )
         }
@@ -430,7 +450,7 @@ fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_with_reso
       let value = canonical_value_for_sdk(expected, expected.root, field.value) catch {
         error => {
           release_canonical_input_values(fields, drops)
-          raise @toolCommon.ToolError::InvalidInput(
+          raise @types.ToolError::InvalidInput(
             "\{context}: failed adapting canonical field `\{name}` to its SDK type: \{Repr(error)}",
           )
         }
@@ -438,7 +458,7 @@ fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_with_reso
       return @schema.from_value_as(value) catch {
         error => {
           release_canonical_input_values(fields, drops)
-          raise @toolCommon.ToolError::InvalidInput(
+          raise @types.ToolError::InvalidInput(
             "\{context}: failed decoding canonical field `\{name}`: \{Repr(error)}",
           )
         }
@@ -446,7 +466,7 @@ fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_with_reso
     }
   }
   release_canonical_input_values(fields, drops)
-  raise @toolCommon.ToolError::InvalidInput(
+  raise @types.ToolError::InvalidInput(
     "\{context}: canonical field `\{name}` was not found",
   )
 }
@@ -539,10 +559,10 @@ pub fn forward_canonical_input(
   fields : Array[CanonicalInputValue],
   def : ToolDef,
   command_index : Int,
-) -> @types.TypedSchemaValue raise @toolCommon.ToolError {
+) -> @types.TypedSchemaValue raise @types.ToolError {
   let model = def.canonical_input_model(command_index) catch {
     error =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "invalid forwarded canonical input model: \{Repr(error)}",
       )
   }
@@ -579,12 +599,12 @@ pub fn forward_canonical_input(
       }
     }
     guard found is Some(found) else {
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "missing forwarded canonical input field `\{target.name}`",
       )
     }
     if found.type_ != target.type_ {
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "canonical input field `\{found.name}` has an incompatible schema for forwarded field `\{target.name}`",
       )
     }
@@ -592,13 +612,13 @@ pub fn forward_canonical_input(
   }
   let input = build_canonical_input(model, params) catch {
     error =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "failed to build forwarded canonical input: \{Repr(error)}",
       )
   }
   @model.typed_schema_value_to_wit(input) catch {
     error =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "failed to encode forwarded canonical input: \{Repr(error)}",
       )
   }

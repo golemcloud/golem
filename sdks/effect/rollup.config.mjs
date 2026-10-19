@@ -1,0 +1,299 @@
+import resolve from "@rollup/plugin-node-resolve"
+import commonjs from "@rollup/plugin-commonjs"
+import typescript from "rollup-plugin-typescript2"
+import terser from "@rollup/plugin-terser"
+import { defineConfig } from "rollup"
+
+/**
+ * Modules that are provided by the Golem host or by the WIT bindings
+ * inside the base WASM. These must be left as external imports so the
+ * component linker can satisfy them at instantiation time.
+ *
+ * `effect` is also externalized: the runtime is embedded in the base
+ * WASM as a separate JS module (see scripts/generate-agent-template.mjs)
+ * so that effect-golem and user components share a single Effect
+ * runtime instance, avoiding identity issues caused by duplicate copies.
+ */
+const external = (id) =>
+  id === "agent-guest" ||
+  id === "node:sqlite" ||
+  id === "effect" ||
+  id === "effect/http" ||
+  id === "effect/http-api" ||
+  id === "@golemcloud/effect-golem" ||
+  id.startsWith("@golemcloud/effect-golem/") ||
+  id.startsWith("golem:") ||
+  id.startsWith("wasi:")
+
+const httpFacades = [
+  ["effect/http", "GolemHttp", "effect-http"],
+  ["./src/effect-httpapi-shared.mjs", "GolemHttpApi", "effect-httpapi"],
+].map(([specifier, namespace, name]) => ({
+  input: `\0${name}`,
+  output: { file: `dist/${name}.mjs`, format: "esm" },
+  external: ["effect"],
+  plugins: [
+    {
+      name: "shared-effect-http",
+      resolveId(id) {
+        return id === `\0${name}` ? id : null
+      },
+      async load(id) {
+        if (id !== `\0${name}`) return null
+        const names = Object.keys(await import(specifier))
+        return (
+          `import { ${namespace} } from "effect";\n` +
+          names.map((key) => `export const ${key} = ${namespace}.${key};`).join("\n")
+        )
+      },
+    },
+  ],
+}))
+
+export default defineConfig([
+  ...httpFacades,
+  {
+    input: "src/index.ts",
+    output: {
+      file: "dist/index.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    // The Effect runtime is marked side-effect-free, which would otherwise
+    // cause Rollup to drop our `export { Effect, Schema, Ref } from "effect"`
+    // re-exports. Treat the entry module's re-exports as side-effectful so
+    // user components embedded in the base WASM can resolve them.
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  {
+    input: "src/Ai.ts",
+    output: {
+      file: "dist/ai.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  {
+    input: "src/Middleware.ts",
+    output: {
+      file: "dist/middleware.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  // Standalone bundle of the `effect` runtime. Embedded as its own JS
+  // module inside the base WASM so that effect-golem and user code share
+  // one runtime instance.
+  {
+    input: "src/effect-bundle.mjs",
+    output: {
+      file: "dist/effect.mjs",
+      format: "esm",
+      sourcemap: false,
+    },
+    treeshake: false,
+    plugins: [
+      resolve({ extensions: [".mjs", ".js"] }),
+      commonjs(),
+      terser(),
+      {
+        name: "exclude-shared-documentation-assets",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type !== "chunk") continue
+            if (
+              Object.keys(chunk.modules).some((id) =>
+                /[/\\]httpapi[/\\]internal[/\\]httpApi(Scalar|Swagger)\.js$/.test(id),
+              )
+            ) {
+              this.error(
+                "Documentation UI assets must be bundled by applications, not the shared Effect runtime",
+              )
+            }
+          }
+        },
+      },
+    ],
+  },
+
+  // SqliteClient adapter. Externalizes `effect`, `effect-golem`, and
+  // `node:sqlite` so the resulting bundle is small and shares the
+  // single Effect runtime instance embedded into the base WASM.
+  {
+    input: "src/Sqlite/SqliteClient.ts",
+    output: {
+      file: "dist/sqlite.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  // PgClient adapter. Externalizes `effect`, `effect-golem`, and the
+  // `golem:rdbms/*` host bindings so the bundle stays small and shares
+  // the single Effect runtime instance embedded into the base WASM.
+  {
+    input: "src/Postgres/PgClient.ts",
+    output: {
+      file: "dist/postgres.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  // MySqlClient adapter. Same externalization as PgClient.
+  {
+    input: "src/Mysql/MySqlClient.ts",
+    output: {
+      file: "dist/mysql.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  // IgniteClient adapter. Same externalization. Deployed as an
+  // optional adapter — some Golem environments may not expose
+  // `golem:rdbms/ignite2@1.5.0`.
+  {
+    input: "src/Ignite/IgniteClient.ts",
+    output: {
+      file: "dist/ignite.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+])

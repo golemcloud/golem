@@ -1,0 +1,24 @@
+manifestVersion: 1.6.0
+
+app: scala-gol40-reflection-acceptance
+
+version: v0.0.0
+
+environments:
+  local:
+    server: local
+    version: v0.0.0
+    componentPresets: quick
+
+components:
+  scala-gol40-reflection-acceptance:fixture:
+    dir: .
+    templates: scala
+
+agents:
+  ScalaGol40ReflectionAcceptance:
+    tools:
+      scala-gol40-reflection-acceptance: {}
+
+tools:
+  scala-gol40-reflection-acceptance: {}

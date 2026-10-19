@@ -949,6 +949,13 @@ pub enum RetryPolicyState {
         attempts: u32,
         inner: Box<RetryPolicyState>,
     },
+    /// Preserves the elapsed-time origin and monotonic high-water mark for a retry sequence
+    /// whose policy contains a [`RetryPolicy::TimeBox`].
+    TimeBox {
+        started_at_millis: u64,
+        elapsed_millis: u64,
+        inner: Box<RetryPolicyState>,
+    },
     /// Tracks left/right sub-states and whether execution has moved to the right policy
     /// for [`RetryPolicy::AndThen`].
     AndThen {
@@ -968,6 +975,7 @@ impl RetryPolicyState {
             RetryPolicyState::Terminal => 0,
             RetryPolicyState::Wrapper(inner) => inner.retry_count(),
             RetryPolicyState::CountBox { attempts, .. } => *attempts,
+            RetryPolicyState::TimeBox { inner, .. } => inner.retry_count(),
             RetryPolicyState::AndThen {
                 left,
                 right,
@@ -1056,6 +1064,146 @@ pub enum RetryVerdict {
     GiveUp,
     /// An error occurred while evaluating the policy (e.g. missing property).
     Error(RetryEvaluationError),
+}
+
+// The state shape comes only from the trusted policy, never from guest bytes.
+// The wire payload is a flat list of integers in state traversal order.
+fn continuation_fields(
+    state: &mut RetryPolicyState,
+    field: &mut impl FnMut(u64) -> Result<u64, String>,
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<(), String> {
+    if depth >= 64 || *remaining == 0 {
+        return Err("Retry continuation exceeds the size/depth limit".into());
+    }
+    *remaining -= 1;
+    match state {
+        RetryPolicyState::Counter(n) => {
+            *n = field(u64::from(*n))?
+                .try_into()
+                .map_err(|_| "Invalid retry counter")?;
+        }
+        RetryPolicyState::Terminal => {}
+        RetryPolicyState::Wrapper(inner) => {
+            continuation_fields(inner, field, depth + 1, remaining)?;
+        }
+        RetryPolicyState::CountBox { attempts, inner } => {
+            *attempts = field(u64::from(*attempts))?
+                .try_into()
+                .map_err(|_| "Invalid retry counter")?;
+            continuation_fields(inner, field, depth + 1, remaining)?;
+        }
+        RetryPolicyState::TimeBox { .. } => {
+            return Err("Invalid retry continuation state shape".into());
+        }
+        RetryPolicyState::AndThen {
+            left,
+            right,
+            on_right,
+        } => {
+            *on_right = match field(u64::from(*on_right))? {
+                0 => false,
+                1 => true,
+                _ => return Err("Invalid retry continuation boolean".into()),
+            };
+            continuation_fields(left, field, depth + 1, remaining)?;
+            continuation_fields(right, field, depth + 1, remaining)?;
+        }
+        RetryPolicyState::Pair(left, right) => {
+            continuation_fields(left, field, depth + 1, remaining)?;
+            continuation_fields(right, field, depth + 1, remaining)?;
+        }
+    }
+    Ok(())
+}
+
+impl RetryPolicy {
+    /// Whether every possible retry path has a finite structural bound.
+    pub fn is_bounded(&self) -> bool {
+        match self {
+            Self::Never | Self::CountBox { .. } | Self::TimeBox { .. } => true,
+            Self::AndThen(l, r) | Self::Union(l, r) => l.is_bounded() && r.is_bounded(),
+            Self::Intersect(l, r) => l.is_bounded() || r.is_bounded(),
+            Self::Clamp { inner, .. }
+            | Self::AddDelay { inner, .. }
+            | Self::Jitter { inner, .. }
+            | Self::FilteredOn { inner, .. } => inner.is_bounded(),
+            _ => false,
+        }
+    }
+
+    /// Advances an opaque guest continuation exactly once through [`Self::step`].
+    pub fn next_retry_delay(
+        &self,
+        token: &[u8],
+        elapsed: Duration,
+        properties: &RetryProperties,
+        rng: &mut dyn RngSource,
+    ) -> Result<(Vec<u8>, Option<Duration>), String> {
+        let mut policy_bytes = Vec::new();
+        desert_rust::serialize(self, &mut policy_bytes).map_err(|e| e.to_string())?;
+        let mut previous_state = self.initial_state();
+        let mut field_count = 2;
+        continuation_fields(
+            &mut previous_state,
+            &mut |n| {
+                field_count += 1;
+                Ok(n)
+            },
+            0,
+            &mut 4096,
+        )?;
+        let mut previous_elapsed = Duration::ZERO;
+        if !token.is_empty() {
+            let payload = token
+                .strip_prefix(policy_bytes.as_slice())
+                .ok_or("Retry policy changed during continuation")?;
+            // At most one integer per node, plus seconds and nanoseconds. JSON's
+            // flat sequence decoder cannot construct recursive state or allocate
+            // from an attacker-supplied length prefix.
+            if payload.len() > field_count * 21 + 2 {
+                return Err("Retry continuation exceeds the size limit".into());
+            }
+            let fields: Vec<u64> = serde_json::from_slice(payload)
+                .map_err(|e| format!("Invalid retry continuation: {e}"))?;
+            let mut fields = fields.into_iter();
+            let mut next = |_| {
+                fields
+                    .next()
+                    .ok_or_else(|| "Truncated retry continuation".to_string())
+            };
+            let secs = next(0)?;
+            let nanos = next(0)?;
+            if nanos >= 1_000_000_000 {
+                return Err("Invalid retry continuation nanoseconds".into());
+            }
+            previous_elapsed = Duration::new(secs, nanos as u32);
+            continuation_fields(&mut previous_state, &mut next, 0, &mut 4096)?;
+            if fields.next().is_some() {
+                return Err("Trailing retry continuation fields".into());
+            }
+        }
+        let elapsed = elapsed.max(previous_elapsed);
+        let (mut state, verdict) = self.step(&previous_state, elapsed, properties, rng);
+        let delay = match verdict {
+            RetryVerdict::Retry(delay) => Some(delay),
+            RetryVerdict::GiveUp => None,
+            RetryVerdict::Error(error) => return Err(error.to_string()),
+        };
+        let mut fields = vec![elapsed.as_secs(), u64::from(elapsed.subsec_nanos())];
+        continuation_fields(
+            &mut state,
+            &mut |n| {
+                fields.push(n);
+                Ok(n)
+            },
+            0,
+            &mut 4096,
+        )?;
+        serde_json::to_writer(&mut policy_bytes, &fields).map_err(|e| e.to_string())?;
+        Ok((policy_bytes, delay))
+    }
 }
 
 /// Discriminant for [`PredicateValue`] types, used in coercion error messages.
@@ -1423,6 +1571,28 @@ impl Predicate {
 }
 
 impl RetryPolicy {
+    /// Returns whether this policy contains an elapsed-time budget.
+    pub fn contains_time_box(&self) -> bool {
+        match self {
+            RetryPolicy::TimeBox { .. } => true,
+            RetryPolicy::CountBox { inner, .. }
+            | RetryPolicy::Clamp { inner, .. }
+            | RetryPolicy::AddDelay { inner, .. }
+            | RetryPolicy::Jitter { inner, .. }
+            | RetryPolicy::FilteredOn { inner, .. } => inner.contains_time_box(),
+            RetryPolicy::AndThen(left, right)
+            | RetryPolicy::Union(left, right)
+            | RetryPolicy::Intersect(left, right) => {
+                left.contains_time_box() || right.contains_time_box()
+            }
+            RetryPolicy::Periodic(_)
+            | RetryPolicy::Exponential { .. }
+            | RetryPolicy::Fibonacci { .. }
+            | RetryPolicy::Immediate
+            | RetryPolicy::Never => false,
+        }
+    }
+
     /// Returns `true` if any nested predicate inside this policy explicitly references
     /// the given property name.
     ///
@@ -2805,6 +2975,198 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use test_r::test;
+
+    #[test]
+    fn continuation_rejects_untrusted_structures_and_lengths() {
+        let policy = RetryPolicy::Immediate;
+        let mut prefix = Vec::new();
+        desert_rust::serialize(&policy, &mut prefix).unwrap();
+        for payload in [
+            [vec![b'['; 10000], vec![b']'; 10000]].concat(),
+            vec![255; 32],
+            b"[0,0]".to_vec(),
+            b"[0,0,1".to_vec(),
+            b"[0,0,1]false".to_vec(),
+            b"[0,0,1,2]".to_vec(),
+            b"[0,0,4294967296]".to_vec(),
+            b"[0,1000000000,1]".to_vec(),
+            format!("[{}0]", "0,".repeat(10000)).into_bytes(),
+            vec![b' '; 100000],
+        ] {
+            let mut token = prefix.clone();
+            token.extend(payload);
+            assert!(
+                policy
+                    .next_retry_delay(
+                        &token,
+                        Duration::ZERO,
+                        &RetryProperties::new(),
+                        &mut FixedRng(0.0)
+                    )
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_roundtrips_maximum_policy_depth() {
+        let mut policy = RetryPolicy::Immediate;
+        for _ in 0..63 {
+            policy = RetryPolicy::TimeBox {
+                limit: Duration::from_secs(10),
+                inner: Box::new(policy),
+            };
+        }
+        let props = RetryProperties::new();
+        let mut rng = FixedRng(0.0);
+        let (token, _) = policy
+            .next_retry_delay(&[], Duration::ZERO, &props, &mut rng)
+            .unwrap();
+        assert_eq!(
+            policy
+                .next_retry_delay(&token, Duration::from_secs(1), &props, &mut rng)
+                .unwrap()
+                .1,
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn continuation_roundtrips_maximum_policy_nodes() {
+        let mut policy = RetryPolicy::Immediate;
+        for _ in 0..11 {
+            policy = RetryPolicy::Union(Box::new(policy.clone()), Box::new(policy));
+        }
+        let policy = RetryPolicy::CountBox {
+            max_retries: 3,
+            inner: Box::new(policy),
+        };
+        let props = RetryProperties::new();
+        let mut rng = FixedRng(0.0);
+        let (token, _) = policy
+            .next_retry_delay(&[], Duration::ZERO, &props, &mut rng)
+            .unwrap();
+        assert_eq!(
+            policy
+                .next_retry_delay(&token, Duration::ZERO, &props, &mut rng)
+                .unwrap()
+                .1,
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn continuation_preserves_exact_float_factors() {
+        let policy_with_factor = |factor| RetryPolicy::CountBox {
+            max_retries: 3,
+            inner: Box::new(RetryPolicy::Jitter {
+                factor,
+                inner: Box::new(RetryPolicy::Exponential {
+                    base_delay: Duration::from_millis(1),
+                    factor,
+                }),
+            }),
+        };
+        let policy = policy_with_factor(51.248178375505404);
+        let props = RetryProperties::new();
+        let mut rng = FixedRng(0.5);
+        let (state, _) = policy
+            .next_retry_delay(&[], Duration::ZERO, &props, &mut rng)
+            .unwrap();
+        let (state, delay) = policy
+            .next_retry_delay(&state, Duration::ZERO, &props, &mut rng)
+            .unwrap();
+        assert!(delay.is_some());
+        assert!(
+            policy_with_factor(51.24817837550541)
+                .next_retry_delay(&state, Duration::ZERO, &props, &mut rng)
+                .unwrap_err()
+                .contains("changed")
+        );
+    }
+
+    #[test]
+    fn continuation_preserves_nested_policy_and_elapsed_budget() {
+        let policy = RetryPolicy::AndThen(
+            Box::new(RetryPolicy::TimeBox {
+                limit: Duration::from_secs(5),
+                inner: Box::new(RetryPolicy::Immediate),
+            }),
+            Box::new(RetryPolicy::CountBox {
+                max_retries: 2,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(1))),
+            }),
+        );
+        let props = RetryProperties::new();
+        let mut rng = FixedRng(0.0);
+        let (state, delay) = policy
+            .next_retry_delay(&[], Duration::from_secs(4), &props, &mut rng)
+            .unwrap();
+        assert_eq!(delay, Some(Duration::ZERO));
+        let (state, delay) = policy
+            .next_retry_delay(&state, Duration::from_secs(5), &props, &mut rng)
+            .unwrap();
+        assert_eq!(delay, Some(Duration::from_secs(1)));
+        let (state, delay) = policy
+            .next_retry_delay(&state, Duration::ZERO, &props, &mut rng)
+            .unwrap();
+        assert_eq!(delay, Some(Duration::from_secs(1)));
+        assert_eq!(
+            policy
+                .next_retry_delay(&state, Duration::ZERO, &props, &mut rng)
+                .unwrap()
+                .1,
+            None
+        );
+        let changed = RetryPolicy::AndThen(
+            Box::new(RetryPolicy::TimeBox {
+                limit: Duration::from_secs(6),
+                inner: Box::new(RetryPolicy::Immediate),
+            }),
+            Box::new(RetryPolicy::CountBox {
+                max_retries: 2,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(1))),
+            }),
+        );
+        assert!(
+            changed
+                .next_retry_delay(&state, Duration::ZERO, &props, &mut rng)
+                .unwrap_err()
+                .contains("changed")
+        );
+        for changed in [
+            RetryPolicy::CountBox {
+                max_retries: 3,
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+            RetryPolicy::CountBox {
+                max_retries: 2,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+            },
+        ] {
+            let original = RetryPolicy::CountBox {
+                max_retries: 2,
+                inner: Box::new(RetryPolicy::Immediate),
+            };
+            let (token, _) = original
+                .next_retry_delay(&[], Duration::ZERO, &props, &mut rng)
+                .unwrap();
+            assert!(
+                changed
+                    .next_retry_delay(&token, Duration::ZERO, &props, &mut rng)
+                    .unwrap_err()
+                    .contains("changed")
+            );
+        }
+        assert!(policy.is_bounded());
+        assert!(
+            !RetryPolicy::Union(Box::new(policy.clone()), Box::new(RetryPolicy::Immediate))
+                .is_bounded()
+        );
+        assert!(
+            RetryPolicy::Intersect(Box::new(policy), Box::new(RetryPolicy::Immediate)).is_bounded()
+        );
+    }
 
     /// Counts how many `Retry` verdicts the policy issues before it gives up.
     fn count_retries(policy: &RetryPolicy) -> usize {

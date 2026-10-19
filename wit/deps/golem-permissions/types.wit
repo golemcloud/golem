@@ -56,12 +56,30 @@ interface types {
         card-revoked(string),
         card-expired(string),
         install-recipient-mismatch(string),
-        card-polymorphic-not-usable(string),
         unknown-resource-class(string),
         invalid-pattern(string),
         invalid-verb(string),
         invalid-owner(string),
         invalid-recipient(string),
+    }
+
+    /// A persistent derivation result, labelled with its kind.
+    variant persistent-card {
+        concrete(permission-card),
+        template(permission-card),
+    }
+
+    /// A card in the caller's wallet, labelled with its kind.
+    variant wallet-card {
+        /// A concrete card: every grant names concrete owners and resources.
+        concrete(permission-card),
+        /// A template card: its grants may contain slot variables (`?agent`,
+        /// `?env`, ...), which resolve for each holder.
+        template(permission-card),
+        /// The scope card lent to the current invocation. It can be inspected
+        /// and attached to awaited calls, and is retired at the end of the
+        /// invocation.
+        scope(permission-card),
     }
 
     // --- Card inspection ---
@@ -74,9 +92,7 @@ interface types {
     /// Parent card identifiers in the derivation DAG.
     parents: func(c: borrow<permission-card>) -> list<card-id>;
 
-    /// Expiry timestamp, if the card has a bounded lifespan.
+    /// Expiry timestamp, if the card has a bounded lifespan. For a scope card,
+    /// the earliest expiry of its root cards.
     expires-at: func(c: borrow<permission-card>) -> option<timestamp>;
-
-    /// `true` if the card is polymorphic (carries slot variables).
-    is-polymorphic: func(c: borrow<permission-card>) -> bool;
 }

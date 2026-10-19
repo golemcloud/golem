@@ -29,6 +29,7 @@ declare_structs! {
         pub component_limit: u64,
         pub worker_connection_limit: u64,
         pub storage_limit: u64,
+        pub blob_storage_limit: u64,
         pub monthly_gas_limit: u64,
         pub monthly_upload_limit: u64,
         pub max_memory_per_worker: u64,

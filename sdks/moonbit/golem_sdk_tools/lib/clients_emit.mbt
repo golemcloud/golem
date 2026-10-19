@@ -13,24 +13,112 @@
 // (see `value_types_emit.mbt` / `agents_emit.mbt`).
 
 ///|
-/// Checks if any constructor parameter uses an RPC-incompatible type.
-fn has_rpc_incompatible_constructor(agent : AgentInfo) -> Bool {
-  visible_params(agent.constructor_params)
-  .iter()
-  .find_first(fn(p) { is_rpc_incompatible_type(p.1) })
-  is Some(_)
+/// Checks whether a type contains an agent stream, resolving local value types
+/// recursively. `visited` is path-local so cycles terminate without hiding a
+/// stream reachable through a sibling field.
+fn param_type_contains_agent_stream(
+  pt : ParamType,
+  value_types : Map[String, ValueTypeInfo],
+  visited : Array[String],
+) -> Bool {
+  match pt {
+    Simple(name) => {
+      if visited.contains(name) {
+        return false
+      }
+      match value_types.get(name) {
+        Some(value_type) => {
+          let next_visited = visited.copy()
+          next_visited.push(name)
+          value_type_contains_agent_stream(
+            value_type, value_types, next_visited,
+          )
+        }
+        None => false
+      }
+    }
+    Optional(inner) | List(inner) | MultimodalType(inner) =>
+      param_type_contains_agent_stream(inner, value_types, visited)
+    ResultType(ok, err) =>
+      param_type_contains_agent_stream(ok, value_types, visited) ||
+      param_type_contains_agent_stream(err, value_types, visited)
+    Tuple(elems) =>
+      elems
+      .iter()
+      .any(fn(elem) {
+        param_type_contains_agent_stream(elem, value_types, visited)
+      })
+    Parameterized(name, params) =>
+      name == "AgentStream" ||
+      name == "@schema.AgentStream" ||
+      params
+      .iter()
+      .any(fn(param) {
+        param_type_contains_agent_stream(param, value_types, visited)
+      })
+  }
 }
 
 ///|
-/// Checks if any parameter or return type of a method uses an RPC-incompatible type.
-fn method_has_rpc_incompatible_types(meth : MethodInfo) -> Bool {
-  for p in visible_params(meth.params) {
-    if is_rpc_incompatible_type(p.1) {
+fn value_type_contains_agent_stream(
+  value_type : ValueTypeInfo,
+  value_types : Map[String, ValueTypeInfo],
+  visited : Array[String],
+) -> Bool {
+  match value_type.kind {
+    Record(fields) =>
+      fields
+      .iter()
+      .any(fn(field) {
+        param_type_contains_agent_stream(field.1, value_types, visited)
+      })
+    SimpleEnum(_) => false
+    VariantEnum(cases) =>
+      cases
+      .iter()
+      .any(fn(case) {
+        match case.1 {
+          VariantPayload::None => false
+          Single(payload) =>
+            param_type_contains_agent_stream(payload, value_types, visited)
+          Multi(fields, _) =>
+            fields
+            .iter()
+            .any(fn(field) {
+              param_type_contains_agent_stream(field.1, value_types, visited)
+            })
+        }
+      })
+  }
+}
+
+///|
+/// Returns the first client-visible constructor parameter containing a stream.
+fn stream_bearing_constructor_param(
+  agent : AgentInfo,
+  value_types : Map[String, ValueTypeInfo],
+) -> (String, ParamType)? {
+  for param in visible_params(agent.constructor_params) {
+    if param_type_contains_agent_stream(param.1, value_types, []) {
+      return Some(param)
+    }
+  }
+  None
+}
+
+///|
+/// Checks if any client-visible parameter or return type contains a stream.
+fn method_contains_agent_stream(
+  meth : MethodInfo,
+  value_types : Map[String, ValueTypeInfo],
+) -> Bool {
+  for param in visible_params(meth.params) {
+    if param_type_contains_agent_stream(param.1, value_types, []) {
       return true
     }
   }
   match meth.return_type {
-    Some(pt) => is_rpc_incompatible_type(pt)
+    Some(pt) => param_type_contains_agent_stream(pt, value_types, [])
     None => false
   }
 }
@@ -43,33 +131,80 @@ fn params_sig(params : Array[(String, ParamType)]) -> String {
 }
 
 ///|
-/// Renders the `@agents.encode_invocation_input([...])` expression that encodes
+/// Renders the `@agents.encode_wire_input([...])` expression that encodes
 /// the user-supplied parameters (in declared order) into a wire input record.
 fn encode_input_expr(params : Array[(String, ParamType)]) -> String {
-  let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
-  "@agents.encode_invocation_input([\{parts}])"
+  let parts = params.map(fn(p) { p.0 }).join(", ")
+  "@agents.encode_wire_input([\{parts}])"
 }
 
 ///|
 /// Renders the async input encoder used only by awaited RPC methods.
 fn encode_input_async_expr(params : Array[(String, ParamType)]) -> String {
-  let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
-  "@agents.encode_invocation_input_async([\{parts}])"
+  let parts = params.map(fn(p) { p.0 }).join(", ")
+  "@agents.encode_wire_input_async([\{parts}])"
+}
+
+///|
+/// The optional label of awaited client methods that attaches a scope card.
+const SCOPE_CARD_LABEL : String = "scope_card"
+
+///|
+/// The generated client method that sets the default scope card. An agent
+/// method with this name would produce a duplicate definition.
+const SET_DEFAULT_SCOPE_CARD : String = "set_default_scope_card"
+
+///|
+/// Renames a positional parameter named like the `scope_card` label to a name
+/// that no other parameter of the method uses. Positional parameters are not
+/// part of the call syntax, so renaming them does not affect callers.
+fn rename_scope_card_param(
+  params : Array[(String, ParamType)],
+) -> Array[(String, ParamType)] {
+  params.map(fn(p) {
+    if p.0 != SCOPE_CARD_LABEL {
+      return p
+    }
+    let mut candidate = SCOPE_CARD_LABEL + "_"
+    while params.iter().any(other => other.0 == candidate) {
+      candidate = candidate + "_"
+    }
+    (candidate, p.1)
+  })
 }
 
 ///|
 /// Generates typed RPC client stubs for all agents.
 pub fn generate_client_code(
   agents : Array[AgentInfo],
+  value_types? : Array[ValueTypeInfo] = [],
   config_types? : Array[ConfigTypeInfo] = [],
   agent_package? : String = "",
-) -> @list.List[@syntax.Impl] {
+) -> @list.List[@syntax.Impl] raise AgentParseError {
+  let value_types_by_name : Map[String, ValueTypeInfo] = Map([])
+  for value_type in value_types {
+    value_types_by_name[value_type.name] = value_type
+  }
   let buf = StringBuilder()
   for agent in agents {
-    if has_rpc_incompatible_constructor(agent) {
+    if agent.is_http_router() {
       continue
     }
-    emit_client(buf, agent, config_types, agent_package)
+    for meth in agent.methods {
+      if meth.name == SET_DEFAULT_SCOPE_CARD {
+        raise AgentParseError(
+          "Cannot generate native client for agent '\{agent.name}': method name '\{SET_DEFAULT_SCOPE_CARD}' is reserved for the generated client method that sets the default scope card",
+        )
+      }
+    }
+    match stream_bearing_constructor_param(agent, value_types_by_name) {
+      Some(param) =>
+        raise AgentParseError(
+          "Cannot generate native client for agent '\{agent.name}': constructor parameter '\{param.0}' contains AgentStream, but native client construction is synchronous; move the stream to an agent method parameter or return type",
+        )
+      None => ()
+    }
+    emit_client(buf, agent, value_types_by_name, config_types, agent_package)
   }
   let source = buf.to_string()
   if source.is_empty() {
@@ -83,6 +218,7 @@ pub fn generate_client_code(
 fn emit_client(
   buf : StringBuilder,
   agent : AgentInfo,
+  value_types : Map[String, ValueTypeInfo],
   config_types : Array[ConfigTypeInfo],
   agent_package : String,
 ) -> Unit {
@@ -123,18 +259,16 @@ fn emit_client(
     "  let client = @rpc.AgentClient::\{migration_ctor}(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
   )
   buf.write_string("  { client, }\n}\n\n")
-  // Explicit phantom identities are meaningful only for durable agents.
-  if durable {
-    buf.write_string("///|\n")
-    buf.write_string(
-      "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
-    )
-    buf.write_string("  let constructor_input = \{ctor_input}\n")
-    buf.write_string(
-      "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
-    )
-    buf.write_string("  { client, }\n}\n\n")
-  }
+  // Known phantom identities are valid for both durable and ephemeral agents.
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
   // get_agent_id
   if durable {
     buf.write_string("///|\n")
@@ -152,22 +286,23 @@ fn emit_client(
   buf.write_string(
     "pub fn \{client}::drop(self : \{client}) -> Unit {\n  self.client.drop()\n}\n\n",
   )
+  // default scope card for awaited invocations
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::\{SET_DEFAULT_SCOPE_CARD}(self : \{client}, card : @permissions.ScopeCard?) -> Unit {\n  self.client.set_default_scope_card(card)\n}\n\n",
+  )
   // scoped (durable only)
   if durable {
     emit_client_scoped(buf, client, "scoped", "get", vis, [])
   }
   emit_client_scoped(buf, client, "scoped_new_phantom", "new_phantom", vis, [])
-  if durable {
-    emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
-      ("phantom_id", "@types.Uuid"),
-    ])
-  }
+  emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
+    ("phantom_id", "@types.Uuid"),
+  ])
   // methods
   for meth in agent.methods {
-    if method_has_rpc_incompatible_types(meth) {
-      continue
-    }
-    emit_client_method(buf, agent, meth, client, durable)
+    let contains_stream = method_contains_agent_stream(meth, value_types)
+    emit_client_method(buf, agent, meth, client, durable, contains_stream)
   }
   // _with_config variants
   match resolve_config_type(agent, config_types, agent_package) {
@@ -230,16 +365,18 @@ fn emit_client_scoped(
 }
 
 ///|
-/// Emits the four per-method client functions: awaited invoke, fire-and-forget
-/// trigger, scheduled invoke, and cancelable scheduled invoke.
+/// Emits the awaited client method and, for stream-free signatures, the three
+/// synchronous trigger and scheduling variants.
 fn emit_client_method(
   buf : StringBuilder,
   agent : AgentInfo,
   meth : MethodInfo,
   client : String,
   durable : Bool,
+  contains_stream : Bool,
 ) -> Unit {
-  let vis = visible_params(meth.params)
+  // The awaited method takes a `scope_card?` label.
+  let vis = rename_scope_card_param(visible_params(meth.params))
   let ctx = escape_string_lit("\{agent.name}.\{meth.name}")
   let input_expr = encode_input_expr(vis)
   let awaited_input_expr = encode_input_async_expr(vis)
@@ -261,11 +398,14 @@ fn emit_client_method(
   // awaited invoke
   buf.write_string("///|\n")
   buf.write_string(
-    "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} {\n",
+    "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n  \{SCOPE_CARD_LABEL}? : @permissions.ScopeCard,\n) -> \{ret} {\n",
   )
+  // A dropped scope card aborts before the input encoding moves any argument
+  // card.
+  buf.write_string("  self.client.check_scope_card(\{SCOPE_CARD_LABEL}?)\n")
   buf.write_string("  let input = \{awaited_input_expr}\n")
   buf.write_string(
-    "  let response = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
+    "  let response = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input, \{SCOPE_CARD_LABEL}?)\n",
   )
   match meth.return_type {
     None =>
@@ -281,9 +421,9 @@ fn emit_client_method(
       buf.write_string("  match result {\n")
       buf.write_string(
         if durable {
-          "    Some(tree) => @agents.decode_output(tree, \"\{ctx}\")\n"
+          "    Some(tree) => @agents.decode_wire_output(tree, \"\{ctx}\")\n"
         } else {
-          "    Some(tree) => { metadata: response.metadata, value: @agents.decode_output(tree, \"\{ctx}\") }\n"
+          "    Some(tree) => { metadata: response.metadata, value: @agents.decode_wire_output(tree, \"\{ctx}\") }\n"
         },
       )
       buf.write_string(
@@ -293,6 +433,9 @@ fn emit_client_method(
     }
   }
   buf.write_string("}\n\n")
+  if contains_stream {
+    return
+  }
   // trigger
   buf.write_string("///|\n")
   buf.write_string(
@@ -368,18 +511,16 @@ fn emit_client_config_variants(
   )
   buf.write_string("  { client, }\n}\n\n")
   // get_phantom_with_config
-  if durable {
-    buf.write_string("///|\n")
-    buf.write_string(
-      "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
-    )
-    buf.write_string("  let constructor_input = \{ctor_input}\n")
-    buf.write_string("  let agent_config = \{walker}(config, [])\n")
-    buf.write_string(
-      "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
-    )
-    buf.write_string("  { client, }\n}\n\n")
-  }
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string("  let agent_config = \{walker}(config, [])\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
   // scoped variants
   if durable {
     emit_client_scoped_with_config(
@@ -401,17 +542,15 @@ fn emit_client_config_variants(
     [],
     override_name,
   )
-  if durable {
-    emit_client_scoped_with_config(
-      buf,
-      client,
-      "scoped_get_phantom_with_config",
-      "get_phantom_with_config",
-      vis,
-      [("phantom_id", "@types.Uuid")],
-      override_name,
-    )
-  }
+  emit_client_scoped_with_config(
+    buf,
+    client,
+    "scoped_get_phantom_with_config",
+    "get_phantom_with_config",
+    vis,
+    [("phantom_id", "@types.Uuid")],
+    override_name,
+  )
 }
 
 ///|

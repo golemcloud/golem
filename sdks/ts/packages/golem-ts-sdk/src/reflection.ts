@@ -1,0 +1,513 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import {
+  getAllAgentTypes as hostGetAllAgentTypes,
+  getAgentType as hostGetAgentType,
+  getAgentTypeByAgentId as hostGetAgentTypeByAgentId,
+  type CancelableScheduledInvocationReceipt,
+  type Datetime,
+  type InvocationMetadata,
+  type RegisteredAgentType,
+} from 'golem:agent/host@2.0.0';
+export {
+  DynamicToolClient,
+  ToolCommand,
+  ToolRemoteOutputError,
+  ToolType,
+  getAllToolTypes,
+  getToolType,
+  type ReflectedToolClient,
+  type ReflectedToolFailure,
+  type ToolArgument,
+} from './toolReflection';
+import type {
+  AgentMethod as HostAgentMethod,
+  InputSchema as HostInputSchema,
+  OutputSchema as HostOutputSchema,
+} from 'golem:agent/common@2.0.0';
+import type { SchemaGraph as WitSchemaGraph } from 'golem:core/types@2.0.0';
+import {
+  RemoteOutputError,
+  resolveRemoteAgentFallibly,
+  type AgentConfigEntry,
+  type RemoteAgentHandle,
+} from './bridge/agent';
+import {
+  field,
+  freezeSchemaGraph,
+  schemaShapesMatch,
+  schemaGraphRootsFromWit,
+  t,
+  type SchemaGraph,
+  type SchemaType,
+  type SchemaValue,
+} from './internal/schema-model';
+import { SchemaRef, type JsonValue } from './schema/ref';
+import { Uuid } from './uuid';
+import { ComponentId } from './ids';
+export { ComponentId } from './ids';
+import { ParsedAgentId, bindAgentClient, type AgentClientBindOptions } from './agentId';
+import type { ScopeCard } from './host/permissions';
+export {
+  DynamicAgentClient,
+  DynamicAgentMethod,
+  type DynamicAgentClientSurface,
+  type DynamicAgentMethodSurface,
+  type DynamicInvocation,
+} from './dynamicClient';
+
+export {
+  isRemoteCallError,
+  RemoteCallError,
+  RemoteOutputError,
+  type RemoteAgentError,
+  type RemoteCallErrorCause,
+} from './bridge/agent';
+
+export interface ReflectedInvocation<T> {
+  readonly metadata: InvocationMetadata;
+  readonly value?: T;
+}
+
+/** Canonical JSON values for declared local configuration paths. */
+export interface ReflectedConfigJsonEntry {
+  readonly path: readonly string[];
+  readonly value: JsonValue;
+}
+
+export class AgentMethod {
+  readonly name: string;
+  readonly description: string;
+  readonly promptHint?: string;
+  readonly input: SchemaRef;
+  readonly output?: SchemaRef;
+
+  constructor(raw: HostAgentMethod, graph: ReflectedGraph) {
+    this.name = raw.name;
+    this.description = raw.description;
+    this.promptHint = raw.promptHint;
+    this.input = inputSchemaRef(graph, raw.inputSchema);
+    this.output = outputSchemaRef(graph, raw.outputSchema);
+    Object.freeze(this);
+  }
+}
+
+export class AgentType {
+  readonly name: string;
+  readonly description: string;
+  readonly sourceLanguage: string;
+  readonly mode: 'durable' | 'ephemeral';
+  readonly implementedBy: ComponentId;
+  readonly constructorInput: SchemaRef;
+  readonly methods: readonly AgentMethod[];
+  readonly config: readonly {
+    readonly path: readonly string[];
+    readonly source: 'local' | 'secret';
+    readonly schema: SchemaRef;
+  }[];
+  readonly client: ReflectedAgentClientFactory;
+
+  constructor(registered: RegisteredAgentType) {
+    const raw = registered.agentType;
+    const graph = decodeReflectedGraph(raw.schema);
+    this.name = raw.typeName;
+    this.description = raw.description;
+    this.sourceLanguage = raw.sourceLanguage;
+    this.mode = raw.mode;
+    this.implementedBy = ComponentId.from(registered.implementedBy);
+    this.constructorInput = inputSchemaRef(graph, raw.constructor.inputSchema);
+    this.methods = Object.freeze(raw.methods.map((method) => new AgentMethod(method, graph)));
+    this.config = Object.freeze(
+      raw.config.map((decl) =>
+        Object.freeze({
+          path: Object.freeze([...decl.path]),
+          source: decl.source,
+          schema: SchemaRef.fromImmutableGraph(graph.graph, reflectedTypeAt(graph, decl.valueType)),
+        }),
+      ),
+    );
+    this.client = new ReflectedAgentClientFactory(this);
+    Object.freeze(this);
+  }
+
+  method(name: string): AgentMethod | undefined {
+    return this.methods.find((method) => method.name === name);
+  }
+
+  /** Construct an agent identity from canonical JSON constructor input. */
+  agentId(input: JsonValue, phantomId?: Uuid): ParsedAgentId {
+    return this.agentIdValue(this.constructorInput.packJson(input), phantomId);
+  }
+
+  /** Construct an agent identity from an already packed constructor value. */
+  agentIdValue(input: SchemaValue, phantomId?: Uuid): ParsedAgentId {
+    if (!this.constructorInput.validateValue(input).success) {
+      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
+    }
+    return ParsedAgentId.create({
+      typeName: this.name,
+      constructorValue: input,
+      phantomId,
+    });
+  }
+
+  [bindAgentClient](
+    agentId: ParsedAgentId,
+    config: readonly AgentConfigEntry[] = [],
+    options?: AgentClientBindOptions,
+  ): ReflectedAgentClient {
+    const parts = agentId.parts();
+    if (parts.typeName !== this.name) {
+      throw new TypeError(`Reflected agent type '${this.name}' cannot bind '${parts.typeName}'`);
+    }
+    if (this.mode === 'ephemeral') {
+      throw new TypeError(
+        `Cannot bind existing ParsedAgentId '${agentId.value}' to ephemeral agent type '${this.name}'; use agentType.client.newPhantom(...)`,
+      );
+    }
+    if (!this.constructorInput.validateValue(parts.constructorValue).success) {
+      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
+    }
+    return new ReflectedAgentClient(
+      this,
+      resolveRemoteAgentFallibly(
+        parts.typeName,
+        parts.constructorValue,
+        parts.phantomId,
+        this.validateConfigValues(config),
+        this.mode,
+      ),
+      options?.scopeCard,
+    );
+  }
+
+  /** Pack canonical JSON overrides for declared local config fields. */
+  packConfigJson(entries: readonly ReflectedConfigJsonEntry[]): AgentConfigEntry[] {
+    return entries.map((entry) => {
+      const declaration = this.configDeclaration(entry.path);
+      return {
+        path: [...entry.path],
+        value: {
+          graph: declaration.schema.graph,
+          value: declaration.schema.packJson(entry.value),
+        },
+      };
+    });
+  }
+
+  /** Validate schema-native overrides before opening an RPC. */
+  validateConfigValues(entries: readonly AgentConfigEntry[]): AgentConfigEntry[] {
+    return entries.map((entry) => {
+      const declaration = this.configDeclaration(entry.path);
+      if (!schemaShapesMatch(declaration.schema.graph, entry.value.graph)) {
+        throw new TypeError(`Incompatible config schema at '${entry.path.join('.')}'`);
+      }
+      if (!declaration.schema.validateValue(entry.value.value).success) {
+        throw new TypeError(`Invalid config value at '${entry.path.join('.')}'`);
+      }
+      return {
+        path: [...entry.path],
+        value: {
+          graph: declaration.schema.graph,
+          value: entry.value.value,
+        },
+      };
+    });
+  }
+
+  private configDeclaration(path: readonly string[]): (typeof this.config)[number] {
+    const declaration = this.config.find(
+      (candidate) =>
+        candidate.path.length === path.length &&
+        candidate.path.every((part, i) => part === path[i]),
+    );
+    if (!declaration) throw new TypeError(`Unknown config path '${path.join('.')}'`);
+    if (declaration.source === 'secret') {
+      throw new TypeError(`Cannot override secret config field '${path.join('.')}' over RPC`);
+    }
+    return declaration;
+  }
+}
+
+export interface ReflectedPhantomClient {
+  readonly agentId: ParsedAgentId;
+  readonly phantomId: Uuid;
+  readonly client: ReflectedAgentClient;
+}
+
+export class ReflectedAgentClientFactory {
+  constructor(private readonly agentType: AgentType) {}
+
+  get(input: JsonValue, config: readonly ReflectedConfigJsonEntry[] = []): ReflectedAgentClient {
+    this.requireMode('durable', 'get');
+    return this.create(
+      this.agentType.constructorInput.packJson(input),
+      undefined,
+      this.agentType.packConfigJson(config),
+    );
+  }
+
+  getValue(input: SchemaValue, config: readonly AgentConfigEntry[] = []): ReflectedAgentClient {
+    this.requireMode('durable', 'getValue');
+    return this.create(input, undefined, config);
+  }
+
+  getPhantom(
+    input: JsonValue,
+    phantomId: Uuid,
+    config: readonly ReflectedConfigJsonEntry[] = [],
+  ): ReflectedAgentClient {
+    return this.create(
+      this.agentType.constructorInput.packJson(input),
+      phantomId,
+      this.agentType.packConfigJson(config),
+    );
+  }
+
+  getPhantomValue(
+    input: SchemaValue,
+    phantomId: Uuid,
+    config: readonly AgentConfigEntry[] = [],
+  ): ReflectedAgentClient {
+    return this.create(input, phantomId, config);
+  }
+
+  newPhantom(
+    input: JsonValue,
+    config: readonly ReflectedConfigJsonEntry[] = [],
+  ): ReflectedPhantomClient | ReflectedAgentClient {
+    return this.newPhantomValue(
+      this.agentType.constructorInput.packJson(input),
+      this.agentType.packConfigJson(config),
+    );
+  }
+
+  newPhantomValue(
+    input: SchemaValue,
+    config: readonly AgentConfigEntry[] = [],
+  ): ReflectedPhantomClient | ReflectedAgentClient {
+    if (this.agentType.mode === 'ephemeral') return this.create(input, undefined, config);
+    const phantomId = Uuid.generate();
+    const agentId = this.agentType.agentIdValue(input, phantomId);
+    return {
+      agentId,
+      phantomId,
+      client: this.create(input, phantomId, config),
+    };
+  }
+
+  private create(
+    input: SchemaValue,
+    phantomId?: Uuid,
+    config: readonly AgentConfigEntry[] = [],
+  ): ReflectedAgentClient {
+    if (!this.agentType.constructorInput.validateValue(input).success) {
+      throw new TypeError(
+        `Invalid constructor value for reflected agent type '${this.agentType.name}'`,
+      );
+    }
+    return new ReflectedAgentClient(
+      this.agentType,
+      resolveRemoteAgentFallibly(
+        this.agentType.name,
+        input,
+        phantomId,
+        this.agentType.validateConfigValues(config),
+        this.agentType.mode,
+      ),
+    );
+  }
+
+  private requireMode(expected: AgentType['mode'], operation: string): void {
+    if (this.agentType.mode !== expected) {
+      throw new TypeError(`${operation} is not available for ${this.agentType.mode} agent types`);
+    }
+  }
+}
+
+export class ReflectedAgentClient {
+  constructor(
+    private readonly agentType: AgentType,
+    private readonly remote: RemoteAgentHandle,
+    private readonly scopeCard?: ScopeCard,
+  ) {}
+
+  method(name: string): ReflectedAgentMethod {
+    const method = this.agentType.method(name);
+    if (!method) throw new TypeError(`Agent type '${this.agentType.name}' has no method '${name}'`);
+    return new ReflectedAgentMethod(method, this.remote, this.scopeCard);
+  }
+}
+
+/**
+ * One method of a reflected agent. The awaited calls borrow `scopeCard` when it
+ * is given, and otherwise the client's default scope card; `null` sends none.
+ */
+export class ReflectedAgentMethod {
+  constructor(
+    public readonly definition: AgentMethod,
+    private readonly remote: RemoteAgentHandle,
+    private readonly defaultScopeCard?: ScopeCard,
+  ) {}
+
+  invoke(
+    input: JsonValue,
+    signal?: AbortSignal,
+    scopeCard?: ScopeCard | null,
+  ): Promise<ReflectedInvocation<JsonValue>> {
+    return this.invokeJson(input, signal, scopeCard);
+  }
+
+  async invokeJson(
+    input: JsonValue,
+    signal?: AbortSignal,
+    scopeCard?: ScopeCard | null,
+  ): Promise<ReflectedInvocation<JsonValue>> {
+    const result = await this.invokeValue(this.definition.input.packJson(input), signal, scopeCard);
+    try {
+      return {
+        metadata: result.metadata,
+        value:
+          result.value === undefined ? undefined : this.definition.output?.unpackJson(result.value),
+      };
+    } catch (error) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned invalid canonical JSON`,
+        { cause: error },
+      );
+    }
+  }
+
+  async invokeValue(
+    input: SchemaValue,
+    signal?: AbortSignal,
+    scopeCard?: ScopeCard | null,
+  ): Promise<ReflectedInvocation<SchemaValue>> {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
+    const result = await this.remote.invokeAndAwaitWithMetadata(
+      this.definition.name,
+      input,
+      signal,
+      scopeCard === null ? undefined : (scopeCard ?? this.defaultScopeCard),
+    );
+    if (this.definition.output !== undefined && result.value === undefined) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned no value for a non-unit output`,
+      );
+    }
+    if (this.definition.output === undefined && result.value !== undefined) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned a value for a unit output`,
+      );
+    }
+    if (this.definition.output !== undefined && result.value !== undefined) {
+      const validation = this.definition.output.validateValue(result.value);
+      if (!validation.success) {
+        throw new RemoteOutputError(
+          `Remote agent ${this.remote.agentId}.${this.definition.name} returned an invalid output: ${validation.issues.map((issue) => issue.message).join('; ')}`,
+        );
+      }
+    }
+    return result;
+  }
+
+  trigger(input: JsonValue): InvocationMetadata {
+    return this.triggerValue(this.definition.input.packJson(input));
+  }
+
+  triggerValue(input: SchemaValue): InvocationMetadata {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
+    return this.remote.invokeWithMetadata(this.definition.name, input);
+  }
+
+  schedule(at: Datetime, input: JsonValue): CancelableScheduledInvocationReceipt {
+    return this.scheduleValue(at, this.definition.input.packJson(input));
+  }
+
+  scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
+    return this.remote.scheduleCancelableWithMetadata(at, this.definition.name, input);
+  }
+}
+
+export function getAllAgentTypes(): readonly AgentType[] {
+  return Object.freeze(
+    hostGetAllAgentTypes()
+      .filter((registered) => registered.agentType.kind === 'regular')
+      .map((registered) => new AgentType(registered)),
+  );
+}
+
+/**
+ * Look up a deployed agent type by name.
+ *
+ * This is an optional discovery operation: it returns `undefined` for routers or types not visible in
+ * the current environment. Once returned, each schema operation is strict and throws for malformed
+ * JSON or schema values.
+ */
+export function getAgentType(name: string): AgentType | undefined {
+  const registered = hostGetAgentType(name);
+  return registered?.agentType.kind === 'regular' ? new AgentType(registered) : undefined;
+}
+
+/**
+ * Look up the current deployed schema for a full environment-scoped identity.
+ *
+ * Returns `undefined` for routers, or when the agent does not exist, its ID is malformed, its type is missing, or
+ * the caller lacks `View` permission. Use {@link ParsedAgentId.parsed} when strict identity parsing is
+ * required independently of discovery.
+ */
+export function getAgentTypeByAgentId(agentId: ParsedAgentId): AgentType | undefined {
+  const registered = hostGetAgentTypeByAgentId(agentId.value);
+  return registered?.agentType.kind === 'regular' ? new AgentType(registered) : undefined;
+}
+
+interface ReflectedGraph {
+  readonly graph: SchemaGraph;
+  readonly types: readonly SchemaType[];
+}
+
+function decodeReflectedGraph(graph: WitSchemaGraph): ReflectedGraph {
+  const indices = graph.typeNodes.map((_, index) => index);
+  const decoded = schemaGraphRootsFromWit(graph, indices);
+  const shared = freezeSchemaGraph({ defs: decoded.defs, root: t.tuple([...decoded.roots]) });
+  return { graph: shared, types: decoded.roots };
+}
+
+function inputSchemaRef(graph: ReflectedGraph, input: HostInputSchema): SchemaRef {
+  const fields = input.val
+    .filter((entry) => entry.source.tag === 'user-supplied')
+    .map((entry) => field(entry.name, reflectedTypeAt(graph, entry.schema), entry.metadata));
+  return SchemaRef.fromImmutableGraph(graph.graph, t.record(fields));
+}
+
+function outputSchemaRef(graph: ReflectedGraph, output: HostOutputSchema): SchemaRef | undefined {
+  if (output.tag === 'unit') return undefined;
+  return SchemaRef.fromImmutableGraph(graph.graph, reflectedTypeAt(graph, output.val));
+}
+
+function reflectedTypeAt(graph: ReflectedGraph, index: number): SchemaType {
+  const type = graph.types[index];
+  if (type === undefined) {
+    throw new TypeError(`reflected schema type node index out of range: ${index}`);
+  }
+  return type;
+}

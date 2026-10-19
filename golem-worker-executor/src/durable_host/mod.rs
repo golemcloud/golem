@@ -20,49 +20,128 @@ pub mod blobstore;
 mod call_coordinator;
 mod cli;
 mod clocks;
-mod concurrent;
+pub(crate) mod concurrent;
 mod config;
 pub mod durability;
-pub(crate) mod durable_session;
-pub(crate) mod durable_stream;
+pub mod durable_session;
+pub mod durable_stream;
 pub mod entity;
+pub mod external_durable_stream;
 pub mod golem;
 pub mod http;
+mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
 pub mod p3;
-mod permissions;
+pub(crate) mod permissions;
 pub mod quota;
 mod random;
 pub mod rdbms;
+pub(crate) mod replay_application;
 pub(crate) mod replay_state;
-pub(crate) mod schema_value_stream;
+#[cfg(feature = "test-utils")]
+pub struct TestEntityBoundaryClaim(pub(crate) concurrent::ReplayCallHandle);
+#[cfg(feature = "test-utils")]
+impl TestEntityBoundaryClaim {
+    pub fn start_idx(&self) -> OplogIndex {
+        self.0.start_idx()
+    }
+}
+#[cfg(feature = "test-utils")]
+pub use replay_state::ReplayEvent as TestReplayEvent;
+pub(crate) mod revision_update;
+pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
 mod sockets;
-pub(crate) mod stream_bus;
-pub(crate) mod stream_session;
-pub(crate) mod stream_transport;
+pub mod stream_bus;
+pub mod stream_session;
+pub mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;
 pub mod tool;
 pub mod wasm_rpc;
 pub mod websocket;
 
-use self::golem::v1x::GetPromiseResultEntry;
+tokio::task_local! {
+    static ENTITY_CANCELLATION_MASKED: ();
+}
+
+/// The per-call quota an outbound durable call is charged against: the per-invocation call
+/// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaClass {
+    Http,
+    Rpc,
+}
+
+impl QuotaClass {
+    /// The quota class a recorded durable call is charged against, or `None` when calls of this
+    /// kind are not quota-charged. This is the single mapping from recorded call kind to quota:
+    /// the charging sites name their class directly, and the replay cursor uses this to report
+    /// which classes still have an unclaimed retained `Start` waiting for its owner (see
+    /// `WorkerState::durable_call_is_fresh`), so the two must agree on the recorded kinds.
+    ///
+    pub(crate) fn of_recorded_call(function_name: &HostFunctionName) -> Option<Self> {
+        match function_name {
+            HostFunctionName::P3HttpClientSend
+            | HostFunctionName::McpToolCall
+            | HostFunctionName::GolemAgentDurableStreamReaderRead
+            | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
+            HostFunctionName::GolemRpcWasmRpcInvoke
+            | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Output {
+    ENTITY_CANCELLATION_MASKED.scope((), future).await
+}
+
+/// How a refused write of the failure of an invocation, or of the status after it, ends that
+/// invocation. A refusal of the agent's own oplog takes the classification of its agent error:
+/// `OplogFailed` is terminal, and `RecoveryRequired` is an infrastructure recovery.
+#[derive(Debug)]
+pub(crate) enum TerminalEntryRefusal {
+    /// The oplog failed for good: an archive layer did not store it, or it does not read. The
+    /// invocation fails with its trap, and the agent stops with this error.
+    OplogFailed(WorkerExecutorError),
+    /// The oplog storage did not answer. The agent recovers with this error, and the invocation
+    /// stays pending.
+    RecoveryRequired(WorkerExecutorError),
+    /// A fence, or a refusal that says nothing of the oplog. Nothing is published: after a fence,
+    /// the new owner of the shard runs the invocation.
+    Unpublished,
+}
+
+pub(crate) fn terminal_entry_refusal(
+    error: &crate::services::oplog::OplogError,
+) -> TerminalEntryRefusal {
+    match error.agent_failure() {
+        Some(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
+            TerminalEntryRefusal::RecoveryRequired(error)
+        }
+        Some(error) => TerminalEntryRefusal::OplogFailed(error),
+        None => TerminalEntryRefusal::Unpublished,
+    }
+}
+
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::durable_host::replay_state::{
+    ReplayStartClaimOutcome, ReplayState, ReplayToLiveOutcome, ReplayToLiveRole, StartClaim,
+};
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, SnapshotSource,
-    TrapType,
+    AgentConfig, ExecutionStatus, HydratedUpdate, InvocationContext, LastError,
+    SnapshotReplayPurpose, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
-use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
+use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -76,7 +155,10 @@ use crate::services::key_value::KeyValueService;
 use crate::services::linear_memory::{
     LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR, UnsharedMemoryGrowth,
 };
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogError, OplogOps, OplogPayloadDownloadError, OplogService,
+    UnreadableOplog,
+};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
@@ -94,16 +176,20 @@ use crate::services::{
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_filesystem::AgentDescriptor;
 use crate::wasi_host;
-use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
+use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
-use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, calculate_pending_card_events,
+use crate::worker::owner_wallet::{
+    AuthorityScopeInputs, CardEventBoundary, OwnerAuthoritySnapshot, WalletCards, WalletSnapshot,
 };
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::start_outcome::{self, BaselineRole, SnapshotRecoveryResult};
+use crate::worker::status::{StatusError, calculate_last_known_status_with_checkpoint};
+use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
     InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
@@ -112,43 +198,47 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-pub(crate) use concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
-};
+pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
-use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
+use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{
+    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
 };
 use golem_common::model::component::{CanonicalFilePath, ComponentId, ComponentRevision};
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    AgentEntity, EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 #[cfg(test)]
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+    InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
-use golem_common::model::oplog::{
-    AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
+use golem_common::model::oplog::payload::types::{
+    SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
+    SerializableWebsocketReconstructionPolicy,
 };
-use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::oplog::{
+    AgentError, AgentResourceId, DurableFunctionType, DurableInvocationId, LogLevel, OplogEntry,
+    OplogErrorKind, OplogIndex, RawSnapshotData, SnapshotAssistedUpdateDetails, UpdateDescription,
+};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingCardEventRef, RetryContext, RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
+    PendingCardEventRef, PendingUpdateRef, RetryContext, RetryVerdict, ScanCursor, ScheduledAction,
+    Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
-use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -158,17 +248,15 @@ use golem_service_base::model::{
 };
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
-use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
-use tokio::sync::RwLock as TRwLock;
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -179,12 +267,6 @@ use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
-};
-use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
-use wasmtime_wasi_http::p2::{
-    BodyCompletionReceiver, HttpResult, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
-    default_send_request_with_pool,
 };
 use wasmtime_wasi_http::p3::RequestOptions;
 use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
@@ -202,42 +284,6 @@ pub struct DurableHttpHooks {
     /// between live and replay modes. When `true`, outgoing HTTP requests are
     /// deferred so that they can be replayed from the oplog instead.
     pub is_replay: Arc<AtomicBool>,
-}
-
-impl WasiHttpHooks for DurableHttpHooks {
-    fn send_request(
-        &mut self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-        body_completion: Option<BodyCompletionReceiver>,
-    ) -> HttpResult<HostFutureIncomingResponse> {
-        let connection_pool = self.connection_pool.clone();
-        if self.is_replay.load(Ordering::Acquire) {
-            // If this is a replay, we must not actually send the request, but we have to store it in the
-            // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
-            // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
-            // or poll the response future.
-            Ok(HostFutureIncomingResponse::deferred(Box::new(move || {
-                Ok(default_send_request_with_pool(
-                    request,
-                    config,
-                    body_completion,
-                    connection_pool,
-                ))
-            })))
-        } else {
-            Ok(default_send_request_with_pool(
-                request,
-                config,
-                body_completion,
-                connection_pool,
-            ))
-        }
-    }
-
-    fn connection_pool(&self) -> Option<&HttpConnectionPool> {
-        self.connection_pool.as_ref()
-    }
 }
 
 impl wasmtime_wasi_http::p3::WasiHttpHooks for DurableHttpHooks {
@@ -312,6 +358,32 @@ pub(crate) fn agent_effective_surface_from_component_metadata(
     Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
 }
 
+pub(crate) fn owner_effective_surface_from_component_metadata(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            let card = StoredCard::Polymorphic(
+                component
+                    .metadata
+                    .component_provision_config()
+                    .initial_permissions
+                    .clone(),
+            );
+            Ok(component_baseline_effective_surface_from_wallet(
+                component,
+                owned_agent_id,
+                [&card],
+            ))
+        }
+    }
+}
+
 pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
@@ -323,11 +395,52 @@ pub(crate) fn agent_monomorphization_context(
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
         agent_name: owned_agent_id.agent_id.agent_id.clone(),
-        agent_type: agent_id.agent_type.clone(),
+        owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+            agent_id.agent_type.clone(),
+        ),
     }
 }
 
-fn agent_initial_card_from_component_metadata(
+fn component_baseline_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    golem_common::model::card::AgentPermissionMonomorphizationContext {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        owner:
+            golem_common::model::card::recipient::RecipientOwnerContext::ComponentExternalToolOwner,
+    }
+}
+
+pub(crate) fn owner_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_monomorphization_context(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            component_baseline_monomorphization_context(component, owned_agent_id)
+        }
+    }
+}
+
+fn component_baseline_effective_surface_from_wallet<'a>(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    cards: impl IntoIterator<Item = &'a StoredCard>,
+) -> golem_common::model::card::EffectiveSurface {
+    let context = component_baseline_monomorphization_context(component, owned_agent_id);
+    golem_common::model::card::agent_effective_surface_from_wallet(&context, cards)
+}
+
+pub(crate) fn agent_initial_card_from_component_metadata(
     component: &Component,
     agent_id: &ParsedAgentId,
 ) -> Result<StoredCard, WorkerExecutorError> {
@@ -359,11 +472,20 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
     runtime: OwnerRuntime,
+    executable: crate::workerctx::WorkerCtxExecutable,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
+    entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
+    entity_cancellation: Option<tokio_util::sync::CancellationToken>,
+    producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     primary_invocation_start_index: Option<OplogIndex>,
+    invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
+    pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     _owner_resources: Arc<OwnerRuntimeResources>,
+    entity_reconstruction_claim_hook:
+        Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
+    replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     filesystem_generation_handle: FilesystemGenerationHandle,
@@ -385,14 +507,19 @@ pub(crate) struct PrimaryInvocationBody {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
+        self.begin_stream_runtime_teardown();
         self.linear_memory.clear_limit_exceeded_callback();
     }
 }
 
 impl PrimaryInvocationBody {
-    pub(crate) async fn complete(mut self) {
+    pub(crate) fn invocation(&self) -> Option<&crate::worker::owner_lane::OwnerInvocationId> {
+        self.permit.as_ref().map(OwnerInvocationPermit::invocation)
+    }
+
+    pub(crate) fn complete(mut self) {
         if let Some(permit) = self.permit.take() {
-            permit.complete_and_wait().await;
+            permit.complete();
         }
     }
 }
@@ -605,6 +732,122 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    #[cfg(feature = "test-utils")]
+    pub fn test_stage_replay_applications(
+        &mut self,
+        events: Vec<TestReplayEvent>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.state.replay_state.test_stage_replay_events(events);
+        replay_application::reserve(self)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn test_replay_application_state(&self) -> (Vec<(usize, bool)>, u64, u64, bool) {
+        use futures::FutureExt;
+        (
+            self.state
+                .replay_applications
+                .iter()
+                .map(|application| {
+                    (
+                        Arc::as_ptr(application) as usize,
+                        application.result.clone().now_or_never().is_some(),
+                    )
+                })
+                .collect(),
+            self.state.wallet_generation,
+            self.state.owner_wallet.snapshot().generation,
+            self.state.owner_wallet.validate_current().is_ok(),
+        )
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn test_set_historical_wallet_generation(&mut self, generation: u64) {
+        assert!(self.state.replay_applications.is_empty());
+        self.state.wallet_generation = generation;
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn test_refuse_next_metadata_admission(&self) {
+        self.public_state
+            .worker()
+            .tasks
+            .test_refuse_next_metadata_admission();
+    }
+
+    pub(crate) fn suspension_policy(
+        &self,
+    ) -> Option<(
+        WakeupScheduler,
+        crate::services::golem_config::SuspendConfig,
+    )> {
+        (self.agent_mode() == AgentMode::Durable).then(|| {
+            (
+                self.state.wakeup_scheduler(),
+                self.state.config.suspend.clone(),
+            )
+        })
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn test_install_entity_tool_operation(
+        &mut self,
+        parent: OwnerInvocationId,
+        call_mode: crate::worker::owner_lane::EntityCallMode,
+    ) -> Result<(), WorkerExecutorError> {
+        let scope = self.entity_invocation_scope().cloned().ok_or_else(|| {
+            WorkerExecutorError::runtime("Entity invocation scope is not installed")
+        })?;
+        let operation = self.owner_execution.tool_operations().create(
+            tool::operation::OwnerToolOperationContext {
+                parent,
+                call_mode,
+                activation: scope.activation().clone(),
+                principal: self.invocation_principal(),
+                descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
+                    golem_common::model::entity::ToolInvocationDescriptor {
+                        attempt_ordinal: 0,
+                        command_path: Vec::new(),
+                        args: Vec::new(),
+                        has_stdin: false,
+                        has_stdout: false,
+                        declares_stdout: false,
+                        has_stderr: false,
+                        declares_stderr: false,
+                        output_contract: golem_common::model::entity::ToolOutputContract {
+                            result: None,
+                            errors: Vec::new(),
+                        },
+                    },
+                ),
+                input: golem_common::schema::TypedSchemaValue::new(
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::tuple(Vec::new()),
+                    ),
+                    golem_common::schema::SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+            },
+        );
+        let operation = operation
+            .accept(scope.invocation_id().clone())
+            .ok_or_else(|| WorkerExecutorError::runtime("Tool operation registration failed"))?;
+        self.set_entity_tool_operation(operation)
+    }
+
+    pub(crate) fn entity_reconstruction_claim_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>> {
+        self.entity_reconstruction_claim_hook.clone()
+    }
+
+    pub(crate) fn replay_admission_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>> {
+        self.replay_admission_hook.clone()
+    }
+
     pub(crate) fn is_live(&self) -> bool {
         self.state.is_live()
     }
@@ -700,7 +943,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -732,21 +975,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: websocket::WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
+        entity_reconstruction_claim_hook: Option<
+            Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
+        >,
+        replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         let crate::workerctx::WorkerFilesystemContext {
             generation_handle: filesystem_generation_handle,
             preopen: filesystem_preopen,
         } = filesystem;
+        if matches!(runtime, OwnerRuntime::Agent) != entity_execution_mode.is_none() {
+            return Err(WorkerExecutorError::runtime(
+                "Entity execution mode must be supplied exactly for entity Stores",
+            ));
+        }
         if runtime == OwnerRuntime::Agent && filesystem_capability != FilesystemCapability::Capable
         {
             return Err(WorkerExecutorError::runtime(
@@ -755,25 +1008,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         debug!(
-            "Worker {} initialized with deleted regions {}",
-            owned_agent_id.agent_id, worker_config.deleted_regions
+            "Worker {} initialized with skipped regions {}",
+            owned_agent_id.agent_id, worker_config.skipped_regions
         );
 
         debug!(
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-        if executable_component.revision != worker_config.component_revision_for_replay {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Executable component revision {} does not match context revision {}",
-                executable_component.revision, worker_config.component_revision_for_replay
-            )));
-        }
-        if runtime == OwnerRuntime::Agent
-            && executable_component.id != owned_agent_id.component_id()
-        {
+        if let crate::workerctx::WorkerCtxExecutable::Component(component) = &executable {
+            if component.revision != worker_config.component_revision_for_replay {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Executable component revision {} does not match context revision {}",
+                    component.revision, worker_config.component_revision_for_replay
+                )));
+            }
+            if runtime == OwnerRuntime::Agent && component.id != owned_agent_id.component_id() {
+                return Err(WorkerExecutorError::runtime(
+                    "Primary Store executable must be the owner component",
+                ));
+            }
+        } else if runtime == OwnerRuntime::Agent {
             return Err(WorkerExecutorError::runtime(
-                "Primary Store executable must be the owner component",
+                "Primary Store requires a component executable",
             ));
         }
         match (&runtime, &entity_activation) {
@@ -796,6 +1053,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
+        match (&executable, entity_activation.as_deref()) {
+            (crate::workerctx::WorkerCtxExecutable::Component(component), Some(activation))
+                if activation.executable_opt().is_some_and(|target| {
+                    target.component_id == component.id
+                        && target.component_revision == component.revision
+                }) => {}
+            (
+                crate::workerctx::WorkerCtxExecutable::Native {
+                    host_tool_id,
+                    implementation_version,
+                },
+                Some(activation),
+            ) if matches!(
+                activation.source(),
+                golem_common::model::entity::EntityActivationSource::Host {
+                    host_tool_id: expected_id,
+                    implementation_version: expected_version,
+                } if expected_id == host_tool_id && expected_version == implementation_version
+            ) => {}
+            (crate::workerctx::WorkerCtxExecutable::Component(_), None)
+                if runtime == OwnerRuntime::Agent => {}
+            _ => {
+                return Err(WorkerExecutorError::runtime(
+                    "Context executable does not match its validated activation source",
+                ));
+            }
+        }
         match (&runtime, &worker_config.owner_component_metadata) {
             (OwnerRuntime::Agent, None) | (OwnerRuntime::Entity(_), Some(_)) => {}
             (OwnerRuntime::Agent, Some(_)) => {
@@ -809,16 +1093,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
-        let component_metadata = executable_component;
+        let component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => {
+                component.as_ref().clone()
+            }
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => worker_config
+                .owner_component_metadata
+                .as_deref()
+                .expect("native entity Store has owner component metadata")
+                .clone(),
+        };
 
-        if component_metadata.metadata.has_shared_linear_memory() {
+        let executable_component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        };
+        if executable_component_metadata
+            .is_some_and(|component| component.metadata.has_shared_linear_memory())
+        {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
                 SHARED_LINEAR_MEMORY_ERROR,
             ));
         }
 
-        let initial_linear_memory = component_metadata.metadata.initial_linear_memory_bytes();
+        let initial_linear_memory = executable_component_metadata
+            .map(|component| component.metadata.initial_linear_memory_bytes())
+            .unwrap_or(0);
         if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
@@ -830,7 +1131,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let agent_type_provision_configs = match &runtime {
-            OwnerRuntime::Agent => agent_id.as_ref().and_then(|agent_id| {
+            OwnerRuntime::Agent => owner_context.agent().and_then(|agent_id| {
                 component_metadata
                     .metadata
                     .agent_type_provision_configs()
@@ -839,24 +1140,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }),
             OwnerRuntime::Entity(_) => None,
         };
-        let agent_config = if agent_id.is_some() {
-            effective_agent_config(
-                worker_config.initial_agent_config.clone(),
-                agent_type_provision_configs
+        let agent_config = if matches!(runtime, OwnerRuntime::Agent) {
+            let provisioned_config = match &owner_context {
+                ResolvedOwnerContext::Agent(_) => agent_type_provision_configs
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                    component_metadata
+                        .metadata
+                        .component_provision_config()
+                        .config
+                        .clone()
+                }
+            };
+            effective_agent_config(
+                worker_config.initial_agent_config.clone(),
+                provisioned_config,
             )?
         } else {
-            HashMap::new()
+            worker_config
+                .initial_agent_config
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.value.clone()))
+                .collect()
         };
 
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
         let suspend_threshold = match execution_status.read().unwrap().agent_mode() {
-            AgentMode::Durable => config.suspend.suspend_after,
-            AgentMode::Ephemeral => config.suspend.ephemeral_max_sleep,
+            AgentMode::Durable => None,
+            AgentMode::Ephemeral => Some(config.suspend.ephemeral_max_sleep),
         };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
@@ -865,6 +1180,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             suspend_threshold,
+            config.agent_sockets.enabled,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let mut wasi_http = WasiHttpCtx::new();
@@ -873,33 +1189,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let deleted_regions = if let Some(snapshot_idx) = worker_config.last_snapshot_index {
-            let mut regions = worker_config.deleted_regions.clone();
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            regions.set_override(snapshot_skip);
-            regions
-        } else {
-            worker_config.deleted_regions.clone()
-        };
-        let replay_state = match &runtime {
-            OwnerRuntime::Agent => {
-                owner_execution
-                    .begin_replay_generation(deleted_regions, worker_config.last_snapshot_index)
-                    .await?
-            }
-            OwnerRuntime::Entity(_) => owner_execution.replay().await?,
-        };
+        let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
         let worker = invocation_queue
             .upgrade()
             .expect("worker must remain alive while creating its context");
-        let card_event_boundary_lock = worker.card_event_boundary_lock();
         let published_authority_generation = worker.published_authority_generation();
+        let tail_work = match &runtime {
+            OwnerRuntime::Agent => owner_execution.primary_tail_work_tracker(),
+            OwnerRuntime::Entity(_) => tail_work::TailWorkTracker::new(),
+        };
         let state = PrivateDurableWorkerState::new(
-            agent_id,
+            owner_context,
             oplog_service,
             oplog.clone(),
             promise_service.clone(),
@@ -921,25 +1221,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             rpc,
             worker_proxy,
             replay_state,
+            owner_wallet,
             runtime.clone(),
+            entity_execution_mode,
+            tail_work,
             component_metadata,
             worker_config.owner_component_metadata,
-            worker_config.agent_effective_surface,
             worker_fork,
             file_loader,
             worker_config.created_by,
             worker_config.created_by_email,
             worker_config.initial_agent_config,
             agent_config,
+            worker_config.authority_wallet,
+            worker_config.entity_start_index,
             shard_service,
             pending_update,
             original_phantom_id,
-            worker_config.last_snapshot_index,
-            worker_config.last_snapshot_source,
+            worker_config.replay.snapshot.map(|(index, _)| index),
+            worker_config.replay.role.clone(),
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
-            card_event_boundary_lock,
             published_authority_generation,
         )
         .await?;
@@ -964,11 +1267,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             runtime,
+            executable,
             filesystem: filesystem_capability,
             entity_invocation_scope: None,
+            entity_tool_operation: None,
+            entity_cancellation: None,
+            producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
+                &worker.tasks,
+            )?),
             primary_invocation_start_index: None,
+            invocation_principal: None,
             owner_execution,
+            runtime_suspension: None,
             _owner_resources: owner_resources,
+            entity_reconstruction_claim_hook,
+            replay_admission_hook,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -1012,13 +1325,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.reset_invocation_call_counts();
     }
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call against the monthly account quota when it is fresh live
+    /// work (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
     /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
     /// suspended and resumed when the registry replenishes the budget.
     pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
+        if self.state.durable_call_is_fresh(QuotaClass::Http)
+            && !self.state.resource_limit_entry.record_http_call()
+        {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
             ))
@@ -1027,12 +1343,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call against the monthly account quota when it is fresh live work
+    /// (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
     /// is exhausted.
     pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        if self.state.is_live() && !self.state.resource_limit_entry.record_rpc_call() {
+        if self.state.durable_call_is_fresh(QuotaClass::Rpc)
+            && !self.state.resource_limit_entry.record_rpc_call()
+        {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
             ))
@@ -1116,6 +1435,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (OwnerRuntime::Agent, _, Some(_)) => Err(WorkerExecutorError::runtime(
                 "Cannot install an entity invocation scope in the primary Store",
             )),
+            (OwnerRuntime::Agent, _, None) => Ok(()),
             (OwnerRuntime::Entity(_), Some(_), Some(_)) => Err(WorkerExecutorError::runtime(
                 "Entity invocation scope is already installed",
             )),
@@ -1123,6 +1443,58 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "Entity invocation scope is not installed",
             )),
             _ => {
+                if let Some(scope) = &scope {
+                    if let Some(started) = scope.span_started() {
+                        let span = InvocationContextSpan::local()
+                            .with_span_id(started.span_id.clone())
+                            .with_start(started.started_at)
+                            .parent(started.parent_span_id.as_ref().map(|span_id| {
+                                InvocationContextSpan::external_parent(span_id.clone())
+                            }))
+                            .with_attributes(started.attributes.0.clone())
+                            .build();
+                        let stack = InvocationContextStack::new(
+                            started.trace_id.clone(),
+                            span,
+                            started.trace_states.clone(),
+                        )
+                        .limit_depth(self.state.config.limits.max_invocation_context_stack_depth);
+                        let (context, current_span_id) = InvocationContext::from_stack(stack)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        self.state.invocation_context.switch_to(context);
+                        self.state.current_span_id = current_span_id;
+                    }
+                    self.state
+                        .set_current_idempotency_key(scope.idempotency_key().clone());
+                    self.state.entity_logical_key_position =
+                        scope.logical_key_positions().then_some(OplogIndex::INITIAL);
+                } else {
+                    self.state.current_idempotency_key = None;
+                    self.state.entity_logical_key_position = None;
+                }
+                self.state.inherited_invocation_scope = scope
+                    .as_ref()
+                    .and_then(EntityInvocationScope::invocation_scope_card)
+                    .cloned()
+                    .map(InheritedInvocationScope::unchecked);
+                if let Some(scope) = &scope {
+                    let roots = scope
+                        .invocation_scope_card()
+                        .map(|card| card.root_card_ids.as_slice())
+                        .unwrap_or_default();
+                    self.state.scope_interest = Some(
+                        self.state
+                            .owner_wallet
+                            .interest
+                            .contribute(Some(scope.invocation_id().clone()), roots),
+                    );
+                }
+                // Clearing execution state precedes retained Store settlement. The retained
+                // Store keeps its roots registered until settlement or actual invalidation.
+                // A changed scope is not represented by a worker-status generation. Force the next
+                // live authorization through the synchronized path, which checks inherited roots.
+                self.state.authority_initialized = false;
+                self.rederive_agent_effective_surface_from_wallet();
                 self.entity_invocation_scope = scope;
                 Ok(())
             }
@@ -1133,18 +1505,98 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.entity_invocation_scope.as_ref()
     }
 
-    pub(crate) fn child_parent_start_index(
-        &self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-    ) -> Option<OplogIndex> {
-        self.state
-            .child_parent_start_index(function_type, begin_index)
-            .or_else(|| {
-                self.entity_invocation_scope
-                    .as_ref()
-                    .map(|scope| scope.invocation_id().start_index())
+    pub(crate) fn set_entity_tool_operation(
+        &mut self,
+        operation: tool::operation::OwnerToolOperation,
+    ) -> Result<(), WorkerExecutorError> {
+        if !matches!(
+            self.runtime,
+            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+        ) {
+            return Err(WorkerExecutorError::runtime(
+                "Tool operation can only be installed in a tool entity Store",
+            ));
+        }
+        if self.entity_tool_operation.replace(operation).is_some() {
+            return Err(WorkerExecutorError::runtime(
+                "Tool operation is already installed in the entity Store",
+            ));
+        }
+        Ok(())
+    }
+
+    fn entity_tool_operation(&self) -> Option<tool::operation::OwnerToolOperation> {
+        self.entity_tool_operation.clone()
+    }
+
+    pub(crate) fn set_invocation_principal(&mut self, principal: Option<Principal>) {
+        self.invocation_principal = principal;
+    }
+
+    pub(crate) fn invocation_principal(&self) -> Principal {
+        self.invocation_principal.clone().unwrap_or_else(|| {
+            Principal::Agent(AgentPrincipal {
+                agent_id: self.owned_agent_id.agent_id.clone(),
             })
+        })
+    }
+
+    pub(crate) fn set_entity_cancellation(
+        &mut self,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<(), WorkerExecutorError> {
+        if !matches!(self.runtime, OwnerRuntime::Entity(_)) {
+            return Err(WorkerExecutorError::runtime(
+                "Cannot install entity cancellation in the primary Store",
+            ));
+        }
+        if self.entity_cancellation.is_some() {
+            return Err(WorkerExecutorError::runtime(
+                "Entity cancellation is already installed",
+            ));
+        }
+        self.entity_cancellation = Some(cancellation);
+        Ok(())
+    }
+
+    fn entity_cancellation(&self) -> Option<tokio_util::sync::CancellationToken> {
+        if ENTITY_CANCELLATION_MASKED.try_with(|()| ()).is_ok() {
+            None
+        } else {
+            self.entity_cancellation.clone()
+        }
+    }
+
+    /// The index of the record that numbers the guest calls of the current invocation: the entity
+    /// invocation `Start` of an entity Store, or the `AgentInvocationStarted` of the primary Store.
+    pub(crate) fn invocation_anchor(&self) -> Option<OplogIndex> {
+        self.entity_parent_start_index().or(self
+            .primary_invocation_start_index
+            .filter(|index| *index != OplogIndex::NONE))
+    }
+
+    /// Reserves the next ordinal in guest call order for a direct Store-holding durable call.
+    pub(crate) fn direct_call_invocation_id(
+        &mut self,
+        _function_type: &DurableFunctionType,
+    ) -> Result<Option<DurableInvocationId>, WorkerExecutorError> {
+        if self.state.snapshotting_mode {
+            return Ok(None);
+        }
+        let observed_by_custom_invocation = wasmtime::component::current_guest_task_context::<
+            durability::CustomInvocationContext,
+        >()
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .as_deref()
+        .and_then(durability::CustomInvocationContext::current)
+        .is_some();
+        if observed_by_custom_invocation {
+            return Ok(None);
+        }
+        let Some(anchor) = self.invocation_anchor() else {
+            return Ok(None);
+        };
+        durability::reserve_invocation_id(self, None, anchor).map(Some)
     }
 
     fn entity_parent_start_index(&self) -> Option<OplogIndex> {
@@ -1206,6 +1658,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.created_by
     }
 
+    pub(crate) fn account_resource_limits(&self) -> Arc<AtomicResourceEntry> {
+        self.resource_limits.clone()
+    }
+
     pub fn created_by_email(&self) -> &AccountEmail {
         &self.state.created_by_email
     }
@@ -1215,19 +1671,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_auth_ctx(&self) -> AuthCtx {
-        let delegation_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
-                &self.state.component_metadata,
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
+                self.authority_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
-            golem_common::model::card::agent_delegation_surface_from_wallet(
-                &context,
-                self.state.agent_wallet_cards.values(),
-            )
-        } else {
-            golem_common::model::card::DelegationSurface::default()
+            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.authority_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
         };
+        let delegation_surface = golem_common::model::card::agent_delegation_surface_from_wallet(
+            &context,
+            self.authority_wallet_cards(),
+        );
 
         AuthCtx::agent_with_permission_surfaces(
             self.created_by(),
@@ -1237,8 +1697,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
     }
 
+    fn authority_wallet_cards(&self) -> impl Iterator<Item = &StoredCard> {
+        let cards = if self.state.is_live() {
+            &self.state.authority_wallet.cards
+        } else {
+            &self.state.agent_wallet_cards
+        };
+        cards
+            .iter()
+            .filter(|(card_id, _)| !self.state.owner_revoked_card_ids.contains(card_id))
+            .map(|(_, card)| card.as_ref())
+    }
+
+    fn authority_component_metadata(&self) -> &Component {
+        if self.state.is_live() {
+            &self.state.authority_wallet.metadata
+        } else {
+            self.owner_component_metadata()
+        }
+    }
+
     pub(crate) fn agent_wallet_cards_snapshot(&self) -> Vec<StoredCard> {
-        self.state.agent_wallet_cards.values().cloned().collect()
+        if self.state.is_live() {
+            self.state
+                .owner_wallet
+                .snapshot()
+                .cards
+                .values()
+                .map(|card| card.as_ref().clone())
+                .collect()
+        } else {
+            self.state
+                .agent_wallet_cards
+                .values()
+                .map(|card| card.as_ref().clone())
+                .collect()
+        }
     }
 
     pub(crate) fn wallet_id_hash(&self) -> [u8; 32] {
@@ -1246,7 +1740,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) fn wallet_generation(&self) -> u64 {
-        self.state.wallet_generation
+        if self.state.is_live() {
+            self.state.owner_wallet.snapshot().generation
+        } else {
+            self.state.wallet_generation
+        }
     }
 
     pub(crate) async fn active_agent_wallet_cards_snapshot(
@@ -1259,12 +1757,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(self.agent_wallet_cards_snapshot());
         }
 
-        self.public_state.worker().reattach_worker_status().await;
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
         self.check_post_replay_wallet_liveness().await?;
         self.drain_card_events_at_boundary().await?;
         let pending_revoked_cards = self
             .pending_card_events_at_boundary()
-            .await?
+            .await
             .into_iter()
             .filter_map(|pending_event| match pending_event.event {
                 QueuedCardEvent::Revoke(event) => Some(event.card_id),
@@ -1319,6 +1820,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         capture: &mut impl FnMut(&mut Self) -> T,
     ) -> Result<Option<T>, WorkerExecutorError> {
+        self.process_pending_replay_events().await?;
         if !self.state.is_live() {
             return Ok(None);
         }
@@ -1366,24 +1868,43 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     fn authority_snapshot_is_stable(&self, generation: u64) -> bool {
-        authority_snapshot_is_current_at(
-            true,
-            self.state.card_interest_index.authority_is_open(),
-            generation,
-            self.state
-                .published_authority_generation
-                .load(Ordering::Acquire),
-            self.state.next_authority_expiration,
-            Utc::now(),
-        )
+        self.state.replay_applications.is_empty()
+            && self.state.owner_wallet.validate_current().is_ok()
+            && Arc::ptr_eq(
+                &self.state.authority_wallet,
+                &self.state.owner_wallet.snapshot(),
+            )
+            && authority_snapshot_is_current_at(
+                true,
+                self.state.card_interest_index.authority_is_open(),
+                generation,
+                self.state
+                    .published_authority_generation
+                    .load(Ordering::Acquire),
+                self.state.next_authority_expiration,
+                Utc::now(),
+            )
     }
 
     fn refresh_authority_expiration_deadline(&mut self) {
+        let cards = if self.state.is_live() {
+            &self.state.authority_wallet.cards
+        } else {
+            &self.state.agent_wallet_cards
+        };
         self.state.next_authority_expiration = self
             .state
-            .agent_wallet_cards
+            .invocation_scope_root_cards
             .values()
-            .chain(self.state.invocation_scope_root_cards.values())
+            .chain(cards.values().map(Arc::as_ref))
+            .chain(
+                self.state
+                    .inherited_invocation_scope
+                    .as_ref()
+                    .and_then(InheritedInvocationScope::live_roots)
+                    .into_iter()
+                    .flat_map(BTreeMap::values),
+            )
             .filter_map(StoredCard::expires_at)
             .min();
     }
@@ -1406,6 +1927,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         targets: &[PermissionTarget],
     ) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError> {
+        self.process_pending_replay_events().await?;
+        if self.state.durability_is_suppressed() && !self.state.is_live() {
+            // In snapshotting mode a durable call resolves as live and records nothing, also while
+            // the Store still replays, as the load of a snapshot during recovery does. Such a call
+            // is not checked: no recorded decision exists for it, and replay must not decide one.
+            return Ok(Ok(LiveAuthorizationPermit { _private: () }));
+        }
         assert_live_authorization(self.state.is_live());
 
         if self.operator_authorizes_current_invocation() {
@@ -1463,6 +1991,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         targets: &[PermissionTarget],
     ) -> Result<Vec<bool>, WorkerExecutorError> {
+        self.process_pending_replay_events().await?;
         assert!(self.state.is_live());
         if self.operator_authorizes_current_invocation() {
             record_permission_decisions(targets, true);
@@ -1518,7 +2047,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn lock_synchronized_card_event_boundary(
         &mut self,
-    ) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError> {
+    ) -> Result<Arc<CardEventBoundary>, WorkerExecutorError> {
         self.lock_synchronized_card_event_boundary_inner(false, true)
             .await?
             .ok_or_else(|| WorkerExecutorError::runtime("unrestricted card boundary was closed"))
@@ -1526,7 +2055,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn lock_synchronized_card_event_boundary_with_authority(
         &mut self,
-    ) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError> {
+    ) -> Result<Arc<CardEventBoundary>, WorkerExecutorError> {
         self.lock_synchronized_card_event_boundary_inner(true, true)
             .await?
             .ok_or_else(|| WorkerExecutorError::runtime("card authority boundary did not reopen"))
@@ -1534,7 +2063,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn try_lock_synchronized_card_event_boundary_with_authority(
         &mut self,
-    ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
+    ) -> Result<Option<Arc<CardEventBoundary>>, WorkerExecutorError> {
         self.lock_synchronized_card_event_boundary_inner(true, false)
             .await
     }
@@ -1543,114 +2072,253 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         requires_agent_authority: bool,
         wait_for_authority: bool,
-    ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
+    ) -> Result<Option<Arc<CardEventBoundary>>, WorkerExecutorError> {
         loop {
-            let boundary_guard = self
-                .state
-                .card_event_boundary_lock
-                .clone()
-                .lock_owned()
-                .await;
-            let authority_checked = requires_agent_authority && self.state.is_live();
-            if authority_checked && !self.state.card_interest_index.authority_is_open() {
-                drop(boundary_guard);
-                if !wait_for_authority {
-                    return Ok(None);
-                }
-                self.state
-                    .card_interest_index
-                    .wait_until_authority_open()
-                    .await;
-                continue;
+            self.process_pending_replay_events().await?;
+            if !self.state.is_live() {
+                return Ok(Some(Arc::new(CardEventBoundary::Historical)));
             }
-            self.process_pending_replay_events_locked().await?;
-            self.drain_card_events_at_boundary().await?;
-            if requires_agent_authority
-                && !authority_checked
-                && self.state.is_live()
-                && !self.state.card_interest_index.authority_is_open()
-            {
-                drop(boundary_guard);
-                if !wait_for_authority {
-                    return Ok(None);
-                }
-                self.state
-                    .card_interest_index
-                    .wait_until_authority_open()
-                    .await;
-                continue;
-            }
-            let retries = if self.has_pending_source_card_transfers_at_boundary() {
-                permissions::prepare_pending_source_card_transfers(self).await?
-            } else {
-                Vec::new()
+            let owner = self.state.owner_wallet.clone();
+            let worker = self.public_state.worker().clone();
+            let inputs = self.authority_scope_inputs();
+            let Some(observation) = owner
+                .synchronize(worker, inputs, requires_agent_authority, wait_for_authority)
+                .await?
+            else {
+                return Ok(None);
             };
-            if retries.is_empty() {
-                return Ok(Some(boundary_guard));
+            let generation = observation.generation;
+            if !self.apply_owner_authority_snapshot(observation)? {
+                continue;
             }
-            // Delivery acquires the target worker's boundary lock. Release the source lock to
-            // avoid self-transfer and opposite-direction transfer deadlocks, then loop so no
-            // caller can cross this boundary until the source confirmation is visible.
-            drop(boundary_guard);
-            permissions::complete_pending_source_card_transfers(self, retries).await?;
+            let boundary = owner.lock_boundary().await?;
+            if let Some(application) = owner.pending_replay_finalization() {
+                drop(boundary);
+                application.result.clone().await?;
+                continue;
+            }
+            if generation
+                != self
+                    .state
+                    .published_authority_generation
+                    .load(Ordering::Acquire)
+                || !Arc::ptr_eq(&self.state.authority_wallet, &owner.snapshot())
+                || (requires_agent_authority && !self.state.card_interest_index.authority_is_open())
+            {
+                drop(boundary);
+                continue;
+            }
+            self.state.card_boundary = Arc::downgrade(&boundary);
+            return Ok(Some(boundary));
         }
     }
 
-    fn has_pending_source_card_transfers_at_boundary(&self) -> bool {
-        self.state
-            .card_event_boundary_scan
-            .as_ref()
-            .is_some_and(|scan| {
-                scan.pending
-                    .iter()
-                    .any(|pending| matches!(&pending.event, QueuedCardEvent::TransferStarted(_)))
-            })
+    fn authority_scope_inputs(&self) -> AuthorityScopeInputs {
+        AuthorityScopeInputs {
+            scope: self.current_invocation_scope_card(),
+            roots: self
+                .state
+                .invocation_scope_root_cards
+                .values()
+                .chain(
+                    self.state
+                        .inherited_invocation_scope
+                        .as_ref()
+                        .and_then(InheritedInvocationScope::live_roots)
+                        .into_iter()
+                        .flat_map(BTreeMap::values),
+                )
+                .cloned()
+                .collect(),
+            unchecked_root_ids: self
+                .state
+                .inherited_invocation_scope
+                .as_ref()
+                .and_then(InheritedInvocationScope::unchecked_root_ids),
+            parent: self.entity_parent_start_index(),
+        }
+    }
+
+    fn apply_owner_authority_snapshot(
+        &mut self,
+        observation: OwnerAuthoritySnapshot,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.state.owner_wallet.validate_current()?;
+        if observation.scope != self.current_invocation_scope_card()
+            || observation.generation
+                != self
+                    .state
+                    .published_authority_generation
+                    .load(Ordering::Acquire)
+            || !Arc::ptr_eq(&observation.wallet, &self.state.owner_wallet.snapshot())
+        {
+            return Ok(false);
+        }
+        self.state.authority_wallet = observation.wallet;
+        self.apply_owner_authority_synchronization(observation.revoked, observation.root_states)?;
+        self.adopt_authority_generation(observation.generation);
+        self.state.authority_initialized = self.state.card_interest_index.authority_is_open();
+        Ok(observation.generation
+            == self
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire)
+            && Arc::ptr_eq(
+                &self.state.authority_wallet,
+                &self.state.owner_wallet.snapshot(),
+            ))
+    }
+
+    pub(crate) async fn commit_wallet_entry(
+        &mut self,
+        entry: OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        let owner = self.state.owner_wallet.clone();
+        let boundary = match self.state.card_boundary.upgrade() {
+            Some(boundary) if matches!(boundary.as_ref(), CardEventBoundary::Live { .. }) => {
+                boundary
+            }
+            _ => owner.lock_boundary().await?,
+        };
+        owner
+            .commit(&self.public_state.worker(), boundary, entry)
+            .await?;
+        self.state.authority_initialized = false;
+        self.state.authority_wallet = owner.snapshot();
+        self.rederive_agent_effective_surface_from_wallet();
+        Ok(())
     }
 
     fn rederive_agent_effective_surface_from_wallet(&mut self) {
-        if matches!(self.runtime, OwnerRuntime::Entity(_)) {
-            return;
-        }
-        self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
-                self.owner_component_metadata(),
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
+                self.authority_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
-            golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
-                &context,
-                self.state.agent_wallet_cards.values(),
-                self.state.invocation_scope_card.as_ref(),
-            )
-        } else {
-            golem_common::model::card::EffectiveSurface::default()
+            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.authority_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
         };
+        let surface = {
+            let wallet = self.authority_wallet_cards();
+            match &self.runtime {
+                OwnerRuntime::Agent => {
+                    golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                        &context,
+                        wallet,
+                        self.state.invocation_scope_card.as_ref(),
+                    )
+                }
+                OwnerRuntime::Entity(_) => match &self.state.inherited_invocation_scope {
+                    None => golem_common::model::card::agent_effective_surface_from_wallet(
+                        &context, wallet,
+                    ),
+                    Some(scope) => {
+                        golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                            &context,
+                            wallet,
+                            Some(&scope.card),
+                        )
+                    }
+                },
+            }
+        };
+        self.state.agent_effective_surface = surface;
+    }
+
+    /// The invocation scope that bounds this Store's current invocation: the primary Store's
+    /// admitted scope, or the scope an entity Store inherited from its caller.
+    pub(crate) fn current_invocation_scope_card(&self) -> Option<ScopeCard> {
+        match &self.runtime {
+            OwnerRuntime::Agent => self.state.invocation_scope_card.clone(),
+            OwnerRuntime::Entity(_) => self
+                .state
+                .inherited_invocation_scope
+                .as_ref()
+                .map(|scope| scope.card.clone()),
+        }
+    }
+
+    /// Brings a Store's authority up to date with its owner worker at a live boundary: excludes
+    /// cards revoked by any of the owner's Stores, removes a scope whose roots they revoked, and
+    /// checks an entity Store's inherited scope roots.
+    async fn synchronize_owner_authority(&mut self) -> Result<(), WorkerExecutorError> {
+        if !self.state.is_live() {
+            return Ok(());
+        }
+        let revoked =
+            owner_revoked_card_ids(&*self.public_state.worker().get_last_known_status().await);
+        let unchecked_root_ids = self
+            .state
+            .inherited_invocation_scope
+            .as_ref()
+            .and_then(InheritedInvocationScope::unchecked_root_ids);
+        let root_states = match unchecked_root_ids {
+            Some(root_ids) => Some(self.state.card_service.check_cards(root_ids).await?),
+            None => None,
+        };
+        self.apply_owner_authority_synchronization(revoked, root_states)
+    }
+
+    fn apply_owner_authority_synchronization(
+        &mut self,
+        revoked: HashSet<CardId>,
+        root_states: Option<HashMap<CardId, CardState>>,
+    ) -> Result<(), WorkerExecutorError> {
+        let remove_inherited_scope = match &mut self.state.inherited_invocation_scope {
+            Some(scope) => {
+                let all_live = match &root_states {
+                    Some(root_states) => scope.check_roots(root_states)?,
+                    None => true,
+                };
+                !all_live || scope.roots_expired(Utc::now())
+            }
+            None => false,
+        };
+        if remove_inherited_scope {
+            self.state.inherited_invocation_scope = None;
+            if let Some(interest) = &self.state.scope_interest {
+                interest.invalidate();
+            }
+        }
+        let revoked_roots = self
+            .interested_card_ids()
+            .into_iter()
+            .filter(|card_id| revoked.contains(card_id))
+            .collect::<Vec<_>>();
+        self.clear_invocation_scope_if_roots_include(&revoked_roots);
+        self.state.owner_revoked_card_ids = revoked;
+        self.rederive_agent_effective_surface_from_wallet();
+        Ok(())
     }
 
     fn interested_card_ids(&self) -> Vec<CardId> {
         let mut card_ids = self
-            .state
-            .agent_wallet_cards
-            .keys()
-            .copied()
+            .agent_wallet_cards_snapshot()
+            .iter()
+            .map(StoredCard::card_id)
             .collect::<BTreeSet<_>>();
         if let Some(scope_card) = &self.state.invocation_scope_card {
             card_ids.extend(scope_card.root_card_ids.iter().copied());
         }
+        if let Some(scope) = &self.state.inherited_invocation_scope {
+            card_ids.extend(scope.card.root_card_ids.iter().copied());
+        }
+        if let Some(interest) = &self.state.scope_interest {
+            card_ids.extend(interest.roots().iter().copied());
+        }
         card_ids.into_iter().collect()
-    }
-
-    async fn refresh_card_interest(&self) {
-        self.state
-            .card_interest_index
-            .set_card_interest(self.owned_agent_id.clone(), &self.interested_card_ids())
-            .await;
     }
 
     async fn install_invocation_scope_card(
         &mut self,
         scope_card: Option<ScopeCard>,
         root_cards: Vec<StoredCard>,
+        candidate_interest: Option<Arc<crate::services::card_interest::CardInterestContribution>>,
     ) {
         // Invocation scope is part of the effective authority but is not represented by a
         // worker-status generation. Force the first live authorization for this invocation
@@ -1661,17 +2329,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &mut self.state.invocation_scope_handles,
         );
         for rep in handles {
-            let _ = self
-                .table()
-                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+            permissions::retire_invocation_scope_handle(self.table(), rep);
         }
         self.state.invocation_scope_card = scope_card;
         self.state.invocation_scope_root_cards = root_cards
             .into_iter()
             .map(|card| (card.card_id(), card))
             .collect();
+        self.state.scope_interest = candidate_interest.or_else(|| {
+            self.state.invocation_scope_card.as_ref().map(|scope| {
+                self.state
+                    .owner_wallet
+                    .interest
+                    .contribute(None, &scope.root_card_ids)
+            })
+        });
         self.rederive_agent_effective_surface_from_wallet();
-        self.refresh_card_interest().await;
     }
 
     async fn clear_invocation_scope_card(&mut self) {
@@ -1681,32 +2354,44 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &mut self.state.invocation_scope_handles,
         );
         for rep in handles {
-            let _ = self
-                .table()
-                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+            permissions::retire_invocation_scope_handle(self.table(), rep);
         }
         if scope_changed {
             self.state.invocation_scope_root_cards.clear();
             self.rederive_agent_effective_surface_from_wallet();
         }
-        self.refresh_card_interest().await;
+        self.state.scope_interest = None;
     }
 
     fn clear_invocation_scope_if_roots_include(&mut self, card_ids: &[CardId]) -> bool {
+        let interest_removed = self.state.scope_interest.as_ref().is_some_and(|interest| {
+            if interest.roots_include(card_ids) {
+                interest.invalidate();
+                true
+            } else {
+                false
+            }
+        });
+        let inherited_scope_removed = self
+            .state
+            .inherited_invocation_scope
+            .as_ref()
+            .is_some_and(|scope| scope.roots_include(&card_ids.iter().copied().collect()));
+        if inherited_scope_removed {
+            self.state.inherited_invocation_scope = None;
+        }
         let (scope_changed, handles) = remove_invocation_scope_for_revoked_roots(
             &mut self.state.invocation_scope_card,
             &mut self.state.invocation_scope_handles,
             card_ids,
         );
         for rep in handles {
-            let _ = self
-                .table()
-                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+            permissions::retire_invocation_scope_handle(self.table(), rep);
         }
         if scope_changed {
             self.state.invocation_scope_root_cards.clear();
         }
-        scope_changed
+        scope_changed || inherited_scope_removed || interest_removed
     }
 
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
@@ -1714,264 +2399,56 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        loop {
-            let pending_events =
-                next_drainable_card_events(self.pending_card_events_at_boundary().await?);
-            let Some(pending_event) = pending_events.first() else {
-                break;
-            };
-            match &pending_event.event {
-                QueuedCardEvent::Revoke(_) => {
-                    let card_ids = pending_events
-                        .into_iter()
-                        .filter_map(|pending_event| match pending_event.event {
-                            QueuedCardEvent::Revoke(event) => Some(event.card_id),
-                            QueuedCardEvent::Install(_)
-                            | QueuedCardEvent::TransferStarted(_)
-                            | QueuedCardEvent::TransferReceived(_) => None,
-                        })
-                        .collect::<Vec<_>>();
-                    self.apply_card_revoked_cascade(&card_ids, true).await?;
-                }
-                QueuedCardEvent::Install(event) => {
-                    let Some(card) = event.card.clone() else {
-                        return Err(WorkerExecutorError::runtime(
-                            "queued card install is missing card payload",
-                        ));
-                    };
-                    let _ = self
-                        .apply_card_install(Some(pending_event.oplog_index), card)
-                        .await?;
-                }
-                QueuedCardEvent::TransferReceived(event) => {
-                    let Some(card) = event.card.clone() else {
-                        return Err(WorkerExecutorError::runtime(
-                            "received card transfer is missing card payload",
-                        ));
-                    };
-                    let _ = self
-                        .apply_received_card_transfer(
-                            pending_event.oplog_index,
-                            event.transfer_id,
-                            event.source_card_id,
-                            card,
-                        )
-                        .await?;
-                }
-                QueuedCardEvent::TransferStarted(_) => {
-                    unreachable!("filtered above")
-                }
-            }
-        }
-
-        self.remove_expired_cards().await?;
+        let owner = self.state.owner_wallet.clone();
+        let boundary = match self.state.card_boundary.upgrade() {
+            Some(boundary) => boundary,
+            None => owner.lock_boundary().await?,
+        };
+        owner
+            .synchronize_locked(
+                &self.public_state.worker(),
+                boundary.clone(),
+                self.entity_parent_start_index(),
+            )
+            .await?;
+        self.state.card_boundary = Arc::downgrade(&boundary);
         self.remove_expired_invocation_scope_roots().await?;
-        Ok(())
+        self.state.authority_wallet = owner.snapshot();
+        self.synchronize_owner_authority().await
     }
 
     async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
         let expired_root_ids =
-            expired_wallet_card_ids_at(&self.state.invocation_scope_root_cards, Utc::now());
+            expired_wallet_card_ids_at(self.state.invocation_scope_root_cards.values(), Utc::now());
         if !expired_root_ids.is_empty() {
-            self.apply_card_revoked_cascade(&expired_root_ids, true)
-                .await?;
+            self.apply_card_revoked_cascade(
+                self.entity_parent_start_index(),
+                &expired_root_ids,
+                true,
+            )
+            .await?;
         }
         Ok(())
     }
 
-    async fn pending_card_events_at_boundary(
-        &mut self,
-    ) -> Result<Vec<PendingCardEventRef>, WorkerExecutorError> {
-        let status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
-        let status_idx = status.oplog_idx;
-        let status_pending = status.pending_card_events;
-
-        let oplog = self.public_state.worker().oplog();
-        let current_idx = oplog.current_oplog_index().await;
-
-        match &mut self.state.card_event_boundary_scan {
-            Some(scan) => scan.synchronize(status_idx, &status_pending, current_idx),
-            None => {
-                self.state.card_event_boundary_scan =
-                    Some(CardEventBoundaryScan::new(status_idx, status_pending));
-            }
-        }
-
-        let unread_range = self
-            .state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .unread_range(current_idx);
-
-        if let Some((start, count)) = unread_range {
-            let entries = oplog.read_exact(start, count).await;
-            self.state
-                .card_event_boundary_scan
-                .as_mut()
-                .expect("card event boundary scan must be initialized")
-                .fold_through(current_idx, &entries);
-        }
-
-        Ok(self
-            .state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .pending
-            .clone())
-    }
-
-    async fn admit_card_to_wallet(
-        &mut self,
-        card: &StoredCard,
-    ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
-        let card_id = card.card_id();
-        let mut candidate_wallet_card_ids = self.interested_card_ids();
-        if !candidate_wallet_card_ids.contains(&card_id) {
-            candidate_wallet_card_ids.push(card_id);
-        }
-        self.state
-            .card_interest_index
-            .set_card_interest(self.owned_agent_id.clone(), &candidate_wallet_card_ids)
-            .await;
-
-        let card_state = self
-            .state
-            .card_service
-            .check_cards(vec![card_id])
-            .await?
-            .remove(&card_id);
-
-        let failure = match card_state {
-            Some(CardState::Live(registered_card)) if registered_card.as_ref() == card => None,
-            Some(CardState::Live(_)) => Some(CardInstallFailure::NotPermitted),
-            Some(CardState::Revoked) => Some(CardInstallFailure::CardRevoked),
-            Some(CardState::Unknown) | None => Some(CardInstallFailure::NotFound),
-        };
-        if let Some(failure) = failure {
-            self.refresh_card_interest().await;
-            return Ok(Err(failure));
-        }
-
-        if add_wallet_card(
-            &mut self.state.agent_wallet_cards,
-            &mut self.state.wallet_generation,
-            card.clone(),
-        )? {
-            self.rederive_agent_effective_surface_from_wallet();
-        }
-        self.refresh_card_interest().await;
-
-        Ok(Ok(()))
-    }
-
-    pub(crate) async fn apply_card_install(
-        &mut self,
-        queued_event_index: Option<OplogIndex>,
-        card: StoredCard,
-    ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
-        let card_id = card.card_id();
-        if let Err(reason) = self.admit_card_to_wallet(&card).await? {
-            if let Some(queued_event_index) = queued_event_index {
-                self.public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::card_install_failed(
-                        queued_event_index,
-                        card_id,
-                        reason,
-                    ))
-                    .await;
-            }
-            Ok(Err(reason))
-        } else {
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::card_installed(
-                    queued_event_index,
-                    card,
-                    Some(self.state.wallet_generation),
-                ))
-                .await;
-            Ok(Ok(()))
-        }
-    }
-
-    async fn apply_received_card_transfer(
-        &mut self,
-        queued_event_index: OplogIndex,
-        transfer_id: uuid::Uuid,
-        source_card_id: Option<CardId>,
-        card: StoredCard,
-    ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
-        let card_id = card.card_id();
-        if let Err(reason) = self.admit_card_to_wallet(&card).await? {
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::card_install_failed(
-                    queued_event_index,
-                    card_id,
-                    reason,
-                ))
-                .await;
-            return Ok(Err(reason));
-        }
-
+    /// Returns the queued card events that are not applied yet.
+    ///
+    /// The published agent status is the only source. Outside snapshotting, each producer of a
+    /// queued event or of its terminal entry commits it and folds it into the status before it
+    /// completes, so the status read under the card event boundary lock is exact and no oplog
+    /// entry is read here.
+    async fn pending_card_events_at_boundary(&self) -> Vec<PendingCardEventRef> {
         self.public_state
             .worker()
-            .add_and_commit_oplog(OplogEntry::card_transferred(
-                transfer_id,
-                source_card_id,
-                card_id,
-                CardHolder::Agent(AgentCardHolder {
-                    agent_id: self.owned_agent_id.agent_id.clone(),
-                }),
-                card,
-                Some(self.state.wallet_generation),
-            ))
-            .await;
-        Ok(Ok(()))
-    }
-
-    async fn apply_card_revoked(
-        &mut self,
-        card_id: CardId,
-        queued_event_index: OplogIndex,
-        is_live: bool,
-    ) -> Result<(), WorkerExecutorError> {
-        let was_in_wallet = remove_wallet_card(
-            &mut self.state.agent_wallet_cards,
-            &mut self.state.wallet_generation,
-            card_id,
-        )?;
-
-        let scope_changed = self.clear_invocation_scope_if_roots_include(&[card_id]);
-        if was_in_wallet || scope_changed {
-            self.rederive_agent_effective_surface_from_wallet();
-        }
-
-        if is_live {
-            self.refresh_card_interest().await;
-
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::card_revoked(
-                    queued_event_index,
-                    card_id,
-                    Some(self.state.wallet_generation),
-                ))
-                .await;
-        }
-
-        Ok(())
+            .get_last_known_status()
+            .await
+            .pending_card_events
+            .clone()
     }
 
     pub(crate) async fn apply_card_revoked_cascade(
         &mut self,
+        entity_parent_start_index: Option<OplogIndex>,
         card_ids: &[CardId],
         commit_immediately: bool,
     ) -> Result<(), WorkerExecutorError> {
@@ -1979,6 +2456,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         card_ids.sort_unstable();
         card_ids.dedup();
         if card_ids.is_empty() {
+            return Ok(());
+        }
+
+        if self.state.is_live() {
+            self.commit_wallet_entry(OplogEntry::CardRevokedCascade {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index,
+                revoked_card_ids: card_ids.clone(),
+                affected_wallets: Vec::new(),
+                local_wallet_generation: 0,
+            })
+            .await?;
+            self.clear_invocation_scope_if_roots_include(&card_ids);
+            self.rederive_agent_effective_surface_from_wallet();
             return Ok(());
         }
 
@@ -1992,8 +2483,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.rederive_agent_effective_surface_from_wallet();
         }
 
-        self.refresh_card_interest().await;
-
         let affected_wallets = if wallet_changed {
             vec![CardHolder::Agent(AgentCardHolder {
                 agent_id: self.owned_agent_id.agent_id.clone(),
@@ -2003,55 +2492,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let entry = OplogEntry::CardRevokedCascade {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
-            local_wallet_generation: Some(self.state.wallet_generation),
+            local_wallet_generation: self.state.wallet_generation,
         };
         if commit_immediately {
-            self.public_state.worker().add_and_commit_oplog(entry).await;
-        } else {
-            self.public_state.worker().add_to_oplog(entry).await;
-        }
-
-        Ok(())
-    }
-
-    pub(crate) async fn remove_expired_cards(&mut self) -> Result<(), WorkerExecutorError> {
-        let cards_to_expire =
-            expired_wallet_card_ids_at(&self.state.agent_wallet_cards, Utc::now());
-
-        if cards_to_expire.is_empty() {
-            return Ok(());
-        }
-
-        let mut expired_card_generations = Vec::with_capacity(cards_to_expire.len());
-        for card_id in cards_to_expire {
-            if remove_wallet_card(
-                &mut self.state.agent_wallet_cards,
-                &mut self.state.wallet_generation,
-                card_id,
-            )? {
-                expired_card_generations.push((card_id, self.state.wallet_generation));
-            }
-        }
-
-        if !expired_card_generations.is_empty() {
-            self.rederive_agent_effective_surface_from_wallet();
-        }
-
-        self.refresh_card_interest().await;
-
-        for (card_id, wallet_generation) in expired_card_generations {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_expired(card_id, Some(wallet_generation)))
-                .await;
+                .add_and_commit_oplog(entry)
+                .await?;
+        } else {
+            self.public_state.worker().add_to_oplog(entry).await?;
         }
+
         Ok(())
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
-        self.state.agent_id.clone()
+        self.state.owner_context.agent().cloned()
+    }
+
+    pub fn owner_context(&self) -> &ResolvedOwnerContext {
+        &self.state.owner_context
     }
 
     pub fn agent_mode(&self) -> AgentMode {
@@ -2060,6 +2523,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_metadata(&self) -> &Component {
         &self.state.component_metadata
+    }
+
+    pub fn executable_component_metadata(&self) -> Option<&Component> {
+        match &self.executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        }
     }
 
     pub fn owner_component_metadata(&self) -> &Component {
@@ -2073,8 +2543,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    pub(crate) fn selected_tool_owner_failure(
+        &self,
+    ) -> Option<crate::durable_host::tool::operation::OwnerFailureWinner> {
+        self.owner_execution
+            .tool_operations()
+            .selected_owner_failure()
+    }
+
     pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
-        self.state.agent_id.as_ref().and_then(|agent_id| {
+        self.state.owner_context.agent().and_then(|agent_id| {
             self.owner_component_metadata()
                 .metadata
                 .agent_type_provision_config(&agent_id.agent_type)
@@ -2090,26 +2568,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn as_wasi_view(&mut self) -> DurableWorkerCtxWasiView<'_, Ctx> {
         DurableWorkerCtxWasiView(self)
-    }
-
-    pub fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_> {
-        // Sync the replay flag observed by `WasiHttpHooks::send_request` with
-        // the current durable execution state before exposing the view to
-        // wasmtime-wasi-http.
-        let is_replay = self.state.is_replay();
-        self.http_hooks
-            .is_replay
-            .store(is_replay, Ordering::Release);
-        let inner = &mut *self;
-        let table = Arc::get_mut(&mut inner.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-        WasiHttpCtxView {
-            ctx: &mut inner.wasi_http,
-            table,
-            hooks: &mut inner.http_hooks,
-        }
     }
 
     pub fn as_wasi_http_view_p3(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
@@ -2169,17 +2627,236 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    async fn switch_to_live(&self) {
-        self.state.replay_state.switch_to_live().await;
-        if self.runtime == OwnerRuntime::Agent {
-            // Incomplete concurrent calls must be woken first so their reconstruction tasks can
-            // repair the original Starts. The primary remains fenced at this await and cannot
-            // admit live guest execution until every historical entity coordinator exits.
-            self.owner_execution
-                .wait_for_historical_reconstructions()
-                .await;
+    async fn begin_switch_to_live(&self) -> Result<BeginReplayToLive, WorkerExecutorError> {
+        begin_replay_to_live(
+            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            matches!(
+                self.runtime,
+                OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+            ),
+            self.entity_tool_operation(),
+            &self.public_state,
+            &self.linear_memory,
+            &self.state.replay_state,
+            if self.runtime == OwnerRuntime::Agent {
+                ReplayToLiveRole::PrimaryAgent
+            } else {
+                ReplayToLiveRole::NonPrimary
+            },
+            self.state.local_live_tail(),
+        )
+        .await
+    }
+
+    async fn finish_switch_to_live(
+        &mut self,
+        pending: PendingReplayToLive,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        self.finish_switch_to_live_at(pending, None).await
+    }
+
+    async fn finish_switch_to_live_at(
+        &mut self,
+        pending: PendingReplayToLive,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        let role = pending.role();
+        let outcome = pending.finish_at(boundary).await?;
+        if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
+            self.process_pending_replay_events().await?;
         }
-        self.linear_memory.switch_to_live();
+        Ok(outcome)
+    }
+
+    pub(crate) fn rejects_live_continuation_at_replay_tail(&self) -> bool {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        mode == Some(InvocationExecutionMode::ReplayingCompleted)
+            || (mode != Some(InvocationExecutionMode::ReplayingIncomplete)
+                && self.runtime != OwnerRuntime::Agent)
+    }
+
+    pub(crate) fn prepare_live_continuation_at_replay_tail(
+        &self,
+        replay_ended: bool,
+        expected: String,
+    ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static + use<Ctx>
+    {
+        self.live_continuation_at_replay_tail_factory(replay_ended, expected)()
+    }
+
+    pub(crate) fn live_continuation_at_replay_tail_factory(
+        &self,
+        replay_ended: bool,
+        expected: String,
+    ) -> impl Fn() -> futures::future::BoxFuture<
+        'static,
+        Result<BeginReplayToLive, WorkerExecutorError>,
+    >
+    + Send
+    + Sync
+    + 'static
+    + use<Ctx> {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        let replaying_incomplete_entity =
+            mode == Some(InvocationExecutionMode::ReplayingIncomplete);
+        let rejected = self.rejects_live_continuation_at_replay_tail()
+            || (!replaying_incomplete_entity && !replay_ended);
+        let replay_state = self.state.replay_state.clone();
+        let public_state = self.public_state.clone();
+        let linear_memory = self.linear_memory.clone();
+        let tool_entity = matches!(
+            self.runtime,
+            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+        );
+        let tool_operation = self.entity_tool_operation();
+        let local_live_tail = self.state.local_live_tail();
+        let role = if self.runtime == OwnerRuntime::Agent {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
+        move || {
+            let expected = expected.clone();
+            let replay_state = replay_state.clone();
+            let public_state = public_state.clone();
+            let linear_memory = linear_memory.clone();
+            let tool_operation = tool_operation.clone();
+            let local_live_tail = local_live_tail.clone();
+            Box::pin(async move {
+                if rejected {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        expected,
+                        format!(
+                            "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
+                            replay_state.last_replayed_index()
+                        ),
+                    ));
+                }
+                if replay_ended {
+                    begin_replay_to_live(
+                        replaying_incomplete_entity,
+                        tool_entity,
+                        tool_operation,
+                        &public_state,
+                        &linear_memory,
+                        &replay_state,
+                        role,
+                        local_live_tail,
+                    )
+                    .await
+                } else {
+                    begin_local_live_continuation(
+                        replaying_incomplete_entity,
+                        tool_entity,
+                        tool_operation,
+                        &public_state,
+                        &linear_memory,
+                        role,
+                        local_live_tail,
+                        &replay_state,
+                        replay_state.replay_target(),
+                    )
+                    .await
+                    .map(BeginReplayToLive::Pending)
+                }
+            })
+        }
+    }
+
+    pub(crate) async fn continue_live_at_replay_tail(
+        &mut self,
+        replay_ended: bool,
+        expected: String,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.continue_live_at_replay_tail_with_refusal(replay_ended, expected, None)
+            .await
+    }
+
+    pub(crate) async fn continue_live_at_replay_tail_with_refusal(
+        &mut self,
+        replay_ended: bool,
+        expected: String,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<bool, WorkerExecutorError> {
+        let pending = match self
+            .prepare_live_continuation_at_replay_tail(replay_ended, expected)
+            .await?
+        {
+            BeginReplayToLive::ReplayResumed => return Ok(false),
+            BeginReplayToLive::Pending(pending) => pending,
+        };
+        self.finish_switch_to_live_at(pending, boundary)
+            .await?
+            .require_live()?;
+        Ok(true)
+    }
+
+    pub(crate) async fn get_oplog_entry_or_continue_live(
+        &mut self,
+        request: SerializableToolPositionalRequest,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        let expected = request.expected_description();
+        loop {
+            if self.is_live() {
+                return Ok(None);
+            }
+            if let Some(hook) = &self.replay_admission_hook {
+                hook.before_positional_replay_read(expected);
+            }
+            match self
+                .state
+                .replay_state
+                .get_oplog_entry_or_replay_end_with_admission(
+                    self.entity_parent_start_index(),
+                    self.entity_tool_operation()
+                        .map(|operation| (operation, request)),
+                )
+                .await?
+            {
+                PositionalRead::Entry(index, entry) => {
+                    return Ok(Some((index, entry)));
+                }
+                PositionalRead::ReplayEnded => {
+                    if self
+                        .continue_live_at_replay_tail_with_refusal(
+                            true,
+                            expected.to_string(),
+                            Some(SerializableToolAdmissionRefusal::BeforePositional { request }),
+                        )
+                        .await?
+                    {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
+        self.switch_to_live_at(None).await
+    }
+
+    async fn switch_to_live_at(
+        &mut self,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<(), WorkerExecutorError> {
+        let pending = match self.begin_switch_to_live().await? {
+            BeginReplayToLive::ReplayResumed => {
+                return Err(WorkerExecutorError::runtime(
+                    "replay target grew while the primary runtime was settling",
+                ));
+            }
+            BeginReplayToLive::Pending(pending) => pending,
+        };
+        self.finish_switch_to_live_at(pending, boundary)
+            .await?
+            .require_live()
     }
 
     fn cleanup_custom_durability_state(&mut self) {
@@ -2198,7 +2875,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
-        if self.runtime == OwnerRuntime::Agent && self.state.is_live() && !reconciling {
+        if self.runtime == OwnerRuntime::Agent
+            && self.state.is_live()
+            && !self.state.snapshotting_mode
+            && !reconciling
+        {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
@@ -2251,11 +2932,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.memory_grow_failed();
     }
 
+    /// The retry of an error trap during a speculative replay: the fixed decision of the trap
+    /// when it retries, as for an out-of-memory. Any other error, and a trap that is not an
+    /// error, gives `None`.
+    pub(crate) fn speculative_retry(trap_type: &TrapType) -> Option<RetryDecision> {
+        match trap_type {
+            TrapType::Error { .. } => Self::fixed_decision_for_trap_type(trap_type)
+                .filter(|decision| *decision != RetryDecision::None),
+            TrapType::Interrupt(_) | TrapType::Exit => None,
+        }
+    }
+
+    /// The retry of a start whose load of an application snapshot ended with `result`: the fixed
+    /// decision of an interrupt, and the retry of an error trap that every invocation retries, as
+    /// [`Self::speculative_retry`] gives it. Any other result gives `None`.
+    pub(crate) fn load_retry(result: &InvokeResult) -> Option<RetryDecision> {
+        match result {
+            InvokeResult::Interrupted { interrupt_kind, .. } => {
+                Self::fixed_decision_for_trap_type(&TrapType::Interrupt(*interrupt_kind))
+            }
+            result => result
+                .as_trap_type::<Ctx>()
+                .as_ref()
+                .and_then(Self::speculative_retry),
+        }
+    }
+
     /// Returns the deterministic, policy-independent recovery decision for a
     /// trap type — i.e. the cases where the answer does not depend on retry
     /// state or any retry policy. For trap-error variants whose decision is
-    /// driven by named retry policies (`Unknown`, `TransientError`, and
-    /// `DeterministicTrap` inside an atomic region), this returns `None` and
+    /// driven by named retry policies (`Unknown` and `TransientError`), this returns `None` and
     /// the caller falls through to policy-based resolution.
     pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
@@ -2263,6 +2969,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
             TrapType::Interrupt(InterruptKind::Jump) => Some(RetryDecision::Immediate),
+            // Never retried here: a retry in place would reopen the oplog with the same stale
+            // epoch. The worker service resumes the agent on the shard's owner.
+            TrapType::Interrupt(InterruptKind::ShardLost) => Some(RetryDecision::None),
             TrapType::Exit => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::OutOfMemory,
@@ -2319,21 +3028,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 error: AgentError::PermanentError(_),
                 ..
             } => Some(RetryDecision::None),
-            // DeterministicTrap *outside* an atomic region is never retried;
-            // *inside* an atomic region it is retried via the named-policy
-            // path (handled by the caller). Membership comes from the trap
-            // itself (the call's own region for a durable-call trap, the
-            // ambient state otherwise), not from "any region currently active".
             TrapType::Error {
                 error: AgentError::DeterministicTrap(_),
-                in_atomic_region: false,
                 ..
             } => Some(RetryDecision::None),
             TrapType::Error {
-                error:
-                    AgentError::Unknown(_)
-                    | AgentError::TransientError(_)
-                    | AgentError::DeterministicTrap(_),
+                error: AgentError::Unknown(_) | AgentError::TransientError(_),
                 ..
             } => None,
         }
@@ -2377,7 +3077,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         // Only Error variants whose decision is policy-driven reach this point
-        // (Unknown, TransientError, and DeterministicTrap-in-atomic-region).
+        // (Unknown and TransientError).
         let TrapType::Error {
             error,
             retry_from,
@@ -2527,15 +3227,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
+        let trace_context = self
+            .state
+            .invocation_context
+            .span_origin(&self.state.current_span_id)
+            .map(
+                |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
+                    trace_id,
+                    span_id: self.state.current_span_id.clone(),
+                },
+            );
         logging::policy::emit_log_event_with_state::<Ctx>(
             event,
-            self.state.component_metadata.metadata.has_oplog_processor(),
+            self.owner_component_metadata()
+                .metadata
+                .has_oplog_processor(),
             &self.owned_agent_id,
             &self.public_state,
             &self.state.replay_state,
             &self.state.oplog,
             self.state.is_live(),
             self.entity_parent_start_index(),
+            trace_context,
         )
         .await;
     }
@@ -2543,184 +3256,77 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn begin_function(
         &mut self,
         function_type: &DurableFunctionType,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        self.begin_function_impl(function_type, None, invocation_id)
+            .await
+            .map(|(index, _)| index)
+    }
+
+    pub async fn begin_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: golem_common::model::oplog::SpanStarted,
+        invocation_id: Option<DurableInvocationId>,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        let (index, recorded) = self
+            .begin_function_impl(function_type, Some(span_started), invocation_id)
+            .await?;
+        let recorded = recorded.ok_or_else(|| {
+            WorkerExecutorError::unexpected_oplog_entry(
+                "durable scope Start carrying span_started",
+                format!("durable scope Start at {index} without span metadata"),
+            )
+        })?;
+        Ok((index, recorded))
+    }
+
+    /// Checks the effect fence and selects the retry fallback without writing protocol entries.
+    async fn begin_function_impl(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: Option<golem_common::model::oplog::SpanStarted>,
+        _invocation_id: Option<DurableInvocationId>,
+    ) -> Result<(OplogIndex, Option<golem_common::model::oplog::SpanStarted>), WorkerExecutorError>
+    {
         if self.state.durability_is_suppressed() {
             let begin_index = self.state.current_oplog_index().await;
             self.state.current_retry_point = begin_index;
-            return Ok(begin_index);
+            return Ok((begin_index, span_started));
         }
 
-        if self.state.opens_durable_scope(function_type) {
-            // During replay, the scope `End` is folded into the resolver: claiming the scope
-            // `Start` registers an awaiter keyed by its `begin_index`, and `end_function` awaits it
-            // instead of reading the `End` positionally. The handle is carried in the active scope
-            // and only stored when the scope continues replaying (not when recovery switches to live
-            // and re-runs the body, which appends a fresh `End` live).
-            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let result = if self.is_live() {
-                // Durable scopes are siblings rather than nested under other durable scopes. In an
-                // entity body they are direct children of the outer entity invocation; their own
-                // host calls point back at the scope Start through `child_parent_start_index`.
-                let entry = OplogEntry::Start {
-                    timestamp: Timestamp::now_utc(),
-                    parent_start_index: self.entity_parent_start_index(),
-                    function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
-                    invocation_id: None,
-                    observational_owner: None,
-                    request: None,
-                    durable_function_type: function_type.clone(),
-                };
-                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
-                Ok(begin_index)
-            } else {
-                let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-                let (begin_index, scope_handle) = self
-                    .state
-                    .replay_state
-                    .claim_scope_start(&scope_name, function_type, self.entity_parent_start_index())
-                    .await?;
-                // The begin-side completion / legality probe stays a non-consuming forward scan: it
-                // decides whether the scope is safe to continue replaying or must be retried *before*
-                // the scope body is replayed. Only the `End` *consumption* moves to the resolver.
-                if !self.state.assume_idempotence
-                    && !matches!(
-                        *function_type,
-                        DurableFunctionType::WriteRemoteBatched(None)
-                    )
-                {
-                    let end_index = self
-                        .state
-                        .replay_state
-                        .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
-                        .await;
-                    if end_index.is_none() {
-                        // Must switch to live mode before failing to be able to commit an Error entry
-                        self.switch_to_live().await;
-                        Err(WorkerExecutorError::runtime(
-                            "Non-idempotent remote write operation was not completed, cannot retry",
-                        ))
-                    } else {
-                        scope_replay_handle = Some(scope_handle);
-                        Ok(begin_index)
-                    }
-                } else if matches!(
-                    *function_type,
-                    DurableFunctionType::WriteRemoteBatched(None)
-                ) {
-                    let lookup_result = self
-                        .state
-                        .replay_state
-                        .lookup_oplog_entry_with_condition_and_state(
-                            begin_index,
-                            OplogEntry::is_end_remote_write_s::<ScopeScanState>,
-                            OplogEntry::no_concurrent_side_effect,
-                            ScopeScanState::new(begin_index),
-                            OplogEntry::track_scope_membership,
-                        )
-                        .await;
-                    match lookup_result {
-                        OplogEntryLookupResult::Found { index, .. } => {
-                            debug!(
-                                "Remote write operation {begin_index} already completed at {index}, continue replaying"
-                            );
-                            scope_replay_handle = Some(scope_handle);
-                            Ok(begin_index)
-                        }
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: true,
-                        } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await;
-                            Err(WorkerExecutorError::runtime(
-                                "Non-idempotent remote write operation was not completed, cannot retry",
-                            ))
-                        }
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: false,
-                        } if self.state.assume_idempotence => {
-                            // We need to jump to the end of the oplog
-                            self.switch_to_live().await;
+        {
+            // No scope opens, so nothing is written before the side effect runs and a fence
+            // already latched would only surface at the commit after it - by which time the
+            // effect has happened and the shard's new owner, having no record of it, runs it
+            // again. Reading the latch costs no storage round trip, so a write whose effect is
+            // about to run is refused here instead. It does not close the window where the shard
+            // moves *during* the call: that one needs a round trip per call, which is exactly what
+            // an idempotent write is declared to avoid.
+            if self.state.is_live()
+                && matches!(function_type, DurableFunctionType::WriteRemote)
+                && let Some(fence) = self.state.oplog.fence()
+            {
+                return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
+            }
 
-                            // But this is not enough, because if the retried batched write operation succeeds,
-                            // and later we replay it, we need to skip the first attempt and only replay the second.
-                            // Se we add a Jump entry to the oplog that registers a deleted region.
-                            let deleted_region = OplogRegion {
-                                start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
-                                end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
-                            };
+            // Hints are nondeterministic and cannot serve as retry points.
 
-                            self.public_state
-                                .worker()
-                                .add_and_commit_oplog(OplogEntry::jump(deleted_region))
-                                .await;
-
-                            // TODO: this recomputation should not be necessary.
-                            self.public_state.worker().reattach_worker_status().await;
-                            // Switched to live and re-running the body: the scope `End` will be
-                            // appended live by `end_function`, so do not store the (now incomplete)
-                            // replay handle.
-                            Ok(begin_index)
-                        }
-                        OplogEntryLookupResult::NotFound { .. } => {
-                            // assume_idempotence is false and the operation was not completed —
-                            // we cannot safely retry a non-idempotent batched write.
-                            self.switch_to_live().await;
-                            Err(WorkerExecutorError::runtime(
-                                "Non-idempotent remote write operation was not completed, cannot retry",
-                            ))
-                        }
-                    }
-                } else {
-                    scope_replay_handle = Some(scope_handle);
-                    Ok(begin_index)
-                }
-            }?;
-
-            // A durable scope (remote write / HTTP request) is now open until the matching
-            // `end_function`; the tip is inside it, so block mid-invocation checkpoints, and any
-            // `Start` written while it is open links back to it via `parent_start_index`.
-            let kind = if matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            ) {
-                DurableScopeKind::BatchedWrite
-            } else {
-                DurableScopeKind::NonIdempotentWrite
-            };
-            self.state
-                .push_durable_scope(result, kind, scope_replay_handle);
-
-            // The effective retry point now derives from the open scope; keep the global fallback
-            // pointing at the scope `Start` so it survives the scope being closed.
-            self.state.current_retry_point = result;
-            Ok(result)
-        } else {
-            // When there is no scope `Start` entry, the current retry point can only
-            // point to the last written non-hint entry. Hint entries must be ignored
-            // because they are nondeterministic.
-            // If the entry belongs to an open batched write or transaction, we need to
-            // set the current retry point to the index of the begin entry.
-            // The returned index, however, is going to be the current / last replayed index.
-
-            let begin_index = if self.state.replay_state.is_live() {
+            let begin_index = if self.state.is_live() {
                 self.state.oplog.current_oplog_index().await
             } else {
                 self.state.replay_state.last_replayed_non_hint_index()
             };
 
-            let new_retry_point = match function_type {
-                DurableFunctionType::WriteRemoteBatched(Some(idx)) => *idx,
-                DurableFunctionType::WriteRemoteTransaction(Some(idx)) => *idx,
-                _ => self
-                    .state
-                    .oplog
-                    .last_added_non_hint_entry()
-                    .await
-                    .unwrap_or(self.state.replay_state.last_replayed_non_hint_index()),
-            };
+            let new_retry_point = self
+                .state
+                .oplog
+                .last_added_non_hint_entry()
+                .await
+                .unwrap_or(self.state.replay_state.last_replayed_non_hint_index());
             self.state.current_retry_point = new_retry_point;
 
-            Ok(begin_index)
+            Ok((begin_index, span_started))
         }
     }
 
@@ -2729,354 +3335,334 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        }
-
-        if self.state.opens_durable_scope(function_type) {
-            if self.is_live() {
-                let entry = OplogEntry::End {
-                    timestamp: Timestamp::now_utc(),
-                    start_index: begin_index,
-                    response: None,
-                    forced_commit: true,
-                };
-                self.state.oplog.add(entry).await;
-                // The durable scope opened in `begin_function` is now closed.
-                self.state.remove_durable_scope(begin_index)?;
-            } else {
-                // The scope `End` was folded into the resolver at scope-open, so consume it
-                // through the resolver (never positionally, which under overlap could steal a
-                // concurrently-replaying sibling call's terminal). This also repairs a
-                // crash-induced half-pair and closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
-            }
-            Ok(())
-        } else {
-            Ok(())
-        }
+        self.end_function_impl(function_type, begin_index, None)
+            .await
     }
 
-    /// Closes a durable scope during replay by awaiting its `End` through the resolver, then
-    /// removing the in-memory scope. The scope `End` was registered as a resolver awaiter when its
-    /// `Start` was claimed (`claim_scope_start`), so it is delivered here whether it is the entry at
-    /// the cursor head or was already auto-drained to this scope's handle by another cursor driver.
-    ///
-    /// A crash between a scope's terminal marker and its `End` (`add_pair` gives contiguity, not
-    /// crash atomicity) truncates the oplog at the marker, so the awaited `End` resolves as
-    /// `Incomplete`; rather than hard-failing we append the missing `End` live to repair the pair for
-    /// future replays. A `None` handle means the scope was opened live (or recovery switched to
-    /// live at scope-open), in which case there is no recorded `End` to await.
-    async fn close_durable_scope_replay(
+    async fn end_function_impl(
         &mut self,
-        begin_index: OplogIndex,
+        _function_type: &DurableFunctionType,
+        _begin_index: OplogIndex,
+        _span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
-        match self.state.take_durable_scope_replay_handle(begin_index) {
-            Some(handle) => {
-                match self
-                    .state
-                    .replay_state
-                    .await_resolution_outcome(handle)
-                    .await?
-                {
-                    concurrent::ResolutionOutcome::Resolved(
-                        concurrent::Resolution::Completed { .. },
-                    ) => {}
-                    concurrent::ResolutionOutcome::Resolved(
-                        concurrent::Resolution::Cancelled { .. },
-                    ) => {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            format!("End {{ start_index: {begin_index} }}"),
-                            format!("Cancelled {{ start_index: {begin_index} }}"),
-                        ));
-                    }
-                    concurrent::ResolutionOutcome::Resolved(
-                        concurrent::Resolution::CompletedButDiscarded {
-                            end_idx,
-                            marker_idx,
-                            ..
-                        },
-                    ) => {
-                        // Discarded completions are recorded only for accessor completion
-                        // futures; a marker referencing a durable scope `Start` means the oplog
-                        // does not match this code path.
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            format!("End {{ start_index: {begin_index} }}"),
-                            format!(
-                                "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a durable scope"
-                            ),
-                        ));
-                    }
-                    concurrent::ResolutionOutcome::Incomplete => {
-                        // Half-pair recovery: the scope `Start` (and any terminal marker) is
-                        // committed but the scope `End` was lost to a crash. Replay has reached the
-                        // end of the oplog, so append the missing `End` live to complete the pair.
-                        self.state
-                            .oplog
-                            .add(OplogEntry::End {
-                                timestamp: Timestamp::now_utc(),
-                                start_index: begin_index,
-                                response: None,
-                                forced_commit: true,
-                            })
-                            .await;
+        Ok(())
+    }
+
+    /// Claims a transaction protocol Start, or continues live at the replay tail.
+    async fn claim_transaction_start(
+        &mut self,
+        scope_name: &HostFunctionName,
+        invocation_id: Option<DurableInvocationId>,
+    ) -> Result<Option<(OplogIndex, concurrent::ReplayCallHandle)>, WorkerExecutorError> {
+        loop {
+            let claim = StartClaim::scope(
+                scope_name,
+                &DurableFunctionType::WriteRemote,
+                self.entity_parent_start_index(),
+            )
+            .with_invocation_id(invocation_id);
+            let expected = claim.expected_description();
+            let store_continued_live = self.state.store_continued_live();
+            match self
+                .state
+                .replay_state
+                .claim_start_for_store_with_admission(
+                    claim.clone(),
+                    store_continued_live,
+                    |_, _| {},
+                    self.entity_tool_operation()
+                        .map(|operation| (operation, scope_name.to_string())),
+                )
+                .await?
+            {
+                ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                    concurrent::reproduce_incomplete_start_refusal(
+                        self.entity_tool_operation().as_ref(),
+                        &self.state.replay_state,
+                        handle.start_idx(),
+                    )
+                    .await?;
+                    return Ok(Some((handle.start_idx(), handle)));
+                }
+                ReplayStartClaimOutcome::DeletedRegion => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        expected,
+                        "matching Start belongs to a deleted replay region".to_string(),
+                    ));
+                }
+                outcome @ (ReplayStartClaimOutcome::ReplayEnded
+                | ReplayStartClaimOutcome::StoreAlreadyLive) => {
+                    if self
+                        .continue_live_at_replay_tail_with_refusal(
+                            matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
+                            expected,
+                            Some(concurrent::admission_refusal_before_start(
+                                &claim,
+                                &scope_name.to_string(),
+                            )?),
+                        )
+                        .await?
+                    {
+                        return Ok(None);
                     }
                 }
             }
-            None => {
-                // Opened live (or recovery switched to live at scope-open): no recorded `End` to
-                // await.
-            }
         }
-        self.state.remove_durable_scope(begin_index)
     }
 
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
     /// it commits, so the worker's `last_known_status` reflects the committed tip. Writes a
-    /// checkpoint only when we are at a structurally clean boundary (no open rollback region) and
-    /// the committed tip is at/below the `get_oplog_index` marker watermark; otherwise it is a
-    /// cheap no-op. The actual write is further throttled by the checkpointer.
+    /// checkpoint only when we are at a structurally clean boundary. The actual write is further
+    /// throttled by the checkpointer.
     async fn maybe_mid_invocation_checkpoint(&self) {
         if !self.state.at_clean_checkpoint_boundary() {
             return;
         }
         self.public_state
             .worker()
-            .checkpoint_status_mid_invocation(self.state.min_exposed_marker)
+            .checkpoint_status_mid_invocation()
             .await;
     }
 
-    pub async fn begin_transaction_function<Tx, Err>(
+    /// Reconstructs the recorded transaction without creating a replacement transaction.
+    /// Historical statements remain replayable even when the resident transaction was lost.
+    pub async fn begin_transaction_function<Tx>(
         &mut self,
-        handler: impl RemoteTransactionHandler<Tx, Err>,
-    ) -> Result<(OplogIndex, Tx), Err>
-    where
-        Err: From<WorkerExecutorError>,
-    {
+        handler: impl RemoteTransactionHandler<Tx, crate::services::rdbms::RdbmsError>,
+    ) -> anyhow::Result<(OplogIndex, Tx)> {
+        use concurrent::DurableContext;
+
         if self.state.durability_is_suppressed() {
-            let (_, tx) = handler.create_new().await?;
+            let (_, tx) = handler.create_new().await.map_err(|error| anyhow!(error))?;
             let begin_index = self.state.current_oplog_index().await;
-            Ok((begin_index, tx))
-        } else if self.is_live() {
-            let (tx_id, tx) = handler.create_new().await?;
-            // A transaction is a durable scope: append the scope `Start` and the
-            // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
-            // boundary. The scope `Start` index is the stable begin index for the whole transaction.
-            // Like other scope Starts it is a direct child of the entity invocation, when present;
-            // its child host calls point back at it via `WriteRemoteTransaction(Some(begin_index))`.
+            return Ok((begin_index, tx));
+        }
+
+        let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+        let invocation_id = self.direct_call_invocation_id(&DurableFunctionType::WriteRemote)?;
+        // A transaction begun after the live transition claims first while unclaimed retained
+        // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
+        // transaction only once replay reports that no scope `Start` remains.
+        let claimed_scope = if self.state.durable_call_is_live() {
+            None
+        } else {
+            self.claim_transaction_start(&scope_name, invocation_id)
+                .await?
+        };
+
+        let Some((scope_start_index, scope_handle)) = claimed_scope else {
+            // Commit the scope before opening the external transaction. No statements can
+            // execute until the Begin marker is committed and the handle reaches the guest.
             let scope_start = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: self.entity_parent_start_index(),
-                function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
-                invocation_id: None,
+                function_name: scope_name,
+                invocation_id,
                 observational_owner: None,
                 request: None,
-                durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+                durable_function_type: DurableFunctionType::WriteRemote,
+                span_started: None,
+                denial: None,
             };
-            let (begin_index, _) = self
+            let begin_index = self
                 .public_state
                 .worker()
                 .oplog()
-                .add_pair(
-                    scope_start,
-                    Box::new(move |_start_index| OplogEntry::begin_remote_transaction(tx_id, None)),
-                )
-                .await;
+                .add(scope_start)
+                .await
+                .map_err(WorkerExecutorError::from)?;
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await
+                .map_err(WorkerExecutorError::from)?;
 
             // The transaction scope is now open until commit/rollback; block checkpoints. Opened
             // live, so there is no recorded scope `End` to await on close.
             self.state
-                .push_durable_scope(begin_index, DurableScopeKind::Transaction, None);
+                .open_transaction_protocol(begin_index, invocation_id, None);
             self.state.current_retry_point = begin_index;
 
-            Ok((begin_index, tx))
-        } else {
-            // The transaction scope `Start` is preserved across restarts, so its index is the
-            // stable original begin index that keys every transaction marker. Its `End` is folded
-            // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
-            // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
-            // interleaved oplog fails here instead of silently driving the recovery logic with the
-            // wrong scope), and registers an awaiter the transaction terminal awaits instead of
-            // reading the scope `End` positionally. The handle is stored only when the transaction
-            // continues replaying (not when recovery restarts it live).
-            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
-            let (scope_start_index, scope_handle) = self
-                .state
-                .replay_state
-                .claim_scope_start(
-                    &scope_name,
-                    &DurableFunctionType::WriteRemoteTransaction(None),
-                    self.entity_parent_start_index(),
-                )
-                .await?;
-            let (begin_index, begin_entry) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::BeginRemoteTransaction
-            )?;
-            // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
-            // transaction (`original_begin_index: None`) or, after a restart, points back at this
-            // scope `Start`.
-            if let OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(idx),
-                ..
-            } = &begin_entry
-                && *idx != scope_start_index
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!(
-                        "BeginRemoteTransaction {{ original_begin_index: None | Some({scope_start_index}) }}"
-                    ),
-                    format!("BeginRemoteTransaction {{ original_begin_index: Some({idx}) }}"),
-                )
-                .into());
-            }
-            let original_begin_index = scope_start_index;
-
-            let assume_idempotence = self.state.assume_idempotence;
-
-            let pre_entry = self
-                .state
-                .replay_state
-                .lookup_oplog_entry_with_condition_and_state(
-                    original_begin_index,
-                    OplogEntry::is_pre_remote_transaction_s,
-                    OplogEntry::no_concurrent_side_effect,
-                    ScopeScanState::new(original_begin_index),
-                    OplogEntry::track_scope_membership,
-                )
-                .await;
-
-            let tx_id = try_match!(
-                begin_entry,
-                OplogEntry::BeginRemoteTransaction { transaction_id, .. }
-            )
-            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
-
-            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
-
-            let mut should_restart = false;
-
-            match pre_entry {
-                OplogEntryLookupResult::Found {
-                    entry: pre_entry, ..
-                } => {
-                    let end_entry = self
-                        .state
-                        .replay_state
-                        .lookup_oplog_entry_with_condition_and_state(
-                            original_begin_index,
-                            OplogEntry::is_end_remote_transaction_s,
-                            OplogEntry::no_concurrent_side_effect,
-                            ScopeScanState::new(original_begin_index),
-                            OplogEntry::track_scope_membership,
-                        )
-                        .await;
-
-                    match end_entry {
-                        OplogEntryLookupResult::Found { .. } => {}
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: false,
-                        } => {
-                            if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
-                                // if we can not confirm the transaction was committed, we need to restart
-                                should_restart = !handler.is_committed(&tx_id).await?;
-                            } else if pre_entry
-                                .is_pre_rollback_remote_transaction(original_begin_index)
-                            {
-                                // if we can not confirm the transaction was rolled back, we need to restart
-                                should_restart = !handler.is_rolled_back(&tx_id).await?;
-                            }
-                        }
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: true,
-                        } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await;
-                            return Err(WorkerExecutorError::runtime(
-                                "Transaction overlapped with other side effects was not completed, cannot retry",
-                            ).into());
-                        }
-                    }
-                }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: false,
-                } => {
-                    should_restart = true;
-                }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: true,
-                } => {
-                    // Must switch to live mode before failing to be able to commit an Error entry
-                    self.switch_to_live().await;
-                    return Err(WorkerExecutorError::runtime(
-                        "Transaction overlapped with other side effects was not completed, cannot retry",
-                    ).into());
+            let (tx_id, tx) = match handler.create_new().await {
+                Ok(tx) => tx,
+                Err(error) => {
+                    self.finish_transaction_terminal(begin_index,
+                        golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal::BeginFailed(Err(error.clone().into())), None).await?;
+                    return Err(anyhow!(error));
                 }
             };
+            self.state
+                .oplog
+                .add(OplogEntry::begin_remote_transaction(tx_id, begin_index))
+                .await?;
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
 
-            let (result, tx) = if should_restart {
-                // We need to jump to the end of the oplog
-                self.switch_to_live().await;
+            return Ok((begin_index, tx));
+        };
 
-                if !assume_idempotence {
-                    Err(WorkerExecutorError::runtime(
-                        "Non-idempotent remote write operation was not completed, cannot retry",
-                    ))
-                } else {
-                    // But this is not enough, because if the retried batched write operation succeeds,
-                    // and later we replay it, we need to skip the first attempt and only replay the second.
-                    // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        // Delete the previous `BeginRemoteTransaction` entry (and everything after),
-                        // because we'll get a new tx id. The transaction scope `Start` lives at
-                        // `scope_start_index < begin_index`, so it is preserved.
-                        start: begin_index,
-                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
-                    };
-
-                    self.public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
-                        .await;
-
-                    // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
-
-                    let (tx_id, tx) = handler.create_new().await?;
-                    let _ = self
-                        .public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
-                            tx_id,
-                            Some(original_begin_index),
-                        ))
-                        .await;
-
-                    // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
-                    // be appended live by the transaction terminal, so do not store the (now
-                    // incomplete) replay handle.
-                    Ok((original_begin_index, tx))
-                }
-            } else {
-                scope_replay_handle = Some(scope_handle);
-                Ok((original_begin_index, tx))
-            }?;
-
-            // The (possibly re-begun) transaction scope is open until commit/rollback.
-            self.state.push_durable_scope(
-                result,
-                DurableScopeKind::Transaction,
-                scope_replay_handle,
+        // The transaction scope `Start` is preserved across restarts, so its index is the
+        // stable original begin index that keys every transaction marker. Its `End` is folded
+        // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
+        // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
+        // interleaved oplog fails here instead of silently driving the recovery logic with the
+        // wrong scope), and registers an awaiter the transaction terminal awaits instead of
+        // reading the scope `End` positionally.
+        let begin_entry = self
+            .state
+            .replay_state
+            .transaction_marker(scope_start_index, |entry| {
+                matches!(entry, OplogEntry::BeginRemoteTransaction { .. })
+            });
+        let Some(begin_entry) = begin_entry else {
+            self.state.open_transaction_protocol(
+                scope_start_index,
+                invocation_id,
+                Some(scope_handle),
             );
-            self.state.current_retry_point = original_begin_index;
+            if let Some(outcome) = self.replay_transaction_terminal(scope_start_index).await? {
+                if let golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal::BeginFailed(Err(error)) = outcome {
+                    return Err(anyhow!(crate::services::rdbms::RdbmsError::from(error)));
+                }
+                return Err(anyhow!("Invalid begin transaction outcome"));
+            }
+            self.publish_direct_replay_tail(scope_start_index).await?;
+            // The previous handle never reached the guest, so it cannot contain statements.
+            // Repair only the begin, retaining its scope Start and every sibling call.
+            let (tx_id, tx) = match handler.create_new().await {
+                Ok(tx) => tx,
+                Err(error) => {
+                    self.finish_transaction_terminal(scope_start_index,
+                        golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal::BeginFailed(Err(error.clone().into())), None).await?;
+                    return Err(anyhow!(error));
+                }
+            };
+            self.state
+                .oplog
+                .add(OplogEntry::begin_remote_transaction(
+                    tx_id,
+                    scope_start_index,
+                ))
+                .await?;
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
+            self.state.current_retry_point = scope_start_index;
+            return Ok((scope_start_index, tx));
+        };
+        let original_begin_index = scope_start_index;
 
-            Ok((result, tx))
+        let tx_id = try_match!(
+            begin_entry,
+            OplogEntry::BeginRemoteTransaction { transaction_id, .. } => transaction_id
+        )
+        .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+
+        let (_, tx) = handler
+            .create_replay(&tx_id)
+            .await
+            .map_err(|error| anyhow!(error))?;
+        let result = original_begin_index;
+        let scope_replay_handle = Some(scope_handle);
+
+        // Historical statements replay before the terminal resolves external transaction status.
+        self.state
+            .open_transaction_protocol(result, invocation_id, scope_replay_handle);
+        self.state.current_retry_point = original_begin_index;
+
+        Ok((result, tx))
+    }
+
+    pub(crate) async fn replay_transaction_terminal(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> anyhow::Result<
+        Option<golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal>,
+    > {
+        let Some(handle) = self.state.take_transaction_replay_handle(begin_index) else {
+            return Ok(None);
+        };
+        match self
+            .state
+            .replay_state
+            .await_resolution_outcome(handle)
+            .await?
+        {
+            concurrent::ResolutionOutcome::Resolved(concurrent::Resolution::Completed {
+                response: Some(response),
+                ..
+            }) => {
+                let response = self
+                    .state
+                    .oplog
+                    .download_payload(response)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let golem_common::model::oplog::HostResponse::GolemRdbmsTransactionTerminal(
+                    response,
+                ) = response
+                else {
+                    return Err(anyhow!("Invalid transaction terminal response"));
+                };
+                self.state.close_transaction_protocol(begin_index)?;
+                Ok(Some(response.outcome))
+            }
+            concurrent::ResolutionOutcome::Incomplete => Ok(None),
+            _ => Err(anyhow!("Invalid transaction scope terminal")),
         }
+    }
+
+    pub(crate) async fn finish_transaction_terminal(
+        &mut self,
+        begin_index: OplogIndex,
+        outcome: golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal,
+        marker: Option<OplogEntry>,
+    ) -> anyhow::Result<()> {
+        use concurrent::DurableContext;
+
+        if self.state.durability_is_suppressed() {
+            return Ok(());
+        }
+        if !self.is_live() {
+            self.publish_direct_replay_tail(begin_index).await?;
+        }
+        let response = golem_common::model::oplog::HostResponse::GolemRdbmsTransactionTerminal(
+            golem_common::model::oplog::HostResponseGolemRdbmsTransactionTerminal { outcome },
+        );
+        let bytes =
+            golem_common::serialization::serialize(&response).map_err(anyhow::Error::msg)?;
+        let response = self
+            .state
+            .oplog
+            .upload_raw_payload(bytes)
+            .await
+            .map_err(anyhow::Error::msg)?
+            .into_payload()
+            .map_err(anyhow::Error::msg)?;
+        if let Some(marker) = marker {
+            self.state.oplog.add(marker).await?;
+        }
+        self.state
+            .oplog
+            .add(OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: begin_index,
+                response: Some(response),
+                forced_commit: true,
+                span_finished: None,
+                span_attributes: None,
+            })
+            .await?;
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        self.state.close_transaction_protocol(begin_index)?;
+        self.maybe_mid_invocation_checkpoint().await;
+        Ok(())
     }
 
     pub async fn pre_commit_transaction_function(
@@ -3090,20 +3676,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_commit_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
             Ok(())
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::PreCommitRemoteTransaction
-            )?;
+            if self
+                .state
+                .replay_state
+                .transaction_marker(begin_index, |entry| {
+                    entry.is_pre_commit_remote_transaction(begin_index)
+                })
+                .is_none()
+            {
+                return Err(WorkerExecutorError::runtime(
+                    "Missing transaction pre-commit marker",
+                ));
+            }
             Ok(())
         }
     }
@@ -3119,124 +3712,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_rollback_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
             Ok(())
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::PreRollbackRemoteTransaction
-            )?;
+            if self
+                .state
+                .replay_state
+                .transaction_marker(begin_index, |entry| {
+                    entry.is_pre_rollback_remote_transaction(begin_index)
+                })
+                .is_none()
+            {
+                return Err(WorkerExecutorError::runtime(
+                    "Missing transaction pre-rollback marker",
+                ));
+            }
             Ok(())
         }
-    }
-
-    pub async fn committed_transaction_function(
-        &mut self,
-        begin_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        } else if self.is_live() {
-            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
-            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
-            // The final marker and the scope `End` are appended as an atomic pair so they can never
-            // be split across a crash boundary (which would leave a marker without its `End`).
-            self.state
-                .oplog
-                .fallible_add_pair(
-                    OplogEntry::committed_remote_transaction(begin_index),
-                    OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: begin_index,
-                        response: None,
-                        forced_commit: true,
-                    },
-                )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
-            // The transaction scope opened in `begin_transaction_function` is now closed: the
-            // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed,
-            // so the tip is no longer inside a jumpable scope on its account.
-            self.state.remove_durable_scope(begin_index)?;
-        } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::CommittedRemoteTransaction
-            )?;
-            // The scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). If a crash split the marker/`End` pair, the
-            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
-            self.close_durable_scope_replay(begin_index).await?;
-        }
-        // The live branch above just committed/updated the status, so this is a clean boundary at
-        // the committed tip (the helper is a no-op during replay and while any other region is
-        // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
-        // invocations.
-        self.maybe_mid_invocation_checkpoint().await;
-        Ok(())
-    }
-
-    pub async fn rolled_back_transaction_function(
-        &mut self,
-        begin_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        } else if self.is_live() {
-            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
-            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
-            // The final marker and the scope `End` are appended as an atomic pair so they can never
-            // be split across a crash boundary (which would leave a marker without its `End`).
-            self.state
-                .oplog
-                .fallible_add_pair(
-                    OplogEntry::rolled_back_remote_transaction(begin_index),
-                    OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: begin_index,
-                        response: None,
-                        forced_commit: true,
-                    },
-                )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
-            // The transaction scope opened in `begin_transaction_function` is now closed: the
-            // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed,
-            // so the tip is no longer inside a jumpable scope on its account.
-            self.state.remove_durable_scope(begin_index)?;
-        } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::RolledBackRemoteTransaction
-            )?;
-            // The scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). If a crash split the marker/`End` pair, the
-            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
-            self.close_durable_scope_replay(begin_index).await?;
-        }
-        // The live branch above just committed/updated the status, so this is a clean boundary at
-        // the committed tip (the helper is a no-op during replay and while any other region is
-        // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
-        // invocations.
-        self.maybe_mid_invocation_checkpoint().await;
-        Ok(())
     }
 }
 
@@ -3255,203 +3753,46 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
             .take();
         match pending_update {
-            Some(TimestampedUpdateDescription {
+            Some(HydratedUpdate {
+                reference,
                 description: description @ UpdateDescription::SnapshotBased { .. },
-                ..
             }) => {
                 let target_revision = *description.target_revision();
 
                 debug!("Finalizing snapshot update to revision {target_revision}");
 
-                match store
+                if let Err(result) =
+                    Self::load_manual_update_snapshot(instance, store, description).await
+                {
+                    let action = store.as_context().data().durable_ctx().start_action(
+                        Some(&reference),
+                        start_outcome::RawStartError::ManualLoad(&result),
+                    );
+                    return Self::perform_start_action(store, action).await;
+                }
+                let component_metadata = store.as_context().data().component_metadata().clone();
+                let agent_type_provision_config = store
+                    .as_context()
+                    .data()
+                    .agent_type_provision_config()
+                    .cloned();
+
+                store
                     .as_context_mut()
                     .data_mut()
-                    .get_public_state()
-                    .oplog()
-                    .get_upload_description_payload(description)
-                    .await
-                {
-                    Ok(Some((data, mime_type))) => {
-                        let component_metadata = store
-                            .as_context()
-                            .data()
-                            .component_metadata()
-                            .metadata
-                            .clone();
-
-                        let idempotency_key = IdempotencyKey::fresh();
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .set_current_idempotency_key(idempotency_key.clone())
-                            .await;
-
-                        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
-                            idempotency_key,
-                            snapshot: RawSnapshotData { data, mime_type },
-                        };
-                        let agent_id = store.as_context().data().parsed_agent_id();
-                        let lowered = match lower_invocation(
-                            load_snapshot_invocation,
-                            &component_metadata,
-                            agent_id.as_ref(),
-                        ) {
-                            Ok(lowered) => lowered,
-                            Err(err) => {
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_worker_update_failed(
-                                        target_revision,
-                                        Some(format!(
-                                            "Manual update failed to lower load-snapshot invocation: {err}"
-                                        )),
-                                    )
-                                    .await;
-                                return Ok(Some(RetryDecision::Immediate));
-                            }
-                        };
-
-                        let invocation_context = InvocationContextStack::fresh();
-                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
-                        if let Err(err) = store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .set_current_invocation_context(invocation_context)
-                            .await
-                        {
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_failed(
-                                    target_revision,
-                                    Some(format!(
-                                        "Manual update failed to install invocation context: {err}"
-                                    )),
-                                )
-                                .await;
-                            return Ok(Some(RetryDecision::Immediate));
-                        }
-
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .begin_call_snapshotting_function();
-
-                        let load_result = invoke_observed_and_traced(
-                            lowered,
-                            store,
-                            instance,
-                            InvocationMode::Replay,
-                        )
-                        .await;
-
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .end_call_snapshotting_function_if_active();
-
-                        for span_id in local_span_ids {
-                            let _ = store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .remove_span(&span_id);
-                        }
-                        for span_id in inherited_span_ids {
-                            let _ = store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .remove_span(&span_id);
-                        }
-
-                        let failed = match load_result {
-                            Err(error) => {
-                                Some(format!("Manual update failed to load snapshot: {error}"))
-                            }
-                            Ok(InvokeResult::Failed { error, .. }) => {
-                                let stderr = store
-                                    .as_context()
-                                    .data()
-                                    .get_public_state()
-                                    .event_service()
-                                    .get_last_invocation_errors();
-                                let error = error.to_string(&stderr);
-                                Some(format!("Manual update failed to load snapshot: {error}"))
-                            }
-                            Ok(InvokeResult::Succeeded {
-                                result: AgentInvocationResult::LoadSnapshot { error },
-                                ..
-                            }) => {
-                                error.map(|e| format!("Manual update failed to load snapshot: {e}"))
-                            }
-                            Ok(InvokeResult::Succeeded { .. }) => Some(
-                                "Unexpected result value from the snapshot load function"
-                                    .to_string(),
-                            ),
-                            _ => None,
-                        };
-
-                        if let Some(error) = failed {
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_failed(target_revision, Some(error))
-                                .await;
-                            Ok(Some(RetryDecision::Immediate))
-                        } else {
-                            let component_metadata =
-                                store.as_context().data().component_metadata().clone();
-                            let agent_type_provision_config = store
-                                .as_context()
-                                .data()
-                                .agent_type_provision_config()
-                                .cloned();
-
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_succeeded(
-                                    target_revision,
-                                    component_metadata.component_size,
-                                    HashSet::from_iter(
-                                        agent_type_provision_config
-                                            .into_iter()
-                                            .flat_map(|c| c.plugins)
-                                            .map(|installation| {
-                                                installation.environment_plugin_grant_id
-                                            }),
-                                    ),
-                                )
-                                .await;
-                            Ok(None)
-                        }
-                    }
-                    Ok(None) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .on_worker_update_failed(
-                                target_revision,
-                                Some("Failed to find snapshot data for update".to_string()),
-                            )
-                            .await;
-                        Ok(Some(RetryDecision::Immediate))
-                    }
-                    Err(error) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .on_worker_update_failed(target_revision, Some(error))
-                            .await;
-                        Ok(Some(RetryDecision::Immediate))
-                    }
-                }
+                    .on_worker_update_succeeded(
+                        target_revision,
+                        component_metadata.component_size,
+                        HashSet::from_iter(
+                            agent_type_provision_config
+                                .into_iter()
+                                .flat_map(|c| c.plugins)
+                                .map(|installation| installation.environment_plugin_grant_id),
+                        ),
+                        start_outcome::success_details_of(&reference),
+                    )
+                    .await?;
+                Ok(None)
             }
             _ => Err(WorkerExecutorError::runtime(
                 "`finalize_pending_snapshot_update` can only be called with a snapshot update description",
@@ -3459,14 +3800,216 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// Loads the application snapshot of the pending snapshot-based update `description`. An
+    /// interrupted load gives `ManualLoadResult::Interrupted` with its interrupt kind, and an
+    /// exited guest gives `ManualLoadResult::Exited`.
+    async fn load_manual_update_snapshot(
+        instance: &Instance,
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        description: UpdateDescription,
+    ) -> Result<(), start_outcome::ManualLoadResult> {
+        use start_outcome::ManualLoadResult;
+        let (data, mime_type) = match store
+            .as_context_mut()
+            .data_mut()
+            .get_public_state()
+            .oplog()
+            .get_upload_description_payload(description)
+            .await
+        {
+            Ok(Some(payload)) => payload,
+            Ok(None) => {
+                return Err(ManualLoadResult::Failed(
+                    "Failed to find snapshot data for update".to_string(),
+                ));
+            }
+            Err(error) => return Err(ManualLoadResult::Failed(error)),
+        };
+        let component_metadata = store
+            .as_context()
+            .data()
+            .component_metadata()
+            .metadata
+            .clone();
+
+        let idempotency_key = IdempotencyKey::fresh();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_idempotency_key(idempotency_key.clone())
+            .await;
+
+        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
+            idempotency_key,
+            snapshot: RawSnapshotData { data, mime_type },
+        };
+        let agent_id = store.as_context().data().parsed_agent_id();
+        let lowered = lower_invocation(
+            load_snapshot_invocation,
+            &component_metadata,
+            agent_id.as_ref(),
+        )
+        .map_err(|err| {
+            ManualLoadResult::Failed(format!(
+                "Manual update failed to lower load-snapshot invocation: {err}"
+            ))
+        })?;
+
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+            .map_err(|err| {
+                ManualLoadResult::Failed(format!(
+                    "Manual update failed to install invocation context: {err}"
+                ))
+            })?;
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_call_snapshotting_function();
+
+        let load_result =
+            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
+
+        local_span_ids
+            .into_iter()
+            .chain(inherited_span_ids)
+            .for_each(|span_id| {
+                let _ = store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .remove_span(&span_id);
+            });
+
+        match load_result {
+            Err(error) => Err(ManualLoadResult::Failed(format!(
+                "Manual update failed to load snapshot: {error}"
+            ))),
+            Ok(InvokeResult::Failed { error, .. }) => {
+                let stderr = store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .event_service()
+                    .get_last_invocation_errors();
+                let error = error.to_string(&stderr);
+                Err(ManualLoadResult::Failed(format!(
+                    "Manual update failed to load snapshot: {error}"
+                )))
+            }
+            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                AgentInvocationResult::LoadSnapshot { error: None } => Ok(()),
+                AgentInvocationResult::LoadSnapshot { error: Some(e) } => Err(
+                    ManualLoadResult::Failed(format!("Manual update failed to load snapshot: {e}")),
+                ),
+                _ => Err(ManualLoadResult::Failed(
+                    "Unexpected result value from the snapshot load function".to_string(),
+                )),
+            },
+            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                Err(ManualLoadResult::Interrupted(interrupt_kind))
+            }
+            Ok(InvokeResult::Exited { .. }) => Err(ManualLoadResult::Exited),
+        }
+    }
+
+    /// What the start does with the failure `error` with the pending update `head`, as
+    /// [`start_outcome::decide`] decides for the baseline of this start.
+    fn start_action(
+        &self,
+        head: Option<&PendingUpdateRef>,
+        error: start_outcome::RawStartError<'_>,
+    ) -> start_outcome::StartAction {
+        start_outcome::decide(
+            &self.state.baseline_role,
+            head,
+            error,
+            &self.owned_agent_id.agent_id,
+            self.public_state.worker().retired_for_lost_shard(),
+        )
+    }
+
+    /// Performs `action` of a failed start: it writes a failed update and starts again on the
+    /// source revision, skips or rejects a periodic record and starts again, or ends the start
+    /// with an error.
+    async fn perform_start_action(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        action: start_outcome::StartAction,
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        match action {
+            start_outcome::StartAction::FailUpdate { entry, reject } => {
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .on_worker_update_failed(entry)
+                    .await?;
+                if let Some(index) = reject {
+                    store
+                        .as_context()
+                        .data()
+                        .get_public_state()
+                        .worker()
+                        .reject_periodic(index);
+                }
+                debug!("Retrying prepare_instance after failed update attempt");
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::SkipPeriodic(index) => {
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .mark_periodic_unavailable(index);
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::RejectPeriodic(index) => {
+                warn!(
+                    snapshot_index = %index,
+                    "The application snapshot of a periodic record does not load; the start selects its baseline again without this record: the previous usable periodic record, or else the authoritative baseline"
+                );
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .reject_periodic(index);
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::Error(error) => Err(error),
+            start_outcome::StartAction::Retry(decision) => Ok(Some(decision)),
+            start_outcome::StartAction::ShardLost => Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            }),
+        }
+    }
+
     async fn try_load_snapshot(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
     ) -> SnapshotRecoveryResult {
-        let (snapshot_index, snapshot_source) = {
-            let state = &store.as_context().data().durable_ctx().state;
-            (state.last_snapshot_index, state.last_snapshot_source)
-        };
+        let snapshot_index = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index;
 
         let snapshot_index = match snapshot_index {
             Some(idx) => idx,
@@ -3475,13 +4018,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         debug!("Attempting snapshot-based recovery from oplog index {snapshot_index}");
 
-        let oplog_entry = store
+        let oplog_entry = match store
             .as_context()
             .data()
             .get_public_state()
             .oplog()
             .read(snapshot_index)
-            .await;
+            .await
+        {
+            Ok(oplog_entry) => oplog_entry,
+            Err(error) => return snapshot_entry_read_failure(error),
+        };
 
         let (data_payload, mime_type) = match oplog_entry {
             OplogEntry::Snapshot {
@@ -3496,24 +4043,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => (payload, mime_type),
             _ => {
                 let error = format!(
-                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry"
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
-                }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after invalid snapshot entry: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
+                );
+                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
             }
         };
 
@@ -3522,32 +4060,51 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .oplog()
-            .download_payload(data_payload)
+            .download_payload_classified(data_payload)
             .await
         {
             Ok(data) => data,
             Err(err) => {
-                let error = format!(
-                    "Failed to download snapshot payload: {err}; falling back to full replay"
+                let lost = matches!(err, OplogPayloadDownloadError::Corrupt(_));
+                let error =
+                    format!("Failed to download snapshot payload at {snapshot_index}: {err}");
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
+                let result = payload_download_failure(
+                    store
+                        .as_context()
+                        .data()
+                        .durable_ctx()
+                        .state
+                        .snapshot_replay_purpose,
+                    lost,
+                    error,
+                );
+                if matches!(result, SnapshotRecoveryResult::Retry(_)) {
+                    store
+                        .as_context()
+                        .data()
+                        .get_public_state()
+                        .worker()
+                        .mark_periodic_unavailable(snapshot_index);
                 }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after snapshot download failure: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
+                return result;
             }
         };
+
+        if let Err(error) = load_load_snapshot_guest(&mut store.as_context_mut(), instance) {
+            Self::emit_snapshot_recovery_event(
+                store,
+                snapshot_index,
+                false,
+                Some(error.to_string()),
+            );
+            return SnapshotRecoveryResult::Failed(error);
+        }
 
         let component_metadata = store
             .as_context()
@@ -3578,9 +4135,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Err(err) => {
                 let error =
                     format!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                return SnapshotRecoveryResult::Failed;
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
+                );
+                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
             }
         };
 
@@ -3594,9 +4155,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
         {
             let error = format!("Snapshot recovery failed to install invocation context: {err}");
-            warn!("{error}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            return SnapshotRecoveryResult::Failed;
+            return SnapshotRecoveryResult::Unavailable(err);
         }
 
         store
@@ -3607,6 +4167,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let load_result =
             invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
 
         store
             .as_context_mut()
@@ -3629,10 +4190,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .remove_span(&span_id);
         }
 
+        let snapshot_divergence = load_result
+            .as_ref()
+            .is_ok_and(InvokeResult::is_snapshot_replay_divergence);
+        if let Some(decision) = load_result.as_ref().ok().and_then(Self::load_retry) {
+            return SnapshotRecoveryResult::Retry(decision);
+        }
         let failed = match load_result {
-            Err(error) => Some(format!(
-                "Snapshot recovery failed to load snapshot: {error}"
-            )),
+            Err(error) => return SnapshotRecoveryResult::Unavailable(error),
+            Ok(InvokeResult::Failed { error, .. }) if !snapshot_divergence => {
+                return SnapshotRecoveryResult::Unavailable(
+                    WorkerExecutorError::InvocationFailed {
+                        error,
+                        stderr: String::new(),
+                    },
+                );
+            }
             Ok(InvokeResult::Failed { error, .. }) => {
                 let stderr = store
                     .as_context()
@@ -3645,25 +4218,87 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     "Snapshot recovery failed to load snapshot: {error}"
                 ))
             }
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::LoadSnapshot { error },
-                ..
-            }) => error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}")),
-            Ok(InvokeResult::Succeeded { .. }) => {
-                Some("Unexpected result value from load-snapshot function".to_string())
-            }
+            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                AgentInvocationResult::LoadSnapshot { error } => {
+                    error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}"))
+                }
+                _ => Some("Unexpected result value from load-snapshot function".to_string()),
+            },
             Ok(_) => Some("Snapshot recovery interrupted".to_string()),
         };
 
         if let Some(error) = failed {
-            warn!("{error}; re-creating instance for full replay");
-            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            SnapshotRecoveryResult::Failed
+            warn!(%error, %snapshot_index, "Snapshot recovery failed");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error.clone()));
+            SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(format!(
+                "Snapshot recovery at {snapshot_index} failed: {error}"
+            )))
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
             SnapshotRecoveryResult::Success
         }
+    }
+
+    /// Whether the replay after the application snapshot of this start, which diverged from the
+    /// oplog with `error`, rejects its record now, as [`start_outcome::decide`] decides: only a
+    /// periodic record, and only while the start still replays it.
+    fn rejects_diverged_record(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        error: &WorkerExecutorError,
+    ) -> bool {
+        let ctx = store.as_context().data().durable_ctx();
+        ctx.state.snapshot_replay_purpose == SnapshotReplayPurpose::PeriodicRecovery
+            && !ctx.is_live()
+            && matches!(
+                ctx.start_action(
+                    None,
+                    start_outcome::RawStartError::Replay {
+                        error,
+                        diverged: true,
+                    },
+                ),
+                start_outcome::StartAction::RejectPeriodic(_)
+            )
+    }
+
+    /// Rejects this periodic snapshot for the starts of this incarnation and gives an immediate
+    /// retry. The next start selects its baseline again without this record: the previous usable
+    /// periodic record, or else the authoritative baseline.
+    fn abandon_diverged_automatic_snapshot(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        error: &impl std::fmt::Display,
+        emit_failure: bool,
+    ) -> RetryDecision {
+        let snapshot_index = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index
+            .expect("an automatic snapshot tail is only replayed after loading a snapshot");
+        let error = format!(
+            "Snapshot recovery at {snapshot_index} diverged from the recorded oplog: {error}; retrying without this snapshot, from the previous usable periodic record or else the authoritative baseline"
+        );
+        warn!(%error, "Abandoning periodic snapshot");
+        if emit_failure
+            && store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .state
+                .snapshot_replay_purpose
+                == SnapshotReplayPurpose::PeriodicRecovery
+        {
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+        }
+        store
+            .as_context()
+            .data()
+            .get_public_state()
+            .worker()
+            .reject_periodic(snapshot_index);
+        RetryDecision::Immediate
     }
 
     fn emit_snapshot_recovery_event(
@@ -3672,6 +4307,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         succeeded: bool,
         error: Option<String>,
     ) {
+        if store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .snapshot_replay_purpose
+            == SnapshotReplayPurpose::AssistedUpdate
+        {
+            return;
+        }
         store
             .as_context_mut()
             .data_mut()
@@ -3691,32 +4336,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-enum SnapshotRecoveryResult {
-    Success,
-    NotAttempted,
-    Failed,
-}
-
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn restart_replay_without_snapshot(&mut self) -> Result<(), WorkerExecutorError> {
-        self.state.replay_state.drop_override_and_restart().await?;
-
-        self.state.agent_wallet_cards = match self.state.agent_id.as_ref() {
-            Some(agent_id) => {
-                let card = agent_initial_card_from_component_metadata(
-                    &self.state.component_metadata,
-                    agent_id,
-                )?;
-                BTreeMap::from([(card.card_id(), card)])
-            }
-            None => BTreeMap::new(),
-        };
-        self.state.wallet_generation = 0;
-        self.rederive_agent_effective_surface_from_wallet();
-
-        Ok(())
-    }
-
     /// Activity tracker for Golem-spawned store background tasks; see
     /// [`tail_work::TailWorkTracker`].
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
@@ -3735,7 +4355,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
         let stream_runtime_teardown = self.stream_runtime_teardown.clone();
-        Arc::new(move || stream_runtime_teardown.load(Ordering::Acquire))
+        // Owner failure fences entity Stores immediately. The primary signals teardown
+        // separately when its interrupt is delivered, not when it is merely queued.
+        let fenced_entity_operations = matches!(self.runtime, OwnerRuntime::Entity(_))
+            .then(|| self.owner_execution.tool_operations());
+        let invocation_loops = self
+            .public_state
+            .worker()
+            .active_agents()
+            .invocation_loops();
+        Arc::new(move || {
+            stream_runtime_teardown.load(Ordering::Acquire)
+                || invocation_loops.is_shut_down()
+                || fenced_entity_operations
+                    .as_ref()
+                    .is_some_and(|operations| operations.selected_owner_failure().is_some())
+        })
     }
 
     pub(crate) fn begin_stream_runtime_teardown(&self) {
@@ -3834,6 +4469,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
     }
 
+    pub(crate) fn invocation_deadline_exceeded(&self) -> bool {
+        self.state
+            .invocation_deadline_exceeded
+            .load(Ordering::Acquire)
+    }
+
     pub(crate) fn end_call_snapshotting_function_if_active(&mut self) {
         if self.state.snapshotting_mode {
             self.end_call_snapshotting_function();
@@ -3845,10 +4486,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rep: u32,
         url: String,
         headers: Option<Vec<(String, String)>>,
+        reconstruction_policy: SerializableWebsocketReconstructionPolicy,
     ) {
-        self.state
-            .open_websocket_connections
-            .insert(rep, WebSocketConnectionState { url, headers });
+        self.state.open_websocket_connections.insert(
+            rep,
+            WebSocketConnectionState {
+                url,
+                headers,
+                reconstruction_policy,
+            },
+        );
     }
 
     /// Returns `Ok(())` if the host is in normal strictness mode, or if the host is in read-only
@@ -3903,262 +4550,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|state| WebSocketConnectionInfo {
                 url: state.url.clone(),
                 headers: state.headers.clone(),
+                reconstruction_policy: state.reconstruction_policy,
             })
-    }
-
-    /// Whether some task currently holds an open replay-cursor transaction. See
-    /// [`ReplayState::has_open_cursor_transaction`]; used by the invocation completion path to
-    /// keep the store's event loop alive until no store-spawned task holds the cursor lock.
-    pub fn has_open_replay_cursor_transaction(&self) -> bool {
-        self.state.replay_state.has_open_cursor_transaction()
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
         loop {
-            let boundary_guard = self
-                .state
-                .card_event_boundary_lock
-                .clone()
-                .lock_owned()
-                .await;
-            self.process_pending_replay_events_locked().await?;
-            let retries = permissions::prepare_pending_source_card_transfers(self).await?;
-            if retries.is_empty() {
+            replay_application::reserve(self)?;
+            let Some(application) = self.state.replay_applications.front().cloned() else {
+                if let Some(entity) = &self.state.entity_replay_wallet {
+                    let generation = entity.receipt().result.await?.wallet.generation;
+                    self.state.wallet_generation = self.state.wallet_generation.max(generation);
+                }
                 return Ok(());
-            }
-            drop(boundary_guard);
-            permissions::complete_pending_source_card_transfers(self, retries).await?;
+            };
+            let prepared = application.result.clone().await?;
+            replay_application::apply(self, &application, &prepared);
         }
-    }
-
-    async fn process_pending_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
-        let replay_events = self.state.replay_state.take_new_replay_events();
-        if !replay_events.is_empty() {
-            debug!("Applying pending side effects accumulated during replay");
-        }
-        for event in replay_events {
-            match event {
-                ReplayEvent::UpdateReplayed { new_revision } => {
-                    debug!("Updating worker state to component metadata revision {new_revision}");
-                    self.update_state_to_new_component_revision(new_revision)
-                        .await?;
-                }
-                ReplayEvent::ForkReplayed { new_phantom_id } => {
-                    debug!("Updating the replay's current phantom id to {new_phantom_id}");
-                    self.update_state_to_new_phantom_id(new_phantom_id).await?;
-                }
-                ReplayEvent::InvocationWalletPinned { wallet_pin } => {
-                    debug!(
-                        generation = wallet_pin.wallet_token.generation,
-                        card_count = wallet_pin.pinned_card_ids.len(),
-                        "Restoring the replayed invocation wallet pin"
-                    );
-                    if apply_invocation_wallet_pin(
-                        &mut self.state.agent_wallet_cards,
-                        self.state.wallet_id_hash,
-                        &mut self.state.wallet_generation,
-                        wallet_pin,
-                    )? {
-                        self.rederive_agent_effective_surface_from_wallet();
-                    }
-                }
-                ReplayEvent::CardInstalled {
-                    card,
-                    wallet_generation,
-                } => {
-                    let card_id = card.card_id();
-                    debug!(card_id = %card_id, "Applying replayed card installation");
-                    if add_wallet_card(
-                        &mut self.state.agent_wallet_cards,
-                        &mut self.state.wallet_generation,
-                        card,
-                    )? {
-                        self.rederive_agent_effective_surface_from_wallet();
-                    }
-                    adopt_recorded_wallet_generation(
-                        &mut self.state.wallet_generation,
-                        wallet_generation,
-                    )?;
-                }
-                ReplayEvent::CardDerived {
-                    card,
-                    wallet_generation,
-                } => {
-                    let card_id = card.card_id();
-                    debug!(card_id = %card_id, "Applying replayed card derivation");
-                    adopt_recorded_wallet_generation(
-                        &mut self.state.wallet_generation,
-                        wallet_generation,
-                    )?;
-                }
-                ReplayEvent::CardTransferStarted {
-                    card_id,
-                    source_holder,
-                    source_wallet_generation,
-                    ..
-                } => {
-                    if source_holder.as_ref().is_none_or(|source_holder| {
-                        card_holder_is_agent(source_holder, &self.owned_agent_id.agent_id)
-                    }) {
-                        if transfer_started_removes_source_membership(
-                            self.state.agent_wallet_cards.get(&card_id),
-                            &source_holder,
-                            &self.owned_agent_id.agent_id,
-                        ) {
-                            debug!(card_id = %card_id, "Applying replayed card transfer start");
-                            if remove_wallet_card(
-                                &mut self.state.agent_wallet_cards,
-                                &mut self.state.wallet_generation,
-                                card_id,
-                            )? {
-                                self.rederive_agent_effective_surface_from_wallet();
-                            }
-                        }
-                        adopt_recorded_wallet_generation(
-                            &mut self.state.wallet_generation,
-                            source_wallet_generation,
-                        )?;
-                    }
-                }
-                ReplayEvent::CardTransferred {
-                    target_holder,
-                    card,
-                    target_wallet_generation,
-                    ..
-                } => {
-                    if card_holder_is_agent(&target_holder, &self.owned_agent_id.agent_id) {
-                        let card_id = card.card_id();
-                        debug!(card_id = %card_id, "Applying replayed card transfer completion");
-                        if add_wallet_card(
-                            &mut self.state.agent_wallet_cards,
-                            &mut self.state.wallet_generation,
-                            card,
-                        )? {
-                            self.rederive_agent_effective_surface_from_wallet();
-                        }
-                        adopt_recorded_wallet_generation(
-                            &mut self.state.wallet_generation,
-                            target_wallet_generation,
-                        )?;
-                    }
-                }
-                ReplayEvent::CardTransferConfirmed { transfer_id, .. } => {
-                    debug!(%transfer_id, "Applying replayed card transfer receipt");
-                }
-                ReplayEvent::CardRevokedCascade {
-                    card_ids,
-                    local_wallet_generation,
-                } => {
-                    debug!(
-                        count = card_ids.len(),
-                        "Applying replayed card revocation cascade"
-                    );
-                    let wallet_changed = remove_wallet_cards(
-                        &mut self.state.agent_wallet_cards,
-                        &mut self.state.wallet_generation,
-                        &card_ids,
-                    )?;
-                    let scope_changed = self.clear_invocation_scope_if_roots_include(&card_ids);
-                    if wallet_changed || scope_changed {
-                        self.rederive_agent_effective_surface_from_wallet();
-                    }
-                    adopt_recorded_wallet_generation(
-                        &mut self.state.wallet_generation,
-                        local_wallet_generation,
-                    )?;
-                }
-                ReplayEvent::CardRevoked {
-                    card_id,
-                    wallet_generation,
-                } => {
-                    debug!(card_id = %card_id, "Applying replayed card revocation");
-                    self.apply_card_revoked(card_id, OplogIndex::NONE, false)
-                        .await?;
-                    adopt_recorded_wallet_generation(
-                        &mut self.state.wallet_generation,
-                        wallet_generation,
-                    )?;
-                }
-                ReplayEvent::CardExpired {
-                    card_id,
-                    wallet_generation,
-                } => {
-                    debug!(card_id = %card_id, "Applying replayed card expiry");
-                    self.apply_card_revoked(card_id, OplogIndex::NONE, false)
-                        .await?;
-                    adopt_recorded_wallet_generation(
-                        &mut self.state.wallet_generation,
-                        wallet_generation,
-                    )?;
-                }
-                ReplayEvent::ReplayFinished => {
-                    debug!("Replaying oplog finished");
-                    self.linear_memory.switch_to_live();
-                    let pending_update = self.state.pending_update.lock().await.take();
-                    if let Some(pending_update) = pending_update {
-                        match pending_update.description {
-                            UpdateDescription::Automatic { target_revision } => {
-                                debug!("Finalizing pending automatic update");
-
-                                if let Err(error) = self
-                                    .update_state_to_new_component_revision(target_revision)
-                                    .await
-                                {
-                                    let stringified_error =
-                                        format!("Applying worker update failed: {error}");
-
-                                    self.on_worker_update_failed(
-                                        target_revision,
-                                        Some(stringified_error),
-                                    )
-                                    .await;
-
-                                    Err(error)?
-                                };
-
-                                let component_metadata = self.component_metadata().clone();
-
-                                self.on_worker_update_succeeded(
-                                    target_revision,
-                                    component_metadata.component_size,
-                                    HashSet::from_iter({
-                                        self.agent_type_provision_config()
-                                            .map(|c| c.plugins.as_slice())
-                                            .unwrap_or_default()
-                                            .iter()
-                                            .map(|installation| {
-                                                installation.environment_plugin_grant_id
-                                            })
-                                    }),
-                                )
-                                .await;
-
-                                debug!("Finalizing automatic update to revision {target_revision}");
-                            }
-                            _ => {
-                                return Err(WorkerExecutorError::runtime(
-                                    "pending replay event finalization expected an automatic update description",
-                                ));
-                            }
-                        }
-                    }
-
-                    self.check_post_replay_wallet_liveness().await?;
-                }
-            }
-        }
-
-        Ok(())
     }
 
     async fn check_post_replay_wallet_liveness(&mut self) -> Result<(), WorkerExecutorError> {
         let interested_card_ids = self.interested_card_ids();
-        self.refresh_card_interest().await;
-
         if interested_card_ids.is_empty() || !self.state.card_interest_index.authority_is_open() {
             return Ok(());
         }
-
         let card_states = self
             .state
             .card_service
@@ -4168,106 +4583,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state.invocation_scope_card.as_ref(),
             &card_states,
         )?;
-
         let revoked_card_ids = card_states
             .into_iter()
             .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
             .collect::<Vec<_>>();
+        if !revoked_card_ids.is_empty() {
+            self.state.authority_initialized = false;
+        }
         self.public_state
             .worker()
             .queue_card_revocations_locked(&revoked_card_ids)
-            .await;
-
-        Ok(())
-    }
-
-    pub async fn update_state_to_new_phantom_id(
-        &mut self,
-        new_phantom_id: Uuid,
-    ) -> Result<(), WorkerExecutorError> {
-        self.state.current_phantom_id = Some(new_phantom_id);
-        Ok(())
-    }
-
-    async fn update_state_to_new_component_revision(
-        &mut self,
-        new_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        let current_metadata = &self.state.component_metadata;
-
-        if new_revision <= current_metadata.revision {
-            debug!("Update {new_revision} was already applied, skipping");
-            return Ok(());
-        };
-
-        let new_metadata = self
-            .component_service()
-            .get_metadata(self.owned_agent_id.component_id(), Some(new_revision))
             .await?;
-
-        let new_agent_type_provision_configs = self.parsed_agent_id().and_then(|aid| {
-            new_metadata
-                .metadata
-                .agent_type_provision_configs()
-                .get(&aid.agent_type)
-                .cloned()
-        });
-
-        let updated_agent_state = if let Some(agent_id) = self.parsed_agent_id() {
-            let agent_type = new_metadata
-                .metadata
-                .find_agent_type_by_name_ref(&agent_id.agent_type)
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "Agent type {} not found in updated agent metadata",
-                        agent_id.agent_type
-                    ))
-                })?;
-
-            let updated_agent_config = effective_agent_config(
-                self.state.initial_agent_config.clone(),
-                new_agent_type_provision_configs
-                    .as_ref()
-                    .map(|c| c.config.clone())
-                    .unwrap_or_default(),
-            )?;
-
-            validate_agent_config(&updated_agent_config, agent_type)?;
-
-            let initial_card =
-                agent_initial_card_from_component_metadata(&new_metadata, &agent_id)?;
-            let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
-            Some((updated_agent_config, initial_wallet_cards))
-        } else {
-            None
-        };
-
-        update_initial_files(
-            &self.filesystem_generation_handle,
-            Arc::clone(&self.state.file_loader),
-            self.owned_agent_id.environment_id,
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.clone())
-                .unwrap_or_default(),
-        )
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-
-        self.state.component_metadata = new_metadata;
-
-        if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
-            self.state.agent_config = updated_agent_config;
-            self.state.cached_agent_config_retry_policies = None;
-            replace_wallet_cards(
-                &mut self.state.agent_wallet_cards,
-                &mut self.state.wallet_generation,
-                initial_wallet_cards,
-            )?;
-            self.rederive_agent_effective_surface_from_wallet();
-        };
-
         Ok(())
     }
 }
@@ -4323,6 +4649,21 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             if let ExecutionStatus::Interrupting { interrupt_kind, .. } = &*execution_status {
                 return Some(*interrupt_kind);
             }
+        }
+        if self
+            .owner_execution
+            .tool_operations()
+            .interruptible_owner_failure()
+            .is_some()
+        {
+            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+        }
+        if self
+            .entity_cancellation
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
         }
         // An exceeded invocation or tail-work deadline surfaces as a synthetic interrupt so work
         // traps at the next epoch check. The corresponding invocation boundary converts the
@@ -4400,19 +4741,70 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Ends an invocation whose failure, or the status after it, the oplog refused to record.
+    async fn refused_terminal_entry(
+        &mut self,
+        error: &OplogError,
+        trap_type: &TrapType,
+        full_function_name: &str,
+    ) -> InvocationFailureDecision {
+        match terminal_entry_refusal(error) {
+            // The storage did not answer: the entry can be stored, but the status after it does
+            // not read. The invocation stays pending, and the agent recovers from its oplog when
+            // the storage answers again.
+            TerminalEntryRefusal::RecoveryRequired(error) => {
+                InvocationFailureDecision::Infrastructure(error)
+            }
+            // The oplog failed for good, so the invocation fails here with the trap, and the
+            // agent stops with the error, which reaches the other waiting callers.
+            TerminalEntryRefusal::OplogFailed(error) => {
+                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                    self.public_state
+                        .worker()
+                        .store_invocation_failure(&idempotency_key, trap_type)
+                        .await;
+                    self.public_state.event_service().emit_invocation_finished(
+                        full_function_name,
+                        &idempotency_key,
+                        self.is_live(),
+                    );
+                }
+                InvocationFailureDecision::Infrastructure(error)
+            }
+            // Refused by a fence, the shard is lost: no failure is published for its invocation,
+            // which the shard's new owner runs.
+            TerminalEntryRefusal::Unpublished => {
+                InvocationFailureDecision::Retry(RetryDecision::None)
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
-        mut invocation: AgentInvocation,
+        hydrated: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError> {
+        let crate::worker::HydratedInvocation {
+            invocation,
+            payload,
+        } = hydrated;
         if !self.state.durability_is_suppressed() {
             let stack = self.get_current_invocation_context().await;
 
             let scope_card = match &invocation {
-                AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
+                AgentInvocation::AgentMethod { scope_card, .. }
+                | AgentInvocation::ExternalTool { scope_card, .. } => scope_card.clone(),
                 _ => None,
             };
+            let scope_interest = scope_card.as_ref().map(|scope| {
+                self.state
+                    .owner_wallet
+                    .interest
+                    .contribute(None, &scope.root_card_ids)
+            });
             let scope_root_cards = if let Some(scope_card) = &scope_card {
                 crate::services::card::validate_scope_card(
                     self.state.card_service.as_ref(),
@@ -4422,12 +4814,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             } else {
                 Vec::new()
             };
-            self.install_invocation_scope_card(scope_card.clone(), scope_root_cards)
-                .await;
+            self.install_invocation_scope_card(
+                scope_card.clone(),
+                scope_root_cards,
+                scope_interest,
+            )
+            .await;
 
             let input = match &invocation {
                 AgentInvocation::AgentInitialization { input, .. }
                 | AgentInvocation::AgentMethod { input, .. } => Some(input),
+                AgentInvocation::ExternalTool { input, .. } => Some(input.value()),
                 _ => None,
             };
             if let Some(input) = input
@@ -4437,48 +4834,40 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::permission_denied("permission denied"));
             }
 
-            match &mut invocation {
-                AgentInvocation::AgentInitialization {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                AgentInvocation::AgentMethod {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                _ => {}
-            }
-
-            let (start_index, _) = self
+            let (idempotency_key, _, _) = invocation.into_parts();
+            let _boundary = self.lock_synchronized_card_event_boundary().await?;
+            let wallet = self.state.owner_wallet.snapshot();
+            let start_index = self
                 .public_state
                 .worker()
                 .oplog()
-                .add_agent_invocation_started_with_index(
-                    invocation,
+                .add_agent_invocation_started_from_pending(
+                    idempotency_key,
+                    payload,
+                    stack,
                     InvocationWalletPin {
                         wallet_token: WalletVersionToken {
-                            wallet_id_hash: self.state.wallet_id_hash,
-                            generation: self.state.wallet_generation,
+                            wallet_id_hash: wallet.wallet_id_hash,
+                            generation: wallet.generation,
                         },
-                        pinned_card_ids: self.state.agent_wallet_cards.keys().copied().collect(),
+                        pinned_card_ids: wallet.cards.keys().copied().collect(),
                         scope_card_id: scope_card.map(|card| card.scope_card_id),
                     },
                 )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
+                .map_err(|err| match err.into_refusal() {
+                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
+                    Err(err) => panic!(
                         "could not encode agent invocation on {}: {err}",
                         self.agent_id()
-                    )
-                });
+                    ),
+                })?;
             self.primary_invocation_start_index = Some(start_index);
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
         }
         Ok(())
     }
@@ -4491,15 +4880,51 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision {
+    ) -> InvocationFailureDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
+
+        // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
+        // lost shard's oplog belongs to another executor now. Like `Restart` and `Jump`, a
+        // `ShardLost` trap records nothing - not the drain, not an entry, not a status change - and
+        // the shard's new owner replays the invocation and records its outcome itself.
+        if let TrapType::Interrupt(kind) = trap_type
+            && self
+                .public_state
+                .worker()
+                .retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind })
+        {
+            return InvocationFailureDecision::Retry(RetryDecision::None);
+        }
+
+        // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
+        // ordinary semantic dropped-call close, which could await replay scopes or append
+        // terminals into the suffix the accepted cut is about to erase.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
+            return InvocationFailureDecision::Retry(RetryDecision::Immediate);
+        }
 
         if self.state.is_live()
             && !self.state.snapshotting_mode
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
         {
-            error!("failed to drain dropped durable calls before invocation failure entry: {err}");
-            return RetryDecision::None;
+            error!(
+                error = %err,
+                "Failed to drain dropped durable calls before the invocation failure entry"
+            );
+            // A `Cancelled` refused by a fence latched during the drain gives the agent up, so
+            // the stop that follows drops this generation instead of leaving it cached to be
+            // restarted in place.
+            if self.public_state.worker().retire_if_shard_lost(&err.source) {
+                return InvocationFailureDecision::Retry(RetryDecision::None);
+            }
+            // A `Cancelled` the oplog refused: the agent recovers, or stops with the error.
+            return match err.source {
+                error @ (WorkerExecutorError::RecoveryRequired { .. }
+                | WorkerExecutorError::OplogFailed { .. }) => {
+                    InvocationFailureDecision::Infrastructure(error)
+                }
+                _ => InvocationFailureDecision::Retry(RetryDecision::None),
+            };
         }
 
         if let TrapType::Error { error, .. } = trap_type {
@@ -4517,16 +4942,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
-        // Special case: jumping is always immediate and may not have a non-detached status.
-        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
-            return RetryDecision::Immediate;
-        }
-
-        let latest_status_before = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
+        let latest_status_before = self.public_state.worker().get_last_known_status().await;
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
                 &latest_status_before.current_retry_state,
@@ -4535,17 +4951,18 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
             .await;
 
+        let entity_parent_start_index = self.entity_parent_start_index();
         let permission_denial_persisted = if let (
             Some(idempotency_key),
             TrapType::Error {
                 error: AgentError::PermissionDenied(error),
                 retry_from,
-                atomic_region_had_side_effects,
                 ..
             },
         ) = (&current_idempotency_key, trap_type)
         {
-            self.state
+            let denial_persisted = self
+                .state
                 .oplog
                 .add_pair(
                     OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
@@ -4553,22 +4970,46 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         let error = error.clone();
                         let retry_policy_state = retry_policy_state.clone();
                         let retry_from = *retry_from;
-                        let inside_atomic_region = *atomic_region_had_side_effects;
                         move |_| {
                             OplogEntry::error(
+                                entity_parent_start_index,
+                                OplogErrorKind::Invocation,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
-                                inside_atomic_region,
                                 retry_policy_state,
                             )
                         }
                     }),
                 )
                 .await;
-            self.public_state
+            if let Err(error) = denial_persisted {
+                if let OplogError::Fenced(fence) = error {
+                    // The shard moved while this failure was being recorded. The fence retires the
+                    // agent exactly as the `ShardLost` arm above does: nothing further may be
+                    // written to an oplog that belongs to another executor now.
+                    self.public_state
+                        .worker()
+                        .refused_by(crate::services::oplog::OplogRefusal::Fenced(fence));
+                    return InvocationFailureDecision::Retry(RetryDecision::None);
+                }
+                if matches!(error, OplogError::Payload(_) | OplogError::Maintenance(_)) {
+                    panic!("oplog write: {error}");
+                }
+                return self
+                    .refused_terminal_entry(&error, trap_type, full_function_name)
+                    .await;
+            }
+            // Refused, like the add above.
+            if let Err(error) = self
+                .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await
+            {
+                return self
+                    .refused_terminal_entry(&error, trap_type, full_function_name)
+                    .await;
+            }
             true
         } else {
             false
@@ -4579,6 +5020,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
             TrapType::Interrupt(InterruptKind::Jump) => None,
             TrapType::Interrupt(InterruptKind::Restart) => None,
+            // The oplog is the new owner's; a stale writer must leave no trace in it.
+            TrapType::Interrupt(InterruptKind::ShardLost) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
             TrapType::Error {
                 error: AgentError::PermissionDenied(_),
@@ -4588,27 +5031,25 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 current_idempotency_key.map(OplogEntry::cancel_pending_invocation)
             }
             TrapType::Error {
-                error,
-                retry_from,
-                atomic_region_had_side_effects,
-                ..
+                error, retry_from, ..
             } => Some(OplogEntry::error(
+                entity_parent_start_index,
+                OplogErrorKind::Invocation,
                 error.clone(),
                 *retry_from,
-                *atomic_region_had_side_effects,
                 retry_policy_state,
             )),
         };
 
-        if let Some(entry) = oplog_entry {
-            self.public_state.worker().add_and_commit_oplog(entry).await;
+        if let Some(entry) = oplog_entry
+            && let Err(error) = self.public_state.worker().add_and_commit_oplog(entry).await
+        {
+            return self
+                .refused_terminal_entry(&error, trap_type, full_function_name)
+                .await;
         };
 
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
+        let latest_status = self.public_state.worker().get_last_known_status().await;
 
         let giving_up = trap_type.is_invocation_rejection()
             || matches!(
@@ -4629,7 +5070,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 self.public_state.event_service().emit_invocation_finished(
                     full_function_name,
                     &idempotency_key,
-                    self.is_live(),
+                    self.is_live() || self.state.authoritative_replay_failure,
                 );
             }
         }
@@ -4639,7 +5080,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             latest_status_before.current_retry_state, decision
         );
 
-        decision
+        InvocationFailureDecision::Retry(decision)
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {
@@ -4674,11 +5115,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
-        let is_live = self.state.is_live();
+        let mut is_live = self.state.is_live();
         if is_live && !self.state.snapshotting_mode {
-            concurrent::drain_queued_dropped_call_events(self)
-                .await
-                .map_err(|err| err.source)?;
+            tool::durability::finish_producer_disposals(self).await?;
         }
         if !self.state.active_custom_invocations.is_empty()
             || !self.state.custom_invocation_scopes.is_empty()
@@ -4689,108 +5128,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             ));
         }
 
-        if is_live {
-            if !self.state.durability_is_suppressed() {
-                let component_revision = output.component_revision.ok_or_else(|| {
-                    WorkerExecutorError::runtime(
-                        "component_revision missing in AgentInvocationOutput during replay",
-                    )
-                })?;
-
-                // Classify the just-completed invocation up front so we can
-                // bump the read-only cache epoch on successful mutating
-                // completion. For non-AgentMethod results
-                // (initialization, manual update, snapshot
-                // load/save, oplog processing) we always invalidate — these
-                // are all state-changing. For AgentMethod results we ask the
-                // worker whether the method is `read_only`.
-                let invalidates_read_only_cache = match &output.result {
-                    AgentInvocationResult::AgentMethod { .. } => self
-                        .public_state
-                        .worker()
-                        .agent_method_invalidates_read_only_cache(full_function_name),
-                    AgentInvocationResult::AgentInitialization
-                    | AgentInvocationResult::ManualUpdate
-                    | AgentInvocationResult::LoadSnapshot { .. }
-                    | AgentInvocationResult::SaveSnapshot { .. }
-                    | AgentInvocationResult::ProcessOplogEntries { .. } => true,
-                };
-
-                // Only `AgentMethod` results need the method name persisted so the
-                // public oplog renderer can resolve the correct output schema.
-                let method_name = match &output.result {
-                    AgentInvocationResult::AgentMethod { .. } => {
-                        Some(full_function_name.to_string())
-                    }
-                    _ => None,
-                };
-
-                self.public_state
-                    .worker()
-                    .oplog()
-                    .add_agent_invocation_finished(
-                        &output.result,
-                        method_name,
-                        consumed_fuel,
-                        component_revision,
-                    )
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("could not encode function result for {full_function_name}: {err}")
-                    });
-
-                self.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await;
-
-                // Bump the read-only cache epoch after the
-                // `AgentInvocationFinished` entry is committed, but *before*
-                // we publish `InvocationCompleted` to waiters via
-                // `store_invocation_success`. Ordering matters: any client
-                // that observes the completion event must also see an
-                // invalidated cache, otherwise it could read a stale cached
-                // result for the now-mutated state.
-                if invalidates_read_only_cache {
-                    self.public_state.worker().bump_read_only_cache_epoch();
-                }
-
-                // Capture the agent's oplog index right after
-                // `AgentInvocationFinished` was committed, together with the
-                // worker's per-instance fingerprint, so the response carries
-                // an unambiguous identification of the agent state it was
-                // produced from.
-                output.oplog_index = Some(
-                    self.public_state
-                        .worker()
-                        .oplog()
-                        .current_oplog_index()
-                        .await,
-                );
-                output.agent_fingerprint = Some(
-                    self.public_state
-                        .worker()
-                        .get_initial_worker_metadata()
-                        .fingerprint,
-                );
-
-                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                    self.public_state
-                        .worker()
-                        .store_invocation_success(&idempotency_key, output.clone())
-                        .await;
-
-                    self.public_state.event_service().emit_invocation_finished(
-                        full_function_name,
-                        &idempotency_key,
-                        is_live,
-                    );
-                }
-            }
-        } else {
+        if !is_live {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
-            // (e.g. `DropEvent::FinishSpan` for a p3 HTTP response dropped unconsumed) must consume
-            // their positional entries (recorded by the live drain at this same point) before the
+            // (e.g. cleanup for a p3 HTTP response dropped unconsumed) must settle
+            // their durable operations before the
             // `AgentInvocationFinished` entry is read.
             concurrent::drain_queued_dropped_call_events(self)
                 .await
@@ -4801,19 +5142,133 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .replay_state
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
-            if let Some(recorded_result) = response
-                && !recorded_result.replay_equivalent(&output.result)
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!(
-                        "{full_function_name} => {:?}",
-                        recorded_result.redacted_debug()
-                    ),
-                    format!(
-                        "{full_function_name} => {:?}",
-                        output.result.redacted_debug()
-                    ),
-                ));
+            if let Some(recorded_result) = response {
+                if !recorded_result.replay_equivalent(&output.result) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!(
+                            "{full_function_name} => {:?}",
+                            recorded_result.redacted_debug()
+                        ),
+                        format!(
+                            "{full_function_name} => {:?}",
+                            output.result.redacted_debug()
+                        ),
+                    ));
+                }
+                debug!("Function {full_function_name} finished");
+                return Ok(());
+            }
+
+            // An incomplete historical invocation can finish after a non-primary entity repair
+            // has moved the shared cursor into Settling. Complete the primary transition before
+            // publishing this newly repaired invocation as a live success.
+            self.switch_to_live().await?;
+            is_live = true;
+            tool::durability::finish_producer_disposals(self).await?;
+        }
+
+        if is_live && !self.state.durability_is_suppressed() {
+            if self.state.entity_execution_mode.is_none() {
+                self.state
+                    .replay_state
+                    .release_retained_starts_at_live_invocation_end()
+                    .await?;
+            }
+            let component_revision = output.component_revision.ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "component_revision missing in AgentInvocationOutput during replay",
+                )
+            })?;
+
+            // Classify the just-completed invocation up front so we can
+            // bump the read-only cache epoch on successful mutating
+            // completion. For non-AgentMethod results
+            // (initialization, manual update, snapshot
+            // load/save, oplog processing) we always invalidate — these
+            // are all state-changing. For AgentMethod results we ask the
+            // worker whether the method is `read_only`.
+            let invalidates_read_only_cache = match &output.result {
+                AgentInvocationResult::AgentMethod { .. } => self
+                    .public_state
+                    .worker()
+                    .agent_method_invalidates_read_only_cache(full_function_name),
+                AgentInvocationResult::AgentInitialization
+                | AgentInvocationResult::ManualUpdate
+                | AgentInvocationResult::LoadSnapshot { .. }
+                | AgentInvocationResult::SaveSnapshot { .. }
+                | AgentInvocationResult::ProcessOplogEntries { .. }
+                | AgentInvocationResult::ExternalTool { .. } => true,
+            };
+
+            // Only `AgentMethod` results need the method name persisted so the
+            // public oplog renderer can resolve the correct output schema.
+            let method_name = match &output.result {
+                AgentInvocationResult::AgentMethod { .. } => Some(full_function_name.to_string()),
+                _ => None,
+            };
+
+            let finished_index = self
+                .public_state
+                .worker()
+                .oplog()
+                .add_agent_invocation_finished(
+                    &output.result,
+                    method_name,
+                    consumed_fuel,
+                    component_revision,
+                )
+                .await
+                .map_err(|err| match err.into_refusal() {
+                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
+                    Err(err) => {
+                        panic!("could not encode function result for {full_function_name}: {err}")
+                    }
+                })?;
+
+            let commit_level = match self.public_state.worker().agent_mode() {
+                AgentMode::Durable => CommitLevel::Always,
+                AgentMode::Ephemeral => CommitLevel::Deferred,
+            };
+            self.public_state
+                .worker()
+                .commit_oplog_before_status_update(commit_level)
+                .await?;
+
+            // Bump the read-only cache epoch after the
+            // `AgentInvocationFinished` entry is committed, but *before*
+            // we publish `InvocationCompleted` to waiters via
+            // `store_invocation_success`. Ordering matters: any client
+            // that observes the completion event must also see an
+            // invalidated cache, otherwise it could read a stale cached
+            // result for the now-mutated state.
+            if invalidates_read_only_cache {
+                self.public_state.worker().bump_read_only_cache_epoch();
+            }
+
+            // Capture the agent's oplog index right after
+            // `AgentInvocationFinished` was committed, together with the
+            // worker's per-instance fingerprint, so the response carries
+            // an unambiguous identification of the agent state it was
+            // produced from.
+            output.oplog_index = Some(finished_index);
+            output.agent_fingerprint = Some(
+                self.public_state
+                    .worker()
+                    .get_initial_worker_metadata()
+                    .fingerprint,
+            );
+
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .worker()
+                    .store_invocation_success(&idempotency_key, output.clone())
+                    .await;
+
+                self.public_state.event_service().emit_invocation_finished(
+                    full_function_name,
+                    &idempotency_key,
+                    is_live,
+                );
             }
         }
         debug!("Function {full_function_name} finished");
@@ -4823,14 +5278,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.state.effective_retry_point()
-    }
-
-    fn current_in_atomic_region(&self) -> bool {
-        !self.state.active_atomic_regions.is_empty()
-    }
-
-    fn current_atomic_region_had_side_effects(&self) -> bool {
-        self.state.outermost_atomic_region_has_side_effects()
     }
 }
 
@@ -4844,8 +5291,15 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let id = self.state.add(resource, name.clone()).await;
         let resource_id = AgentResourceId(id);
         if self.state.is_live() {
-            let entry = OplogEntry::create_resource(resource_id, name.clone());
-            self.public_state.worker().add_to_oplog(entry).await;
+            let entry = OplogEntry::create_resource(
+                self.entity_parent_start_index(),
+                resource_id,
+                name.clone(),
+            );
+            self.public_state
+                .worker()
+                .add_to_oplog_or_retire(entry)
+                .await;
         }
         id
     }
@@ -4855,8 +5309,15 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         if let Some((resource_type_id, _)) = &result {
             let id = AgentResourceId(resource_id);
             if self.state.is_live() {
-                let entry = OplogEntry::drop_resource(id, resource_type_id.clone());
-                self.public_state.worker().add_to_oplog(entry).await;
+                let entry = OplogEntry::drop_resource(
+                    self.entity_parent_start_index(),
+                    id,
+                    resource_type_id.clone(),
+                );
+                self.public_state
+                    .worker()
+                    .add_to_oplog_or_retire(entry)
+                    .await;
             }
         }
         result
@@ -4896,17 +5357,12 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-    ) {
-        let entry = OplogEntry::failed_update(target_revision, details.clone());
-        self.public_state.worker().add_and_commit_oplog(entry).await;
-
-        warn!(
-            "Worker failed to update to {}: {}, update attempt aborted",
-            target_revision,
-            details.unwrap_or_else(|| "?".to_string())
-        );
+        failed_update: OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        warn!(?failed_update, "Worker update attempt aborted");
+        let worker = self.public_state.worker();
+        worker.add_and_commit_oplog(failed_update).await?;
+        Ok(())
     }
 
     async fn on_worker_update_succeeded(
@@ -4916,7 +5372,8 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         new_active_plugins: HashSet<
             golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
         >,
-    ) {
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+    ) -> Result<(), WorkerExecutorError> {
         info!("Worker update to {} finished successfully", target_revision);
         let worker = self.public_state.worker();
         worker
@@ -4925,108 +5382,15 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 target_revision,
                 new_component_size,
                 new_active_plugins,
+                snapshot_assisted_details,
             )
-            .await;
+            .await?;
+        Ok(())
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let span_id = self.state.current_span_id.clone();
-        let span = self.start_child_span(&span_id, initial_attributes).await?;
-        if activate {
-            self.state.current_span_id = span.span_id().clone();
-        }
-        Ok(span)
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let current_span_id = &self.state.current_span_id;
-
-        let is_live = self.is_live();
-
-        let span = if is_live {
-            self.state
-                .invocation_context
-                .start_span(parent, None)
-                .map_err(WorkerExecutorError::runtime)?
-        } else {
-            let (_, entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::StartSpan)?;
-
-            let (timestamp, span_id) = match entry {
-                OplogEntry::StartSpan {
-                    timestamp, span_id, ..
-                } => (timestamp, span_id),
-                other => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "StartSpan",
-                        format!("{other:?}"),
-                    ));
-                }
-            };
-
-            let parent_span = self.state.invocation_context.get(parent).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "parent span {parent} missing during StartSpan replay: {err}"
-                ))
-            })?;
-            let span = InvocationContextSpan::local()
-                .with_span_id(span_id)
-                .with_start(timestamp)
-                .with_parent(parent_span)
-                .build();
-            self.state.invocation_context.add_span(span.clone());
-            span
-        };
-
-        if current_span_id != parent
-            && !self
-                .state
-                .invocation_context
-                .has_in_stack(current_span_id, parent)
-        {
-            // The parent span is not in the current invocation stack. This can happen if it was created in a previous
-            // invocation and stored in some global state.
-            // To preserve the current invocation context stack but also have the information from the desired parent
-            // span, we add a _link_ to the newly created span.
-
-            self.state
-                .invocation_context
-                .add_link(span.span_id(), parent)
-                .map_err(WorkerExecutorError::runtime)?;
-        };
-
-        for (name, value) in initial_attributes {
-            span.set_attribute(name.clone(), value.clone());
-        }
-
-        if is_live {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::StartSpan {
-                    timestamp: span.start().unwrap_or(Timestamp::now_utc()),
-                    parent_start_index: self.entity_parent_start_index(),
-                    span_id: span.span_id().clone(),
-                    parent: Some(parent.clone()),
-                    linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
-                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
-                })
-                .await;
-        }
-
-        Ok(span)
-    }
-
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
             // Walk up to the parent if it still exists in the invocation context;
@@ -5050,64 +5414,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::finish_span(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                ))
-                .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
-        }
-
-        if &self.state.current_span_id == span_id {
-            let span = self.state.invocation_context.get(span_id).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "span {span_id} missing during finish_span replay: {err}"
-                ))
-            })?;
-            self.state.current_span_id = span
-                .parent()
-                .map(|p| p.span_id().clone())
-                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
-        }
-        let _ = self
-            .state
-            .invocation_context
-            .finish_span(span_id)
-            .map_err(WorkerExecutorError::runtime);
-        Ok(())
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.state
-            .invocation_context
-            .set_attribute(span_id, key.to_string(), value.clone())
-            .map_err(WorkerExecutorError::runtime)?;
-        if self.is_live() {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::set_span_attribute(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                    key.to_string(),
-                    value,
-                ))
-                .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
-        }
-        Ok(())
-    }
-
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         self.state
             .invocation_context
@@ -5116,29 +5422,17 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
-pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
-    fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
-    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
-    type ExtraDeps = Ctx::ExtraDeps;
-
-    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
-        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
-    }
-
-    async fn resume_replay(
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Replays the recorded invocations of the start, as `resume_replay` does. A failure says
+    /// whether the replay after an application snapshot diverged from the oplog with a typed
+    /// divergence while the start still replayed it.
+    async fn replay(
         store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, ReplayFailure> {
+        let mut diverged = false;
+        let result = async {
         let mut number_of_replayed_functions = 0;
 
         if refresh_replay_target {
@@ -5162,18 +5456,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .await?;
         }
 
-        let (agent_mode, is_agent) = {
-            let component = store.as_context().data().component_metadata();
-            (
-                store.as_context().data().agent_mode(),
-                component.metadata.is_agent(),
-            )
-        };
+        let agent_mode = store.as_context().data().agent_mode();
 
         let resume_result = loop {
-            let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                (agent_mode == AgentMode::Durable || // durable components are fully replayed
-                    (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
+            let context = store.as_context();
+            let durable_ctx = context.data().durable_ctx();
+            let cont = durable_ctx.state.is_replay() && should_replay_invocation(
+                agent_mode,
+                durable_ctx.owner_context(),
+                number_of_replayed_functions,
+            );
 
             if cont {
                 let oplog_entry = store
@@ -5188,12 +5480,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 match oplog_entry {
                     Err(error) => break Err(error),
                     Ok(None) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .process_pending_replay_events()
-                            .await?;
+                        let mut store_context = store.as_context_mut();
+                        let durable_ctx = store_context.data_mut().durable_ctx_mut();
+                        durable_ctx.switch_to_live().await?;
                         break Ok(None);
                     }
                     Ok(Some(replay_state::AgentInvocationStartedEntry {
@@ -5208,11 +5497,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             invocation_payload,
                             invocation_context.clone(),
                         );
-                        let scope_card = match &agent_invocation {
-                            AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
-                            _ => None,
-                        };
-                        let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
+                        if agent_mode == AgentMode::Ephemeral
+                            && !matches!(agent_invocation, AgentInvocation::AgentInitialization { .. })
+                        {
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                "AgentInitialization for ephemeral initialization replay",
+                                format!("{:?}", agent_invocation.kind()),
+                            ));
+                        }
+                        let scope_card = agent_invocation.scope_card().cloned();
+                        let recorded_scope_card_id = wallet_pin.scope_card_id;
                         let payload_scope_card_id =
                             scope_card.as_ref().map(|card| card.scope_card_id);
                         if payload_scope_card_id != recorded_scope_card_id {
@@ -5224,34 +5518,62 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             ));
                         }
 
-                        let component_metadata = store
-                            .as_context()
-                            .data()
-                            .component_metadata()
-                            .metadata
-                            .clone();
-
-                        let worker = store.as_context().data().get_public_state().worker();
-                        let agent_invocation = worker
-                            .rehydrate_durable_streaming_invocation(agent_invocation)
-                            .await?;
-                        let agent_id = store.as_context().data().parsed_agent_id();
-                        let lowered = lower_invocation(
-                            agent_invocation,
-                            &component_metadata,
-                            agent_id.as_ref(),
-                        )?;
-                        let full_function_name = lowered.display_name.clone();
-
-                        let mut store_context = store.as_context_mut();
-                        let durable_ctx = store_context.data_mut().durable_ctx_mut();
-                        durable_ctx
-                            .install_invocation_scope_card(scope_card, Vec::new())
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .install_invocation_scope_card(scope_card, Vec::new(), None)
                             .await;
-                        if let Err(error) = durable_ctx.process_pending_replay_events().await {
-                            durable_ctx.clear_invocation_scope_card().await;
-                            break Err(error);
+
+                        let preparation = async {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .process_pending_replay_events()
+                                .await?;
+
+                            let component_metadata = store
+                                .as_context()
+                                .data()
+                                .component_metadata()
+                                .metadata
+                                .clone();
+                            let worker = store.as_context().data().get_public_state().worker();
+                            let agent_id = store.as_context().data().parsed_agent_id();
+                            let uses_streams = invocation_uses_streams(
+                                &agent_invocation,
+                                &component_metadata,
+                                agent_id.as_ref(),
+                            );
+                            let agent_invocation = if uses_streams {
+                                worker
+                                    .rehydrate_durable_streaming_invocation(agent_invocation)
+                                    .await?
+                            } else {
+                                agent_invocation
+                            };
+                            let lowered = lower_invocation(
+                                agent_invocation,
+                                &component_metadata,
+                                agent_id.as_ref(),
+                            )?;
+                            Ok::<_, WorkerExecutorError>((worker, uses_streams, lowered))
                         }
+                        .await;
+                        let (worker, uses_streams, lowered) = match preparation {
+                            Ok(preparation) => preparation,
+                            Err(error) => {
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .clear_invocation_scope_card()
+                                    .await;
+                                break Err(error);
+                            }
+                        };
+                        let full_function_name = lowered.display_name.clone();
 
                         debug!("Replaying function {}", &full_function_name);
                         debug!(
@@ -5280,6 +5602,21 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .durable_ctx_mut()
                             .primary_invocation_start_index = Some(oplog_index);
+                        // An invocation retained only through its start has no recorded body.
+                        // Publish live before pure guest code or logging runs, without waiting
+                        // for a durable host call to observe the exhausted replay cursor.
+                        if store.as_context().data().durable_ctx().state.replay_state.is_live()
+                            && let Err(error) = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .switch_to_live()
+                                .await
+                        {
+                            store.as_context_mut().data_mut().durable_ctx_mut()
+                                .clear_invocation_scope_card().await;
+                            break Err(error);
+                        }
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -5289,10 +5626,14 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         .instrument(span)
                         .await;
 
-                        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-                        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-                        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
-                        // are finished at AgentInvocationFinished.
+                        let invoke_result = if uses_streams {
+                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
+                        } else {
+                            invoke_result
+                        };
+
+                        // Invocation-owned spans are closed by AgentInvocationFinished in the
+                        // oplog processor; removing their resident context records no transition.
                         for span_id in local_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
@@ -5302,74 +5643,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                result: mut invocation_result,
+                                result: invocation_result,
                                 consumed_fuel,
                             }) => {
-                                if let AgentInvocationResult::AgentMethod { output } =
-                                    &mut invocation_result
-                                {
-                                    let (graph, root, component_revision) = {
-                                        let component = store.data().component_metadata();
-                                        let agent_id = store.data().parsed_agent_id();
-                                        let agent_type = agent_id
-                                            .as_ref()
-                                            .and_then(|agent_id| {
-                                                component
-                                                    .metadata
-                                                    .find_agent_type_by_name_ref(
-                                                        &agent_id.agent_type,
-                                                    )
-                                            })
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result schema is unavailable",
-                                                )
-                                            })?;
-                                        let method = agent_type
-                                            .methods
-                                            .iter()
-                                            .find(|method| method.name == full_function_name)
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result method schema is unavailable",
-                                                )
-                                            })?;
-                                        (
-                                            agent_type.schema.clone(),
-                                            method.output_schema.schema().cloned().unwrap_or_else(
-                                                || {
-                                                    golem_common::schema::SchemaType::tuple(
-                                                        Vec::new(),
-                                                    )
-                                                },
-                                            ),
-                                            component.revision,
-                                        )
-                                    };
-                                    let worker = worker.clone();
-                                    let result_value = output.clone();
-                                    let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store
-                                        .run_concurrent(async move |_accessor| {
-                                            worker
-                                                .materialize_durable_streaming_result(
-                                                    &replay_idempotency_key,
-                                                    result_value,
-                                                    &graph,
-                                                    &root,
-                                                    component_revision,
-                                                )
-                                                .await
-                                        })
-                                        .await
-                                        .map_err(|error| {
-                                            WorkerExecutorError::runtime(error.to_string())
-                                        })??;
-                                }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
-                                    result: invocation_result,
+                                    result: *invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
@@ -5390,31 +5670,159 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 {
                                     break Err(err);
                                 }
+                                // An invocation that was interrupted by a crash reaches its end
+                                // here, in live mode, instead of in the invocation loop, so its
+                                // durable Stream Session must be finished here as well;
+                                // otherwise resumed session clients never observe completion.
+                                if uses_streams
+                                    && store.as_context().data().durable_ctx().is_live()
+                                {
+                                    let worker = worker.clone();
+                                    let idempotency_key = idempotency_key.clone();
+                                    let result = store.run_concurrent(async move |_accessor| {
+                                        worker.complete_durable_streaming_session(&idempotency_key).await
+                                    }).await;
+                                    if let Err(error) = result.map_err(|error| WorkerExecutorError::runtime(error.to_string())).and_then(|result| result) {
+                                        error!(%error, "Failed to complete durable streaming session");
+                                        break Err(error);
+                                    }
+                                }
+                                if store.as_context().data().durable_ctx().is_live() {
+                                    worker.reset_infrastructure_recovery_backoff();
+                                }
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
                             _ => {
+                                let owner_failure = store
+                                    .as_context()
+                                    .data()
+                                    .durable_ctx()
+                                    .selected_tool_owner_failure();
+                                if let Some(error) = selected_recovery_error(
+                                    owner_failure.as_ref(),
+                                    store.as_context().data().agent_mode(),
+                                    &invoke_result,
+                                ) {
+                                    break Err(error.clone());
+                                }
+                                let details = format!("{invoke_result:?}");
+                                let snapshot_divergence = match &invoke_result {
+                                    Ok(result) => result.is_snapshot_replay_divergence(),
+                                    Err(WorkerExecutorError::UnexpectedOplogEntry { .. }) => true,
+                                    Err(_) => false,
+                                };
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
                                         Some(TrapType::from_worker_executor_error::<Ctx>(
                                             error,
                                             OplogIndex::INITIAL,
-                                            false,
-                                            false,
                                             store.as_context().data().agent_mode(),
                                         ))
                                     }
-                                };
+                                }
+;
                                 let decision = match trap_type {
+                                    // A recorded invocation that fails while its entries are still
+                                    // being replayed after an automatic snapshot load most likely
+                                    // diverged from the recorded execution because the guest state
+                                    // restored from the snapshot differs from the original one. The
+                                    // recorded oplog is authoritative, so instead of committing the
+                                    // failure the snapshot is rejected and the worker starts again
+                                    // without it, from an earlier usable periodic record or from
+                                    // its authoritative baseline.
+                                    Some(TrapType::Error { error, .. })
+                                        if snapshot_divergence
+                                            && Self::rejects_diverged_record(
+                                                store,
+                                                &WorkerExecutorError::runtime(error.message()),
+                                            ) =>
+                                    {
+                                        Some(Self::abandon_diverged_automatic_snapshot(
+                                            store,
+                                            &error.message(),
+                                            true,
+                                        ))
+                                    }
+                                    Some(trap_type)
+                                        if store.as_context().data().durable_ctx().state.snapshot_replay_purpose
+                                            != SnapshotReplayPurpose::None
+                                            && !store.as_context().data().durable_ctx().is_live()
+                                            && !store.as_context().data().durable_ctx().state.authoritative_replay_failure =>
+                                    {
+                                        // Speculative reconstruction failures, after a snapshot or
+                                        // in the replay for a pending automatic update, must not
+                                        // append an authoritative invocation Error for already
+                                        // recorded work: the start decides what the failure means.
+                                        // The failure of the replay says whether it diverged.
+                                        diverged = snapshot_divergence;
+                                        match trap_type {
+                                            // A trap that every invocation retries, such as an
+                                            // out-of-memory under the memory admission, keeps its
+                                            // retry: it says nothing about the replay.
+                                            TrapType::Error { .. } if let Some(retry) = Self::speculative_retry(&trap_type) => Some(retry),
+                                            TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
+                                                error,
+                                                stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
+                                            }),
+                                            TrapType::Interrupt(kind) => {
+                                                // `on_invocation_failure` is skipped on this path,
+                                                // so a lost shard is recorded here: its `None`
+                                                // decision alone would stop the agent as an
+                                                // ordinary one, left cached to restart in place.
+                                                worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
+                                                Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
+                                            }
+                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during a speculative replay")),
+                                        }
+                                    }
                                     Some(trap_type) => {
-                                        let decision = store
+                                        let decision = match store
                                             .as_context_mut()
                                             .data_mut()
                                             .on_invocation_failure(&full_function_name, &trap_type)
-                                            .await;
+                                            .await
+                                        {
+                                            InvocationFailureDecision::Retry(decision) => decision,
+                                            // The start retries the replay when the storage
+                                            // answers again.
+                                            InvocationFailureDecision::Infrastructure(error) => {
+                                                break Err(error);
+                                            }
+                                        };
 
                                         if decision == RetryDecision::None {
+                                            // Like the invocation loop, permanently fail the
+                                            // durable Stream Session of an invocation that was
+                                            // interrupted by a crash and cannot be retried.
+                                            // A fresh interrupt is authoritative even before live
+                                            // publication; already-finished sessions stay unchanged.
+                                            // Not for a lost shard, however the loss
+                                            // reached the trap: the shard's new owner resumes that
+                                            // invocation.
+                                            let shard_lost = matches!(
+                                                trap_type,
+                                                TrapType::Interrupt(InterruptKind::ShardLost)
+                                            );
+                                            if uses_streams
+                                                && !shard_lost
+                                                && (matches!(trap_type, TrapType::Interrupt(_))
+                                                    || store.as_context().data().durable_ctx().is_live()
+                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure)
+                                            {
+                                                // A refused write means the shard has moved:
+                                                // record it before the startup result is published.
+                                                if let Err(error) = worker
+                                                    .fail_durable_streaming_session(
+                                                        &idempotency_key,
+                                                        details,
+                                                    )
+                                                    .await
+                                                {
+                                                    worker.retire_if_shard_lost(&error);
+                                                }
+                                            }
                                             // Cannot retry so we need to fail
                                             match trap_type {
                                                 TrapType::Interrupt(_interrupt_kind) => {
@@ -5422,9 +5830,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    break Err(WorkerExecutorError::runtime(
-                                                        "Process exited",
-                                                    ));
+                                                    break Err(
+                                                        WorkerExecutorError::PreviousInvocationExited,
+                                                    );
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -5434,7 +5842,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         .event_service()
                                                         .get_last_invocation_errors();
                                                     break Err(
-                                                        WorkerExecutorError::InvocationFailed {
+                                                        WorkerExecutorError::PreviousInvocationFailed {
                                                             error,
                                                             stderr,
                                                         },
@@ -5466,7 +5874,60 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         record_number_of_replayed_functions(number_of_replayed_functions);
 
+        if matches!(resume_result, Ok(None)) {
+            tool::durability::finish_producer_disposals(
+                store.as_context_mut().data_mut().durable_ctx_mut(),
+            ).await?;
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .snapshot_replay_purpose = SnapshotReplayPurpose::None;
+        }
+
         resume_result
+        }.await;
+        store.data().set_suspended();
+        // Result validation can consume the final recorded entry before detecting a mismatch.
+        // Its typed replay error, rather than the resulting live cursor, identifies divergence.
+        if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result
+            && Self::rejects_diverged_record(store, error)
+        {
+            return Ok(Some(Self::abandon_diverged_automatic_snapshot(
+                store, error, true,
+            )));
+        }
+        result.map_err(|error| ReplayFailure { error, diverged })
+    }
+}
+
+pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
+    fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
+    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
+    type ExtraDeps = Ctx::ExtraDeps;
+
+    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
+        this: &T,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        latest_worker_status: &AgentStatusRecord,
+    ) -> Option<LastError> {
+        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
+    }
+
+    async fn resume_replay(
+        store: &mut Store<Ctx>,
+        instance: &Instance,
+        refresh_replay_target: bool,
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        Self::replay(store, instance, refresh_replay_target)
+            .await
+            .map_err(|failure| failure.error)
     }
 
     async fn prepare_instance(
@@ -5481,7 +5942,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
 
-            // We have to replay the initialize call for agents:
+            // Only typed agent owners have an initialize call to replay.
             let replay_decision = Self::resume_replay(store, instance, false).await;
             record_resume_worker(start.elapsed());
 
@@ -5491,10 +5952,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
-                    .state
-                    .replay_state
                     .switch_to_live()
-                    .await;
+                    .await?;
 
                 // Appending a Restart marker
                 store
@@ -5503,7 +5962,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .get_public_state()
                     .oplog()
                     .add(OplogEntry::restart())
-                    .await;
+                    .await?;
 
                 Ok(None)
             } else {
@@ -5521,111 +5980,114 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .clone();
 
             match pending_update {
-                Some(timestamped_update) => {
-                    match &timestamped_update.description {
-                        UpdateDescription::SnapshotBased { .. } => {
-                            // If a snapshot based update is pending, no replay should be necessary
-                            if !store.as_context().data().durable_ctx().is_live() {
-                                return Err(WorkerExecutorError::runtime(
-                                    "snapshot-based pending update expected replay state to already be live",
-                                ));
-                            }
-
-                            Self::finalize_pending_snapshot_update(instance, store).await
+                Some(hydrated) => match &hydrated.description {
+                    UpdateDescription::SnapshotBased { .. } => {
+                        // If a snapshot based update is pending, no replay should be necessary
+                        if !store.as_context().data().durable_ctx().is_live() {
+                            return Err(WorkerExecutorError::runtime(
+                                "snapshot-based pending update expected replay state to already be live",
+                            ));
                         }
-                        UpdateDescription::Automatic {
-                            target_revision, ..
-                        } => {
-                            let replay_result = async {
-                                if let SnapshotRecoveryResult::Failed =
-                                    Self::try_load_snapshot(store, instance).await
-                                {
-                                    return Err(WorkerExecutorError::failed_to_resume_worker(
-                                        agent_id.clone(),
-                                        WorkerExecutorError::runtime("loading snapshot failed"),
-                                    ));
-                                };
-                                // automatic update will be succeeded as part of the replay.
-                                let result = Self::resume_replay(store, instance, false).await?;
 
-                                record_resume_worker(start.elapsed());
-
-                                Ok(result)
+                        Self::finalize_pending_snapshot_update(instance, store).await
+                    }
+                    UpdateDescription::Automatic { .. }
+                    | UpdateDescription::SnapshotAssistedAutomatic { .. } => {
+                        let assisted = matches!(
+                            hydrated.description,
+                            UpdateDescription::SnapshotAssistedAutomatic { .. }
+                        );
+                        let attempt = async {
+                            match Self::try_load_snapshot(store, instance).await {
+                                SnapshotRecoveryResult::Success => {}
+                                SnapshotRecoveryResult::NotAttempted if !assisted => {}
+                                failure => return Err(AttemptFailure::Load(failure)),
                             }
-                            .await;
+                            // An automatic update succeeds at the end of the replay.
+                            let result = Self::replay(store, instance, assisted)
+                                .await
+                                .map_err(AttemptFailure::Replay)?;
+                            record_resume_worker(start.elapsed());
+                            Ok(result)
+                        }
+                        .await;
 
-                            match replay_result {
-                                Err(error) => {
-                                    // replay failed. There are two cases here:
-                                    // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
-                                    // 2. We failed after the update has succeeded. In this case we can the original failure.
-                                    let final_pending_update = store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .durable_ctx_mut()
-                                        .state
-                                        .pending_update
-                                        .lock()
-                                        .await
-                                        .take();
-
-                                    match final_pending_update {
-                                        Some(_) => {
-                                            // We failed before the update has succeeded. Mark the update as failed and retry
+                        match attempt {
+                            Ok(result) => Ok(result),
+                            Err(failure) => {
+                                // A failure before the update point fails the update or retries
+                                // it, as the outcome table decides. A failure after the update
+                                // point consumed the update: the update point performed the
+                                // outcome of its own failure, and its error ends the start.
+                                let pending = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .state
+                                    .pending_update
+                                    .lock()
+                                    .await
+                                    .take();
+                                match pending {
+                                    Some(pending) => {
+                                        let action = {
+                                            let raw = match &failure {
+                                                AttemptFailure::Load(result) => {
+                                                    start_outcome::RawStartError::Load(result)
+                                                }
+                                                AttemptFailure::Replay(ReplayFailure {
+                                                    error,
+                                                    diverged,
+                                                }) => start_outcome::RawStartError::Replay {
+                                                    error,
+                                                    diverged: *diverged,
+                                                },
+                                            };
                                             store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_worker_update_failed(
-                                                    *target_revision,
-                                                    Some(format!(
-                                                        "Automatic update failed: {error}"
-                                                    )),
-                                                )
-                                                .await;
-
-                                            debug!(
-                                                "Retrying prepare_instance after failed update attempt"
-                                            );
-
-                                            Ok(Some(RetryDecision::Immediate))
-                                        }
-                                        _ => Err(error),
+                                                .as_context()
+                                                .data()
+                                                .durable_ctx()
+                                                .start_action(Some(&pending.reference), raw)
+                                        };
+                                        Self::perform_start_action(store, action).await
                                     }
+                                    None => Err(failure.into_error()),
                                 }
-                                _ => replay_result,
                             }
                         }
                     }
-                }
+                },
                 None => match Self::try_load_snapshot(store, instance).await {
                     SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                         let result = Self::resume_replay(store, instance, false).await;
                         record_resume_worker(start.elapsed());
                         result
                     }
-                    SnapshotRecoveryResult::Failed => {
-                        store
+                    failure => {
+                        let action = store
                             .as_context()
                             .data()
-                            .get_public_state()
-                            .worker()
-                            .snapshot_recovery_disabled
-                            .store(true, Ordering::Release);
-                        Ok(Some(RetryDecision::Immediate))
+                            .durable_ctx()
+                            .start_action(None, start_outcome::RawStartError::Load(&failure));
+                        Self::perform_start_action(store, action).await
                     }
                 },
             }
         };
         match prepare_result {
             Ok(None) => {
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .settle_exclusions_after_prepare()
+                    .await?;
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }
             Ok(other) => Ok(other),
-            Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-                agent_id.clone(),
-                error,
-            )),
+            Err(error) => Err(prepare_failure(agent_id, error)),
         }
     }
 
@@ -5635,55 +6097,67 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-        let workers = this.worker_service().get_running_workers_in_shards().await;
+        let snapshots = this.agent_filesystem_snapshots();
+        let on_stale = |agent: &OwnedAgentId, fingerprint| {
+            // Only a durable agent has a member in the recovery index.
+            snapshots.delete_all_snapshots(
+                &crate::filesystem_snapshot::AgentSnapshots::agent(agent, fingerprint),
+                AgentMode::Durable,
+            )
+        };
+        let workers = this
+            .worker_service()
+            .get_running_workers_in_shards(&on_stale)
+            .await?;
 
         debug!(workers = ?workers, "Recovering running workers");
 
+        // Only a worker that is genuinely gone may be skipped; every other failure fails the
+        // assignment. See `recovered_status` for the distinction and for what failing buys.
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
             let agent_mode = worker.initial_worker_metadata.agent_mode;
-            // A running worker should always have a recoverable oplog (a `Create` entry), so a
-            // `None` here is an unexpected invariant violation (e.g. a corrupt/partially-deleted
-            // oplog). Isolate the failure to this one agent instead of aborting recovery of every
-            // other worker on this executor (which propagating would do — and would also fail
-            // executor startup or the shard-assignment RPC, since one poison worker could
-            // permanently block this executor from serving its shards).
-            let Some(latest_worker_status) = calculate_last_known_status_with_checkpoint(
-                this,
+            let Some(latest_worker_status) = recovered_status(
                 &owned_agent_id,
-                agent_mode,
-                worker.last_known_status,
-            )
-            .await
+                calculate_last_known_status_with_checkpoint(
+                    this,
+                    &owned_agent_id,
+                    worker.initial_worker_metadata.fingerprint,
+                    agent_mode,
+                    worker.last_known_status,
+                )
+                .await,
+            )?
             else {
-                error!(
-                    agent_id = %owned_agent_id,
-                    "Failed to calculate worker status during shard-assignment recovery; skipping agent"
-                );
                 continue;
             };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            if should_restart_after_shard_assignment_change(&latest_worker_status)
-                && let Err(err) = Worker::get_or_create_running(
+            if should_restart_after_shard_assignment_change(&latest_worker_status) {
+                let expected_fingerprint = worker.initial_worker_metadata.fingerprint;
+                let activation = Worker::get_existing_running_with_fingerprint(
                     this,
                     &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    expected_fingerprint,
                 )
-                .await
-            {
-                // Same isolation rationale: don't let one worker that fails to restart abort
-                // recovery of the rest. It will be retried on demand on its next invocation.
-                error!(
-                    agent_id = %owned_agent_id,
-                    error = %err,
-                    "Failed to restart worker during shard-assignment recovery; skipping agent"
-                );
+                .await;
+                match activation {
+                    Ok(_) => {}
+                    Err(error @ WorkerExecutorError::AgentNotFound { .. }) => {
+                        if this
+                            .worker_service()
+                            .remove_if_stale(&owned_agent_id, expected_fingerprint, &on_stale)
+                            .await?
+                        {
+                            continue;
+                        }
+                        return Err(anyhow!(
+                            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                        ));
+                    }
+                    // A shard that left the assignment mid-recovery is skipped, not fatal.
+                    Err(error) => recovered_restart(&owned_agent_id, Err::<(), _>(error))?,
+                }
             }
         }
 
@@ -5691,7 +6165,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     }
 }
 
-fn card_holder_is_agent(holder: &CardHolder, agent_id: &AgentId) -> bool {
+pub(crate) fn card_holder_is_agent(holder: &CardHolder, agent_id: &AgentId) -> bool {
     matches!(holder, CardHolder::Agent(holder) if holder.agent_id == *agent_id)
 }
 
@@ -5815,6 +6289,82 @@ fn remove_invocation_scope_for_revoked_roots(
     (affected, handles)
 }
 
+pub(crate) fn owner_revoked_card_ids(
+    status: &golem_common::model::AgentStatusRecord,
+) -> HashSet<CardId> {
+    status
+        .revoked_cards
+        .iter()
+        .copied()
+        .chain(
+            status
+                .pending_card_events
+                .iter()
+                .filter_map(|pending_event| match &pending_event.event {
+                    QueuedCardEvent::Revoke(event) => Some(event.card_id),
+                    QueuedCardEvent::Install(_)
+                    | QueuedCardEvent::TransferStarted(_)
+                    | QueuedCardEvent::TransferReceived(_) => None,
+                }),
+        )
+        .collect()
+}
+
+/// Invocation scope an entity Store inherits from the Store that started its invocation. Tool and
+/// middleware code acts as if it were inlined in the owner agent, so the inherited scope follows
+/// the primary Store's rules: it applies as soon as it is installed, its roots are checked at the
+/// entity Store's first live authority boundary, and a revoked or expired root removes the scope.
+#[derive(Clone, Debug)]
+struct InheritedInvocationScope {
+    card: ScopeCard,
+    /// The live root cards, once checked at a live authority boundary.
+    roots: Option<BTreeMap<CardId, StoredCard>>,
+}
+
+impl InheritedInvocationScope {
+    fn unchecked(card: ScopeCard) -> Self {
+        Self { card, roots: None }
+    }
+
+    fn unchecked_root_ids(&self) -> Option<Vec<CardId>> {
+        self.roots
+            .is_none()
+            .then(|| self.card.root_card_ids.clone())
+    }
+
+    fn live_roots(&self) -> Option<&BTreeMap<CardId, StoredCard>> {
+        self.roots.as_ref()
+    }
+
+    /// Records the checked root cards and returns whether every root is live. As in the primary
+    /// Store after replay, a root that the card service does not know is an error.
+    fn check_roots(
+        &mut self,
+        card_states: &HashMap<CardId, CardState>,
+    ) -> Result<bool, WorkerExecutorError> {
+        if self.roots.is_some() {
+            return Ok(true);
+        }
+        let roots = live_scope_root_cards_from_states(Some(&self.card), card_states)?;
+        let all_live = roots.len() == self.card.root_card_ids.len();
+        self.roots = Some(roots);
+        Ok(all_live)
+    }
+
+    fn roots_include(&self, card_ids: &HashSet<CardId>) -> bool {
+        self.card
+            .root_card_ids
+            .iter()
+            .any(|root_id| card_ids.contains(root_id))
+    }
+
+    fn roots_expired(&self, now: DateTime<Utc>) -> bool {
+        self.roots
+            .as_ref()
+            .is_some_and(|roots| !expired_wallet_card_ids_at(roots.values(), now).is_empty())
+    }
+}
+
 fn live_scope_root_cards_from_states(
     scope_card: Option<&ScopeCard>,
     card_states: &HashMap<CardId, CardState>,
@@ -5840,18 +6390,16 @@ fn live_scope_root_cards_from_states(
     Ok(root_cards)
 }
 
-fn transfer_started_removes_source_membership(
+pub(crate) fn transfer_started_removes_source_membership(
     source_card: Option<&StoredCard>,
-    source_holder: &Option<CardHolder>,
+    source_holder: &CardHolder,
     agent_id: &AgentId,
 ) -> bool {
     matches!(source_card, Some(StoredCard::Concrete(_)))
-        && source_holder
-            .as_ref()
-            .is_none_or(|holder| card_holder_is_agent(holder, agent_id))
+        && card_holder_is_agent(source_holder, agent_id)
 }
 
-fn next_drainable_card_events(
+pub(crate) fn next_drainable_card_events(
     pending_events: Vec<PendingCardEventRef>,
 ) -> Vec<PendingCardEventRef> {
     let mut result = Vec::new();
@@ -5882,14 +6430,14 @@ fn next_drainable_card_events(
     result
 }
 
-fn add_wallet_card(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+pub(crate) fn add_wallet_card(
+    wallet: &mut WalletCards,
     generation: &mut u64,
     card: StoredCard,
 ) -> Result<bool, WorkerExecutorError> {
     let card_id = card.card_id();
     if let Some(existing) = wallet.get(&card_id) {
-        return if existing == &card {
+        return if existing.as_ref() == &card {
             Ok(false)
         } else {
             Err(WorkerExecutorError::runtime(format!(
@@ -5900,12 +6448,12 @@ fn add_wallet_card(
     *generation = generation
         .checked_add(1)
         .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
-    wallet.insert(card_id, card);
+    wallet.insert(card_id, Arc::new(card));
     Ok(true)
 }
 
-fn remove_wallet_card(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+pub(crate) fn remove_wallet_card(
+    wallet: &mut WalletCards,
     generation: &mut u64,
     card_id: CardId,
 ) -> Result<bool, WorkerExecutorError> {
@@ -5919,8 +6467,8 @@ fn remove_wallet_card(
     Ok(true)
 }
 
-fn remove_wallet_cards(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+pub(crate) fn remove_wallet_cards(
+    wallet: &mut WalletCards,
     generation: &mut u64,
     card_ids: &[CardId],
 ) -> Result<bool, WorkerExecutorError> {
@@ -5932,28 +6480,30 @@ fn remove_wallet_cards(
         .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
 
     for card_id in card_ids {
-        wallet.remove(card_id);
+        if wallet.contains_key(card_id) {
+            wallet.remove(card_id);
+        }
     }
     *generation = next_generation;
     Ok(true)
 }
 
-fn expired_wallet_card_ids_at(
-    wallet: &BTreeMap<CardId, StoredCard>,
+fn expired_wallet_card_ids_at<'a>(
+    cards: impl IntoIterator<Item = &'a StoredCard>,
     now: DateTime<Utc>,
 ) -> Vec<CardId> {
-    wallet
-        .iter()
-        .filter_map(|(card_id, card)| {
+    cards
+        .into_iter()
+        .filter_map(|card| {
             card.expires_at()
                 .filter(|expires_at| *expires_at <= now)
-                .map(|_| *card_id)
+                .map(|_| card.card_id())
         })
         .collect()
 }
 
-fn apply_invocation_wallet_pin(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+pub(crate) fn apply_invocation_wallet_pin(
+    wallet: &mut WalletCards,
     wallet_id_hash: [u8; 32],
     generation: &mut u64,
     wallet_pin: InvocationWalletPin,
@@ -5984,46 +6534,58 @@ fn apply_invocation_wallet_pin(
         ));
     }
 
-    let mut pinned_wallet = BTreeMap::new();
-    for card_id in wallet_pin.pinned_card_ids {
-        let card = wallet.get(&card_id).cloned().ok_or_else(|| {
-            WorkerExecutorError::unexpected_oplog_entry(
+    // Validate the complete pin before changing membership. Retained prefixes share every
+    // unchanged node and payload; rebuilding the pinned map would copy all membership nodes.
+    if wallet
+        .keys()
+        .copied()
+        .eq(wallet_pin.pinned_card_ids.iter().copied())
+    {
+        *generation = wallet_pin.wallet_token.generation;
+        return Ok(false);
+    }
+    for card_id in &wallet_pin.pinned_card_ids {
+        if !wallet.contains_key(card_id) {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
                 "invocation wallet pin backed by replayed card definitions",
                 format!("pinned card {card_id} is missing from the replayed wallet"),
-            )
-        })?;
-        pinned_wallet.insert(card_id, card);
-    }
-
-    let membership_changed = wallet.keys().ne(pinned_wallet.keys());
-    *wallet = pinned_wallet;
-    *generation = wallet_pin.wallet_token.generation;
-    Ok(membership_changed)
-}
-
-fn adopt_recorded_wallet_generation(
-    generation: &mut u64,
-    recorded_generation: Option<u64>,
-) -> Result<(), WorkerExecutorError> {
-    if let Some(recorded_generation) = recorded_generation {
-        if recorded_generation < *generation {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "non-decreasing wallet generation",
-                format!(
-                    "recorded generation {recorded_generation} is behind replayed generation {}",
-                    *generation
-                ),
             ));
         }
-        *generation = recorded_generation;
     }
+
+    let removed = wallet
+        .keys()
+        .filter(|id| wallet_pin.pinned_card_ids.binary_search(id).is_err())
+        .copied()
+        .collect::<Vec<_>>();
+    for card_id in &removed {
+        wallet.remove(card_id);
+    }
+    *generation = wallet_pin.wallet_token.generation;
+    Ok(!removed.is_empty())
+}
+
+pub(crate) fn adopt_recorded_wallet_generation(
+    generation: &mut u64,
+    recorded_generation: u64,
+) -> Result<(), WorkerExecutorError> {
+    if recorded_generation < *generation {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            "non-decreasing wallet generation",
+            format!(
+                "recorded generation {recorded_generation} is behind replayed generation {}",
+                *generation
+            ),
+        ));
+    }
+    *generation = recorded_generation;
     Ok(())
 }
 
-fn replace_wallet_cards(
-    wallet: &mut BTreeMap<CardId, StoredCard>,
+pub(crate) fn replace_wallet_cards(
+    wallet: &mut WalletCards,
     generation: &mut u64,
-    replacement: BTreeMap<CardId, StoredCard>,
+    replacement: WalletCards,
 ) -> Result<bool, WorkerExecutorError> {
     let removed_ids = wallet
         .keys()
@@ -6049,19 +6611,533 @@ fn replace_wallet_cards(
     for card_id in removed_ids {
         wallet.remove(&card_id);
     }
-    for card in replacement.into_values() {
-        let card_id = card.card_id();
-        wallet.entry(card_id).or_insert(card);
+    for (card_id, card) in replacement {
+        if !wallet.contains_key(&card_id) {
+            wallet.insert(card_id, card);
+        }
     }
     *generation = next_generation;
     Ok(true)
 }
 
+/// What shard-assignment recovery does with one worker's computed status: `Ok(Some)` to restart
+/// it, `Ok(None)` to skip it, `Err` to fail the whole assignment.
+///
+/// The same distinction `enum_workers_at_key` draws for the scan itself:
+///
+/// - `Ok(None)` from the status computation means the oplog is gone - a delete that raced the
+///   index read. There is nothing to resume, so that one agent is skipped.
+/// - `Err` is not evidence the worker is gone. Logging it and moving on would acknowledge the
+///   assignment with the worker still stopped, and nothing would try again until an external
+///   invocation happened to arrive: a running agent stranded silently for as long as this
+///   executor owns the shard. Failing the assignment hands the retry to the caller instead. The
+///   shard manager retries a failed `assign_shards`, and at startup the process exits and the
+///   restart policy retries. Recovery is idempotent - a worker restarted on an earlier attempt is
+///   simply found running on the next - so re-running the whole scan is safe. The restart that
+///   follows a computed status is treated the same way by the caller.
+///
+/// Every storage read on this path has already had the key-value retry budget, which is sized to
+/// outlast an AWS failover, so what arrives here as `Err` is what outlived that budget. A worker
+/// that can never be restarted therefore keeps this executor from serving its shards, loudly,
+/// rather than being dropped from recovery quietly. That is the intended trade: the loud failure
+/// is visible and gets acted on, the quiet one is not. It is also the shape the oplog layers
+/// already have - a bounded storage retry, then a fatal failure - at a lower cost, since a failed
+/// assignment is one RPC rather than a process exit.
+///
+/// An oplog that does not read (`StatusError::Unreadable`) for good, because its data is corrupt or
+/// missing, is not that kind of failure: no retry of the assignment reads it, so failing the
+/// assignment would stop every other agent forever. That one agent is skipped and logged, and its
+/// oplog is left as it is. An oplog whose storage did not answer
+/// ([`UnreadableOplog::is_transient`]) is that kind of failure: a retry can read it.
+fn recovered_status(
+    owned_agent_id: &OwnedAgentId,
+    computed: Result<Option<AgentStatusRecord>, StatusError>,
+) -> Result<Option<AgentStatusRecord>, anyhow::Error> {
+    match computed {
+        Ok(Some(status)) => Ok(Some(status)),
+        Ok(None) => {
+            error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
+            Ok(None)
+        }
+        // No retry reads the oplog, so failing the assignment would keep every other agent from
+        // being resumed. The agent is left as it is, with its oplog, for an operator to inspect.
+        Err(StatusError::Unreadable(error)) if !error.is_transient() => {
+            log_unreadable_recovered_agent(owned_agent_id, &error);
+            Ok(None)
+        }
+        Err(error) => Err(anyhow!(
+            "failed to calculate the status of {owned_agent_id} during shard-assignment recovery, so it cannot be resumed: {error}"
+        )),
+    }
+}
+
+/// The outcome of restarting one recovered agent, drawing the same line as [`recovered_status`].
+///
+/// `ShardingNotReady` means the agent's shard left this executor's assignment while recovery was
+/// running: a later delivery revoked it, and the worker was refused an epoch rather than opened
+/// unfenced. `OplogFenced` means another executor claimed the agent's oplog at a newer epoch
+/// before this one wrote to it. Either way the agent belongs to the shard's new owner, which
+/// recovers it there. This is a skip, like an oplog that is gone. Failing the whole assignment for
+/// it would stop every other agent in the scan from being resumed. An agent whose oplog does not
+/// read (`OplogFailed`, for example from rebuilding its stream session index) is skipped too:
+/// no retry of the assignment reads that oplog. Any other restart failure still fails the
+/// assignment.
+fn recovered_restart<W>(
+    owned_agent_id: &OwnedAgentId,
+    restarted: Result<W, WorkerExecutorError>,
+) -> Result<(), anyhow::Error> {
+    match restarted {
+        Ok(_) => Ok(()),
+        Err(WorkerExecutorError::ShardingNotReady | WorkerExecutorError::OplogFenced { .. }) => {
+            debug!(agent_id = %owned_agent_id, "Worker's shard left the assignment during shard-assignment recovery; skipping agent");
+            Ok(())
+        }
+        // As for a status that does not fold: no retry of the assignment reads the oplog.
+        Err(error) if is_failed_oplog(&error) => {
+            log_unreadable_recovered_agent(owned_agent_id, &error);
+            Ok(())
+        }
+        Err(error) => Err(anyhow!(
+            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+        )),
+    }
+}
+
+/// Logs an agent that shard-assignment recovery skips because its oplog does not read.
+fn log_unreadable_recovered_agent(owned_agent_id: &OwnedAgentId, error: &dyn std::fmt::Display) {
+    error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
+}
+
+/// Whether `error` is an oplog that failed, also when a failed resume carries it.
+fn is_failed_oplog(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::OplogFailed { .. } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog(reason),
+        _ => false,
+    }
+}
+
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
+    status.status != AgentStatus::Interrupted
+        && (matches!(
+            status.status,
+            AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying
+        ) || status.has_pending_work())
+}
+
+fn should_replay_invocation(
+    mode: AgentMode,
+    owner: &ResolvedOwnerContext,
+    replayed_invocations: usize,
+) -> bool {
+    mode == AgentMode::Durable
+        || (matches!(owner, ResolvedOwnerContext::Agent(_)) && replayed_invocations == 0)
+}
+
+fn store_is_live(
+    entity_execution_mode: Option<InvocationExecutionMode>,
+    local_live_tail: bool,
+    shared_live_published: bool,
+) -> bool {
+    match entity_execution_mode {
+        Some(InvocationExecutionMode::ReplayingCompleted) => false,
+        Some(InvocationExecutionMode::ReplayingIncomplete | InvocationExecutionMode::Live) => {
+            local_live_tail
+        }
+        None => shared_live_published,
+    }
+}
+
+pub(crate) enum BeginReplayToLive {
+    ReplayResumed,
+    Pending(PendingReplayToLive),
+}
+
+// Callers immediately destructure this transient result; avoid allocating each oplog entry.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub(crate) enum PositionalRead {
+    Entry(OplogIndex, OplogEntry),
+    ReplayEnded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FinishReplayToLive {
+    Live,
+    AttachmentAdmissionRejected,
+    Cancelled,
+}
+
+impl FinishReplayToLive {
+    pub(crate) fn require_live(self) -> Result<(), WorkerExecutorError> {
+        match self {
+            Self::Live => Ok(()),
+            Self::AttachmentAdmissionRejected => {
+                Err(tool_attachment_live_admission_rejected_error())
+            }
+            Self::Cancelled => Err(tool_attachment_live_admission_cancelled_error()),
+        }
+    }
+}
+
+#[must_use = "replay cleanup must finish before live attachment admission is finalized"]
+pub(crate) struct PendingReplayToLive {
+    #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
+    replay_target: OplogIndex,
+    role: ReplayToLiveRole,
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    local_live_tail: Arc<AtomicBool>,
+}
+
+impl PendingReplayToLive {
+    #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
+    pub(crate) fn replay_target(&self) -> OplogIndex {
+        self.replay_target
+    }
+
+    fn role(&self) -> ReplayToLiveRole {
+        self.role
+    }
+
+    pub(crate) async fn finish_at(
+        self,
+        boundary: Option<
+            golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
+        >,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        if self.replaying_incomplete_entity && self.tool_entity {
+            let operation = self.tool_operation.ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "Incomplete tool entity has no live-admission operation installed",
+                )
+            })?;
+            match operation
+                .activate_live_attachment_memory_accounting_at(boundary)
+                .await
+            {
+                tool::operation::ToolLiveAdmissionOutcome::Admitted => {}
+                tool::operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
+                    return Ok(FinishReplayToLive::AttachmentAdmissionRejected);
+                }
+                tool::operation::ToolLiveAdmissionOutcome::Cancelled => {
+                    return Ok(FinishReplayToLive::Cancelled);
+                }
+                tool::operation::ToolLiveAdmissionOutcome::Fenced => {
+                    return Err(WorkerExecutorError::runtime(
+                        "Tool operation was fenced during live-memory admission",
+                    ));
+                }
+            }
+        }
+
+        if self.role == ReplayToLiveRole::NonPrimary {
+            self.local_live_tail.store(true, Ordering::Release);
+        }
+        Ok(FinishReplayToLive::Live)
+    }
+}
+
+const TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED: &str =
+    "Tool attachment live-memory admission was exhausted";
+
+pub(crate) fn tool_attachment_live_admission_rejected_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED)
+}
+
+pub(crate) fn is_tool_attachment_live_admission_rejection(error: &WorkerExecutorError) -> bool {
     matches!(
-        status.status,
-        AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying | AgentStatus::Interrupted
-    ) || status.has_pending_work()
+        error,
+        WorkerExecutorError::Runtime { details }
+            if details == TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED
+    )
+}
+
+const TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED: &str =
+    "Tool attachment live-memory admission was cancelled";
+
+pub(crate) fn tool_attachment_live_admission_cancelled_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED)
+}
+
+async fn activate_incomplete_entity_linear_memory<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+) -> Result<(), WorkerExecutorError> {
+    if !replaying_incomplete_entity {
+        return Ok(());
+    }
+
+    let active_agents = public_state.worker().active_agents();
+    linear_memory
+        .activate_live_reservation(move |bytes| {
+            let active_agents = active_agents.clone();
+            async move { active_agents.acquire_memory(bytes).await }
+        })
+        .await;
+    Ok(())
+}
+
+async fn await_incomplete_tool_attachment_reconstruction(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    operation: Option<&tool::operation::OwnerToolOperation>,
+    replay: &ReplayState,
+) -> Result<(), WorkerExecutorError> {
+    if replaying_incomplete_entity && tool_entity {
+        let invocation = operation
+            .and_then(|operation| operation.invocation_id())
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("Incomplete tool entity has no accepted operation")
+            })?;
+        replay
+            .await_tool_attachment_reconstruction(invocation.start_index())
+            .await?;
+    }
+    Ok(())
+}
+
+async fn begin_replay_to_live<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    replay_state: &ReplayState,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+) -> Result<BeginReplayToLive, WorkerExecutorError> {
+    await_incomplete_tool_attachment_reconstruction(
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation.as_ref(),
+        replay_state,
+    )
+    .await?;
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    match replay_state.switch_to_live(linear_memory, role).await? {
+        ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
+        ReplayToLiveOutcome::Live { replay_target } => {
+            Ok(BeginReplayToLive::Pending(PendingReplayToLive {
+                replay_target,
+                role,
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                local_live_tail,
+            }))
+        }
+    }
+}
+
+async fn begin_local_live_continuation<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+    replay_state: &ReplayState,
+    replay_target: OplogIndex,
+) -> Result<PendingReplayToLive, WorkerExecutorError> {
+    await_incomplete_tool_attachment_reconstruction(
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation.as_ref(),
+        replay_state,
+    )
+    .await?;
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    linear_memory.switch_to_live();
+    Ok(PendingReplayToLive {
+        replay_target,
+        role,
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation,
+        local_live_tail,
+    })
+}
+
+/// The infrastructure error that ends an invocation or a replay of a durable agent outside the
+/// guest's failure handling: a reconstruction that is required, or an oplog that failed.
+///
+/// The winner of the tool-owner arbitration comes first. An infrastructure winner is that error;
+/// a trap or a lifecycle winner keeps its own handling, so nothing is selected. Without a winner,
+/// the error is the one of the invocation.
+pub(crate) fn selected_recovery_error<'a>(
+    owner_failure: Option<&'a crate::durable_host::tool::operation::OwnerFailureWinner>,
+    agent_mode: AgentMode,
+    result: &'a Result<InvokeResult, WorkerExecutorError>,
+) -> Option<&'a WorkerExecutorError> {
+    use crate::durable_host::tool::operation::OwnerFailureWinner;
+    if agent_mode != AgentMode::Durable {
+        return None;
+    }
+    let error = match owner_failure {
+        Some(OwnerFailureWinner::Infrastructure(error)) => error,
+        Some(OwnerFailureWinner::Trap(_) | OwnerFailureWinner::Lifecycle(_)) => return None,
+        None => result.as_ref().err()?,
+    };
+    matches!(
+        error,
+        WorkerExecutorError::RecoveryRequired { .. } | WorkerExecutorError::OplogFailed { .. }
+    )
+    .then_some(error)
+}
+
+/// What a start gets when the snapshot record itself does not read. A storage that did not answer
+/// is `Unavailable` with `RecoveryRequired`, which the start retries without a decision on the
+/// record; any other read failure is `OplogFailed`, which fails the start in every column. Neither
+/// is a snapshot that failed to load, so the record is never rejected for it.
+fn snapshot_entry_read_failure(error: UnreadableOplog) -> SnapshotRecoveryResult {
+    let transient = error.is_transient();
+    let error = WorkerExecutorError::from(error);
+    if transient {
+        SnapshotRecoveryResult::Unavailable(error)
+    } else {
+        SnapshotRecoveryResult::Failed(error)
+    }
+}
+
+/// What a start gets when the payload of the application snapshot of its baseline does not
+/// download for `purpose`, with `error` as the text. `lost` tells that the payload is missing or
+/// does not decode, rather than that its store failed. A periodic record is skipped for the start
+/// attempt and the start retries at once (the caller marks it unavailable). A snapshot-assisted
+/// attempt whose store failed retries with the same record through the recovery path, and
+/// nothing marks the record; one whose payload is lost reports the selected record as lost. The
+/// replay for a pending automatic update retries a failed store through the recovery path too,
+/// and gets the runtime error for a lost payload. Any other baseline gets the runtime error.
+fn payload_download_failure(
+    purpose: SnapshotReplayPurpose,
+    lost: bool,
+    error: String,
+) -> SnapshotRecoveryResult {
+    match purpose {
+        SnapshotReplayPurpose::PeriodicRecovery => {
+            SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
+        }
+        SnapshotReplayPurpose::AssistedUpdate if lost => {
+            SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(error))
+        }
+        SnapshotReplayPurpose::AssistedUpdate => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+                retry_from: None,
+                details: error,
+            })
+        }
+        SnapshotReplayPurpose::AutomaticUpdate if !lost => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+                retry_from: None,
+                details: error,
+            })
+        }
+        SnapshotReplayPurpose::None | SnapshotReplayPurpose::AutomaticUpdate => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error))
+        }
+    }
+}
+
+/// Performs `action`, the outcome of a failure of the update of the instance at the update point
+/// of a start, on the p2 and the p3 path, and gives the error that ends the start. The update
+/// point consumed the pending update, so a start that runs again starts on the source revision:
+/// a written failed update, a skipped or a rejected record end the start with `Restart`, an
+/// internal retry signal that records no interruption. A failed write ends it with the error of
+/// the write, a lost shard with `ShardLost`, and an error of the table with the error that
+/// `start_outcome::update_point_error` gives for it.
+pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
+    worker: &Arc<Worker<Ctx>>,
+    action: start_outcome::StartAction,
+) -> WorkerExecutorError {
+    let restart = WorkerExecutorError::Interrupted {
+        kind: InterruptKind::Restart,
+    };
+    match action {
+        start_outcome::StartAction::FailUpdate { entry, reject } => {
+            warn!(?entry, "Worker update attempt aborted");
+            match worker.add_and_commit_oplog(entry).await {
+                Ok(_) => {
+                    if let Some(index) = reject {
+                        worker.reject_periodic(index);
+                    }
+                    restart
+                }
+                Err(error) => WorkerExecutorError::from(error),
+            }
+        }
+        start_outcome::StartAction::SkipPeriodic(index) => {
+            worker.mark_periodic_unavailable(index);
+            restart
+        }
+        start_outcome::StartAction::RejectPeriodic(index) => {
+            worker.reject_periodic(index);
+            restart
+        }
+        start_outcome::StartAction::Error(error) => start_outcome::update_point_error(error),
+        start_outcome::StartAction::ShardLost => WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        },
+        start_outcome::StartAction::Retry(decision) => WorkerExecutorError::runtime(format!(
+            "the update point has no snapshot load to retry ({decision:?})"
+        )),
+    }
+}
+
+/// The error of a failed `prepare_instance`. A failure of the previous invocation and an
+/// interrupt keep their form: the invocation loop handles an interrupt as an interrupted start and
+/// records no recovery failure for it. Every other error is a failure to resume the agent.
+fn prepare_failure(agent_id: &AgentId, error: WorkerExecutorError) -> WorkerExecutorError {
+    match error {
+        error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+        | WorkerExecutorError::PreviousInvocationExited
+        | WorkerExecutorError::Interrupted { .. }) => error,
+        error => WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), error),
+    }
+}
+
+/// A failed replay of the recorded invocations of a start.
+struct ReplayFailure {
+    error: WorkerExecutorError,
+    /// Whether the replay after an application snapshot diverged from the oplog with a typed
+    /// divergence while the start still replayed it.
+    diverged: bool,
+}
+
+/// Why a pending automatic update did not reach the end of its replay.
+enum AttemptFailure {
+    /// The application snapshot of the baseline did not load.
+    Load(SnapshotRecoveryResult),
+    /// The replay failed.
+    Replay(ReplayFailure),
+}
+
+impl AttemptFailure {
+    fn into_error(self) -> WorkerExecutorError {
+        match self {
+            Self::Load(
+                SnapshotRecoveryResult::Failed(error)
+                | SnapshotRecoveryResult::Unavailable(error)
+                | SnapshotRecoveryResult::Lost(error),
+            )
+            | Self::Replay(ReplayFailure { error, .. }) => error,
+            Self::Load(_) => WorkerExecutorError::runtime(
+                "Snapshot-assisted automatic update did not attempt its required snapshot",
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6085,7 +7161,534 @@ mod tests {
     use std::collections::HashSet;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
+
     use test_r::test;
+
+    /// A payload of an application snapshot that does not download skips a periodic record for
+    /// the start attempt. A snapshot-assisted attempt whose payload store fails retries with the
+    /// same record through the recovery path: the outcome table writes no failed update and
+    /// rejects nothing for it. A snapshot-assisted attempt whose payload is missing or does not
+    /// decode fails the update as a lost record and rejects the record.
+    #[test]
+    fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_store_failed() {
+        use golem_common::model::{
+            AssistedSelection, PendingUpdateKind, PendingUpdateRef, UsableAutomaticSnapshot,
+        };
+        let head = PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(12),
+            admission_index: OplogIndex::from_u64(10),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot: UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(7),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
+                },
+            })),
+        };
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "payload".to_string(),
+        };
+        let decide = |result: &SnapshotRecoveryResult| {
+            start_outcome::decide(
+                &start_outcome::BaselineRole::AssistedPending(Arc::new(head.clone())),
+                Some(&head),
+                start_outcome::RawStartError::Load(result),
+                &agent_id,
+                false,
+            )
+        };
+        let unavailable = payload_download_failure(
+            SnapshotReplayPurpose::AssistedUpdate,
+            false,
+            "blob store unavailable".to_string(),
+        );
+        let lost = payload_download_failure(
+            SnapshotReplayPurpose::AssistedUpdate,
+            true,
+            "referenced oplog payload is missing".to_string(),
+        );
+
+        [false, true].iter().for_each(|lost| {
+            assert!(matches!(
+                payload_download_failure(
+                    SnapshotReplayPurpose::PeriodicRecovery,
+                    *lost,
+                    "down".to_string()
+                ),
+                SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
+            ));
+            assert!(matches!(
+                payload_download_failure(SnapshotReplayPurpose::None, *lost, "down".to_string()),
+                SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+            ));
+        });
+        assert!(matches!(
+            payload_download_failure(
+                SnapshotReplayPurpose::AutomaticUpdate,
+                false,
+                "blob store unavailable".to_string()
+            ),
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            payload_download_failure(
+                SnapshotReplayPurpose::AutomaticUpdate,
+                true,
+                "referenced oplog payload is missing".to_string()
+            ),
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+        ));
+        assert!(matches!(
+            unavailable,
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            decide(&unavailable),
+            start_outcome::StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        match decide(&lost) {
+            start_outcome::StartAction::FailUpdate {
+                entry:
+                    OplogEntry::FailedUpdate {
+                        details,
+                        snapshot_assisted_details: Some(assisted),
+                        snapshot_fault,
+                        ..
+                    },
+                reject,
+            } => {
+                assert!(
+                    details
+                        .as_deref()
+                        .is_some_and(|details| details
+                            .starts_with(start_outcome::UPDATE_SNAPSHOT_UNAVAILABLE)),
+                    "{details:?}"
+                );
+                assert_eq!(assisted.snapshot_index, OplogIndex::from_u64(7));
+                assert_eq!(
+                    snapshot_fault,
+                    Some(golem_common::model::oplog::SnapshotFault::Unavailable)
+                );
+                assert_eq!(reject, Some(OplogIndex::from_u64(7)));
+            }
+            other => panic!("a lost payload fails the update, got {other:?}"),
+        }
+    }
+
+    /// An out-of-memory trap while the application snapshot loads retries the start with its
+    /// permits reacquired, as during any invocation, in a snapshot-assisted attempt and in the
+    /// start of a plain automatic update after a promoted baseline: the outcome table writes no
+    /// failed update for it. An interrupt keeps its fixed decision; any other trap does not retry.
+    #[test]
+    fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_start() {
+        let failed = |error: AgentError| InvokeResult::Failed {
+            consumed_fuel: 0,
+            error,
+            timed_out: false,
+            retry_from: OplogIndex::INITIAL,
+            semantic_trap_retry_override: None,
+        };
+        let retry = |result: &InvokeResult| {
+            DurableWorkerCtx::<crate::workerctx::default::Context>::load_retry(result)
+        };
+        let pending = |kind: PendingUpdateKind| PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(12),
+            admission_index: OplogIndex::from_u64(10),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind,
+        };
+        let assisted = pending(PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(
+            golem_common::model::AssistedSelection {
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot: golem_common::model::UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(7),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
+                },
+            },
+        )));
+        let automatic = pending(PendingUpdateKind::Automatic);
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "load".to_string(),
+        };
+        let out_of_memory = SnapshotRecoveryResult::Retry(
+            retry(&failed(AgentError::OutOfMemory)).expect("an out-of-memory trap retries"),
+        );
+        let decide = |role: start_outcome::BaselineRole, head: &PendingUpdateRef| {
+            start_outcome::decide(
+                &role,
+                Some(head),
+                start_outcome::RawStartError::Load(&out_of_memory),
+                &agent_id,
+                false,
+            )
+        };
+
+        assert_eq!(
+            [
+                retry(&failed(AgentError::OutOfMemory)),
+                retry(&failed(AgentError::InternalError("diverged".to_string()))),
+                retry(&failed(AgentError::Unknown("transient".to_string()))),
+                retry(&InvokeResult::Interrupted {
+                    consumed_fuel: 0,
+                    interrupt_kind: InterruptKind::Restart,
+                }),
+                retry(&InvokeResult::Exited { consumed_fuel: 0 }),
+            ],
+            [
+                Some(RetryDecision::ReacquirePermits),
+                None,
+                None,
+                Some(RetryDecision::Immediate),
+                None,
+            ]
+        );
+        assert!(matches!(
+            decide(
+                start_outcome::BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+                &assisted
+            ),
+            start_outcome::StartAction::Retry(RetryDecision::ReacquirePermits)
+        ));
+        [
+            start_outcome::BaselineRole::AssistedPromoted,
+            start_outcome::BaselineRole::ManualPromoted,
+        ]
+        .into_iter()
+        .for_each(|role| {
+            assert!(matches!(
+                decide(role, &automatic),
+                start_outcome::StartAction::Retry(RetryDecision::ReacquirePermits)
+            ))
+        });
+    }
+
+    /// An interrupt that ends a start, for example the restart of a revert while the start after
+    /// a failed update replays, keeps its form, so the invocation loop handles it as an interrupted
+    /// start and writes no recovery failure. A failure of the previous invocation keeps its form
+    /// too; every other error is a failure to resume the agent.
+    #[test]
+    fn a_prepare_failure_keeps_an_interrupt_and_a_previous_invocation_failure() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "prepare".to_string(),
+        };
+        let interrupt = WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Restart,
+        };
+        let previous = WorkerExecutorError::PreviousInvocationFailed {
+            error: AgentError::Unknown("trap".to_string()),
+            stderr: String::new(),
+        };
+        let runtime = WorkerExecutorError::runtime("boom");
+        assert_eq!(
+            [
+                prepare_failure(&agent_id, interrupt.clone()),
+                prepare_failure(&agent_id, previous.clone()),
+                prepare_failure(&agent_id, WorkerExecutorError::PreviousInvocationExited),
+                prepare_failure(&agent_id, runtime.clone()),
+            ],
+            [
+                interrupt,
+                previous,
+                WorkerExecutorError::PreviousInvocationExited,
+                WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), runtime),
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_recovery_branch_preserves_owner_and_ephemeral_priority() {
+        let result = Err(WorkerExecutorError::recovery_required(
+            "payload backend unavailable",
+        ));
+        assert!(selected_recovery_error(None, AgentMode::Durable, &result).is_some());
+        assert!(
+            selected_recovery_error(Some(&lifecycle_winner()), AgentMode::Durable, &result)
+                .is_none()
+        );
+        assert!(selected_recovery_error(None, AgentMode::Ephemeral, &result).is_none());
+    }
+
+    fn lifecycle_winner() -> crate::durable_host::tool::operation::OwnerFailureWinner {
+        crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(
+            InterruptKind::Interrupt(Timestamp::now_utc()),
+        )
+    }
+
+    /// A snapshot record whose storage did not answer is a recovery the start retries, not a
+    /// snapshot that failed to load; a snapshot record that does not read for good is the failed
+    /// oplog.
+    #[test]
+    fn a_snapshot_record_that_is_unavailable_is_a_recovery_not_a_failed_load() {
+        use crate::services::oplog::{OplogReadError, OplogReadSource};
+
+        let agent_id = recovered_agent().agent_id();
+        let unavailable = snapshot_entry_read_failure(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::source_unavailable(OplogReadSource::Archive(1), "outage"),
+        ));
+        assert!(matches!(
+            unavailable,
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        let corrupt = snapshot_entry_read_failure(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        ));
+        assert!(matches!(
+            corrupt,
+            SnapshotRecoveryResult::Failed(WorkerExecutorError::OplogFailed { .. })
+        ));
+    }
+
+    /// A tool failure that wins the owner arbitration as an infrastructure error keeps that
+    /// classification: a reconstruction that is required, or an oplog that failed, is selected
+    /// whatever the invocation itself returned. An ordinary infrastructure winner, a trap and a
+    /// lifecycle winner keep their own handling.
+    #[test]
+    fn a_winning_infrastructure_owner_failure_is_the_recovery_error() {
+        use crate::durable_host::tool::operation::OwnerFailureWinner;
+
+        let result = Err(WorkerExecutorError::runtime("guest trapped"));
+        let recovery = OwnerFailureWinner::Infrastructure(WorkerExecutorError::recovery_required(
+            "archive storage unavailable",
+        ));
+        assert_eq!(
+            selected_recovery_error(Some(&recovery), AgentMode::Durable, &result),
+            Some(&WorkerExecutorError::recovery_required(
+                "archive storage unavailable"
+            ))
+        );
+        let ordinary = OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime("host"));
+        assert!(selected_recovery_error(Some(&ordinary), AgentMode::Durable, &result).is_none());
+        assert!(selected_recovery_error(Some(&recovery), AgentMode::Ephemeral, &result).is_none());
+        let recovery_result = Err(WorkerExecutorError::recovery_required("payload"));
+        assert!(
+            selected_recovery_error(
+                Some(&lifecycle_winner()),
+                AgentMode::Durable,
+                &recovery_result
+            )
+            .is_none()
+        );
+    }
+
+    /// An oplog that does not read ends the replay with its error instead of failing the guest.
+    #[test]
+    fn replay_recovery_branch_selects_an_unreadable_oplog() {
+        let result = Err(WorkerExecutorError::oplog_failed(
+            AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "unreadable".to_string(),
+            },
+            "corrupt oplog data from archive layer 1",
+        ));
+        assert_eq!(
+            selected_recovery_error(None, AgentMode::Durable, &result),
+            result.as_ref().err()
+        );
+        assert!(
+            selected_recovery_error(Some(&lifecycle_winner()), AgentMode::Durable, &result)
+                .is_none()
+        );
+    }
+
+    /// A refused write of the failure of an invocation takes the classification of its agent
+    /// error. A failed archive write, or an oplog that does not read for good, fails the invocation
+    /// with its cause. An oplog storage that did not answer is a recovery, so the invocation stays
+    /// pending. A fence publishes nothing, because the new owner of the shard runs the invocation.
+    #[test]
+    fn a_refused_invocation_failure_takes_the_classification_of_its_agent_error() {
+        use crate::services::oplog::{
+            OplogError, OplogFence, OplogReadError, OplogReadSource, UnreadableOplog,
+        };
+
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "terminal-entry".to_string(),
+        };
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::ArchiveWrite(
+                crate::services::oplog::ArchiveWriteFailure {
+                    agent_id: agent_id.clone(),
+                    level: 0,
+                    details: "injected archive failure".to_string(),
+                }
+            )),
+            TerminalEntryRefusal::OplogFailed(WorkerExecutorError::OplogFailed { .. })
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
+                agent_id: agent_id.clone(),
+                error: OplogReadError::Gap {
+                    start: OplogIndex::INITIAL,
+                    end: OplogIndex::from_u64(2),
+                },
+            })),
+            TerminalEntryRefusal::OplogFailed(WorkerExecutorError::OplogFailed { .. })
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
+                agent_id: agent_id.clone(),
+                error: OplogReadError::source_unavailable(
+                    OplogReadSource::Archive(0),
+                    "injected archive outage",
+                ),
+            })),
+            TerminalEntryRefusal::RecoveryRequired(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Fenced(OplogFence {
+                agent_id,
+                expected_epoch: golem_common::model::ShardEpoch(1),
+                actual_epoch: Some(golem_common::model::ShardEpoch(2)),
+            })),
+            TerminalEntryRefusal::Unpublished
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Payload("payload".to_string())),
+            TerminalEntryRefusal::Unpublished
+        ));
+    }
+
+    #[test]
+    fn replay_recovery_branch_rejects_ordinary_host_failure() {
+        let result = Err(WorkerExecutorError::runtime("host task failed"));
+        assert!(selected_recovery_error(None, AgentMode::Durable, &result).is_none());
+    }
+
+    #[test]
+    fn ephemeral_replay_is_only_for_typed_owner_initialization() {
+        use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+        let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentId::new(
+            AgentTypeName("counter".to_string()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::string()),
+                SchemaValue::String("meaningful-constructor-input".to_string()),
+            ),
+            None,
+        )));
+        assert!(should_replay_invocation(AgentMode::Ephemeral, &agent, 0));
+        assert!(!should_replay_invocation(AgentMode::Ephemeral, &agent, 1));
+        for owner in [
+            ResolvedOwnerContext::ComponentWorker,
+            ResolvedOwnerContext::ComponentBaseline,
+        ] {
+            for replayed in [0, 1, 3] {
+                assert!(!should_replay_invocation(
+                    AgentMode::Ephemeral,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+        for owner in [agent, ResolvedOwnerContext::ComponentWorker] {
+            for replayed in [0, 1, 3] {
+                assert!(should_replay_invocation(
+                    AgentMode::Durable,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn component_file_node_reports_the_write_permission_of_a_file() {
+        use crate::services::agent_filesystem as agent_fs;
+        let file = |read_only| agent_fs::Attributes {
+            kind: agent_fs::ObjectKind::File,
+            link_count: 1,
+            size: 7,
+            accessed: None,
+            modified: None,
+            read_only,
+        };
+
+        let read_only =
+            component_file_node(PathBuf::from("dir/read-only.txt"), file(true)).unwrap();
+        let writable = component_file_node(PathBuf::from("writable.txt"), file(false)).unwrap();
+
+        assert_eq!(
+            read_only,
+            ComponentFileSystemNode {
+                name: "read-only.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
+                    size: 7,
+                },
+            }
+        );
+        assert_eq!(
+            writable.details,
+            ComponentFileSystemNodeDetails::File {
+                permissions: golem_common::model::component::AgentFilePermissions::ReadWrite,
+                size: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
+        assert!(!store_is_live(None, false, false));
+        assert!(store_is_live(None, false, true));
+
+        let completed = Some(InvocationExecutionMode::ReplayingCompleted);
+        assert!(!store_is_live(completed, false, false));
+        assert!(!store_is_live(completed, false, true));
+        assert!(!store_is_live(completed, true, true));
+
+        let incomplete = Some(InvocationExecutionMode::ReplayingIncomplete);
+        assert!(!store_is_live(incomplete, false, false));
+        assert!(!store_is_live(incomplete, false, true));
+        assert!(store_is_live(incomplete, true, true));
+        assert!(store_is_live(
+            Some(InvocationExecutionMode::Live),
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    async fn pending_replay_to_live_is_fail_closed_until_finished() {
+        let local_live_tail = Arc::new(AtomicBool::new(false));
+        let pending = PendingReplayToLive {
+            replay_target: OplogIndex::from_u64(42),
+            role: ReplayToLiveRole::NonPrimary,
+            replaying_incomplete_entity: false,
+            tool_entity: false,
+            tool_operation: None,
+            local_live_tail: local_live_tail.clone(),
+        };
+
+        assert_eq!(pending.replay_target(), OplogIndex::from_u64(42));
+        assert!(!local_live_tail.load(Ordering::Acquire));
+        assert_eq!(
+            pending.finish_at(None).await.unwrap(),
+            FinishReplayToLive::Live
+        );
+        assert!(local_live_tail.load(Ordering::Acquire));
+
+        let dropped_tail = Arc::new(AtomicBool::new(false));
+        drop(PendingReplayToLive {
+            replay_target: OplogIndex::from_u64(43),
+            role: ReplayToLiveRole::NonPrimary,
+            replaying_incomplete_entity: false,
+            tool_entity: false,
+            tool_operation: None,
+            local_live_tail: dropped_tail.clone(),
+        });
+        assert!(!dropped_tail.load(Ordering::Acquire));
+    }
 
     #[test]
     fn operator_authorized_invocation_guard_clears_mode_when_dropped() {
@@ -6403,20 +8006,6 @@ mod tests {
             ),
             (
                 SnapshotBoundaryConditions {
-                    open_atomic_region: true,
-                    ..Default::default()
-                },
-                SnapshotBoundaryBlocker::OpenAtomicRegion,
-            ),
-            (
-                SnapshotBoundaryConditions {
-                    open_durable_scope: true,
-                    ..Default::default()
-                },
-                SnapshotBoundaryBlocker::OpenDurableScope,
-            ),
-            (
-                SnapshotBoundaryConditions {
                     snapshotting: true,
                     ..Default::default()
                 },
@@ -6428,6 +8017,13 @@ mod tests {
                     ..Default::default()
                 },
                 SnapshotBoundaryBlocker::InFlightHostCall,
+            ),
+            (
+                SnapshotBoundaryConditions {
+                    open_tool_attachment: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::OpenToolAttachment,
             ),
         ];
         for (conditions, expected) in cases {
@@ -6441,15 +8037,14 @@ mod tests {
 
     #[test]
     fn snapshot_boundary_any_condition_combination_blocks() {
-        // Exhaustive truth table over the five conditions: a snapshot is admitted iff every
+        // Exhaustive truth table over the four conditions: a snapshot is admitted iff every
         // condition is clear, and the reported blocker is always one of the set conditions.
-        for bits in 0u32..32 {
+        for bits in 0u32..16 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
-                open_atomic_region: bits & 2 != 0,
-                open_durable_scope: bits & 4 != 0,
-                snapshotting: bits & 8 != 0,
-                in_flight_host_call: bits & 16 != 0,
+                in_flight_host_call: bits & 2 != 0,
+                snapshotting: bits & 4 != 0,
+                open_tool_attachment: bits & 8 != 0,
             };
             let blocker = conditions.blocker();
             assert_eq!(
@@ -6460,10 +8055,9 @@ mod tests {
             if let Some(blocker) = blocker {
                 let named_condition_is_set = match blocker {
                     SnapshotBoundaryBlocker::Replaying => conditions.replaying,
-                    SnapshotBoundaryBlocker::OpenAtomicRegion => conditions.open_atomic_region,
-                    SnapshotBoundaryBlocker::OpenDurableScope => conditions.open_durable_scope,
                     SnapshotBoundaryBlocker::Snapshotting => conditions.snapshotting,
                     SnapshotBoundaryBlocker::InFlightHostCall => conditions.in_flight_host_call,
+                    SnapshotBoundaryBlocker::OpenToolAttachment => conditions.open_tool_attachment,
                 };
                 assert!(
                     named_condition_is_set,
@@ -6475,85 +8069,49 @@ mod tests {
 
     #[test]
     fn checkpoint_boundary_truth_table() {
-        // Exhaustive truth table over the four blocking conditions: a mid-invocation status
+        // Exhaustive truth table over the three blocking conditions: a mid-invocation status
         // checkpoint is admitted iff every condition is clear.
-        for bits in 0u32..16 {
+        for bits in 0u32..8 {
             let replaying = bits & 1 != 0;
-            let open_atomic_region = bits & 2 != 0;
-            let open_durable_scope = bits & 4 != 0;
-            let snapshotting = bits & 8 != 0;
+            let in_flight_host_call = bits & 2 != 0;
+            let snapshotting = bits & 4 != 0;
             assert_eq!(
                 PrivateDurableWorkerState::clean_checkpoint_boundary(
                     replaying,
-                    open_atomic_region,
-                    open_durable_scope,
+                    in_flight_host_call,
                     snapshotting,
                 ),
                 bits == 0,
                 "checkpoint must be admitted iff no condition is set; replaying: {replaying}, \
-                 open_atomic_region: {open_atomic_region}, open_durable_scope: {open_durable_scope}, \
+                 in_flight_host_call: {in_flight_host_call}, \
                  snapshotting: {snapshotting}"
             );
         }
     }
 
     #[test]
-    fn snapshot_boundary_is_checkpoint_boundary_with_no_in_flight_host_call() {
+    fn snapshot_boundary_is_checkpoint_boundary_without_live_resources() {
         // The documented sync invariant between the two predicates: `blocker() == None` is
-        // equivalent to `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
-        for bits in 0u32..32 {
+        // equivalent to a clean checkpoint without in-flight calls or open tool attachments.
+        for bits in 0u32..16 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
-                open_atomic_region: bits & 2 != 0,
-                open_durable_scope: bits & 4 != 0,
-                snapshotting: bits & 8 != 0,
-                in_flight_host_call: bits & 16 != 0,
+                in_flight_host_call: bits & 2 != 0,
+                snapshotting: bits & 4 != 0,
+                open_tool_attachment: bits & 8 != 0,
             };
             let at_checkpoint_boundary = PrivateDurableWorkerState::clean_checkpoint_boundary(
                 conditions.replaying,
-                conditions.open_atomic_region,
-                conditions.open_durable_scope,
+                conditions.in_flight_host_call,
                 conditions.snapshotting,
             );
             assert_eq!(
                 conditions.blocker().is_none(),
-                at_checkpoint_boundary && !conditions.in_flight_host_call,
-                "snapshot admission must equal checkpoint admission plus no in-flight host call; \
+                at_checkpoint_boundary
+                    && !conditions.in_flight_host_call
+                    && !conditions.open_tool_attachment,
+                "snapshot admission requires a checkpoint without live calls or attachments; \
                  conditions: {conditions:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn suspend_admission_truth_table() {
-        let cases = [
-            // (live_host_calls, suspendable_waits, open_durable_scope, pending_p3_tx, expected)
-            (0, 0, false, false, true),
-            (2, 2, false, false, true),
-            // A live host call not parked in a suspendable wait blocks suspension.
-            (1, 0, false, false, false),
-            (3, 2, false, false, false),
-            // An open durable scope blocks suspension even when all calls are parked.
-            (0, 0, true, false, false),
-            (2, 2, true, false, false),
-            // A pending P3 HTTP request transmission blocks suspension.
-            (0, 0, false, true, false),
-            (2, 2, false, true, false),
-            (1, 0, true, true, false),
-        ];
-        for (live_host_calls, suspendable_waits, open_durable_scope, pending_p3_tx, expected) in
-            cases
-        {
-            assert_eq!(
-                PrivateDurableWorkerState::suspend_admissible(
-                    live_host_calls,
-                    suspendable_waits,
-                    open_durable_scope,
-                    pending_p3_tx,
-                ),
-                expected,
-                "live_host_calls: {live_host_calls}, suspendable_waits: {suspendable_waits}, \
-                 open_durable_scope: {open_durable_scope}, pending_p3_tx: {pending_p3_tx}"
             );
         }
     }
@@ -6583,6 +8141,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
+            expires_at: None,
         }
     }
 
@@ -6622,6 +8181,83 @@ mod tests {
         );
         assert!(scope_card.is_none());
         assert_eq!(handles, HashMap::from([(11, vec![unrelated_root])]));
+    }
+
+    #[test]
+    fn inherited_scope_roots_are_checked_once_and_unknown_roots_are_errors() {
+        let first = CardId(Uuid::from_u128(1));
+        let second = CardId(Uuid::from_u128(2));
+        let live = |card_id| CardState::Live(Box::new(concrete_card(card_id)));
+        let unchecked =
+            || InheritedInvocationScope::unchecked(invocation_scope_card(vec![first, second]));
+
+        let mut scope = unchecked();
+        assert_eq!(scope.unchecked_root_ids(), Some(vec![first, second]));
+        assert!(
+            scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, live(second))
+                ]))
+                .unwrap()
+        );
+        assert_eq!(
+            scope
+                .live_roots()
+                .map(|roots| roots.keys().copied().collect::<Vec<_>>()),
+            Some(vec![first, second])
+        );
+        assert_eq!(scope.unchecked_root_ids(), None);
+        assert!(scope.check_roots(&HashMap::new()).unwrap());
+
+        let mut scope = unchecked();
+        assert!(
+            !scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, CardState::Revoked)
+                ]))
+                .unwrap()
+        );
+
+        let mut scope = unchecked();
+        assert!(
+            scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, CardState::Unknown)
+                ]))
+                .is_err()
+        );
+        let mut scope = unchecked();
+        assert!(
+            scope
+                .check_roots(&HashMap::from([(first, live(first))]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn inherited_scope_detects_revoked_and_expired_roots() {
+        let root = CardId(Uuid::from_u128(1));
+        let unrelated = CardId(Uuid::from_u128(2));
+        let now = Utc::now();
+        let scope = InheritedInvocationScope {
+            card: invocation_scope_card(vec![root]),
+            roots: Some(BTreeMap::from([(
+                root,
+                concrete_card_expiring_at(root, Some(now + chrono::Duration::seconds(60))),
+            )])),
+        };
+
+        assert!(!scope.roots_include(&HashSet::from([unrelated])));
+        assert!(scope.roots_include(&HashSet::from([root])));
+        assert!(!scope.roots_expired(now));
+        assert!(scope.roots_expired(now + chrono::Duration::seconds(60)));
+        assert!(
+            !InheritedInvocationScope::unchecked(invocation_scope_card(vec![root]))
+                .roots_expired(now + chrono::Duration::seconds(60))
+        );
     }
 
     #[test]
@@ -6904,7 +8540,9 @@ mod tests {
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
             agent_name: "Cart(alice)".to_string(),
-            agent_type: AgentTypeName("Cart".to_string()),
+            owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+                AgentTypeName("Cart".to_string()),
+            ),
         }
     }
 
@@ -6916,11 +8554,18 @@ mod tests {
         })
     }
 
+    fn wallet_cards(cards: impl IntoIterator<Item = (CardId, StoredCard)>) -> WalletCards {
+        cards
+            .into_iter()
+            .map(|(id, card)| (id, Arc::new(card)))
+            .collect()
+    }
+
     #[test]
     fn wallet_membership_helpers_bump_once_per_effective_change() {
         let card_id = CardId::new();
         let card = concrete_card(card_id);
-        let mut wallet = BTreeMap::new();
+        let mut wallet = WalletCards::new();
         let mut generation = 10;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
@@ -6947,7 +8592,7 @@ mod tests {
         let first = concrete_card(CardId::new());
         let second = concrete_card(CardId::new());
         let retained = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([
+        let mut wallet = wallet_cards([
             (first.card_id(), first.clone()),
             (second.card_id(), second.clone()),
             (retained.card_id(), retained.clone()),
@@ -6963,7 +8608,7 @@ mod tests {
             .unwrap()
         );
         assert_eq!(generation, 11);
-        assert_eq!(wallet, BTreeMap::from([(retained.card_id(), retained)]));
+        assert_eq!(wallet, wallet_cards([(retained.card_id(), retained)]));
 
         assert!(
             !remove_wallet_cards(
@@ -6979,7 +8624,7 @@ mod tests {
     #[test]
     fn wallet_cascade_removal_is_atomic_when_generation_is_exhausted() {
         let card = concrete_card(CardId::new());
-        let original_wallet = BTreeMap::from([(card.card_id(), card.clone())]);
+        let original_wallet = wallet_cards([(card.card_id(), card.clone())]);
         let mut wallet = original_wallet.clone();
         let mut generation = u64::MAX;
 
@@ -7011,7 +8656,7 @@ mod tests {
             Vec::new(),
             vec![Some(AgentVerb::View)],
         );
-        let original_wallet = BTreeMap::from([
+        let original_wallet = wallet_cards([
             (broad_floor.card_id(), broad_floor.clone()),
             (
                 independent_view_floor.card_id(),
@@ -7021,7 +8666,7 @@ mod tests {
         ]);
         let original_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            original_wallet.values(),
+            original_wallet.values().map(Arc::as_ref),
         );
         assert!(original_surface.authorize(&view).unwrap());
         assert!(!original_surface.authorize(&invoke).unwrap());
@@ -7038,7 +8683,7 @@ mod tests {
         );
         let live_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            live_wallet.values(),
+            live_wallet.values().map(Arc::as_ref),
         );
         assert_eq!(live_generation, 13);
         assert!(live_surface.authorize(&view).unwrap());
@@ -7054,10 +8699,10 @@ mod tests {
             )
             .unwrap()
         );
-        adopt_recorded_wallet_generation(&mut replayed_generation, Some(live_generation)).unwrap();
+        adopt_recorded_wallet_generation(&mut replayed_generation, live_generation).unwrap();
         let replayed_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            replayed_wallet.values(),
+            replayed_wallet.values().map(Arc::as_ref),
         );
         assert_eq!(replayed_wallet, live_wallet);
         assert_eq!(replayed_generation, live_generation);
@@ -7086,7 +8731,7 @@ mod tests {
         );
         let released_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
-            released_wallet.values(),
+            released_wallet.values().map(Arc::as_ref),
         );
         assert_eq!(released_generation, 13);
         assert!(released_surface.authorize(&view).unwrap());
@@ -7096,7 +8741,7 @@ mod tests {
     #[test]
     fn wallet_generation_distinguishes_aba_membership_cycles() {
         let card = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::new();
+        let mut wallet = WalletCards::new();
         let mut generation = 0;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
@@ -7114,7 +8759,7 @@ mod tests {
     #[test]
     fn duplicate_wallet_delivery_does_not_bump_generation() {
         let card = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::new();
+        let mut wallet = WalletCards::new();
         let mut generation = 40;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
@@ -7128,15 +8773,14 @@ mod tests {
     fn expiry_generation_outcome_is_stable_when_replayed() {
         let card = concrete_card(CardId::new());
         let card_id = card.card_id();
-        let mut wallet = BTreeMap::from([(card_id, card)]);
+        let mut wallet = wallet_cards([(card_id, card)]);
         let mut generation = 7;
 
         assert!(remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
         let recorded_expiry_generation = generation;
 
         assert!(!remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
-        adopt_recorded_wallet_generation(&mut generation, Some(recorded_expiry_generation))
-            .unwrap();
+        adopt_recorded_wallet_generation(&mut generation, recorded_expiry_generation).unwrap();
 
         assert!(wallet.is_empty());
         assert_eq!(generation, 8);
@@ -7155,7 +8799,7 @@ mod tests {
             Some(boundary + chrono::Duration::nanoseconds(1)),
         );
         let indefinite = concrete_card(CardId::new());
-        let wallet = BTreeMap::from([
+        let wallet = wallet_cards([
             (elapsed.card_id(), elapsed.clone()),
             (at_boundary.card_id(), at_boundary.clone()),
             (later.card_id(), later),
@@ -7163,7 +8807,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            expired_wallet_card_ids_at(&wallet, boundary)
+            expired_wallet_card_ids_at(wallet.values().map(Arc::as_ref), boundary)
                 .into_iter()
                 .collect::<HashSet<_>>(),
             HashSet::from([elapsed.card_id(), at_boundary.card_id()])
@@ -7181,7 +8825,7 @@ mod tests {
         let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
         let later =
             concrete_card_expiring_at(CardId::new(), Some(boundary + chrono::Duration::hours(1)));
-        let original_wallet = BTreeMap::from([
+        let original_wallet = wallet_cards([
             (elapsed.card_id(), elapsed),
             (at_boundary.card_id(), at_boundary),
             (later.card_id(), later),
@@ -7190,20 +8834,23 @@ mod tests {
         let mut live_wallet = original_wallet.clone();
         let mut live_generation = 7;
         let mut recorded_expiries = Vec::new();
-        for card_id in expired_wallet_card_ids_at(&live_wallet, boundary) {
+        for card_id in expired_wallet_card_ids_at(live_wallet.values().map(Arc::as_ref), boundary) {
             assert!(remove_wallet_card(&mut live_wallet, &mut live_generation, card_id).unwrap());
             recorded_expiries.push((card_id, live_generation));
         }
 
         let mut replayed_wallet = original_wallet;
         let mut replayed_generation = 7;
-        assert!(expired_wallet_card_ids_at(&replayed_wallet, replay_clock).is_empty());
+        assert!(
+            expired_wallet_card_ids_at(replayed_wallet.values().map(Arc::as_ref), replay_clock)
+                .is_empty()
+        );
         for (card_id, recorded_generation) in recorded_expiries {
             assert!(
                 remove_wallet_card(&mut replayed_wallet, &mut replayed_generation, card_id)
                     .unwrap()
             );
-            adopt_recorded_wallet_generation(&mut replayed_generation, Some(recorded_generation))
+            adopt_recorded_wallet_generation(&mut replayed_generation, recorded_generation)
                 .unwrap();
         }
 
@@ -7222,13 +8869,13 @@ mod tests {
             StoredCard::Concrete(card) => card.system_card = true,
             StoredCard::Polymorphic(_) => unreachable!(),
         }
-        let mut wallet = BTreeMap::from([(card_id, card.clone())]);
+        let mut wallet = wallet_cards([(card_id, card.clone())]);
         let mut generation = 10;
 
         assert!(add_wallet_card(&mut wallet, &mut generation, conflicting_payload).is_err());
 
         assert_eq!(generation, 10);
-        assert_eq!(wallet.get(&card_id), Some(&card));
+        assert_eq!(wallet.get(&card_id).map(Arc::as_ref), Some(&card));
     }
 
     #[test]
@@ -7241,11 +8888,11 @@ mod tests {
         }
         let removed = concrete_card(CardId::new());
         let added = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([
+        let mut wallet = wallet_cards([
             (retained.card_id(), retained.clone()),
             (removed.card_id(), removed),
         ]);
-        let replacement = BTreeMap::from([
+        let replacement = wallet_cards([
             (conflicting_retained.card_id(), conflicting_retained),
             (added.card_id(), added),
         ]);
@@ -7254,16 +8901,19 @@ mod tests {
         assert!(replace_wallet_cards(&mut wallet, &mut generation, replacement).unwrap());
         assert_eq!(generation, 22);
         assert_eq!(wallet.len(), 2);
-        assert_eq!(wallet.get(&retained.card_id()), Some(&retained));
+        assert_eq!(
+            wallet.get(&retained.card_id()).map(Arc::as_ref),
+            Some(&retained)
+        );
     }
 
     #[test]
     fn wallet_replacement_is_atomic_when_generation_would_overflow() {
         let removed = concrete_card(CardId::new());
         let added = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([(removed.card_id(), removed)]);
+        let mut wallet = wallet_cards([(removed.card_id(), removed)]);
         let original_wallet = wallet.clone();
-        let replacement = BTreeMap::from([(added.card_id(), added)]);
+        let replacement = wallet_cards([(added.card_id(), added)]);
         let mut generation = u64::MAX - 1;
 
         assert!(replace_wallet_cards(&mut wallet, &mut generation, replacement).is_err());
@@ -7271,16 +8921,13 @@ mod tests {
     }
 
     #[test]
-    fn replay_adopts_recorded_wallet_generation_and_defaults_legacy_entries() {
+    fn replay_adopts_recorded_wallet_generation() {
         let mut generation = 10;
 
-        adopt_recorded_wallet_generation(&mut generation, None).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 10).unwrap();
         assert_eq!(generation, 10);
 
-        adopt_recorded_wallet_generation(&mut generation, Some(10)).unwrap();
-        assert_eq!(generation, 10);
-
-        adopt_recorded_wallet_generation(&mut generation, Some(12)).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 12).unwrap();
         assert_eq!(generation, 12);
     }
 
@@ -7288,7 +8935,7 @@ mod tests {
     fn replay_rejects_decreasing_recorded_wallet_generation() {
         let mut generation = 10;
 
-        assert!(adopt_recorded_wallet_generation(&mut generation, Some(9)).is_err());
+        assert!(adopt_recorded_wallet_generation(&mut generation, 9).is_err());
         assert_eq!(generation, 10);
     }
 
@@ -7298,7 +8945,7 @@ mod tests {
         let base_card = concrete_card(CardId::new());
         let stale_card = concrete_card(CardId::new());
         let derived_card = concrete_card(CardId::new());
-        let mut wallet = BTreeMap::from([
+        let mut wallet = wallet_cards([
             (base_card.card_id(), base_card.clone()),
             (stale_card.card_id(), stale_card),
         ]);
@@ -7321,16 +8968,113 @@ mod tests {
             .unwrap()
         );
         assert_eq!(wallet.len(), 1);
-        assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
+        assert_eq!(
+            wallet.get(&base_card.card_id()).map(Arc::as_ref),
+            Some(&base_card)
+        );
         assert_eq!(generation, 1);
         assert!(!wallet.contains_key(&derived_card.card_id()));
 
         assert!(add_wallet_card(&mut wallet, &mut generation, derived_card.clone()).unwrap());
-        adopt_recorded_wallet_generation(&mut generation, Some(2)).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 2).unwrap();
         assert_eq!(wallet.len(), 2);
-        assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
-        assert_eq!(wallet.get(&derived_card.card_id()), Some(&derived_card));
+        assert_eq!(
+            wallet.get(&base_card.card_id()).map(Arc::as_ref),
+            Some(&base_card)
+        );
+        assert_eq!(
+            wallet.get(&derived_card.card_id()).map(Arc::as_ref),
+            Some(&derived_card)
+        );
         assert_eq!(generation, 2);
+    }
+
+    #[test]
+    fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
+        let original = wallet_cards((0..1024).map(|_| {
+            let card = concrete_card(CardId::new());
+            (card.card_id(), card)
+        }));
+        let hash = [0x42; 32];
+        let ids = original.keys().copied().collect::<Vec<_>>();
+        let pin = |ids, hash, generation| InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: hash,
+                generation,
+            },
+            pinned_card_ids: ids,
+            scope_card_id: None,
+        };
+        let mut missing = ids[1..].to_vec();
+        missing.push(CardId::new());
+        missing.sort_unstable();
+        for invalid in [
+            pin(ids.clone(), [0x43; 32], 8),
+            pin(ids.iter().rev().copied().collect(), hash, 8),
+            pin(vec![ids[0], ids[0]], hash, 8),
+            pin(ids.clone(), hash, 7),
+            pin(missing, hash, 9),
+        ] {
+            let mut wallet = original.clone();
+            let mut generation = 8;
+            assert!(
+                apply_invocation_wallet_pin(&mut wallet, hash, &mut generation, invalid).is_err()
+            );
+            assert!(wallet.ptr_eq(&original));
+            assert_eq!(generation, 8);
+        }
+
+        let mut wallet = original.clone();
+        let mut generation = 8;
+        assert!(
+            !apply_invocation_wallet_pin(
+                &mut wallet,
+                hash,
+                &mut generation,
+                pin(ids.clone(), hash, 9)
+            )
+            .unwrap()
+        );
+        assert!(wallet.ptr_eq(&original));
+        assert_eq!(generation, 9);
+        let mut prefixes = vec![wallet.clone()];
+        for end in (0..ids.len()).rev() {
+            assert!(
+                apply_invocation_wallet_pin(
+                    &mut wallet,
+                    hash,
+                    &mut generation,
+                    pin(ids[..end].to_vec(), hash, 9)
+                )
+                .unwrap()
+            );
+            assert_eq!(wallet.len(), end);
+            prefixes.push(wallet.clone());
+        }
+        let entries = prefixes
+            .iter()
+            .flat_map(|wallet| {
+                wallet
+                    .values()
+                    .map(|card| std::ptr::from_ref(card) as usize)
+            })
+            .collect::<HashSet<_>>();
+        let payloads = prefixes
+            .iter()
+            .flat_map(|wallet| wallet.values().map(|card| Arc::as_ptr(card) as usize))
+            .collect::<HashSet<_>>();
+        assert_eq!(payloads.len(), ids.len());
+        assert!(
+            entries.len() < ids.len() * 128,
+            "pins rebuilt {} membership entries",
+            entries.len()
+        );
+        eprintln!(
+            "wallet pins: prefixes={}, payloads={}, membership entries={}",
+            prefixes.len(),
+            payloads.len(),
+            entries.len()
+        );
     }
 
     fn polymorphic_card(card_id: CardId) -> StoredCard {
@@ -7353,9 +9097,9 @@ mod tests {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "source-agent".to_string(),
         };
-        let source_holder = Some(CardHolder::Agent(AgentCardHolder {
+        let source_holder = CardHolder::Agent(AgentCardHolder {
             agent_id: agent_id.clone(),
-        }));
+        });
         let concrete = concrete_card(CardId::new());
         let polymorphic = polymorphic_card(CardId::new());
 
@@ -7369,36 +9113,15 @@ mod tests {
             &source_holder,
             &agent_id,
         ));
-        assert!(transfer_started_removes_source_membership(
-            Some(&concrete),
-            &None,
-            &agent_id,
-        ));
-
-        let different_source = Some(CardHolder::Agent(AgentCardHolder {
+        let different_source = CardHolder::Agent(AgentCardHolder {
             agent_id: AgentId {
                 component_id: ComponentId(Uuid::new_v4()),
                 agent_id: agent_id.agent_id.clone(),
             },
-        }));
+        });
         assert!(!transfer_started_removes_source_membership(
             Some(&concrete),
             &different_source,
-            &agent_id,
-        ));
-    }
-
-    #[test]
-    fn legacy_transfer_start_removes_concrete_source_membership() {
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "legacy-source-agent".to_string(),
-        };
-        let concrete = concrete_card(CardId::new());
-
-        assert!(transfer_started_removes_source_membership(
-            Some(&concrete),
-            &None,
             &agent_id,
         ));
     }
@@ -7416,6 +9139,7 @@ mod tests {
         let pending_transfer = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(1),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::transfer_started(Uuid::new_v4(), transfer_card, target_holder),
         };
         assert!(next_drainable_card_events(vec![pending_transfer.clone()]).is_empty());
@@ -7425,6 +9149,7 @@ mod tests {
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(2),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(revoked_card_id),
             },
         ];
@@ -7445,6 +9170,7 @@ mod tests {
         let receipt = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(1),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::transfer_received(Uuid::new_v4(), source_card_id, card.clone()),
         };
 
@@ -7454,7 +9180,7 @@ mod tests {
         assert!(matches!(
             &next[0].event,
             QueuedCardEvent::TransferReceived(event)
-                if event.source_card_id == Some(source_card_id)
+                if event.source_card_id == source_card_id
                     && event.card_id == card.card_id()
                     && event.card.as_ref() == Some(&card)
         ));
@@ -7470,21 +9196,25 @@ mod tests {
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(1),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(first),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(2),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(second),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(3),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::install(install),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(4),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(after_install),
             },
         ];
@@ -7499,128 +9229,6 @@ mod tests {
             &next[1].event,
             QueuedCardEvent::Revoke(event) if event.card_id == second
         ));
-    }
-
-    #[test]
-    fn card_event_boundary_scan_reads_each_entry_once() {
-        let initial_idx = OplogIndex::from_u64(10);
-        let mut scan = CardEventBoundaryScan::new(initial_idx, Vec::new());
-        let mut scanned_entries = 0;
-
-        for boundary in 1..=5_000 {
-            let current_idx = OplogIndex::from_u64(initial_idx.as_u64() + boundary * 2);
-            let (start, count) = scan.unread_range(current_idx).unwrap();
-            assert_eq!(start, OplogIndex::from_u64(current_idx.as_u64() - 1));
-            assert_eq!(count, 2);
-
-            let entries = BTreeMap::from([
-                (start, OplogEntry::no_op()),
-                (current_idx, OplogEntry::no_op()),
-            ]);
-            scanned_entries += entries.len();
-            scan.fold_through(current_idx, &entries);
-        }
-
-        assert_eq!(scanned_entries, 10_000);
-        assert_eq!(scan.through, OplogIndex::from_u64(10_010));
-        assert!(scan.unread_range(scan.through).is_none());
-    }
-
-    #[test]
-    fn card_event_boundary_scan_folds_queued_and_terminal_entries_incrementally() {
-        let card_id = CardId::new();
-        let queued_idx = OplogIndex::from_u64(11);
-        let terminal_idx = OplogIndex::from_u64(12);
-        let mut scan = CardEventBoundaryScan::new(OplogIndex::from_u64(10), Vec::new());
-
-        scan.fold_through(
-            queued_idx,
-            &BTreeMap::from([(
-                queued_idx,
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
-            )]),
-        );
-
-        assert_eq!(scan.pending.len(), 1);
-        assert_eq!(scan.pending[0].oplog_index, queued_idx);
-
-        scan.fold_through(
-            terminal_idx,
-            &BTreeMap::from([(
-                terminal_idx,
-                OplogEntry::card_revoked(queued_idx, card_id, None),
-            )]),
-        );
-
-        assert!(scan.pending.is_empty());
-        assert_eq!(scan.through, terminal_idx);
-    }
-
-    #[test]
-    fn card_event_boundary_scan_rebases_from_authoritative_status() {
-        let cached_card_id = CardId::new();
-        let status_card_id = CardId::new();
-        let cached_pending = PendingCardEventRef {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::from_u64(9),
-            event: QueuedCardEvent::revoke(cached_card_id),
-        };
-        let status_pending = PendingCardEventRef {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::from_u64(10),
-            event: QueuedCardEvent::revoke(status_card_id),
-        };
-        let mut scan =
-            CardEventBoundaryScan::new(OplogIndex::from_u64(10), vec![cached_pending.clone()]);
-
-        scan.synchronize(
-            OplogIndex::from_u64(9),
-            std::slice::from_ref(&status_pending),
-            OplogIndex::from_u64(10),
-        );
-        assert_eq!(scan.pending, vec![cached_pending]);
-
-        scan.synchronize(
-            OplogIndex::from_u64(10),
-            std::slice::from_ref(&status_pending),
-            OplogIndex::from_u64(10),
-        );
-        assert_eq!(scan.pending, vec![status_pending.clone()]);
-
-        scan.synchronize(OplogIndex::from_u64(12), &[], OplogIndex::from_u64(12));
-        assert_eq!(scan.through, OplogIndex::from_u64(12));
-        assert!(scan.pending.is_empty());
-    }
-
-    #[test]
-    fn card_event_boundary_scan_discards_cache_after_rewind() {
-        let cached_pending = PendingCardEventRef {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::from_u64(20),
-            event: QueuedCardEvent::revoke(CardId::new()),
-        };
-        let status_pending = PendingCardEventRef {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::from_u64(5),
-            event: QueuedCardEvent::revoke(CardId::new()),
-        };
-        let mut scan = CardEventBoundaryScan::new(OplogIndex::from_u64(20), vec![cached_pending]);
-
-        scan.synchronize(
-            OplogIndex::from_u64(5),
-            std::slice::from_ref(&status_pending),
-            OplogIndex::from_u64(8),
-        );
-
-        assert_eq!(scan.through, OplogIndex::from_u64(5));
-        assert_eq!(scan.pending, vec![status_pending]);
-        assert_eq!(
-            scan.unread_range(OplogIndex::from_u64(8)),
-            Some((OplogIndex::from_u64(6), 3))
-        );
-
-        let fresh_scan = CardEventBoundaryScan::new(OplogIndex::from_u64(8), Vec::new());
-        assert!(fresh_scan.pending.is_empty());
     }
 
     #[test]
@@ -7648,6 +9256,7 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::INITIAL,
+            admission_index: OplogIndex::INITIAL,
             target_revision: ComponentRevision::INITIAL,
             kind: PendingUpdateKind::Automatic,
         });
@@ -7665,200 +9274,181 @@ mod tests {
         assert!(!should_restart_after_shard_assignment_change(&status));
     }
 
-    fn open_region(regions: &mut Vec<ActiveAtomicRegion>, begin: u64) -> OplogIndex {
-        let begin_index = OplogIndex::from_u64(begin);
-        regions.push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
-        begin_index
+    #[test]
+    fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Interrupted,
+            current_idempotency_key: Some(IdempotencyKey::fresh()),
+            ..AgentStatusRecord::default()
+        };
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.pending_invocations.push(PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: Some(IdempotencyKey::fresh()),
+            manual_update_target_revision: None,
+        });
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL.next(),
+            admission_index: OplogIndex::INITIAL.next(),
+            target_revision: ComponentRevision::INITIAL,
+            kind: PendingUpdateKind::Automatic,
+        });
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.status = AgentStatus::Suspended;
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
+    fn recovered_agent() -> OwnedAgentId {
+        OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "recovered".to_string(),
+            },
+        )
     }
 
     #[test]
-    fn atomic_region_nested_close_transfers_pending_lease_to_parent() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-        let inner = open_region(&mut regions, 20);
+    fn shard_assignment_recovery_restarts_a_worker_whose_status_was_computed() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Running,
+            ..AgentStatusRecord::default()
+        };
 
-        let lease = register_atomic_region_call(&mut regions, inner, true).unwrap();
-        assert_eq!(lease.owner(), Some(inner));
+        let recovered = recovered_status(&recovered_agent(), Ok(Some(status))).unwrap();
 
-        close_atomic_region(&mut regions, inner);
-
-        assert_eq!(lease.owner(), Some(outer));
-        let survivors = atomic_region_surviving_members(&regions, outer);
-        assert_eq!(survivors.len(), 1);
-        assert!(std::sync::Arc::ptr_eq(&survivors[0], &lease));
-    }
-
-    #[test]
-    fn atomic_region_outermost_close_detaches_replay_safe_call() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-
-        let lease = register_atomic_region_call(&mut regions, outer, true).unwrap();
-        assert!(!atomic_region_has_parent(&regions, outer));
-
-        close_atomic_region(&mut regions, outer);
-
-        // Detached: the call's retry grouping falls back to its own execution scope.
-        assert_eq!(lease.owner(), None);
-        assert!(regions.is_empty());
-    }
-
-    #[test]
-    fn atomic_region_outermost_close_guard_sees_pending_unsafe_call() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-
-        let _lease = register_atomic_region_call(&mut regions, outer, false).unwrap();
-
-        // The live close path (mark_end_operation) rejects the close when the outermost region
-        // still has a surviving non-repairable member; verify the guard predicate observes it.
-        let blocked = !atomic_region_has_parent(&regions, outer)
-            && atomic_region_surviving_members(&regions, outer)
-                .iter()
-                .any(|lease| !lease.repairable_when_incomplete());
-        assert!(blocked);
-    }
-
-    #[test]
-    fn atomic_region_nested_close_transfers_unsafe_call_without_blocking() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-        let inner = open_region(&mut regions, 20);
-
-        let lease = register_atomic_region_call(&mut regions, inner, false).unwrap();
-
-        // A nested close never blocks: the unsafe call transfers to the parent, which becomes
-        // responsible for it at its own close.
-        assert!(atomic_region_has_parent(&regions, inner));
-        close_atomic_region(&mut regions, inner);
-
-        assert_eq!(lease.owner(), Some(outer));
-        let blocked = !atomic_region_has_parent(&regions, outer)
-            && atomic_region_surviving_members(&regions, outer)
-                .iter()
-                .any(|lease| !lease.repairable_when_incomplete());
-        assert!(blocked);
-    }
-
-    #[test]
-    fn atomic_region_release_after_transfer_removes_member_from_new_owner() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-        let inner = open_region(&mut regions, 20);
-
-        let lease = register_atomic_region_call(&mut regions, inner, false).unwrap();
-        close_atomic_region(&mut regions, inner);
-        assert_eq!(lease.owner(), Some(outer));
-
-        // Completion / cancellation releases the lease from its *current* owner.
-        lease.release();
-        assert_eq!(lease.owner(), None);
-        assert!(atomic_region_surviving_members(&regions, outer).is_empty());
-    }
-
-    #[test]
-    fn atomic_region_released_lease_is_not_transferred_on_close() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-        let inner = open_region(&mut regions, 20);
-
-        let lease = register_atomic_region_call(&mut regions, inner, true).unwrap();
-        lease.release();
-
-        close_atomic_region(&mut regions, inner);
-
-        assert_eq!(lease.owner(), None);
-        assert!(atomic_region_surviving_members(&regions, outer).is_empty());
-    }
-
-    #[test]
-    fn atomic_region_dropped_lease_leaves_no_stale_member() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-
-        let lease = register_atomic_region_call(&mut regions, outer, false).unwrap();
-        drop(lease);
-
-        // The registry holds weak references only: a dropped handle's bookkeeping does not
-        // survive as a stale blocker.
-        assert!(atomic_region_surviving_members(&regions, outer).is_empty());
-        let blocked = atomic_region_surviving_members(&regions, outer)
-            .iter()
-            .any(|lease| !lease.repairable_when_incomplete());
-        assert!(!blocked);
-    }
-
-    #[test]
-    fn atomic_region_nested_close_propagates_side_effects_to_parent() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-        let inner = open_region(&mut regions, 20);
-
-        assert!(mark_atomic_region_has_side_effects_for(&mut regions, inner));
-        close_atomic_region(&mut regions, inner);
-
-        assert!(
-            regions
-                .iter()
-                .find(|region| region.begin_index == outer)
-                .unwrap()
-                .has_side_effects
+        assert_eq!(
+            recovered.map(|status| status.status),
+            Some(AgentStatus::Running)
         );
     }
 
+    /// No oplog means the index entry outlived the worker: nothing to resume, so it is skipped.
     #[test]
-    fn atomic_region_close_of_unknown_region_is_noop() {
-        let mut regions = Vec::new();
-        let outer = open_region(&mut regions, 10);
-        let lease = register_atomic_region_call(&mut regions, outer, true).unwrap();
-
-        close_atomic_region(&mut regions, OplogIndex::from_u64(99));
-
-        assert_eq!(lease.owner(), Some(outer));
-        assert_eq!(regions.len(), 1);
+    fn shard_assignment_recovery_skips_a_worker_whose_oplog_is_gone() {
+        assert!(matches!(
+            recovered_status(&recovered_agent(), Ok(None)),
+            Ok(None)
+        ));
     }
 
+    /// A status that could not be *computed* is not a worker that is gone. Skipping it would
+    /// acknowledge the assignment with the worker stopped and nothing recording that it should
+    /// run; failing the assignment is what gets it retried.
     #[test]
-    fn atomic_region_register_in_unknown_region_returns_none() {
-        let mut regions = Vec::new();
-        open_region(&mut regions, 10);
+    fn shard_assignment_recovery_fails_on_a_status_it_cannot_compute() {
+        let error = recovered_status(
+            &recovered_agent(),
+            Err("failed to load durable stream session payload: redis failover".into()),
+        )
+        .expect_err("an uncomputable status was skipped rather than failing the assignment");
 
         assert!(
-            register_atomic_region_call(&mut regions, OplogIndex::from_u64(99), true).is_none()
+            error.to_string().contains("cannot be resumed")
+                && error.to_string().contains("redis failover"),
+            "{error}"
         );
     }
 
+    /// An agent whose oplog does not read is skipped and does not fail the assignment: no retry of
+    /// the assignment would read it, and failing it would keep every other agent from resuming.
     #[test]
-    fn atomic_region_two_level_transfer_follows_current_owner() {
-        let mut regions = Vec::new();
-        let outermost = open_region(&mut regions, 10);
-        let middle = open_region(&mut regions, 20);
-        let innermost = open_region(&mut regions, 30);
-
-        let lease = register_atomic_region_call(&mut regions, innermost, true).unwrap();
-
-        close_atomic_region(&mut regions, innermost);
-        assert_eq!(lease.owner(), Some(middle));
-
-        close_atomic_region(&mut regions, middle);
-        assert_eq!(lease.owner(), Some(outermost));
-
-        close_atomic_region(&mut regions, outermost);
-        assert_eq!(lease.owner(), None);
+    fn shard_assignment_recovery_skips_an_agent_whose_oplog_does_not_read() {
+        let unreadable = crate::services::oplog::UnreadableOplog {
+            agent_id: recovered_agent().agent_id(),
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        };
+        assert!(matches!(
+            recovered_status(&recovered_agent(), Err(StatusError::Unreadable(unreadable))),
+            Ok(None)
+        ));
     }
 
+    /// An oplog whose storage did not answer can be read by a retry, so it fails the assignment,
+    /// which is retried, instead of leaving the agent out of the recovery for good.
     #[test]
-    fn atomic_region_idempotency_key_indexes_start_after_region_begin() {
-        let original_region_begin = OplogIndex::from_u64(10);
-        let mut next_idempotency_key_oplog_index = original_region_begin.next();
+    fn shard_assignment_recovery_fails_on_an_oplog_that_is_unavailable() {
+        let unavailable = crate::services::oplog::UnreadableOplog {
+            agent_id: recovered_agent().agent_id(),
+            error: crate::services::oplog::OplogReadError::source_unavailable(
+                crate::services::oplog::OplogReadSource::Archive(1),
+                "injected archive outage",
+            ),
+        };
+        let error = recovered_status(
+            &recovered_agent(),
+            Err(StatusError::Unreadable(unavailable)),
+        )
+        .expect_err("an unavailable oplog was skipped rather than failing the assignment");
+        assert!(
+            error.to_string().contains("injected archive outage"),
+            "{error}"
+        );
+    }
 
-        let first =
-            next_atomic_region_idempotency_key_oplog_index(&mut next_idempotency_key_oplog_index);
-        let second =
-            next_atomic_region_idempotency_key_oplog_index(&mut next_idempotency_key_oplog_index);
+    /// An agent whose restart finds its oplog unreadable, for example while rebuilding its stream
+    /// session index, is skipped: the other agents of the scan are still resumed.
+    #[test]
+    fn shard_assignment_recovery_skips_a_restart_that_finds_the_oplog_failed() {
+        let unreadable = WorkerExecutorError::oplog_failed(
+            recovered_agent().agent_id(),
+            "corrupt oplog data from archive layer 1",
+        );
+        assert!(recovered_restart::<()>(&recovered_agent(), Err(unreadable.clone())).is_ok());
+        assert!(
+            recovered_restart::<()>(
+                &recovered_agent(),
+                Err(WorkerExecutorError::failed_to_resume_worker(
+                    recovered_agent().agent_id(),
+                    unreadable,
+                )),
+            )
+            .is_ok()
+        );
+    }
 
-        assert_eq!(first, OplogIndex::from_u64(11));
-        assert_eq!(second, OplogIndex::from_u64(12));
+    /// A revoke that races recovery refuses the worker an epoch. That agent is skipped, so the rest
+    /// of the scan is still resumed. Any other restart failure still fails the assignment.
+    #[test]
+    fn shard_assignment_recovery_skips_a_worker_whose_shard_left_the_assignment() {
+        assert!(recovered_restart(&recovered_agent(), Ok(())).is_ok());
+        assert!(
+            recovered_restart::<()>(
+                &recovered_agent(),
+                Err(WorkerExecutorError::ShardingNotReady)
+            )
+            .is_ok()
+        );
+        let agent = recovered_agent();
+        assert!(
+            recovered_restart::<()>(
+                &agent,
+                Err(WorkerExecutorError::oplog_fenced(
+                    agent.agent_id.clone(),
+                    2,
+                    Some(3)
+                ))
+            )
+            .is_ok()
+        );
+
+        let error = recovered_restart::<()>(
+            &recovered_agent(),
+            Err(WorkerExecutorError::runtime("instance failed to start")),
+        )
+        .expect_err("a restart failure other than a lost shard was skipped");
+        assert!(
+            error.to_string().contains("failed to restart")
+                && error.to_string().contains("instance failed to start"),
+            "{error}"
+        );
     }
 
     struct PendingRequestBody;
@@ -7963,17 +9553,6 @@ mod tests {
             "the p3 request transmission future must not resolve while the request body is still open"
         );
     }
-
-    #[test]
-    fn atomic_region_idempotency_key_indexes_advance_after_each_derivation() {
-        let mut next_idempotency_key_oplog_index = OplogIndex::from_u64(11);
-
-        assert_eq!(
-            next_atomic_region_idempotency_key_oplog_index(&mut next_idempotency_key_oplog_index),
-            OplogIndex::from_u64(11)
-        );
-        assert_eq!(next_idempotency_key_oplog_index, OplogIndex::from_u64(12));
-    }
 }
 
 #[async_trait]
@@ -8004,9 +9583,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
 
         if attributes.kind == agent_fs::ObjectKind::File {
             return Ok(GetFileSystemNodeResult::File(component_file_node(
-                &generation_handle,
-                relative,
-                attributes,
+                relative, attributes,
             )?));
         }
         if attributes.kind != agent_fs::ObjectKind::Directory {
@@ -8045,71 +9622,9 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
             .map_err(|error| filesystem_read_error(path, error))?
             .await
             .map_err(|error| filesystem_read_error(path, error))?;
-            result.push(component_file_node(
-                &generation_handle,
-                entry_relative,
-                attributes,
-            )?);
+            result.push(component_file_node(entry_relative, attributes)?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        use crate::services::agent_filesystem as agent_fs;
-
-        let generation_handle = self.filesystem_generation_handle();
-        let relative = PathBuf::from(path.to_rel_string());
-        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
-            .map_err(|error| filesystem_read_error(path, error))?;
-        let attributes = match agent_fs::attributes(
-            &generation_handle,
-            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        {
-            Ok(attributes) => attributes,
-            Err(error) if filesystem_error_is_not_found(&error) => {
-                return Ok(ReadFileResult::NotFound);
-            }
-            Err(error) => return Err(filesystem_read_error(path, error)),
-        };
-        if attributes.kind != agent_fs::ObjectKind::File {
-            return Ok(ReadFileResult::NotAFile);
-        }
-        let opened = agent_fs::open(
-            &generation_handle,
-            target,
-            agent_fs::OpenOptions::Existing {
-                expected: agent_fs::ObjectKind::File,
-                access: agent_fs::AccessMode::Read,
-                follow: agent_fs::Follow::Yes,
-            },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let agent_fs::OpenNode::File(file) = opened.node else {
-            unreachable!("file open returned a non-file node")
-        };
-        let length =
-            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: "File is too large to read on this executor".to_string(),
-            })?;
-        let bytes = agent_fs::read_file(
-            &generation_handle,
-            &file,
-            agent_fs::ReadRange { offset: 0, length },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
-        Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
 }
 
@@ -8129,7 +9644,6 @@ fn filesystem_read_error(path: &CanonicalFilePath, error: impl Display) -> Worke
 }
 
 fn component_file_node(
-    generation_handle: &FilesystemGenerationHandle,
     relative: PathBuf,
     attributes: crate::services::agent_filesystem::Attributes,
 ) -> Result<ComponentFileSystemNode, WorkerExecutorError> {
@@ -8143,8 +9657,11 @@ fn component_file_node(
     let details = match attributes.kind {
         agent_fs::ObjectKind::File => ComponentFileSystemNodeDetails::File {
             size: attributes.size,
-            permissions: agent_fs::path_permissions(generation_handle, &relative)
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+            permissions: if attributes.read_only {
+                golem_common::model::component::AgentFilePermissions::ReadOnly
+            } else {
+                golem_common::model::component::AgentFilePermissions::ReadWrite
+            },
         },
         agent_fs::ObjectKind::Directory | agent_fs::ObjectKind::Symlink => {
             ComponentFileSystemNodeDetails::Directory
@@ -8177,7 +9694,7 @@ fn backward_scan_window_start(end: OplogIndex) -> OplogIndex {
 ///
 /// A possible future optimization is to maintain the relevant indices (last error, last invocation
 /// start) directly in the [`AgentStatusRecord`] so that no backward oplog scan is needed at all.
-async fn last_error<T: HasOplogService + HasConfig>(
+pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
@@ -8196,10 +9713,14 @@ async fn last_error<T: HasOplogService + HasConfig>(
         return None;
     }
 
-    let last_index = this
+    let last_index = match this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await
+    {
+        Ok(last_index) => last_index,
+        Err(error) => return Some(unreadable_last_error(error)),
+    };
     if last_index == OplogIndex::NONE {
         return None;
     }
@@ -8213,7 +9734,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
     let mut window_end = last_index;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = this
+        let entries = match this
             .oplog_service()
             .read_exact(
                 owned_agent_id,
@@ -8221,7 +9742,11 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 window_start,
                 window_end.as_u64() - window_start.as_u64() + 1,
             )
-            .await;
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => return Some(unreadable_last_error(error)),
+        };
 
         let mut idx = window_end;
         loop {
@@ -8232,6 +9757,9 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 // Skip entries in deleted regions without consulting the read range.
             } else {
                 match entries.get(&idx) {
+                    Some(OplogEntry::RecoverySucceeded { .. }) => {
+                        break 'scan;
+                    }
                     Some(OplogEntry::Error {
                         error, retry_from, ..
                     }) => {
@@ -8289,12 +9817,13 @@ async fn last_error<T: HasOplogService + HasConfig>(
     }
 }
 
-fn next_atomic_region_idempotency_key_oplog_index(
-    next_idempotency_key_oplog_index: &mut OplogIndex,
-) -> OplogIndex {
-    let result = *next_idempotency_key_oplog_index;
-    *next_idempotency_key_oplog_index = next_idempotency_key_oplog_index.next();
-    result
+/// The last error of an agent whose oplog does not read back to it: the read failure itself.
+fn unreadable_last_error(error: UnreadableOplog) -> LastError {
+    LastError {
+        error: AgentError::InternalError(WorkerExecutorError::from(error).to_string()),
+        stderr: String::new(),
+        retry_from: OplogIndex::NONE,
+    }
 }
 
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
@@ -8319,7 +9848,8 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     let mut window_end = last_oplog_idx;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = this
+        // The stderr is the context of an error, so a window that does not read ends it.
+        let Ok(entries) = this
             .oplog_service()
             .read_exact(
                 owned_agent_id,
@@ -8327,7 +9857,10 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                 window_start,
                 window_end.as_u64() - window_start.as_u64() + 1,
             )
-            .await;
+            .await
+        else {
+            break 'scan;
+        };
 
         let mut idx = window_end;
         loop {
@@ -8396,448 +9929,11 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     stderr_entries.join("")
 }
 
-/// Transferable ownership of a P2 HTTP request's durable scope. The request state carrying this
-/// session moves from the response future to the response, body, stream, and trailers resources.
-/// Synchronous resource drops defer closure through the worker's drop-event queue.
-#[derive(Debug, Clone)]
-pub(crate) struct HttpRequestSession {
-    inner: Arc<HttpRequestSessionInner>,
-}
-
-#[derive(Debug)]
-struct HttpRequestSessionInner {
-    begin_index: OplogIndex,
-    span_id: SpanId,
-    phase: AtomicU8,
-    drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
-}
-
-const HTTP_REQUEST_OPEN: u8 = 0;
-const HTTP_REQUEST_SCOPE_CLOSED: u8 = 1;
-const HTTP_REQUEST_CLOSED: u8 = 2;
-
-impl HttpRequestSession {
-    pub(crate) fn new(
-        begin_index: OplogIndex,
-        span_id: SpanId,
-        drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
-    ) -> Self {
-        Self {
-            inner: Arc::new(HttpRequestSessionInner {
-                begin_index,
-                span_id,
-                phase: AtomicU8::new(HTTP_REQUEST_OPEN),
-                drop_sink,
-            }),
-        }
-    }
-
-    pub(crate) fn begin_index(&self) -> OplogIndex {
-        self.inner.begin_index
-    }
-
-    pub(crate) fn span_id(&self) -> &SpanId {
-        &self.inner.span_id
-    }
-
-    pub(crate) fn mark_closed(&self) {
-        self.inner
-            .phase
-            .store(HTTP_REQUEST_CLOSED, Ordering::Release);
-    }
-
-    pub(crate) fn mark_scope_closed(&self) {
-        let _ = self.inner.phase.compare_exchange(
-            HTTP_REQUEST_OPEN,
-            HTTP_REQUEST_SCOPE_CLOSED,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
-    }
-
-    pub(crate) fn defer_close(&self) {
-        self.inner.enqueue_close();
-    }
-}
-
-impl HttpRequestSessionInner {
-    fn enqueue_close(&self) {
-        let phase = self.phase.swap(HTTP_REQUEST_CLOSED, Ordering::AcqRel);
-        if let Some(sink) = &self.drop_sink {
-            let event = match phase {
-                HTTP_REQUEST_OPEN => Some(concurrent::DropEvent::CloseDurableScope {
-                    function_type: DurableFunctionType::WriteRemoteBatched(None),
-                    begin_index: self.begin_index,
-                    span_id: Some(self.span_id.clone()),
-                }),
-                HTTP_REQUEST_SCOPE_CLOSED => Some(concurrent::DropEvent::FinishSpan {
-                    span_id: self.span_id.clone(),
-                    durable: true,
-                }),
-                _ => None,
-            };
-            if let Some(event) = event {
-                let _ = sink.send(event);
-            }
-        }
-    }
-}
-
-impl Drop for HttpRequestSessionInner {
-    fn drop(&mut self) {
-        self.enqueue_close();
-    }
-}
-
-/// Tracks conditions that affect whether an HTTP request is eligible for
-/// transparent inline retry. Each flag records an event during the request
-/// lifecycle that disqualifies one or more retry zones.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct HttpRetryEligibility {
-    /// Whether this request has an in-task retry loop running in the background.
-    /// When true, transient errors that reach `get()` are the final result and
-    /// should not trigger trap+replay.
-    pub has_background_retry: bool,
-    /// Set to true when splice()/blocking_splice() is called on the outgoing body stream.
-    /// When true, body bytes cannot be fully reconstructed from the oplog.
-    pub has_unreconstructable_body: bool,
-    /// Set to true when subscribe() is called on the outgoing body output stream.
-    /// When true, output stream inline retry is disabled because the pollable
-    /// would become stale after resource replacement.
-    pub output_stream_subscribed: bool,
-    /// Set to true when skip()/blocking_skip() is called on the response body.
-    /// When true, resuming-response-body inline retry is disabled because we
-    /// cannot verify
-    /// the skipped bytes against the retry response.
-    pub had_body_skip: bool,
-    /// Set to true when OutgoingBody::finish() is called with Some(trailers).
-    /// When true, inline retry is disabled because trailers are not persisted
-    /// in the oplog and cannot be reconstructed.
-    pub has_outgoing_trailers: bool,
-    /// Set to true when OutgoingBody::finish() is called.
-    /// Awaiting-response retry requires the body to be fully finished before
-    /// retrying.
-    pub body_finished: bool,
-    /// Set to true when the outgoing body resource is dropped before
-    /// OutgoingBody::finish() succeeds. Once this happens, the request body is
-    /// not fully replayable.
-    pub body_closed_without_finish: bool,
-    /// Set to true when outgoing body stream writes are replayed from oplog
-    /// (rather than executed live). When true, the actual body pipe does NOT
-    /// contain the replayed bytes, so the request must be rebuilt from oplog
-    /// before finishing the body.
-    pub replayed_body_writes: bool,
-}
-
-/// Shared state used by the HTTP response future wrapper for requests whose
-/// response can arrive before the outgoing body is finished.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HttpOutgoingBodyState {
-    Open,
-    Finished,
-    Closed,
-}
-
-/// Decision computed by the pending-status response wrapper task after the
-/// first response arrives early (before the outgoing body is finished).
-///
-/// The wrapper task starts in [`PendingStatusRetryDecision::Pending`] and
-/// transitions exactly once to either [`PendingStatusRetryDecision::Matched`]
-/// (an explicit `status-code` retry policy applies to the early response) or
-/// [`PendingStatusRetryDecision::NotMatched`] (no policy applies, so the
-/// response should be exposed normally). Consumers of the receiving end
-/// (`io::streams` write/flush paths) deterministically wait for the
-/// transition out of `Pending` instead of relying on cooperative scheduling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PendingStatusRetryDecision {
-    Pending,
-    Matched,
-    NotMatched,
-}
-
-/// State associated with ongoing http requests, on top of the underlying wasi-http implementation
-#[derive(Debug, Clone)]
-pub(crate) struct HttpRequestState {
-    /// Durable scope ownership transferred with this state between WASI resources.
-    pub session: HttpRequestSession,
-    /// Information about the request to be included in the oplog
-    pub request: HostRequestHttpRequest,
-    /// When tracking is transferred from IncomingBody to InputStream via stream(),
-    /// this records the IncomingBody handle so that on stream close we can transfer
-    /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
-    pub body_handle: Option<u32>,
-    /// The original response status observed by the guest before body consumption.
-    /// Response-body resumption only swaps the body stream, so inline retry must
-    /// not resume from a retried response that changes the status code visible via
-    /// IncomingResponse.
-    pub response_status: Option<u16>,
-    /// The outgoing body resource handle associated with this request, set when
-    /// outgoing_handler::handle() resolves the pending body mapping.
-    pub outgoing_body_rep: Option<u32>,
-    /// The outgoing body output stream resource handle, set when outgoing_body::write()
-    /// creates the stream from the outgoing body.
-    pub output_stream_rep: Option<u32>,
-    pub use_tls: bool,
-    pub connect_timeout: Duration,
-    pub first_byte_timeout: Duration,
-    pub between_bytes_timeout: Duration,
-    /// Notifies a wrapped response future when the outgoing body becomes fully
-    /// replayable, or when it is closed before finish and therefore cannot be
-    /// held back for status-code retry anymore.
-    pub outgoing_body_state: Option<tokio::sync::watch::Sender<HttpOutgoingBodyState>>,
-    /// Watched by the pending-status response wrapper to publish whether an
-    /// early response (received while the outgoing body is still open) has
-    /// matched an explicit status-code retry policy. When the watch transitions
-    /// to [`PendingStatusRetryDecision::Matched`], body stream writes may be
-    /// accepted into the oplog even if the original transport has already
-    /// closed the body pipe; the fully captured body will be used by the
-    /// subsequent status-code retry. The decision is published exactly once,
-    /// deterministically, so write/flush paths can `wait_for` it instead of
-    /// polling and relying on scheduler yields.
-    pub pending_status_retry_decision:
-        Option<tokio::sync::watch::Receiver<PendingStatusRetryDecision>>,
-    /// Retry eligibility flags tracked during the request lifecycle.
-    pub retry: HttpRetryEligibility,
-}
-
-impl HttpRequestState {
-    pub fn begin_index(&self) -> OplogIndex {
-        self.session.begin_index()
-    }
-
-    pub fn outgoing_request_config(&self) -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls: self.use_tls,
-            connect_timeout: self.connect_timeout,
-            first_byte_timeout: self.first_byte_timeout,
-            between_bytes_timeout: self.between_bytes_timeout,
-        }
-    }
-}
-
-/// Extracted view of the begin_index and request from an HttpRequestState,
-/// used when processing outgoing body output stream operations.
-#[derive(Debug, Clone)]
-pub(crate) struct HttpOutputStreamState {
-    pub request_handle: u32,
-    pub begin_index: OplogIndex,
-    pub request: HostRequestHttpRequest,
-}
-
-/// A durable call's atomic-region membership as a *transferable retry lease*.
-///
-/// The lease tracks which open atomic region currently owns the call's retry grouping. It starts
-/// out owned by the region the call was initiated in, and the owner can change over the call's
-/// lifetime: when a region is closed (`mark-end-operation`) while member calls are still pending,
-/// their leases transfer to the enclosing open atomic region, or detach entirely at the outermost
-/// close (allowed only for calls that are safe to re-execute from an incomplete `Start` on
-/// replay). A detached lease means the call's trap/retry grouping falls back to its own execution
-/// scope (`retry_from`) and its late terminal marks no atomic-region side effects — it must never
-/// retry "into" the already-committed region.
-///
-/// Reads and writes are store-free (interior mutability), so terminal paths, `Drop` impls, and
-/// accessor tasks can release or consult the lease without borrowing the worker state.
-#[derive(Debug)]
-pub struct AtomicRegionLease {
-    /// The begin index of the open atomic region that currently owns this call, or `None` once the
-    /// call completed / was released or detached.
-    owner: std::sync::Mutex<Option<OplogIndex>>,
-    /// Whether the call may be safely re-executed when replay finds its `Start` committed but its
-    /// terminal missing (see `InFunctionRetryController::can_reexecute_on_incomplete_replay`).
-    /// Non-repairable calls (non-idempotent / batched / transactional writes) keep the outermost
-    /// region close rejected while they are pending.
-    repairable_when_incomplete: bool,
-}
-
-impl AtomicRegionLease {
-    fn new(owner: OplogIndex, repairable_when_incomplete: bool) -> Self {
-        Self {
-            owner: std::sync::Mutex::new(Some(owner)),
-            repairable_when_incomplete,
-        }
-    }
-
-    /// The atomic region currently owning this call, if any.
-    pub(crate) fn owner(&self) -> Option<OplogIndex> {
-        *self.owner.lock().unwrap()
-    }
-
-    /// Releases the lease: the call reached a terminal (or its start was rolled back) and no
-    /// longer counts as an in-flight member of any region. Idempotent and store-free, so it is
-    /// safe from `Drop` impls and accessor tasks.
-    pub(crate) fn release(&self) {
-        *self.owner.lock().unwrap() = None;
-    }
-
-    /// Whether the call is safe to leave incomplete inside a committed (closed) atomic region.
-    pub(crate) fn repairable_when_incomplete(&self) -> bool {
-        self.repairable_when_incomplete
-    }
-
-    fn transfer(&self, new_owner: Option<OplogIndex>) {
-        *self.owner.lock().unwrap() = new_owner;
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ActiveAtomicRegion {
-    begin_index: OplogIndex,
-    next_idempotency_key_oplog_index: OplogIndex,
-    has_side_effects: bool,
-    /// Leases of durable calls initiated in (or transferred into) this region. Weak so a finished
-    /// call's bookkeeping does not outlive its handle; pruned lazily. A member is *surviving*
-    /// (still in flight in this region) when the weak upgrades and the lease's current owner is
-    /// this region.
-    members: Vec<std::sync::Weak<AtomicRegionLease>>,
-}
-
-impl ActiveAtomicRegion {
-    fn new(begin_index: OplogIndex, next_idempotency_key_oplog_index: OplogIndex) -> Self {
-        Self {
-            begin_index,
-            next_idempotency_key_oplog_index,
-            has_side_effects: false,
-            members: Vec::new(),
-        }
-    }
-
-    fn surviving_members(&self) -> Vec<std::sync::Arc<AtomicRegionLease>> {
-        self.members
-            .iter()
-            .filter_map(|weak| weak.upgrade())
-            .filter(|lease| lease.owner() == Some(self.begin_index))
-            .collect()
-    }
-}
-
-fn mark_atomic_region_has_side_effects_for(
-    active_atomic_regions: &mut [ActiveAtomicRegion],
-    begin_index: OplogIndex,
-) -> bool {
-    if let Some(region) = active_atomic_regions
-        .iter_mut()
-        .find(|region| region.begin_index == begin_index)
-    {
-        region.has_side_effects = true;
-        true
-    } else {
-        false
-    }
-}
-
-/// Registers a durable call as an in-flight member of the atomic region `begin_index` and returns
-/// its ownership lease, or `None` when the region is not open.
-fn register_atomic_region_call(
-    active_atomic_regions: &mut [ActiveAtomicRegion],
-    begin_index: OplogIndex,
-    repairable_when_incomplete: bool,
-) -> Option<std::sync::Arc<AtomicRegionLease>> {
-    let region = active_atomic_regions
-        .iter_mut()
-        .find(|region| region.begin_index == begin_index)?;
-    let lease = std::sync::Arc::new(AtomicRegionLease::new(
-        begin_index,
-        repairable_when_incomplete,
-    ));
-    region.members.push(std::sync::Arc::downgrade(&lease));
-    Some(lease)
-}
-
-/// The leases of durable calls still in flight in the atomic region `begin_index`.
-fn atomic_region_surviving_members(
-    active_atomic_regions: &[ActiveAtomicRegion],
-    begin_index: OplogIndex,
-) -> Vec<std::sync::Arc<AtomicRegionLease>> {
-    active_atomic_regions
-        .iter()
-        .find(|region| region.begin_index == begin_index)
-        .map(|region| region.surviving_members())
-        .unwrap_or_default()
-}
-
-/// Whether the atomic region `begin_index` is nested inside another open atomic region (which
-/// would receive its surviving members on close).
-fn atomic_region_has_parent(
-    active_atomic_regions: &[ActiveAtomicRegion],
-    begin_index: OplogIndex,
-) -> bool {
-    active_atomic_regions
-        .iter()
-        .position(|region| region.begin_index == begin_index)
-        .is_some_and(|pos| pos > 0)
-}
-
-/// Closes the atomic region `begin_index`: transfers its surviving member leases (and its
-/// side-effect bit) to the enclosing open atomic region if one exists, detaches them otherwise,
-/// and removes the region. No-op when the region is not open.
-fn close_atomic_region(
-    active_atomic_regions: &mut Vec<ActiveAtomicRegion>,
-    begin_index: OplogIndex,
-) {
-    let Some(pos) = active_atomic_regions
-        .iter()
-        .position(|region| region.begin_index == begin_index)
-    else {
-        return;
-    };
-    let closed = active_atomic_regions.remove(pos);
-    let parent = if pos > 0 {
-        Some(&mut active_atomic_regions[pos - 1])
-    } else {
-        None
-    };
-    match parent {
-        Some(parent) => {
-            let parent_begin = parent.begin_index;
-            for weak in &closed.members {
-                if let Some(lease) = weak.upgrade()
-                    && lease.owner() == Some(begin_index)
-                {
-                    lease.transfer(Some(parent_begin));
-                    parent.members.push(std::sync::Weak::clone(weak));
-                }
-            }
-            // Entries persisted inside the closed region lie inside the parent's span too, so
-            // the parent inherits the side-effect classification.
-            parent.has_side_effects |= closed.has_side_effects;
-        }
-        None => {
-            for weak in &closed.members {
-                if let Some(lease) = weak.upgrade()
-                    && lease.owner() == Some(begin_index)
-                {
-                    lease.release();
-                }
-            }
-        }
-    }
-}
-
-/// The kind of a durable scope, identified by the `OplogIndex` of its `Start` entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DurableScopeKind {
-    /// A batched remote write scope (`WriteRemoteBatched(None)`).
-    BatchedWrite,
-    /// A non-idempotent remote write scope (`WriteRemote` with `assume_idempotence == false`).
-    NonIdempotentWrite,
-    /// A remote transaction scope.
-    Transaction,
-}
-
-/// A currently open durable scope. Durable scopes are first-class `Start`/`End` pairs
-/// (batched writes, non-idempotent writes, transactions) identified by their `Start` index.
-/// The innermost open scope provides the `parent_start_index` for any `Start` written while
-/// it is open, and contributes to the effective retry point (see `effective_retry_point`).
-#[derive(Debug)]
-struct ActiveDurableScope {
-    start_index: OplogIndex,
-    #[allow(dead_code)]
-    kind: DurableScopeKind,
-    /// During replay, the resolver handle for this scope's `End`: registered when the scope
-    /// `Start` is claimed, awaited (and taken) when the scope closes. `None` on the live path (the
-    /// scope `End` is written, not replayed) and once the handle has been taken by the closing
-    /// `end_function` / transaction terminal.
+/// Resident ownership of a transaction protocol's terminal and checkpoint blocker.
+struct TransactionProtocol {
+    _invocation_id: Option<DurableInvocationId>,
     replay_end: Option<concurrent::ReplayCallHandle>,
+    _live_call_permit: concurrent::LiveCallPermit,
 }
 
 #[derive(Debug)]
@@ -8863,53 +9959,14 @@ pub(crate) struct TcpTakenStreams {
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
+    pub reconstruction_policy: SerializableWebsocketReconstructionPolicy,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionInfo {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
-}
-
-struct CardEventBoundaryScan {
-    through: OplogIndex,
-    pending: Vec<PendingCardEventRef>,
-}
-
-impl CardEventBoundaryScan {
-    fn new(through: OplogIndex, pending: Vec<PendingCardEventRef>) -> Self {
-        Self { through, pending }
-    }
-
-    fn synchronize(
-        &mut self,
-        status_idx: OplogIndex,
-        status_pending: &[PendingCardEventRef],
-        current_idx: OplogIndex,
-    ) {
-        if status_idx >= self.through || current_idx < self.through {
-            self.through = status_idx;
-            self.pending = status_pending.to_vec();
-        }
-    }
-
-    fn unread_range(&self, current_idx: OplogIndex) -> Option<(OplogIndex, u64)> {
-        (current_idx > self.through).then(|| {
-            (
-                self.through.next(),
-                current_idx.as_u64() - self.through.as_u64(),
-            )
-        })
-    }
-
-    fn fold_through(
-        &mut self,
-        current_idx: OplogIndex,
-        entries: &BTreeMap<OplogIndex, OplogEntry>,
-    ) {
-        self.pending = calculate_pending_card_events(std::mem::take(&mut self.pending), entries);
-        self.through = current_idx;
-    }
+    pub reconstruction_policy: SerializableWebsocketReconstructionPolicy,
 }
 
 struct PrivateDurableWorkerState {
@@ -8933,27 +9990,33 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<ParsedAgentId>,
+    owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
+    /// Store-local child positions under an entity seed.
+    entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
-    assume_idempotence: bool,
+    /// The invocation's fixed initial mode for entity Stores. Primary Stores follow the shared
+    /// published replay state instead.
+    entity_execution_mode: Option<InvocationExecutionMode>,
+    /// Per-Store live continuation after this entity's matching historical call was removed by a
+    /// replay jump while sibling Stores still have owner-oplog reconstruction work.
+    local_live_tail: Arc<AtomicBool>,
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
-    custom_invocation_ordinals: HashMap<Option<uuid::Uuid>, u64>,
+    invocation_ordinals: HashMap<OplogIndex, u64>,
+    /// Next tool invocation attempt ordinal in each durable parent namespace.
+    tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
     custom_invocation_scopes: HashMap<u64, OpenCustomInvocationScope>,
     next_custom_invocation_scope_id: u64,
-
-    /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
-    open_http_requests: HashMap<u32, HttpRequestState>,
 
     /// State of open p3 HTTP responses created by the durable `client::send`, keyed by the p3
     /// response resource rep. Carries the `outgoing-http-request` invocation span (started by
@@ -8976,10 +10039,6 @@ struct PrivateDurableWorkerState {
     /// WebSocket connection state indexed by websocket resource rep.
     open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
 
-    /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
-    /// before outgoing_handler::handle() is called and the HttpRequestState is created.
-    pending_http_outgoing_request_body: HashMap<u32, u32>,
-
     /// Tracks file-backed wasi output streams so quota charging can be based on
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
@@ -8999,6 +10058,9 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
+    /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
+    p2_timer_deadlines: HashMap<u32, std::time::Instant>,
+
     /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
     /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
     /// from the oplog instead of invoking the native host call, so the native
@@ -9007,15 +10069,6 @@ struct PrivateDurableWorkerState {
     /// uninterrupted execution would. Reconstructed on replay from the durable
     /// acquire calls and cleared when the socket resource is dropped.
     tcp_taken_streams: HashMap<u32, TcpTakenStreams>,
-
-    /// Maps outgoing body rep → output stream rep, set during outgoing_body::write()
-    /// before outgoing_handler::handle() is called. Used by handle() to populate
-    /// output_stream_rep in HttpRequestState for streams created before dispatch.
-    pending_http_outgoing_body_stream: HashMap<u32, u32>,
-
-    /// Retry eligibility flags accumulated before outgoing_handler::handle() creates
-    /// the HttpRequestState. Keyed by outgoing request rep.
-    pending_http_retry_eligibility: HashMap<u32, HttpRetryEligibility>,
 
     snapshotting_mode: bool,
 
@@ -9035,15 +10088,26 @@ struct PrivateDurableWorkerState {
 
     component_metadata: Component,
     owner_component_metadata: Option<Arc<Component>>,
+    owner_wallet: Arc<crate::worker::owner_wallet::OwnerWallet>,
+    entity_replay_wallet: Option<Arc<crate::worker::owner_wallet::EntityReplayWallet>>,
+    authority_wallet: Arc<WalletSnapshot>,
+    card_boundary: Weak<CardEventBoundary>,
+    replay_applications: VecDeque<Arc<replay_application::ReplayApplication>>,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
-    agent_wallet_cards: BTreeMap<CardId, StoredCard>,
+    agent_wallet_cards: WalletCards,
     invocation_scope_card: Option<ScopeCard>,
     invocation_scope_root_cards: BTreeMap<CardId, StoredCard>,
     invocation_scope_handles: HashMap<u32, Vec<CardId>>,
+    /// Invocation scope an entity Store inherits from the Store that started its current entity
+    /// invocation. It bounds the entity's effective surface but is not exposed as a wallet handle.
+    inherited_invocation_scope: Option<InheritedInvocationScope>,
+    scope_interest: Option<Arc<crate::services::card_interest::CardInterestContribution>>,
+    /// Cards the owner worker has revoked. Revocation events are drained by whichever of the
+    /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
+    /// surfaces instead of relying on draining every event itself.
+    owner_revoked_card_ids: HashSet<CardId>,
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
-    card_event_boundary_scan: Option<CardEventBoundaryScan>,
-    card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
     published_authority_generation: Arc<AtomicU64>,
     processed_authority_generation: u64,
     authority_initialized: bool,
@@ -9078,11 +10142,6 @@ struct PrivateDurableWorkerState {
     /// Used to finalize deferred parent deletion when a child pollable is dropped.
     rpc_pollable_to_parent: HashMap<u32, u32>,
 
-    // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
-    promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
-    // Map from resource_id to the dyn_pollables that wrap it
-    promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
-
     /// The **global fallback** retry point: the index attached to an `Error` entry for a trap that
     /// happens outside any in-flight durable call. It is maintained by `begin_function` /
     /// transaction begin and the explicit HTTP/RPC retry-point writes, so it normally tracks the
@@ -9092,52 +10151,18 @@ struct PrivateDurableWorkerState {
     /// durable call carries its retry grouping in its call-owned `execution_scope`
     /// (`durable_host::concurrent`, read by `ScopedRetryHost`) and in the semantic-trap error
     /// marker, so an overlapping call completing cannot clobber a sibling's grouping.
-    ///
-    /// This is *not* what is read directly at error time. Errors use
-    /// [`PrivateDurableWorkerState::effective_retry_point`], which layers priority on top of this
-    /// field: an active atomic region (whole region retried from its begin index) wins, and only
-    /// otherwise does it fall back to `current_retry_point`. Keep them distinct: write
-    /// `current_retry_point`, read `effective_retry_point()`.
     current_retry_point: OplogIndex,
 
-    /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
-    /// determine the effective retry point associated with an error; while `current_retry_point` is changed for each
-    /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
-    /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
-    /// from scratch.
-    active_atomic_regions: Vec<ActiveAtomicRegion>,
+    /// Transaction-owned protocol terminals. Each entry holds a host-call permit until closed.
+    transaction_protocols: HashMap<OplogIndex, TransactionProtocol>,
 
-    /// Currently open durable scopes other than atomic regions: batched / remote writes
-    /// (`Start`..`End`) and remote transactions (`Start`..`End` wrapping the transaction markers).
-    /// Maintained by `begin_function`/`end_function` and the transaction lifecycle functions.
-    ///
-    /// While any such scope is open, the current oplog tip sits inside it, so a later trap/replay
-    /// can append a jump that deletes the tip — making a mid-invocation status checkpoint at the tip
-    /// unsafe (see `at_clean_checkpoint_boundary`). Only the *set* of open scopes matters for this.
-    ///
-    /// Durable scopes are **not** strictly nested: HTTP / RPC scopes are long-lived and overlap as
-    /// siblings (one opens while another is still pending), closing in arbitrary order. So this is
-    /// an order-independent collection, not a stack: `remove_durable_scope` removes the closed scope
-    /// wherever it is and hard-errors only if it was never open. `parent_start_index` is therefore
-    /// **not** derived from this collection (which scope is "innermost" is meaningless for siblings)
-    /// — it is threaded explicitly from the owning call/resource. A fresh state is built per worker
-    /// incarnation, so a scope left open by a trap is cleared on restart.
-    active_durable_scopes: Vec<ActiveDurableScope>,
-
-    /// Number of live durable host calls currently in flight. Used by suspendable P3 waits to
-    /// detect when all in-flight work is parked in waits that can safely suspend the worker.
+    /// Number of live durable host calls currently in flight, including marker persistence.
     live_host_calls: Arc<AtomicUsize>,
 
     /// Activity tracking for Golem-spawned store background tasks. The invocation completion
     /// path drains the store's event loop until no spawned task is active (see
     /// [`tail_work::TailWorkTracker`]) before `AgentInvocationFinished` is written.
     tail_work: tail_work::TailWorkTracker,
-
-    /// Suspend-capable waits currently parked by P3 sleep / promise APIs. The value is the wall
-    /// clock deadline for a scheduled wake, if the wait has one; pure promise waits have no
-    /// deadline and are woken by promise completion.
-    suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
-    next_suspendable_wait_id: AtomicU64,
 
     /// Latched when the current invocation's wall-clock deadline
     /// (`limits.max_invocation_duration`) has been exceeded. Shared with the deadline timer task
@@ -9156,24 +10181,31 @@ struct PrivateDurableWorkerState {
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
     ),
+    dropped_call_event_backlog: VecDeque<concurrent::DropEvent>,
     completion_marker_recorder: concurrent::CompletionMarkerRecorder,
-
-    /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
-    /// invocation (the `NoOp` marker it plants). It is the only realistic `set_oplog_index` target,
-    /// which deletes `(M.next()..source]` and preserves `M`, so a checkpoint at an index `<= M`
-    /// survives such a jump. Mid-invocation checkpoints are not advanced past this watermark. Reset
-    /// at the start of every invocation (a marker held across invocations only costs graceful
-    /// fallback, never correctness).
-    min_exposed_marker: Option<OplogIndex>,
 
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
-    pending_update: tokio::sync::Mutex<Option<TimestampedUpdateDescription>>,
+    pending_update: tokio::sync::Mutex<Option<HydratedUpdate>>,
+
+    /// Remains set after finalization takes `pending_update`, until success is committed. Fresh
+    /// wallet-independent calls must not extend target-only history while that outcome is pending.
+    automatic_update_unsettled: bool,
 
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
-    last_snapshot_source: Option<SnapshotSource>,
+    /// The baseline of the start: the column of the start outcome table.
+    baseline_role: BaselineRole,
+    /// The purpose of the speculative replay of this start: the replay after a periodic record,
+    /// the replay after the record of a snapshot-assisted update, or the full replay of a pending
+    /// automatic update, or `None` when the replay is not speculative. A periodic recovery can
+    /// reject a divergent record; an update replay fails the update or retries it, as the outcome
+    /// table decides, and records no application failure.
+    snapshot_replay_purpose: SnapshotReplayPurpose,
+
+    /// A protocol refusal ended replay without granting live authority.
+    authoritative_replay_failure: bool,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -9212,7 +10244,7 @@ impl WakeupScheduler {
                 &self.owned_agent_id.agent_id,
                 self.oplog.current_oplog_index().await,
             )
-            .await;
+            .await?;
 
         let schedule_id = self
             .scheduler_service
@@ -9238,7 +10270,7 @@ impl WakeupScheduler {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -9260,88 +10292,122 @@ impl PrivateDurableWorkerState {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         replay_state: ReplayState,
+        owner_wallet: Arc<crate::worker::owner_wallet::OwnerWallet>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
+        tail_work: tail_work::TailWorkTracker,
         component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
-        configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
+        initial_authority_wallet: Option<Vec<StoredCard>>,
+        entity_start_index: Option<OplogIndex>,
         shard_service: Arc<dyn ShardService>,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
-        last_snapshot_source: Option<SnapshotSource>,
+        baseline_role: BaselineRole,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
-        card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
         published_authority_generation: Arc<AtomicU64>,
     ) -> Result<Self, WorkerExecutorError> {
-        let completion_marker_recorder =
-            concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
+        let entity_replay_wallet = match (&runtime, entity_execution_mode) {
+            (
+                OwnerRuntime::Entity(_),
+                Some(
+                    InvocationExecutionMode::ReplayingCompleted
+                    | InvocationExecutionMode::ReplayingIncomplete,
+                ),
+            ) => {
+                let start = entity_start_index.ok_or_else(|| {
+                    WorkerExecutorError::runtime("historical entity Store has no recorded Start")
+                })?;
+                Some(owner_wallet.entity_replay_wallet(start)?)
+            }
+            _ => None,
+        };
+        let entity_wallet_generation = match &entity_replay_wallet {
+            Some(entity) => entity.receipt().result.await?.wallet.generation,
+            _ => owner_wallet.snapshot().generation,
+        };
         let (agent_wallet_cards, wallet_generation) = match &runtime {
             OwnerRuntime::Agent => {
-                let initial_agent_wallet_cards =
-                    || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
-                        match agent_id.as_ref() {
-                            Some(agent_id) => {
-                                let card = agent_initial_card_from_component_metadata(
-                                    &component_metadata,
-                                    agent_id,
-                                )?;
-                                Ok(BTreeMap::from([(card.card_id(), card)]))
-                            }
-                            None => Ok(BTreeMap::new()),
-                        }
-                    };
-                if let Some(snapshot_idx) = last_snapshot_index {
-                    match oplog.read(snapshot_idx).await {
-                        OplogEntry::Snapshot {
-                            active_cards,
-                            wallet_generation,
-                            ..
-                        } => (
-                            active_cards
-                                .into_iter()
-                                .map(|card| (card.card_id(), card))
-                                .collect(),
-                            wallet_generation,
-                        ),
-                        _ => (initial_agent_wallet_cards()?, 0),
-                    }
-                } else {
-                    (initial_agent_wallet_cards()?, 0)
-                }
+                let historical = owner_wallet.initial_historical_snapshot();
+                (historical.cards, historical.generation)
             }
-            OwnerRuntime::Entity(_) => (BTreeMap::new(), 0),
+            OwnerRuntime::Entity(_) => (
+                initial_authority_wallet
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|card| (card.card_id(), Arc::new(card)))
+                    .collect(),
+                entity_wallet_generation,
+            ),
         };
         let wallet_id_hash = CardHolder::Agent(golem_common::model::card::AgentCardHolder {
             agent_id: owned_agent_id.agent_id.clone(),
         })
         .wallet_id_hash();
-        let agent_effective_surface = match (&runtime, agent_id.as_ref()) {
-            (OwnerRuntime::Agent, Some(agent_id)) => {
+        let agent_effective_surface = match (&runtime, &owner_context) {
+            (OwnerRuntime::Agent, ResolvedOwnerContext::Agent(agent_id)) => {
                 let context =
                     agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
                 golem_common::model::card::agent_effective_surface_from_wallet(
                     &context,
-                    agent_wallet_cards.values(),
+                    agent_wallet_cards.values().map(Arc::as_ref),
                 )
             }
-            (OwnerRuntime::Agent, None) => golem_common::model::card::EffectiveSurface::default(),
-            (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
+            (
+                OwnerRuntime::Agent,
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+            ) => component_baseline_effective_surface_from_wallet(
+                &component_metadata,
+                &owned_agent_id,
+                agent_wallet_cards.values().map(Arc::as_ref),
+            ),
+            (OwnerRuntime::Entity(_), ResolvedOwnerContext::Agent(agent_id)) => {
+                let owner_component_metadata = owner_component_metadata
+                    .as_deref()
+                    .expect("entity Store has owner component metadata");
+                let context = agent_monomorphization_context(
+                    owner_component_metadata,
+                    &owned_agent_id,
+                    agent_id,
+                );
+                golem_common::model::card::agent_effective_surface_from_wallet(
+                    &context,
+                    agent_wallet_cards.values().map(Arc::as_ref),
+                )
+            }
+            (
+                OwnerRuntime::Entity(_),
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+            ) => component_baseline_effective_surface_from_wallet(
+                owner_component_metadata
+                    .as_deref()
+                    .expect("entity Store has owner component metadata"),
+                &owned_agent_id,
+                agent_wallet_cards.values().map(Arc::as_ref),
+            ),
         };
+        let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
+        let snapshot_replay_purpose =
+            baseline_role.purpose(pending_update.as_ref().map(|update| &update.reference));
+        let completion_marker_recorder =
+            concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         Ok(Self {
             oplog_service,
             oplog,
-            agent_id,
+            owner_context,
             http_call_count: 0,
             per_invocation_http_call_limit,
             rpc_call_count: 0,
@@ -9364,25 +10430,25 @@ impl PrivateDurableWorkerState {
             agent_config,
             owned_agent_id,
             current_idempotency_key: None,
+            entity_logical_key_position: None,
             rpc,
             worker_proxy,
             resources: HashMap::new(),
             last_resource_id: AgentResourceId::INITIAL,
-            assume_idempotence: true,
+            entity_execution_mode,
+            local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             active_custom_invocations: HashMap::new(),
-            custom_invocation_ordinals: HashMap::new(),
+            invocation_ordinals: HashMap::new(),
+            tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
-            open_http_requests: HashMap::new(),
             open_p3_http_responses: HashMap::new(),
             pending_p3_http_request_transmissions: HashMap::new(),
             open_websocket_connections: HashMap::new(),
-            pending_http_outgoing_request_body: HashMap::new(),
-            pending_http_outgoing_body_stream: HashMap::new(),
-            pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
+            p2_timer_deadlines: HashMap::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
@@ -9390,15 +10456,21 @@ impl PrivateDurableWorkerState {
             operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,
             owner_component_metadata,
+            authority_wallet: owner_wallet.snapshot(),
+            card_boundary: Weak::new(),
+            replay_applications: VecDeque::new(),
+            owner_wallet,
+            entity_replay_wallet,
             agent_effective_surface,
             agent_wallet_cards,
             invocation_scope_card: None,
             invocation_scope_root_cards: BTreeMap::new(),
             invocation_scope_handles: HashMap::new(),
+            inherited_invocation_scope: None,
+            scope_interest: None,
+            owner_revoked_card_ids: HashSet::new(),
             wallet_id_hash,
             wallet_generation,
-            card_event_boundary_scan: None,
-            card_event_boundary_lock,
             published_authority_generation,
             processed_authority_generation: 0,
             authority_initialized: false,
@@ -9418,24 +10490,28 @@ impl PrivateDurableWorkerState {
             runtime_retry_policy_mutations: BTreeMap::new(),
             rpc_pollable_to_parent: HashMap::new(),
             shard_service,
-            promise_backed_pollables: TRwLock::new(HashMap::new()),
-            promise_dyn_pollables: TRwLock::new(HashMap::new()),
+            automatic_update_unsettled: pending_update.as_ref().is_some_and(|update| {
+                matches!(
+                    update.description,
+                    UpdateDescription::Automatic { .. }
+                        | UpdateDescription::SnapshotAssistedAutomatic { .. }
+                )
+            }),
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
-            active_atomic_regions: Vec::new(),
-            active_durable_scopes: Vec::new(),
+            transaction_protocols: HashMap::new(),
             live_host_calls: Arc::new(AtomicUsize::new(0)),
-            tail_work: tail_work::TailWorkTracker::new(),
-            suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
-            next_suspendable_wait_id: AtomicU64::new(1),
+            tail_work,
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
+            dropped_call_event_backlog: VecDeque::new(),
             completion_marker_recorder,
-            min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
-            last_snapshot_source,
+            baseline_role,
+            snapshot_replay_purpose,
+            authoritative_replay_failure: false,
             resource_limit_entry,
         })
     }
@@ -9492,117 +10568,45 @@ impl PrivateDurableWorkerState {
             .insert(name.to_string(), None);
     }
 
-    /// Returns whether the outermost active atomic region has side effects
-    pub fn outermost_atomic_region_has_side_effects(&self) -> bool {
-        self.active_atomic_regions
-            .first()
-            .is_some_and(|region| region.has_side_effects)
-    }
-
-    /// The `parent_start_index` to attach to the host-call `Start` of a durable call, given the
-    /// function type and the `begin_index` returned by `begin_function`. This is derived
-    /// *explicitly* from the call itself, never from the set of temporally-open scopes (which scope
-    /// is "innermost" is meaningless when long-lived sibling scopes overlap):
-    ///
-    /// - if the call opened its own durable scope (non-idempotent `WriteRemote` /
-    ///   `WriteRemoteBatched(None)`), its host-call `Start` nests inside that scope (`begin_index`);
-    /// - otherwise it nests inside the enclosing scope encoded in the function type
-    ///   (`WriteRemoteBatched(Some)` / `WriteRemoteTransaction(Some)`), if any;
-    /// - otherwise it is a top-level call with no parent.
-    fn child_parent_start_index(
-        &self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-    ) -> Option<OplogIndex> {
-        if self.opens_durable_scope(function_type) {
-            Some(begin_index)
-        } else {
-            match function_type {
-                DurableFunctionType::WriteRemoteBatched(Some(idx))
-                | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
-                _ => None,
-            }
-        }
-    }
-
-    /// Whether a durable function of this `function_type` opens a durable scope — a first-class
-    /// `Start`/`End` pair, opened by [`DurableWorkerCtx::begin_function`] and closed by
-    /// [`DurableWorkerCtx::end_function`] — namely a non-idempotent remote write or the first
-    /// (`None`) call of a batched remote write.
-    ///
-    /// Unpersisted execution turns off persistence entirely, and `persist`/`replay` skip
-    /// `end_function`, so no scope must be opened either: otherwise the scope `Start` would be
-    /// committed with no matching `End`, corrupting later replay.
-    /// An unpersisted execution never straddles a single scope's begin/end, so guarding both ends
-    /// with the same predicate keeps the durable-scope stack balanced.
-    fn opens_durable_scope(&self, function_type: &DurableFunctionType) -> bool {
-        !self.durability_is_suppressed()
-            && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
-                || matches!(
-                    *function_type,
-                    DurableFunctionType::WriteRemoteBatched(None)
-                ))
-    }
-
-    /// Opens a durable scope identified by its `Start` index. Must be balanced by
-    /// `remove_durable_scope` on the matching `End`/`Cancelled`. `replay_end` is the resolver handle
-    /// for the scope `End` when the scope was claimed during replay, or `None` on the live
-    /// path.
-    fn push_durable_scope(
+    fn open_transaction_protocol(
         &mut self,
         start_index: OplogIndex,
-        kind: DurableScopeKind,
+        invocation_id: Option<DurableInvocationId>,
         replay_end: Option<concurrent::ReplayCallHandle>,
     ) {
-        self.active_durable_scopes.push(ActiveDurableScope {
-            start_index,
-            kind,
+        let protocol = TransactionProtocol {
+            _invocation_id: invocation_id,
             replay_end,
-        });
+            _live_call_permit: concurrent::LiveCallPermit::new(self.live_host_calls.clone()),
+        };
+        assert!(
+            self.transaction_protocols
+                .insert(start_index, protocol)
+                .is_none()
+        );
     }
 
-    /// Takes the resolver handle for the scope `End` of the open scope at `start_index`, if one was
-    /// registered during replay. Leaves the scope open (it is closed by `remove_durable_scope`
-    /// after the `End` has been awaited). Returns `None` if the scope was opened live or the handle
-    /// was already taken.
-    fn take_durable_scope_replay_handle(
+    fn take_transaction_replay_handle(
         &mut self,
         start_index: OplogIndex,
     ) -> Option<concurrent::ReplayCallHandle> {
-        self.active_durable_scopes
-            .iter_mut()
-            .find(|scope| scope.start_index == start_index)
-            .and_then(|scope| scope.replay_end.take())
+        self.transaction_protocols
+            .get_mut(&start_index)
+            .and_then(|protocol| protocol.replay_end.take())
     }
 
-    fn is_durable_scope_open(&self, start_index: OplogIndex) -> bool {
-        self.active_durable_scopes
-            .iter()
-            .any(|scope| scope.start_index == start_index)
-    }
-
-    /// Closes the durable scope opened at `start_index`. Durable scopes are not strictly nested
-    /// (long-lived HTTP / RPC scopes overlap as siblings and close in arbitrary order), so the
-    /// closed scope is removed wherever it is in the collection. It is a hard error only if the
-    /// scope was never open, which would mean the begin/end bookkeeping got out of sync.
-    fn remove_durable_scope(&mut self, start_index: OplogIndex) -> Result<(), WorkerExecutorError> {
-        match self
-            .active_durable_scopes
-            .iter()
-            .position(|scope| scope.start_index == start_index)
-        {
-            Some(pos) => {
-                self.active_durable_scopes.remove(pos);
-                Ok(())
-            }
-            None => Err(WorkerExecutorError::runtime(format!(
-                "Tried to close durable scope {start_index} but it is not open; open scopes: {:?}",
-                self.active_durable_scopes
-                    .iter()
-                    .map(|s| s.start_index)
-                    .collect::<Vec<_>>()
-            ))),
-        }
+    fn close_transaction_protocol(
+        &mut self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.transaction_protocols
+            .remove(&start_index)
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Transaction protocol {start_index} is not open"
+                ))
+            })?;
+        Ok(())
     }
 
     fn dropped_call_event_sender(
@@ -9633,44 +10637,6 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    fn suspendable_waits(&self) -> Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>> {
-        self.suspendable_waits.clone()
-    }
-
-    fn next_suspendable_wait_id(&self) -> u64 {
-        self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
-    }
-
-    fn register_passive_suspendable_wait(&self) -> suspendable_wait::SuspendableWaitRegistration {
-        suspendable_wait::SuspendableWaitRegistration::new(
-            self.next_suspendable_wait_id(),
-            None,
-            self.suspendable_waits(),
-        )
-    }
-
-    fn safe_to_suspend(&self) -> bool {
-        Self::suspend_admissible(
-            self.live_host_calls.load(Ordering::Acquire),
-            self.suspendable_waits.lock().unwrap().len(),
-            !self.active_durable_scopes.is_empty(),
-            !self.pending_p3_http_request_transmissions.is_empty(),
-        )
-    }
-
-    /// Pure form of [`Self::safe_to_suspend`], factored out so its truth table can be tested
-    /// without constructing worker state: the worker may suspend when every live durable host
-    /// call in flight is parked in a suspendable wait, no durable scope is open, and no P3 HTTP
-    /// request transmission is pending.
-    fn suspend_admissible(
-        live_host_calls: usize,
-        suspendable_waits: usize,
-        open_durable_scope: bool,
-        pending_p3_http_transmission: bool,
-    ) -> bool {
-        live_host_calls == suspendable_waits && !open_durable_scope && !pending_p3_http_transmission
-    }
-
     fn wakeup_scheduler(&self) -> WakeupScheduler {
         WakeupScheduler {
             promise_service: self.promise_service.clone(),
@@ -9682,159 +10648,46 @@ impl PrivateDurableWorkerState {
     }
 
     fn take_dropped_call_events(&mut self) -> Vec<concurrent::DropEvent> {
-        let mut events = Vec::new();
+        let mut events: Vec<_> = self.dropped_call_event_backlog.drain(..).collect();
         while let Ok(event) = self.dropped_call_events.1.try_recv() {
             events.push(event);
         }
         events
     }
 
-    fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {
-        self.current_retry_point = retry_point;
+    fn take_next_dropped_call_event(&mut self) -> Option<concurrent::DropEvent> {
+        self.dropped_call_event_backlog
+            .pop_front()
+            .or_else(|| self.dropped_call_events.1.try_recv().ok())
     }
 
-    /// The retry point to associate with an error, with priority `atomic region > global`. While an
-    /// atomic region is active the whole region is retried from its begin index; otherwise the error
-    /// is grouped at `current_retry_point`, which the durable-call machinery keeps pointing at the
+    /// The retry point to associate with an error. The durable-call machinery keeps it at the
     /// enclosing scope `Start` (or the call's own `Start` when unscoped). Durable scopes do **not**
     /// add a tier here: with overlapping sibling scopes there is no meaningful "innermost" scope, so
     /// grouping is driven by the explicitly-maintained `current_retry_point` instead.
     fn effective_retry_point(&self) -> OplogIndex {
-        if let Some(region) = self.active_atomic_regions.last() {
-            region.begin_index
-        } else {
-            self.current_retry_point
-        }
+        self.current_retry_point
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
-        if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
-            next_atomic_region_idempotency_key_oplog_index(
-                &mut outermost_atomic_region.next_idempotency_key_oplog_index,
-            )
+        if let Some(position) = self.entity_logical_key_position.as_mut() {
+            let result = *position;
+            *position = position.next();
+            result
         } else {
             oplog_index
         }
     }
 
-    pub fn current_atomic_region_idempotency_key_oplog_index(&self) -> Option<OplogIndex> {
-        self.active_atomic_regions
-            .first()
-            .map(|region| region.next_idempotency_key_oplog_index)
-    }
-
-    /// Enriches retry properties with worker-local context: `agent-type` and `is-idempotent`.
+    /// Enriches retry properties with the worker's `agent-type`.
     /// Should be called on all executor-constructed retry property bags before policy resolution.
     pub fn enrich_retry_properties(&self, props: &mut RetryProperties) {
-        if let Some(agent_id) = &self.agent_id {
+        if let Some(agent_id) = self.owner_context.agent() {
             props.set(
                 "agent-type",
                 PredicateValue::Text(agent_id.agent_type.to_string()),
             );
         }
-        props.set(
-            "is-idempotent",
-            PredicateValue::Boolean(self.assume_idempotence),
-        );
-    }
-
-    /// Mark the outermost active atomic region as having side effects
-    pub fn mark_atomic_region_has_side_effects(&mut self) {
-        if let Some(region) = self.active_atomic_regions.first_mut() {
-            region.has_side_effects = true;
-        }
-    }
-
-    pub fn mark_atomic_region_has_side_effects_for(&mut self, begin_index: OplogIndex) -> bool {
-        mark_atomic_region_has_side_effects_for(&mut self.active_atomic_regions, begin_index)
-    }
-
-    /// Registers a durable call as an in-flight member of the atomic region `begin_index` and
-    /// returns its ownership lease, or `None` when the region is not open. The caller keeps the
-    /// returned `Arc` alive for the call's lifetime and `release()`s it when the call reaches a
-    /// terminal; region close (`close_atomic_region`) transfers or detaches surviving leases.
-    pub fn register_atomic_region_call(
-        &mut self,
-        begin_index: OplogIndex,
-        repairable_when_incomplete: bool,
-    ) -> Option<std::sync::Arc<AtomicRegionLease>> {
-        register_atomic_region_call(
-            &mut self.active_atomic_regions,
-            begin_index,
-            repairable_when_incomplete,
-        )
-    }
-
-    /// The leases of durable calls still in flight in the atomic region `begin_index`.
-    pub fn atomic_region_surviving_members(
-        &self,
-        begin_index: OplogIndex,
-    ) -> Vec<std::sync::Arc<AtomicRegionLease>> {
-        atomic_region_surviving_members(&self.active_atomic_regions, begin_index)
-    }
-
-    /// Whether the atomic region `begin_index` is nested inside another open atomic region (which
-    /// would receive its surviving members on close).
-    pub fn atomic_region_has_parent(&self, begin_index: OplogIndex) -> bool {
-        atomic_region_has_parent(&self.active_atomic_regions, begin_index)
-    }
-
-    /// Closes the atomic region `begin_index`: transfers its surviving member leases (and its
-    /// side-effect bit) to the enclosing open atomic region if one exists, detaches them
-    /// otherwise, and removes the region. Run on both the live path (after the `EndAtomicRegion`
-    /// entry is appended) and the replay path (after the entry is consumed), so replay performs
-    /// the same ownership transitions as live execution did. No-op when the region is not open.
-    pub fn close_atomic_region(&mut self, begin_index: OplogIndex) {
-        close_atomic_region(&mut self.active_atomic_regions, begin_index)
-    }
-
-    /// Whether the atomic region identified by `begin_index` has recorded side effects. Used for
-    /// membership-precise trap classification: a durable call carries its own region's begin index
-    /// in its execution scope, so the persisted `inside_atomic_region` flag reflects the *call's*
-    /// region rather than whatever region happens to be outermost at trap time.
-    pub fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
-        self.active_atomic_regions
-            .iter()
-            .find(|region| region.begin_index == begin_index)
-            .is_some_and(|region| region.has_side_effects)
-    }
-
-    /// Find the open_http_requests entry key for a given outgoing body rep.
-    fn find_request_handle_by_outgoing_body(&self, body_rep: u32) -> Option<u32> {
-        self.open_http_requests
-            .iter()
-            .find(|(_, state)| state.outgoing_body_rep == Some(body_rep))
-            .map(|(&handle, _)| handle)
-    }
-
-    /// Find the open_http_requests entry key for a given output stream rep.
-    fn find_request_handle_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
-        self.open_http_requests
-            .iter()
-            .find(|(_, state)| state.output_stream_rep == Some(stream_rep))
-            .map(|(&handle, _)| handle)
-    }
-
-    /// Find the pending outgoing request rep for a given outgoing body rep.
-    fn find_pending_request_rep_by_outgoing_body(&self, body_rep: u32) -> Option<u32> {
-        self.pending_http_outgoing_request_body
-            .iter()
-            .find(|(_, pending_body_rep)| **pending_body_rep == body_rep)
-            .map(|(&request_rep, _)| request_rep)
-    }
-
-    /// Find the pending outgoing body rep for a given output stream rep.
-    fn find_pending_body_rep_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
-        self.pending_http_outgoing_body_stream
-            .iter()
-            .find(|(_, pending_stream_rep)| **pending_stream_rep == stream_rep)
-            .map(|(&body_rep, _)| body_rep)
-    }
-
-    /// Find the pending outgoing request rep for a given output stream rep.
-    fn find_pending_request_rep_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
-        let body_rep = self.find_pending_body_rep_by_output_stream(stream_rep)?;
-        self.find_pending_request_rep_by_outgoing_body(body_rep)
     }
 
     /// In live mode it returns the last oplog index (index of the entry last added).
@@ -9847,14 +10700,18 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Increments the HTTP call counter for the current invocation if in live mode.
+    /// Increments the HTTP call counter for the current invocation if the call is fresh live
+    /// work.
     ///
     /// Returns `Err` if the per-invocation HTTP call limit would be exceeded.
     /// The check and increment are performed only during live execution; replay
     /// mode is a no-op so that recovering workers are not penalised for calls
-    /// already made in a prior execution.
+    /// already made in a prior execution. Call quotas are charged before the
+    /// call's `Start` is claimed or written, so they use
+    /// [`Self::durable_call_is_fresh`]: a call that may still adopt a retained
+    /// recorded `Start` charged to the same quota is not charged again.
     pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.is_live() {
+        if !self.durable_call_is_fresh(QuotaClass::Http) {
             return Ok(());
         }
         if self.per_invocation_http_call_limit != u64::MAX
@@ -9866,11 +10723,13 @@ impl PrivateDurableWorkerState {
         Ok(())
     }
 
-    /// Increments the RPC call counter for the current invocation if in live mode.
+    /// Increments the RPC call counter for the current invocation if the call is fresh live work.
     ///
-    /// Returns `Err` if the per-invocation RPC call limit would be exceeded.
+    /// Returns `Err` if the per-invocation RPC call limit would be exceeded. Uses
+    /// [`Self::durable_call_is_fresh`] for the same reason as
+    /// [`Self::check_and_increment_http_call_count`].
     pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.is_live() {
+        if !self.durable_call_is_fresh(QuotaClass::Rpc) {
             return Ok(());
         }
         if self.per_invocation_rpc_call_limit != u64::MAX
@@ -9886,14 +10745,63 @@ impl PrivateDurableWorkerState {
         self.http_call_count = 0;
         self.rpc_call_count = 0;
         self.scope_card_mint_ordinal = 0;
-        // The `get_oplog_index` marker watermark is per-invocation: a marker captured in a previous
-        // invocation only costs a graceful checkpoint fallback if jumped to, never correctness.
-        self.min_exposed_marker = None;
+        self.tool_invocation_attempt_ordinals.clear();
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.replay_state.is_live()
+        store_is_live(
+            self.entity_execution_mode,
+            self.local_live_tail.load(Ordering::Acquire),
+            self.replay_state.is_live_published(),
+        )
+    }
+
+    pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
+        self.local_live_tail.clone()
+    }
+
+    /// Whether a durable call that would claim a recorded `Start` may skip replay and record a new
+    /// `Start` directly.
+    ///
+    /// This is stricter than [`Self::is_live`]: while the cursor has retained `Start`s (recorded
+    /// `Start`s that a positional reader stepped over without consuming and that no owner has
+    /// claimed yet), a call arriving after the live transition may still be the replayed owner of
+    /// one of them. Such calls must go through the replay claim path so they can adopt their
+    /// retained `Start` instead of duplicating it. Entity Stores in `Live` mode never replay, so
+    /// they always answer `true` once live.
+    ///
+    /// Positional readers, authorization and snapshot decisions keep using [`Self::is_live`],
+    /// which describes the Store's position, not a call's admission. Per-call quotas use
+    /// [`Self::durable_call_is_fresh`], which narrows the retained-`Start` exception to the
+    /// call's own quota class.
+    pub fn durable_call_is_live(&self) -> bool {
+        self.is_live()
+            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+                || !self.replay_state.has_unclaimed_retained_starts())
+    }
+
+    /// Whether a durable call charged to `quota` that this Store is about to issue is known to
+    /// create fresh work: the Store is live and no unclaimed retained `Start` charged to the same
+    /// quota remains for a late owner to adopt. Per-call quotas are charged before a call is
+    /// admitted (so that a refused call leaves no oplog entry), and use this predicate: a call
+    /// that may still adopt a retained recorded `Start` is not charged again, while retained
+    /// `Start`s charged to other quotas (or to none) never suppress a charge. Retained `Start`s
+    /// of the same quota class but a different owner (another Store of this agent, or a different
+    /// call kind sharing the quota) also suppress the charge; that residual under-charge is
+    /// bounded by the recorded prefix of one recovered invocation.
+    pub fn durable_call_is_fresh(&self, quota: QuotaClass) -> bool {
+        self.is_live()
+            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+                || !self.replay_state.retains_unclaimed_start_charged_to(quota))
+    }
+
+    /// Whether this Store is an incomplete entity that already continued live locally while the
+    /// shared cursor may still replay other owners' records. See
+    /// [`ReplayState::claim_start_for_store`].
+    pub(crate) fn store_continued_live(&self) -> bool {
+        self.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete)
+            && self.is_live()
     }
 
     fn durability_is_suppressed(&self) -> bool {
@@ -9901,15 +10809,12 @@ impl PrivateDurableWorkerState {
     }
 
     /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
-    /// status checkpoint may be taken: we are live, no rollback-capable region is open (so no later
-    /// trap/replay can append a jump that deletes the tip), and snapshotting is not active. The
-    /// `get_oplog_index` marker watermark is checked separately by the caller against the committed
-    /// status tip.
+    /// status checkpoint may be taken: we are live, no host call is in flight, and snapshotting
+    /// is not active.
     pub fn at_clean_checkpoint_boundary(&self) -> bool {
         Self::clean_checkpoint_boundary(
             !self.is_live(),
-            !self.active_atomic_regions.is_empty(),
-            !self.active_durable_scopes.is_empty(),
+            self.has_in_flight_live_host_calls(),
             self.durability_is_suppressed(),
         )
     }
@@ -9919,11 +10824,10 @@ impl PrivateDurableWorkerState {
     /// boundary is clean iff all of them are `false`.
     fn clean_checkpoint_boundary(
         replaying: bool,
-        open_atomic_region: bool,
-        open_durable_scope: bool,
+        in_flight_host_call: bool,
         snapshotting: bool,
     ) -> bool {
-        !replaying && !open_atomic_region && !open_durable_scope && !snapshotting
+        !replaying && !in_flight_host_call && !snapshotting
     }
 
     /// The first condition currently blocking a snapshot, or `None` when the worker is at a safe
@@ -9935,19 +10839,18 @@ impl PrivateDurableWorkerState {
     /// but whose `End`/`Cancelled` is recorded after it would leave a terminal whose `Start` the
     /// post-snapshot replay never sees (the orphan terminal is drained harmlessly, but the call
     /// itself cannot be restored from the snapshot). Snapshots are therefore only taken at a
-    /// clean checkpoint boundary (no open atomic regions or durable scopes, and no snapshotting)
-    /// with no durable host call in flight.
+    /// clean checkpoint boundary (no in-flight host calls and no snapshotting)
+    /// with no durable host call in flight or tool attachment needing the skipped history.
     ///
     /// The sampled conditions must stay in sync with [`Self::at_clean_checkpoint_boundary`]:
     /// `blocker() == None` is equivalent to
-    /// `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
+    /// a clean checkpoint with no in-flight host call or open tool attachment.
     pub fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         SnapshotBoundaryConditions {
             replaying: !self.is_live(),
-            open_atomic_region: !self.active_atomic_regions.is_empty(),
-            open_durable_scope: !self.active_durable_scopes.is_empty(),
             snapshotting: self.snapshotting_mode,
             in_flight_host_call: self.has_in_flight_live_host_calls(),
+            open_tool_attachment: self.replay_state.has_open_tool_attachments(),
         }
         .blocker()
     }
@@ -9963,7 +10866,7 @@ impl PrivateDurableWorkerState {
 
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
-        self.custom_invocation_ordinals.clear();
+        self.invocation_ordinals.clear();
     }
 
     pub async fn get_workers(
@@ -9997,15 +10900,13 @@ impl PrivateDurableWorkerState {
 struct SnapshotBoundaryConditions {
     /// The worker is still replaying its oplog (snapshots are only taken in live mode).
     replaying: bool,
-    /// An atomic region is open: a later trap could append a jump deleting the oplog tip.
-    open_atomic_region: bool,
-    /// A durable scope is open: its `Start`/`End` pair would straddle the snapshot cut.
-    open_durable_scope: bool,
     /// A snapshotting function (save/load) call is already in progress.
     snapshotting: bool,
     /// A live durable host call is in flight: its `Start` may precede the cut while its
     /// terminal entry lands after it.
     in_flight_host_call: bool,
+    /// Attachment endpoints or pending regeneration need history that the snapshot would skip.
+    open_tool_attachment: bool,
 }
 
 impl SnapshotBoundaryConditions {
@@ -10014,14 +10915,12 @@ impl SnapshotBoundaryConditions {
     fn blocker(self) -> Option<SnapshotBoundaryBlocker> {
         if self.replaying {
             Some(SnapshotBoundaryBlocker::Replaying)
-        } else if self.open_atomic_region {
-            Some(SnapshotBoundaryBlocker::OpenAtomicRegion)
-        } else if self.open_durable_scope {
-            Some(SnapshotBoundaryBlocker::OpenDurableScope)
         } else if self.snapshotting {
             Some(SnapshotBoundaryBlocker::Snapshotting)
         } else if self.in_flight_host_call {
             Some(SnapshotBoundaryBlocker::InFlightHostCall)
+        } else if self.open_tool_attachment {
+            Some(SnapshotBoundaryBlocker::OpenToolAttachment)
         } else {
             None
         }
@@ -10033,20 +10932,20 @@ impl SnapshotBoundaryConditions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotBoundaryBlocker {
     Replaying,
-    OpenAtomicRegion,
-    OpenDurableScope,
     Snapshotting,
     InFlightHostCall,
+    OpenToolAttachment,
 }
 
 impl Display for SnapshotBoundaryBlocker {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Replaying => write!(f, "the worker is still replaying its oplog"),
-            Self::OpenAtomicRegion => write!(f, "an atomic region is still open"),
-            Self::OpenDurableScope => write!(f, "a durable scope is still open"),
             Self::Snapshotting => write!(f, "a snapshot function call is already in progress"),
             Self::InFlightHostCall => write!(f, "a durable host call is still in flight"),
+            Self::OpenToolAttachment => {
+                write!(f, "a tool attachment still requires replay history")
+            }
         }
     }
 }
@@ -10223,14 +11122,9 @@ impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
-    fn http(&mut self) -> WasiHttpCtxView<'_> {
-        self.as_wasi_http_view()
-    }
-}
-
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
-/// replay, while skipping hint entries.
+/// replay, while skipping hint entries. The reader is the `DurableWorkerCtx` performing the
+/// positional read: its entity attribution decides which interleaved entries it may consume.
 /// The macro expression's type is `Result<(OplogIndex, OplogEntry), WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
@@ -10252,19 +11146,8 @@ macro_rules! get_oplog_entry {
             }
         }
     };
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
-    };
-}
-
-/// [`get_oplog_entry!`] variant for call sites running inside Wasmtime accessor futures: reads
-/// through [`crate::durable_host::replay_state::ReplayState::get_oplog_entry_owned`], whose cursor
-/// transaction runs on an owned task, so the store-polled caller never queues on the cursor mutex
-/// directly. Direct invocation-loop / p2 host-call readers keep using [`get_oplog_entry!`].
-#[macro_export]
-macro_rules! get_oplog_entry_owned {
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry_owned(); $($cases),+)
+    ($ctx:expr, $($cases:path),+) => {
+        $crate::get_oplog_entry!(@reader ($ctx).state.replay_state.get_oplog_entry(($ctx).entity_parent_start_index()); $($cases),+)
     };
 }
 

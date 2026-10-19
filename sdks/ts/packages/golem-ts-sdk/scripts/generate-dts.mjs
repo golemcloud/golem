@@ -19,7 +19,7 @@ const sourceWit = resolve(packageDir, '../../wit');
 const typesDir = join(packageDir, 'types');
 const temporaryDir = join(packageDir, '.generated-types');
 const mergedTypesDir = join(temporaryDir, 'merged');
-const preservedDeclarations = ['node-sqlite-extensions.d.ts'];
+const preservedDeclarations = ['node-sqlite-extensions.d.ts', 'wasm-rquickjs-execution.d.ts'];
 
 function filesBelow(root) {
   if (!existsSync(root)) return [];
@@ -85,8 +85,21 @@ try {
     if (existsSync(source)) cpSync(source, join(mergedTypesDir, declaration));
   }
 
-  rmSync(typesDir, { recursive: true, force: true });
-  renameSync(mergedTypesDir, typesDir);
+  const generatedFiles = filesBelow(mergedTypesDir);
+  const unchanged =
+    generatedFiles.length === filesBelow(typesDir).length &&
+    generatedFiles.every((path) => {
+      const target = join(typesDir, relative(mergedTypesDir, path));
+      return (
+        existsSync(target) &&
+        statSync(target).isFile() &&
+        readFileSync(path).equals(readFileSync(target))
+      );
+    });
+  if (!unchanged) {
+    rmSync(typesDir, { recursive: true, force: true });
+    renameSync(mergedTypesDir, typesDir);
+  }
 } finally {
   rmSync(temporaryDir, { recursive: true, force: true });
 }

@@ -1,0 +1,1198 @@
+{
+ "cases": {
+  "agent: append lines to a file": {
+   "script": "6f87d17ee9025348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\nd\n4\n"
+   }
+  },
+  "agent: argument parsing loop": {
+   "script": "45888f1ae390cc81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "demo 3 1 rest\n"
+   }
+  },
+  "agent: arithmetic counters": {
+   "script": "ec29ae5a1abd2698",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n7\n"
+   }
+  },
+  "agent: associative counter": {
+   "script": "77d0be1d1370803c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 3\nb 1\nc 1\n"
+   }
+  },
+  "agent: awk one-liner": {
+   "script": "6f8f853cdacf9019",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "103\n"
+   }
+  },
+  "agent: background job status": {
+   "script": "f33d969a662d22c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "agent: base64 round trip": {
+   "script": "6034153cb92222e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c2VjcmV0IGRhdGEK\nsecret data\n"
+   }
+  },
+  "agent: bash -c with arguments": {
+   "script": "207d4641ebe619cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "runner got 2 args: a b\n"
+   }
+  },
+  "agent: check a command exists": {
+   "script": "aeda0dbd221fece8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "have-jq\nno-tool\n"
+   }
+  },
+  "agent: check exit codes explicitly": {
+   "script": "feb6550568bc7aa9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no-match\n"
+   }
+  },
+  "agent: checksum and verify": {
+   "script": "e85e3bf42247518f",
+   "status": 0,
+   "stderr": {
+    "text": "sha256sum: WARNING: 1 computed checksum did NOT match\n"
+   },
+   "stdout": {
+    "text": "/tmp/f: OK\n/tmp/f: FAILED\nstatus=1\n"
+   }
+  },
+  "agent: cleanup trap": {
+   "script": "a284784531ace476",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "working\ncleaned\n"
+   }
+  },
+  "agent: command substitution in a condition": {
+   "script": "d599dee63dfaf0ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two-lines\n"
+   }
+  },
+  "agent: compare files": {
+   "script": "e342df770827be7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "differ\n2c2\n< b\n---\n> c\nstatus=1\na\n"
+   }
+  },
+  "agent: conditional chains": {
+   "script": "a04f426e45fd1285",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\nback\n"
+   }
+  },
+  "agent: copy and remove trees": {
+   "script": "53ca32f0a6820a38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/t:\nd\n\n/tmp/t/d:\nf\nt\n"
+   }
+  },
+  "agent: count lines of code": {
+   "script": "15a709218dc08e69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n 2 src/lib.rs\n 3 src/main.rs\n 5 total\n"
+   }
+  },
+  "agent: counter under set -e": {
+   "script": "84f73eb3b8f0bd52",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "agent: create a directory tree": {
+   "script": "c89e5b6081ce1671",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/app\n/tmp/app/docs\n/tmp/app/src\n/tmp/app/src/a.rs\n/tmp/app/src/b.rs\n/tmp/app/tests\n"
+   }
+  },
+  "agent: cut characters and fields": {
+   "script": "2f4aecb28e9343ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bcd\nb:c\nb\n"
+   }
+  },
+  "agent: cut columns from CSV": {
+   "script": "984b1b723125cf76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ann\nbob\ncid\n27\n"
+   }
+  },
+  "agent: date arithmetic": {
+   "script": "f4987680c3b28185",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-01\n"
+   }
+  },
+  "agent: dedupe preserving order": {
+   "script": "50ed618e6e9cf289",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nc\n"
+   }
+  },
+  "agent: default and required variables": {
+   "script": "1cd1459e4ded0c1d",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: REQUIRED: REQUIRED must be set\n"
+   },
+   "stdout": {
+    "text": "anon\n"
+   }
+  },
+  "agent: du and df": {
+   "script": "bf8593b5dfd0f06d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "agent: environment for a single command": {
+   "script": "ce27b967bdd2fdaa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "FOO=bar\n[]\n"
+   }
+  },
+  "agent: escape for JSON with jq": {
+   "script": "cc07d0592d33194f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"msg\":\"he said \\\"hi\\\"\"}\n"
+   }
+  },
+  "agent: exit codes of pipelines": {
+   "script": "a9f7039a785f52bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 0\n1\n"
+   }
+  },
+  "agent: export for child shells": {
+   "script": "680a9f1daa5db1e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "http://localhost\n"
+   }
+  },
+  "agent: expr and factor": {
+   "script": "720243c75c96179d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n5\n84: 2 2 3 7\n"
+   }
+  },
+  "agent: file size and existence checks": {
+   "script": "479a04ae2195f7c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n3\nnonempty\ndir\n"
+   }
+  },
+  "agent: find and delete": {
+   "script": "4ebc6bbf0d6fb5b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "keep.txt\n"
+   }
+  },
+  "agent: find and exec grep": {
+   "script": "552dadf8e6872a37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib.rs\n"
+   }
+  },
+  "agent: find files by name": {
+   "script": "34555b794c10bbc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib.rs\n./src/main.rs\n.\n./docs\n./src\n"
+   }
+  },
+  "agent: find newer and size": {
+   "script": "8d0086f7b338a259",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./data.json\n./people.csv\n./src/lib.rs\n./src/main.rs\n5\n"
+   }
+  },
+  "agent: find with print0 and xargs -0": {
+   "script": "bd6f9f3c478e9c1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/sp/a b\n/tmp/sp/c\n"
+   }
+  },
+  "agent: fixed dates": {
+   "script": "a253fec12e818907",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-01T00:00:00\n1709208000\nFriday\n"
+   }
+  },
+  "agent: function returning a value by output": {
+   "script": "42279b3541ace1b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello-big-world\n"
+   }
+  },
+  "agent: functions with local and return": {
+   "script": "4d22857c88be0ff1",
+   "status": 0,
+   "stderr": {
+    "text": "empty: /tmp/b\n"
+   },
+   "stdout": {
+    "text": "a-ok\nstatus=1\n"
+   }
+  },
+  "agent: generate files from a template": {
+   "script": "7031dc9e1860bcde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file 1\nfile 2\n"
+   }
+  },
+  "agent: grep count and quiet": {
+   "script": "d333fead13c9ac4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nfound\nabsent\n"
+   }
+  },
+  "agent: grep extended regex with capture via sed": {
+   "script": "5c8aa8a4b9e0b42f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "add\nmain\n"
+   }
+  },
+  "agent: grep for files only": {
+   "script": "9cdd0a59f24c8e17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src/lib.rs\nsrc/main.rs\nsrc/main.rs\n"
+   }
+  },
+  "agent: grep recursively with line numbers": {
+   "script": "e10d8e4a55677513",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md:3:Some TODO here.\n./src/lib.rs:2:// TODO: sub\n"
+   }
+  },
+  "agent: grep with include and exclude": {
+   "script": "4f6de8618024bc67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib.rs:1:pub fn add(a: i32, b: i32) -> i32 { a + b }\n./src/main.rs:1:fn main() {\n./docs/README.md:3:Some TODO here.\n"
+   }
+  },
+  "agent: guard with an error message": {
+   "script": "5c04e6a99cbe8464",
+   "status": 3,
+   "stderr": {
+    "text": "missing input\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "agent: gzip": {
+   "script": "8abaac1076ae97d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "agent: head and tail of output": {
+   "script": "41ba1bc300c2c7b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n99\n100\n1\n2\n3\n"
+   }
+  },
+  "agent: here string into a command": {
+   "script": "2da5fbd4ae9afda8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.22.3\n"
+   }
+  },
+  "agent: hex dump": {
+   "script": "893aad9c081c95e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 42 0a\n"
+   }
+  },
+  "agent: human readable sizes": {
+   "script": "2af4724ec574e891",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0M\n1.5K\n2048\n"
+   }
+  },
+  "agent: in-place sed edit": {
+   "script": "40ca1c03fd8ef110",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fn main() {\n    println!(\"world\");\n}\n"
+   }
+  },
+  "agent: in-place sed with backup": {
+   "script": "e9f264fc6dfe7b9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "pub fn add(a: i32, b: i32) -> i32 { a + b }\n// DONE: sub\n// TODO: sub\n"
+   }
+  },
+  "agent: iterate an array with indices": {
+   "script": "bbc02c39ffbf516c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0=x\n1=y\n2=z\n"
+   }
+  },
+  "agent: join lines with a comma": {
+   "script": "2f7da0af632fc606",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a,b,c\na,b\n"
+   }
+  },
+  "agent: jq build JSON": {
+   "script": "9ef1ca7e06b4c6ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"name\": \"demo\",\n  \"count\": 3,\n  \"tags\": [\n    \"x\",\n    \"y\"\n  ]\n}\n"
+   }
+  },
+  "agent: jq exit status": {
+   "script": "173a5969064a988b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n1\nstatus=0\n"
+   }
+  },
+  "agent: jq length keys and sort": {
+   "script": "5e98f546f0a039de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n[\"a\",\"c\",\"b\"]\nn\nname\n"
+   }
+  },
+  "agent: jq modify and write back": {
+   "script": "2c3df68648667528",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"name\":\"a\",\"n\":10}\n"
+   }
+  },
+  "agent: jq raw input to array": {
+   "script": "3971fbedeac374a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"x\",\"y\"]\n"
+   }
+  },
+  "agent: jq select and project": {
+   "script": "f65349c43ddfcc49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nc\n"
+   }
+  },
+  "agent: jq slurp lines": {
+   "script": "d76f60ba51245099",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "agent: jq to CSV": {
+   "script": "540688eddb3d3afc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\",1\n\"b\",5\n\"c\",3\n"
+   }
+  },
+  "agent: jq with arguments": {
+   "script": "a909d361bef62553",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"name\": \"b\",\n  \"n\": 5\n}\n"
+   }
+  },
+  "agent: let and compound arithmetic": {
+   "script": "ce95459c29e4cb7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 4 2\n"
+   }
+  },
+  "agent: long pipeline": {
+   "script": "bf64e42117138c29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "271\n"
+   }
+  },
+  "agent: loop over command output with spaces": {
+   "script": "ad89d6d87d741d28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b]\n[c]\n<a>\n<b>\n<c>\n"
+   }
+  },
+  "agent: lowercase and replace": {
+   "script": "95e2edf41374669e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello world Hello_World HELLO WORLD\n"
+   }
+  },
+  "agent: nested command substitution": {
+   "script": "941ba8be73ba68dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dir: b\n"
+   }
+  },
+  "agent: normalise line endings": {
+   "script": "622585a135465fce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a  \\n   b  \\n\n4\n"
+   }
+  },
+  "agent: nproc": {
+   "script": "d489f5b68ddee63e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "agent: number lines": {
+   "script": "7d33e78733f2538f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tx\n     2\t\n     3\ty\n     1\tx\n     2\ty\n"
+   }
+  },
+  "agent: parallel jobs and wait": {
+   "script": "fcf0af8b4265ff50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "job1\njob2\njob3\n"
+   }
+  },
+  "agent: patch a file with diff output": {
+   "script": "8d8d94b649c0fb8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/work\na\nB\nc\n"
+   }
+  },
+  "agent: patch from stdin with strip level": {
+   "script": "383b0c06091e5531",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file src/f\ny\n"
+   }
+  },
+  "agent: printf -v to build a string": {
+   "script": "9bb9e2bb91021c5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-b\n"
+   }
+  },
+  "agent: printf a table": {
+   "script": "bb05d10e7215be77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name  | size\na     |   10\nbb    |  200\n"
+   }
+  },
+  "agent: process substitution": {
+   "script": "a7ac9c3d33d0b39c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n---\n> b\nstatus=1\n"
+   }
+  },
+  "agent: read CSV in a loop": {
+   "script": "a862c6223183505c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ann    31\nbob    27\ncid    45\n"
+   }
+  },
+  "agent: readarray lines": {
+   "script": "acd18a629506dc35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 c\n"
+   }
+  },
+  "agent: realpath and readlink": {
+   "script": "33a07df7b449cb25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d\n/tmp/r/d\n/tmp/r/d\n"
+   }
+  },
+  "agent: rename files in a loop": {
+   "script": "2968943149066073",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.md\nb.md\n"
+   }
+  },
+  "agent: replace across files": {
+   "script": "314f124b6be7b06e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md:3:Some FIXME here.\n./src/lib.rs:2:// FIXME: sub\n"
+   }
+  },
+  "agent: retry loop": {
+   "script": "1ee4510852b7ec34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok after 3\n"
+   }
+  },
+  "agent: sed delete and insert lines": {
+   "script": "dd2ec3f88cb96288",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "// header\nfn main() {\n}\n"
+   }
+  },
+  "agent: sed print a line range": {
+   "script": "2a3c6acd2b9ad53a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n6\n7\n8\n20\n"
+   }
+  },
+  "agent: sequence formatting": {
+   "script": "086db11967708c0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "08\n09\n10\n1,2,3,4,5\n1\n3\n5\n7\n"
+   }
+  },
+  "agent: sh -c in find exec": {
+   "script": "4f50dc6cd6d06d75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x.txt\ny.txt\n"
+   }
+  },
+  "agent: show whitespace": {
+   "script": "03d402cb11f66e9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^Ib $\n"
+   }
+  },
+  "agent: silence everything": {
+   "script": "22ca86a7858055f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nstatus=2\n"
+   }
+  },
+  "agent: sort CSV by a numeric column": {
+   "script": "15b3e46ec153d2c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bob,27\nann,31\ncid,45\n"
+   }
+  },
+  "agent: sort by multiple keys": {
+   "script": "6a0130f54b00053b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c 1\na 2\nb 2\n"
+   }
+  },
+  "agent: sort unique and reverse": {
+   "script": "5dff3301badfd3c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n3\n2\n1\nA\na\nb\n"
+   }
+  },
+  "agent: source an env file": {
+   "script": "aeab05fa2a1141a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8080 my app\n"
+   }
+  },
+  "agent: split a string into an array": {
+   "script": "b25db6ddf8989a8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n[a][b][c d]\n"
+   }
+  },
+  "agent: split and reassemble": {
+   "script": "e060a264368438c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/part.aa\n/tmp/part.ab\n/tmp/part.ac\n10\n"
+   }
+  },
+  "agent: stderr to a log and stdout to a pipe": {
+   "script": "77cb1fdc98ea07bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "DATA\nwarn\n"
+   }
+  },
+  "agent: strict mode catches a failing pipeline": {
+   "script": "b36ed9827d883f0a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "start\n"
+   }
+  },
+  "agent: strict mode catches an unset variable": {
+   "script": "242deac3ba27807a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: undefined_var: unbound variable\n"
+   },
+   "stdout": {
+    "text": "start\n"
+   }
+  },
+  "agent: strict mode script": {
+   "script": "b5832089c1246db5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "processing a\nprocessing b\ndone\n"
+   }
+  },
+  "agent: string contains and matches": {
+   "script": "f8f6822bc9b86ce3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "branch\nlogin\nlogin\n"
+   }
+  },
+  "agent: strip path components": {
+   "script": "c069aa41b24db0ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file.tar.gz /a/b /a/b/file file.tar /a/b\n"
+   }
+  },
+  "agent: sum a column": {
+   "script": "4067ee8dc4c69fdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "103\n"
+   }
+  },
+  "agent: sum a column without process substitution": {
+   "script": "f14426c466550979",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "103\n"
+   }
+  },
+  "agent: tail follow is refused or ends": {
+   "script": "e32e2d201e6459a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "agent: tar": {
+   "script": "713440beb402dfbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "agent: tee to a file and stdout": {
+   "script": "358cd8812cd848af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "LOGGED\nlogged\n"
+   }
+  },
+  "agent: temporary file round trip": {
+   "script": "72e03523ee712aa6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "payload\nremoved\n"
+   }
+  },
+  "agent: timeout": {
+   "script": "53b2beb4e06ea6c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fast\nstatus=0\n"
+   }
+  },
+  "agent: tr squeeze and delete": {
+   "script": "b13035359be21dc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaa bbb\nabc\n"
+   }
+  },
+  "agent: uname": {
+   "script": "7cda3e82b91dbc23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "agent: uppercase and trim": {
+   "script": "a6fa68ef7f46351e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HELLO WORLD\n"
+   }
+  },
+  "agent: while read from a file": {
+   "script": "c12c20ed30544304",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<one>\n<two>\n<three>\n"
+   }
+  },
+  "agent: while read without a trailing newline": {
+   "script": "0e663f501c832e33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<one>\n<two>\n"
+   }
+  },
+  "agent: word frequency": {
+   "script": "3649f316e8c1c935",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      3 a\n      2 b\n"
+   }
+  },
+  "agent: write JSON with printf": {
+   "script": "3a88c4586ed0a734",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"name\":\"demo\",\"n\":3}\n"
+   }
+  },
+  "agent: write a file with a heredoc": {
+   "script": "14371061d56b2f89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[server]\nport = 8080\nhost = \"${HOST}\"\n"
+   }
+  },
+  "agent: write a file with an expanding heredoc": {
+   "script": "e97bb58cebffceb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "project: demo\nfiles: 3\n"
+   }
+  },
+  "agent: xargs with placeholders": {
+   "script": "88ce8f4c9aba0072",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "item a done\nitem b done\npair 1 2\npair 3 4\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

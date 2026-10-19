@@ -6,7 +6,7 @@ struct Policy;
 impl PublicEchoMiddleware for Policy {
     async fn echo(
         &self,
-        underlying: &mut PublicEchoUnderlying,
+        underlying: &PublicEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<PublicError>> {
         underlying.echo(value).await

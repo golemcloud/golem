@@ -22,6 +22,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           submodules: true
+          fetch-depth: 0
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v1-golem-rust
@@ -30,17 +31,21 @@ jobs:
           save-if: false
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
       - id: get_version
         uses: battila7/get-version-action@v2
+      - name: Verify shared crate release
+        run: cargo make --profile ci verify-shared-crates
+      - name: Set shared crate versions
+        run: cargo make --profile ci set-shared-crates-version
       - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        working-directory: sdks/rust
         run: |
           export VERSION_FULL="${{ steps.get_version.outputs.version }}"
           export VERSION="${VERSION_FULL#golem-rust-v}"
-          sed -i "s/0.0.0/$VERSION/g" golem-rust-macro/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-rust/Cargo.toml
+          git ls-files -z '*Cargo.toml' | xargs -0 sed -i "s/0\.0\.0/$VERSION/g"
           cargo publish -p golem-rust-macro --all-features --allow-dirty
-          cargo publish -p golem-rust --all-features --allow-dirty
+          cargo publish --manifest-path sdks/rust/golem-rust/Cargo.toml --all-features --allow-dirty

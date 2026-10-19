@@ -32,32 +32,44 @@ The recommended approach is to declare the bridge in `golem.yaml` (as shown abov
 golem build --yes
 ```
 
-This produces a MoonBit module per agent type (e.g., `my-agent-client/`) in the configured output directory (or `golem-temp/bridge-sdk/moonbit/` by default). Re-running `golem build` after agent changes keeps the generated client in sync automatically.
+This produces a MoonBit module per agent type (e.g., `my-agent-client/`) under
+`bridge-sdk/moonbit/` (or `golem-temp/bridge-sdk/moonbit/` when `outputDir` is omitted). Re-running
+`golem build` after agent changes keeps the generated client in sync automatically.
 
 Avoid invoking `golem generate-bridge` manually — it exists as a low-level escape hatch, but the manifest-driven flow above is the supported way to keep bridges configured, reproducible, and up to date.
 
-## Step 3: Add the Generated Module as a Local Dependency
+## Step 3: Add the Generated Module to a Workspace
 
-The generated `my-agent-client/` directory is a self-contained `moon` module. Its `moon.mod.json` declares an agent-derived module name matching the generated directory name (for example, `my-agent-client`), so multiple generated bridge modules can be used from the same external project. The module bundles its own runtime, only depends on `moonbitlang/async` and the MoonBit core library, and builds for the `native` target.
+The generated `my-agent-client/` directory is a self-contained module. The generator deliberately
+emits its metadata as `moon.mod.json`; do not rename or edit that generated file. The application
+itself should use the current `moon.mod` format.
 
-Add it to your external MoonBit project as a local path dependency in `moon.mod.json`. Also depend on `moonbitlang/async` directly — your own `async fn main` entry point needs it imported (see the next step), and the version must match the one the generated module pins (`0.21.2`):
+Create the external application in `external-client/`. Because local path dependencies in
+`moon.mod` are deprecated, add `external-client/moon.work` with both modules:
 
-```json
-{
-  "name": "my-org/external-client",
-  "preferred-target": "native",
-  "deps": {
-    "my-agent-client": {
-      "path": "../golem-temp/bridge-sdk/moonbit/my-agent-client"
-    },
-    "moonbitlang/async": "0.21.2"
-  }
+```moonbit
+members = [
+  ".",
+  "../bridge-sdk/moonbit/my-agent-client",
+]
+```
+
+Then import the generated module and `moonbitlang/async` in the application's `moon.mod`, using the
+exact generated name/version and the async version declared by the bridge's `moon.mod.json`:
+
+```moonbit
+name = "my-org/external-client"
+preferred_target = "native"
+
+import {
+  "my-agent-client@0.0.1",
+  "moonbitlang/async@0.21.2",
 }
 ```
 
-The `path` points to the directory containing the generated module's `moon.mod.json`. Since the client uses the native HTTP transport, `preferred-target` is set to `native` for your standalone app.
-
-Then run `moon install`.
+The workspace resolves `my-agent-client` locally. Run `moon check --target native` from
+`external-client`; current MoonBit commands fetch registry dependencies automatically, so do not
+use the old project-dependency meaning of `moon install`.
 
 ## Step 4: Use the Generated Client
 
@@ -176,7 +188,7 @@ let reply = agent.analyze([
 
 ## Unstructured Text and Binary
 
-Rich `text` and `binary` parameters and return values map to the ergonomic
+Schema values explicitly role-marked as unstructured text or unstructured binary map to the ergonomic
 `@runtime.UnstructuredText` and `@runtime.UnstructuredBinary` wrappers, each of
 which is either inline content or a URL reference:
 
@@ -190,7 +202,9 @@ which is either inline content or a URL reference:
 @runtime.BinaryUrl("https://example.com/cat.png")
 ```
 
-When the agent restricts the allowed language codes or MIME types, the generated
+These wrappers do not represent arbitrary bare text or binary schema values. Bare binary maps to
+`@runtime.AgentBinary`, and bare text is not supported by this bridge mapping. When a role-marked
+value restricts the allowed language codes or MIME types, the generated
 client validates returned values against the allowed set and raises a
 `@runtime.BridgeError` on a disallowed code.
 
@@ -208,4 +222,5 @@ Each agent type gets its own `moon` module directory containing:
 - The generated code is fully typed — method parameters and return types map to MoonBit types, and all custom types (records, variants, enums, flags, unions, multimodal, unstructured text/binary) are generated as corresponding MoonBit types
 - The client targets `native` and uses `moonbitlang/async` for HTTP communication; all constructors and methods are `async`
 - The generated module is self-contained: it bundles its runtime and only depends on `moonbitlang/async` and the MoonBit core library
-- Add the generated module as a local path dependency and run `moon install` before using it
+- Keep application metadata in `moon.mod`; leave the generated bridge's `moon.mod.json` unchanged
+- Resolve the generated module through `moon.work`, then run `moon check --target native`

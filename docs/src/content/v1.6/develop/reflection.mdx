@@ -1,0 +1,1110 @@
+# Agent reflection
+
+import { Tabs } from "nextra/components"
+
+Use reflection when your application selects an agent type or method at runtime. You can discover deployed types, inspect and validate their schemas, construct agent IDs, address phantom agents, and invoke methods without importing the target's definition.
+
+For ordinary application code, prefer [Agent-to-Agent communication](/v1.6/develop/rpc), including generated guest bridges between components. Reflection is useful for gateways and adapters whose target is not known at build time.
+
+| Client approach | Use it when | What validates the call |
+| --- | --- | --- |
+| **Normal RPC** | The target is known at build time through a definition or generated guest client | Generated static codecs validate typed inputs and decode outputs |
+| **Caller-defined static client** | The caller knows a stable interface but does not share the producer's source definition | Caller-owned schemas and codecs validate the fields they describe |
+| **Discovered client** | The caller selects an agent, method, tool, or command from the current environment | An immutable discovery snapshot automatically validates inputs and declared outputs |
+| **Fully dynamic client** | Infrastructure already transports packed schema-native values | The caller explicitly owns packing and validation; the host still validates authorization and the deployed target |
+
+Normal RPC is not reflection. It provides the strongest compile-time experience with the least setup, through a source definition or a generated guest client.
+
+Caller-defined static clients are useful for integrations that deliberately
+own a typed view of another component. A full agent definition can create and
+identify agents and validate known configuration declarations. A method-only
+definition can bind an existing durable identity, but cannot validate an
+identity or configuration declarations it does not describe. Caller-defined
+tool definitions similarly provide typed access to a selected tool surface.
+
+Discovered clients are the default choice when the deployed environment is the
+source of truth. Discovery reads visible metadata and returns a client backed
+by that snapshot. The snapshot does not change under the caller: rediscover
+explicitly when a newer deployment should be used.
+
+Fully dynamic clients are the lowest-level option. They invoke an existing
+durable agent identity or an explicit tool command using schema-native values.
+Use them for gateways, adapters, and other infrastructure that intentionally
+keeps schema selection, packing, and result validation separate from
+transport.
+
+The examples below use a durable `CounterAgent` with constructor field `name: string` and method `add(by: signed 32-bit integer)`, returning a signed 32-bit integer. Later snippets reuse variables from the discovery example. Run calls inside an agent method; these are guest SDK APIs, not external REST clients.
+
+## Discover, inspect, and call an agent
+
+List the visible types or look up one by name. A discovered type exposes its name, description, lifecycle mode, source language, implementing component, constructor schema, methods, and configuration declarations. Each method exposes its name, description, input schema, and optional output schema. Input schemas contain caller-supplied fields, not fields supplied by Golem such as the principal.
+
+Discovered calls validate inputs before RPC and validate declared outputs after the call. A unit-returning method has no output schema or returned value; invocation metadata is still available.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+import {
+  getAllAgentTypes,
+  getReflectedAgentType,
+} from "@golemcloud/golem-ts-sdk"
+
+export async function inspectAndCallCounter() {
+  const available = getAllAgentTypes()
+  const counterType = getReflectedAgentType("CounterAgent")
+  if (!counterType || counterType.mode !== "durable") {
+    throw new Error("CounterAgent unavailable or not durable")
+  }
+  const add = counterType.method("add")
+  if (!add) throw new Error("add unavailable")
+  const args = { by: 5 }
+  const checked = add.input.validateJson(args)
+  if (!checked.success) throw new Error(JSON.stringify(checked.issues))
+  console.log(available.map(type => type.name), add.input.toJsonSchema())
+
+  const client = counterType.client.get({ name: "main" })
+  const result = await client.method("add").invoke(args)
+  console.log(result.value, result.metadata.agentId)
+  return result
+}
+```
+
+Metadata `method(name)` and type discovery return `undefined` on a miss. Inspect `constructorInput`, `methods`, `config`, and method `input`/`output` schemas. Invalid schema operations and calls throw.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```typescript
+import { Effect } from "effect"
+import { Reflection } from "@golemcloud/effect-golem"
+
+export const inspectAndCallCounter = Effect.gen(function* () {
+  const available = yield* Reflection.getAllAgentTypes
+  const counterType = yield* Reflection.getAgentType("CounterAgent")
+  if (!counterType || counterType.mode !== "durable") {
+    return yield* Effect.fail("CounterAgent unavailable or not durable")
+  }
+  const add = counterType.method("add")
+  if (!add) return yield* Effect.fail("add unavailable")
+  const args = { by: 5 }
+  const checked = add.input.validateJson(args)
+  if (!checked.success) return yield* Effect.fail(checked.issues)
+  yield* Effect.log(available.map(type => type.name), add.input.toJsonSchema())
+
+  const client = yield* counterType.client.get({ name: "main" })
+  const method = yield* client.method("add")
+  return yield* method.invoke(args)
+}).pipe(Effect.scoped)
+```
+
+Discovery returns `undefined` on a miss; other failures use the Effect error channel. Metadata lookup is synchronous; binding and invocation are Effects. Inspect `constructorInput`, `methods`, `config`, and method `input`/`output`. Keep clients and returned resources inside their scope.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Inside an async function returning `Result<_, GolemReflectError>`:
+
+```rust
+use golem_rust::{get_agent_type, get_all_agent_types, GolemReflectError};
+use golem_rust::serde_json::json;
+
+let available = get_all_agent_types()?;
+let counter_type = get_agent_type("CounterAgent")?;
+let add = counter_type.method("add")?;
+let args = json!({ "by": 5 });
+let input_schema = add.input().to_json_schema(true);
+let output_schema = add.output().map(|schema| schema.to_json_schema(true));
+let constructor_schema = counter_type.constructor_input().to_json_schema(true);
+
+let client = counter_type.client().get_json(&json!({ "name": "main" }))?;
+let result = client.method("add")?.invoke_json(&args).await?;
+println!("{:?}: {:?}", result.metadata, result.value);
+```
+
+Missing types and methods return errors. Inspect `name()`, `mode()`, `source_language()`, `implemented_by()`, `methods()`, and `config()`. Schema `pack_json` validates and packs input; `validate_value` validates a native value.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Inside agent code with an implicit `scala.concurrent.ExecutionContext`:
+
+```scala
+import golem.reflection.*
+import zio.blocks.schema.json.Json
+
+val constructor = Json.Object("name" -> Json.String("main"))
+val args = Json.Object("by" -> Json.Number(BigDecimal(5)))
+val available = Reflection.getAllAgentTypes()
+val prepared = for {
+  counterType <- Reflection.getAgentType("CounterAgent").flatMap(
+    _.toRight(GolemReflectError.Discovery("CounterAgent unavailable"))
+  )
+  add <- counterType.method("add").toRight(
+    GolemReflectError.Discovery("add unavailable")
+  )
+} yield (counterType, add)
+
+val call = for {
+  pair <- prepared
+  client <- pair._1.client.get(constructor)
+  method <- client.method("add")
+} yield {
+  println(pair._2.input.toJsonSchema())
+  method.invokeJson(args)
+}
+```
+
+Discovery returns `Either[GolemReflectError, Option[AgentType]]`. Metadata method lookup returns `Option`. `call` is an `Either` containing a `Future[Either[...]]`: await the future in your agent method and handle both error boundaries. Inspect `constructorInput`, `methods`, `config`, `mode`, and `implementedBy`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Add these public imports to your existing `moon.pkg`:
+
+```moonbit filename="moon.pkg"
+import {
+  "golemcloud/golem_sdk/reflection",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model" @model,
+}
+```
+
+Inside an async agent method, with no `await` keyword:
+
+```moonbit
+let available = @reflection.get_all_agent_types()
+guard @reflection.get_agent_type("CounterAgent") is Some(counter_type) else {
+  raise @reflection.ReflectError::Discovery("CounterAgent unavailable")
+}
+guard counter_type.find_method("add") is Some(add) else {
+  raise @reflection.ReflectError::Discovery("add unavailable")
+}
+let constructor = Json::object({ "name": Json::string("main") })
+let args = Json::object({ "by": Json::number(5.0) })
+let input_schema = add.input().to_json_schema()
+let client = counter_type.get_json(constructor)
+defer client.drop()
+
+let result = client.invoke_json("add", args)
+let agent_id = result.metadata.agent_id
+```
+
+Discovery and `find_method` return optional values; other fallible operations raise `ReflectError`. Inspect `constructor_input()`, `methods()`, `config()`, `mode()`, and `implemented_by()`. Use `defer client.drop()` so the client is released even when a call raises.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+import (
+    "fmt"
+    "github.com/golemcloud/golem/sdks/go/golem"
+    "github.com/golemcloud/golem/sdks/go/golem/reflection"
+)
+
+// Inside an agent handler:
+available := reflection.DiscoverAgentTypes()
+counterType, found := reflection.DiscoverAgentType("CounterAgent")
+if !found {
+    panic("CounterAgent unavailable")
+}
+add, found := counterType.Method("add")
+if !found {
+    panic("add unavailable")
+}
+fmt.Println(len(available), golem.Must(add.Input().ToJSONSchema(true)))
+
+constructor := map[string]any{"name": "main"}
+args := map[string]any{"by": 5}
+client := golem.Must(counterType.Get(constructor))
+total, invocation, err := client.Call("add", args)
+if err != nil {
+    panic(err)
+}
+fmt.Println(total, invocation.AgentID, invocation.IdempotencyKey)
+```
+
+Discovery and method lookup return a `found` boolean. Other operations return errors; `golem.Must` panics on failure here for brevity. Inspect `Constructor().Input()`, `Methods()`, `Mode()`, and `Schema()`. `Output()` is optional; check `Get()` before accessing its schema. The reflected Go type does not expose configuration declarations or the implementing component as public accessors.
+  </Tabs.Tab>
+</Tabs>
+
+## Caller-defined static clients
+
+A full client describes the type name, constructor, lifecycle, and methods using caller-owned codecs. A method-only client describes just methods and binds a durable agent ID supplied by the caller. Neither performs discovery. Method-only clients cannot validate constructor or configuration declarations they do not describe.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+import { defineAgentClient, method } from "@golemcloud/golem-ts-sdk"
+import { z } from "zod"
+
+export const Counter = defineAgentClient({
+  name: "CounterAgent",
+  id: { name: z.string() },
+  methods: {
+    add: method({ input: { by: z.int32() }, returns: z.int32() }),
+  },
+})
+export const CounterMethods = defineAgentClient({ methods: Counter.methods })
+
+export async function callCounter() {
+  const id = Counter.agentId({ name: "main" })
+  const full = id.client(Counter)
+  const methodOnly = id.client(CounterMethods)
+  return [await full.add({ by: 5 }), await methodOnly.add({ by: 5 })]
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```typescript
+import { Effect, Schema } from "effect"
+import { defineAgentClient, method, WitTypes } from "@golemcloud/effect-golem"
+
+export const Counter = defineAgentClient({
+  name: "CounterAgent",
+  id: { name: Schema.String },
+  methods: {
+    add: method({ input: { by: WitTypes.Int32 }, success: WitTypes.Int32 }),
+  },
+})
+export const CounterMethods = defineAgentClient({ methods: Counter.methods })
+
+export const callCounter = Effect.gen(function* () {
+  const id = yield* Counter.agentId({ name: "main" })
+  const full = yield* id.client(Counter)
+  const methodOnly = yield* id.client(CounterMethods)
+  return [yield* full.add({ by: 5 }), yield* methodOnly.add({ by: 5 })]
+}).pipe(Effect.scoped)
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```rust
+use golem_rust::agent_client;
+
+#[agent_client(type_name = "CounterAgent")]
+trait CounterApi {
+    fn new(name: String) -> Self;
+    fn add(&self, by: i32) -> i32;
+}
+
+#[agent_client]
+trait CounterMethods {
+    fn add(&self, by: i32) -> i32;
+}
+
+// Inside an async function returning Result:
+let full = CounterApiClient::get("main".to_string())?;
+let total = full.add(5).await?;
+let methods = CounterMethodsClient::bind(&existing_id)?;
+let other = methods.add(5).await?;
+```
+
+`existing_id` is a `golem_rust::ParsedAgentId`. The macro also generates trigger, pending, and scheduled methods.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```scala
+import golem.reflection.*
+import golem.runtime.{InputRecordCodec, OutputCodec}
+
+val full = AgentClientDefinition.full(
+  name = "CounterAgent",
+  mode = AgentMode.Durable,
+  constructor = InputRecordCodec.single[String]("name")
+)
+val fullAdd = full.method(
+  "add", InputRecordCodec.single[Int]("by"), OutputCodec.single[Int]
+)
+val methods = AgentClientDefinition.methodOnly
+val methodAdd = methods.method(
+  "add", InputRecordCodec.single[Int]("by"), OutputCodec.single[Int]
+)
+val fullCall = full.client.get("main").map(_.method(fullAdd).invoke(5))
+val methodCall = methods.bind(existingId).map(_.method(methodAdd).invoke(5))
+```
+
+`existingId` is a `ParsedAgentId`. Each call is an `Either` containing a `Future`; a successful invocation contains the typed `value`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Declare the caller-owned types:
+
+```moonbit
+#derive.golem_schema
+struct CounterId {
+  name : String
+}
+
+#derive.golem_schema
+struct AddInput {
+  by : Int
+}
+```
+
+Inside an async agent method:
+
+```moonbit
+let full = @reflection.FullAgentClient::get(
+  "CounterAgent", CounterId::{ name: "main" },
+)
+defer full.drop()
+let total : @reflection.Invocation[Int] = full.invoke("add", AddInput::{ by: 5 })
+
+let id = @reflection.FullAgentClient::agent_id(
+  "CounterAgent", CounterId::{ name: "main" },
+)
+let methods = @reflection.MethodOnlyAgentClient::bind(id)
+defer methods.drop()
+let other : @reflection.Invocation[Int] = methods.invoke("add", AddInput::{ by: 5 })
+```
+
+The result annotation selects the output codec. Method names remain strings; input and output codecs belong to the caller.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+type CounterID struct{ Name string }
+type AddInput struct{ By int32 }
+type CounterMethods struct{}
+
+var (
+    Counter = golem.DefineFullAgentClient[CounterID](
+        "CounterAgent", golem.AgentClientSpec{},
+    )
+    Add = Counter.Method[AddInput, int32]("add")
+    Methods = golem.DefineAgentClient[CounterMethods]()
+    MethodAdd = Methods.Method[AddInput, int32]("add")
+)
+
+// Inside an agent handler:
+full := golem.Must(Counter.Get(CounterID{Name: "main"}))
+total := golem.Must(Add.Call(full, AddInput{By: 5}))
+id := golem.Must(Counter.AgentID(CounterID{Name: "main"}, golem.None[golem.UUID]()))
+methodOnly := golem.Must(Methods.Bind(id))
+other := golem.Must(MethodAdd.Call(methodOnly, AddInput{By: 5}))
+```
+
+Use the SDK's patched Go toolchain, which supports generic methods.
+  </Tabs.Tab>
+</Tabs>
+
+## Construct, parse, and bind agent IDs
+
+An ID contains the agent type name, constructor values, and optional phantom ID. Constructing or parsing it does not invoke the agent. Binding prepares a client; a later invocation reaches the durable agent and creates it if necessary. Discovery by ID is a separate lookup and does not create an agent.
+
+Use a discovered type or full client to construct an ID with schema validation. Raw ID constructors are for infrastructure that already owns packed constructor values. A full or discovered client checks the type name and constructor when binding; a method-only or fully dynamic client has no such local schema authority.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+import { ParsedAgentId, getAgentTypeByAgentId } from "@golemcloud/golem-ts-sdk"
+
+const id = counterType.agentId({ name: "main" })
+const parsed = new ParsedAgentId(id.value)
+const { typeName, constructorValue, phantomId } = parsed.parts()
+const currentType = getAgentTypeByAgentId(parsed)
+if (!currentType) throw new Error("Agent or type unavailable")
+const rebound = parsed.client(currentType)
+```
+
+Wrapping a string does not parse it; `parts()` performs strict parsing. For packed values, use `ParsedAgentId.create({ typeName, constructorValue, phantomId })`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Inside `Effect.gen`, with `AgentIdentity` imported from the SDK:
+
+```typescript
+const id = yield* counterType.agentId({ name: "main" })
+const parsed = yield* AgentIdentity.parse(id.encoded)
+const currentType = yield* Reflection.getAgentTypeByAgentId(parsed)
+if (!currentType) return yield* Effect.fail("Agent or type unavailable")
+const rebound = yield* parsed.client(currentType)
+yield* Effect.log(parsed.typeName, parsed.phantomId)
+```
+
+Parsing is strict. `parsed.constructorValue` holds the native constructor tree. For packed values, use `AgentIdentity.make({ typeName, constructorValue, phantomId })`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```rust
+use golem_rust::{get_agent_type_for, ParsedAgentId};
+
+let id = counter_type.agent_id_json(&json!({ "name": "main" }), None)?;
+let parsed = ParsedAgentId::new(id.as_str());
+let parts = parsed.parts()?;
+let current_type = get_agent_type_for(&parsed)?;
+let rebound = current_type.bind(&parsed)?;
+```
+
+`parts()` performs strict parsing. For packed values, use `ParsedAgentId::from_value(type_name, constructor_value, phantom_id)`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```scala
+val rebound = for {
+  pair <- prepared
+  id <- pair._1.agentId(constructor)
+  parsed = ParsedAgentId(id.value)
+  parts <- parsed.parts
+  currentType <- Reflection.getAgentTypeFor(parsed).flatMap(
+    _.toRight(GolemReflectError.Discovery("Agent or type unavailable"))
+  )
+  client <- currentType.bind(parsed)
+} yield (parts, client)
+```
+
+`parts` performs strict parsing. For packed values, use `ParsedAgentId.create(typeName, constructorValue, phantomId)`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```moonbit
+let id = counter_type.agent_id_json(constructor)
+let parsed : @reflection.ParsedAgentId = { value: id.value }
+let parts = parsed.parts()
+guard @reflection.get_agent_type_by_agent_id(parsed) is Some(target) else {
+  raise @reflection.ReflectError::Discovery("Agent or type unavailable")
+}
+let rebound = match parts.phantom_id {
+  None => target.get_value(parts.constructor_value)
+  Some(uuid) => target.resume_phantom_value(parts.constructor_value, uuid)
+}
+defer rebound.drop()
+```
+
+This binds a durable target. `parts()` performs strict parsing. For packed values, use `ParsedAgentId::create(type_name, constructor_value, phantom_id=...)`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+id := golem.Must(counterType.AgentID(constructor, golem.None[golem.UUID]()))
+raw := golem.Must(reflection.ParseRawAgentID(id))
+fmt.Println(raw.TypeName, golem.Must(raw.ConstructorJSON()))
+currentType, found := reflection.DiscoverAgentTypeByID(id)
+if !found {
+    panic("Agent or type unavailable")
+}
+rebound := golem.Must(currentType.Bind(id))
+```
+
+`golem.ParseAgentID[CounterID](id)` decodes into a caller-owned constructor type. For a packed typed constructor, use `reflection.MakeAgentID(typeName, constructor, phantom)`.
+  </Tabs.Tab>
+</Tabs>
+
+## Phantom and ephemeral agents
+
+A durable phantom has its own reusable ID. Allocate a new phantom, save its phantom ID, or address an existing phantom using that ID and the same constructor values.
+
+An ephemeral client is a logical handle for one-shot invocations, not a reusable final agent identity. Use its fresh or known-phantom factory rather than ordinary durable binding. Invocation metadata records the final agent ID and idempotency key. Do not rebind a completed ephemeral agent ID for another call.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+const fresh = counterType.client.newPhantom({ name: "main" })
+if (!("client" in fresh)) throw new Error("Expected a durable phantom")
+const known = counterType.client.getPhantom({ name: "main" }, fresh.phantomId)
+const result = await known.method("add").invoke({ by: 5 })
+```
+
+For an ephemeral discovered type, `newPhantom(input)` returns the client directly instead of a `{ client, agentId, phantomId }` bundle. `getPhantom(input, phantomId)` addresses a known phantom. For example:
+
+```typescript
+const requestType = getReflectedAgentType("RequestAgent")
+if (!requestType || requestType.mode !== "ephemeral") {
+  throw new Error("RequestAgent unavailable or not ephemeral")
+}
+const request = requestType.client.newPhantom({ route: "summarize" })
+if ("client" in request) throw new Error("Expected an ephemeral client")
+const result = await request.method("run").invoke({ text: "hello" })
+console.log(result.metadata.agentId, result.metadata.idempotencyKey)
+```
+
+This assumes `RequestAgent` has constructor field `route` and a `run(text)` method.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Inside `Effect.gen`, after narrowing `counterType.mode` to `"durable"`:
+
+```typescript
+const fresh = yield* counterType.client.newPhantom({ name: "main" })
+const known = yield* counterType.client.getPhantom({ name: "main" }, fresh.phantomId)
+const result = yield* (yield* known.method("add")).invoke({ by: 5 })
+```
+
+For an ephemeral type, `newPhantom` returns the client directly. For a `RequestAgent` with constructor field `route` and method `run(text)`:
+
+```typescript
+const requestType = yield* Reflection.getAgentType("RequestAgent")
+if (!requestType || requestType.mode !== "ephemeral") {
+  return yield* Effect.fail("RequestAgent unavailable or not ephemeral")
+}
+const request = yield* requestType.client.newPhantom({ route: "summarize" })
+const result = yield* (yield* request.method("run")).invoke({ text: "hello" })
+yield* Effect.log(result.metadata.agentId, result.metadata.idempotencyKey)
+```
+
+Use `getPhantom(input, phantomId)` when the phantom ID is already known.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```rust
+use golem_rust::NewPhantomClient;
+
+let fresh = counter_type.client().new_phantom_json(&json!({ "name": "main" }))?;
+if let NewPhantomClient::Durable(fresh) = fresh {
+    let known = counter_type.client().get_phantom_value(
+        counter_type.constructor_input().pack_json(&json!({ "name": "main" }))?,
+        fresh.phantom_id,
+    )?;
+    let result = known.method("add")?.invoke_json(&args).await?;
+}
+```
+
+For an ephemeral type, `new_phantom_json` returns `NewPhantomClient::Ephemeral(client)`. Use `get_phantom_value` for a known phantom. Ephemeral types reject ordinary durable `get` and existing-ID binding.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```scala
+val phantoms = prepared.flatMap { case (counterType, _) =>
+  counterType.client.newPhantom(constructor).flatMap {
+    case Right(fresh) =>
+      counterType.client.getPhantom(constructor, fresh.phantomId)
+    case Left(_) =>
+      Left(GolemReflectError.Identity("Expected a durable phantom"))
+  }
+}
+```
+
+The outer `Either` reports errors. Inside a successful `newPhantom`, `Right(bundle)` is a durable phantom and `Left(client)` is an ephemeral logical client. `getPhantom(constructor, phantomId)` supports known phantoms. Ephemeral types reject ordinary `get` and existing-ID binding.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```moonbit
+let fresh = counter_type.new_phantom_json(constructor)
+defer fresh.drop()
+
+// saved_phantom_id is a previously saved UUID.
+let known = counter_type.resume_phantom_json(constructor, saved_phantom_id)
+defer known.drop()
+let result = known.invoke_json("add", args)
+```
+
+For an ephemeral discovered type, use `ephemeral_json(constructor)` or `ephemeral_phantom_json(constructor, phantom_id)` instead of the durable factories. Both return clients that must be dropped. Durable clients expose `reusable_identity` and `phantom_id` as optional fields; save them when the phantom must be addressed again.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+fresh := golem.Must(counterType.NewPhantom(constructor))
+raw := golem.Must(reflection.ParseRawAgentID(fresh.AgentID()))
+phantomID, found := raw.PhantomID.Get()
+if !found {
+    panic("Expected a phantom ID")
+}
+known := golem.Must(counterType.Get(
+    constructor, reflection.WithPhantomID(phantomID),
+))
+```
+
+For ephemeral types, `NewPhantom` creates a fresh logical client. `Get` requires `WithPhantomID` to address a known phantom; ordinary `Get` and existing-ID `Bind` are rejected.
+  </Tabs.Tab>
+</Tabs>
+
+## Creation-time configuration
+
+You can override declared local configuration values, not secrets. Unknown paths and invalid values fail before RPC. Overrides apply only when the durable agent is created; calling an existing agent does not replace its persisted configuration.
+
+These examples assume that `CounterAgent` declares a local signed 32-bit value at `limits.max`.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+const configured = counterType.client.get(
+  { name: "configured" },
+  [{ path: ["limits", "max"], value: 10 }],
+)
+```
+
+For native overrides, use `getValue` with typed entries. `packConfigJson` converts JSON entries; `validateConfigValues` checks native entries. Existing IDs bind with `id.client(counterType, entries)`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```typescript
+const configured = yield* counterType.client.get(
+  { name: "configured" },
+  [{ path: ["limits", "max"], value: 10 }],
+)
+```
+
+Use `getValue` for native entries. Existing IDs use `counterType.bindWithJsonConfig(id, entries)` or `bindWithConfig` for native entries; these remain scoped Effects.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```rust
+let configured = counter_type.client().get_json_with_config(
+    &json!({ "name": "configured" }),
+    vec![(vec!["limits".to_string(), "max".to_string()], json!(10))],
+)?;
+```
+
+Use `get_value_with_config` for native `AgentConfigValue` entries. Existing IDs use `bind_with_json_config` or `bind_with_config`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```scala
+val configured = prepared.flatMap { case (counterType, _) =>
+  counterType.client.get(
+    Json.Object("name" -> Json.String("configured")),
+    List(ReflectedConfigJson(List("limits", "max"), Json.Number(BigDecimal(10))))
+  )
+}
+```
+
+Use `getValue` for native `golem.config.ConfigOverride` entries. Convert JSON entries with `counterType.packConfigJson(entries)` before passing them to `counterType.bind(id, nativeEntries)`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```moonbit
+let configured = counter_type.get_json_with_config(
+  Json::object({ "name": Json::string("configured") }),
+  [@reflection.ReflectedConfigJsonValue::{
+    path: ["limits", "max"],
+    value: Json::number(10.0),
+  }],
+)
+defer configured.drop()
+```
+
+Use `get_value_with_config` for native `ReflectedConfigValue` entries. Phantom and ephemeral factories also have configuration variants.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+configured := golem.Must(counterType.Get(
+    map[string]any{"name": "configured"},
+    reflection.WithConfigJSON([]string{"limits", "max"}, 10),
+))
+```
+
+Use `WithConfigValue` for a native value. `Get`, `NewPhantom`, and `Bind` accept configuration options. Caller-defined full clients can declare a typed configuration with `DefineConfiguredFullAgentClient`.
+  </Tabs.Tab>
+</Tabs>
+
+## Trigger, schedule, and cancel calls
+
+Awaited calls return results and invocation metadata. Triggered calls return metadata without waiting for a result. Scheduled calls return a cancellation handle as well as metadata. Metadata contains the target agent ID and idempotency key.
+
+These examples use an application-supplied absolute time `at`. Cancelling observation of a running call does not undo remote side effects or prove that the invocation never ran.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+const method = client.method("add")
+const triggered = method.trigger({ by: 5 })
+const scheduled = method.schedule(at, { by: 5 })
+scheduled.cancellationToken.cancel()
+
+const abort = new AbortController()
+const pending = method.invoke({ by: 5 }, abort.signal)
+abort.abort()
+try {
+  await pending
+} catch (error) {
+  console.error(error)
+}
+```
+
+`at` has `seconds: bigint` and `nanoseconds: number`. An `AbortSignal` cancels an awaited call's observation. Inspect structured remote errors with `isRemoteCallError`, not by parsing messages.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```typescript
+const method = yield* client.method("add")
+const triggered = yield* method.trigger({ by: 5 })
+const scheduled = yield* method.schedule(at, { by: 5 })
+yield* scheduled.cancel
+```
+
+`at` has `seconds: bigint` and `nanoseconds: number`. Keep the schedule's scope open while its cancellation handle is needed. Fiber interruption cancels observation of an awaited call; failures remain typed Effect errors.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```rust
+let method = client.method("add")?;
+let triggered = method.trigger_value(add.input().pack_json(&args)?)?;
+let scheduled = method.schedule_value(at, add.input().pack_json(&args)?)?;
+scheduled.cancellation_token.cancel();
+
+let pending = method.pending_value(add.input().pack_json(&args)?)?;
+pending.cancel();
+let completion = pending.await;
+```
+
+`at` is `golem_rust::ScheduledTime`. Pending calls allow explicit cancellation; cancellation and completion can race. Trigger and schedule use native input values.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```scala
+val method = for {
+  pair <- prepared
+  client <- pair._1.client.get(constructor)
+  add <- client.method("add")
+} yield add
+
+val triggered = method.flatMap(_.triggerJson(args))
+val scheduled = method.flatMap(_.scheduleJson(at, args))
+scheduled.foreach(_.cancellationToken.cancel())
+```
+
+`at` is `golem.Datetime`. Awaited reflected agent calls return a `Future`, with no public pending-call cancellation handle. Scheduled calls expose a cancellation token.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```moonbit
+let triggered = client.trigger_json("add", args)
+let scheduled = client.schedule_json(at, "add", args)
+defer scheduled.drop()
+scheduled.cancel()
+```
+
+Use the datetime supplied by your application's clock integration for `at`. Dropping a schedule releases its handle; cancelling is separate. Awaited agent calls have no public pending-call cancellation handle.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+triggered, err := client.Trigger("add", args)
+if err != nil {
+    panic(err)
+}
+scheduled := golem.Must(client.Schedule(at, "add", args))
+scheduled.Cancel()
+
+pending := golem.Must(client.CallAsync("add", args))
+pending.Cancel()
+_, err = pending.Get()
+```
+
+`at` is a `time.Time`. A pending call exposes its invocation `ID` immediately. Repeated `Get()` calls return the stored result; cancellation reports `golem.ErrCallCancelled` when it wins the race. Use `errors.As` to inspect `*golem.RemoteCallError` and its structured cause.
+  </Tabs.Tab>
+</Tabs>
+
+## Lend authority to an awaited call
+
+An awaited reflected call can borrow a scope card derived during the current invocation. The card extends the callee's authority for that call only. Triggered and scheduled calls cannot borrow scope cards. See [Permission cards](/v1.6/develop/cards) for deriving and managing cards; the snippets below assume an existing scope card.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+const result = await client.method("add").invoke({ by: 5 }, undefined, scopeCard)
+```
+
+The second argument is an optional `AbortSignal`. Pass `null` as the scope-card argument to suppress a client's default scope card.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```typescript
+const method = yield* client.method("add")
+const result = yield* method.invoke({ by: 5 }, { scopeCard })
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```rust
+let result = client.method("add")?
+    .invoke_json_with_scope_card(&args, &scope_card).await?;
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```scala
+val lentCall = for {
+  pair <- prepared
+  client <- pair._1.client.get(constructor)
+  method <- client.method("add")
+} yield method.invokeJson(args, Some(scopeCard))
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```moonbit
+let result = client.invoke_json("add", args, scope_card=scope_card)
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+result, invocation, err := client.Call(
+    "add", args, reflection.CallScopeCard(scopeCard),
+)
+```
+
+`client.WithScopeCard(scopeCard)` sets a default for awaited calls. A per-call option can override that default.
+  </Tabs.Tab>
+</Tabs>
+
+## Fully dynamic calls and native values
+
+Fully dynamic clients bind an ID without discovering a schema or validating inputs and outputs against one. Keep a discovered snapshot alongside the client when you want explicit validation. Packing input with that snapshot does not attach its output-validation policy to the dynamic client.
+
+These examples pack `add`'s JSON input, invoke dynamically, and validate and decode the native result. For streaming methods, use native value APIs, transfer owned inputs only once, and consume or close returned streams before releasing the client or scope. JSON helpers cannot transport streams, futures, or opaque capabilities. Prefer a typed client when the streaming contract is known at build time.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+const id = counterType.agentId({ name: "main" })
+const input = add.input.packJson({ by: 5 })
+const result = await id.dynamicClient().method("add").invokeValue(input)
+if (!add.output || result.value === undefined) {
+  throw new Error("add must return a value")
+}
+const checked = add.output.validateValue(result.value)
+if (!checked.success) throw new Error(JSON.stringify(checked.issues))
+const total = add.output.unpackJson(result.value)
+```
+
+Dynamic methods also expose `triggerValue` and `scheduleValue`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Inside `Effect.gen` and an open scope:
+
+```typescript
+const id = yield* counterType.agentId({ name: "main" })
+const input = add.input.packJson({ by: 5 })
+const dynamic = yield* id.dynamicClient()
+const result = yield* dynamic.method("add").invoke(input)
+if (!add.output || result.value === undefined) {
+  return yield* Effect.fail("add must return a value")
+}
+const checked = add.output.validateValue(result.value)
+if (!checked.success) return yield* Effect.fail(checked.issues)
+const total = add.output.unpackJson(result.value)
+```
+
+Dynamic methods also expose `trigger` and `schedule`, both taking native values.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```rust
+let id = counter_type.agent_id_json(&json!({ "name": "main" }), None)?;
+let input = add.input().pack_json(&args)?;
+let result = id.dynamic_client()?.method("add").invoke_value(input).await?;
+let output = add.output().ok_or_else(|| {
+    GolemReflectError::MalformedRemoteOutput("add declares unit output".into())
+})?;
+let value = result.value.ok_or_else(|| {
+    GolemReflectError::MalformedRemoteOutput("add returned no value".into())
+})?;
+output.validate_value(&value)?;
+let total = output.unpack_json(&value)?;
+```
+
+Dynamic methods also expose native trigger, pending, and schedule operations.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+With an implicit `ExecutionContext`, the outer `Either` prepares a `Future`:
+
+```scala
+val dynamicCall = for {
+  pair <- prepared.left.map(_.message)
+  input <- pair._2.input.packJson(args).left.map(_.message)
+  id <- pair._1.agentId(constructor).left.map(_.message)
+  dynamic <- id.dynamicClient.left.map(_.message)
+} yield dynamic.method("add").invokeValue(input).map {
+  _.left.map(_.message).flatMap { result =>
+    for {
+      output <- pair._2.output.toRight("add declares unit output")
+      value <- result.value.toRight("add returned no value")
+      _ <- output.validateValue(value)
+        .left.map(_.map(_.message).mkString("; "))
+      total <- output.unpackJson(value).left.map(_.message)
+    } yield total
+  }
+}
+```
+
+Dynamic methods also expose `triggerValue` and `scheduleValue`. Handle errors in both preparation and the asynchronous result.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```moonbit
+let id = counter_type.agent_id_json(constructor)
+let input = add.input().pack_json(args)
+let dynamic = @reflection.DynamicAgentClient::from_agent_id(id)
+defer dynamic.drop()
+
+let result = dynamic.invoke_value("add", input)
+guard result.value is Some(value) else {
+  raise @reflection.ReflectError::Schema("add returned no value")
+}
+defer @model.drop_owned_capabilities(value)
+guard add.output() is Some(output) else {
+  raise @reflection.ReflectError::Schema("add declares unit output")
+}
+output.validate_value(value)
+let total = output.unpack_json(value)
+```
+
+`unpack_json` is async. Dynamic clients also expose `trigger_value` and `schedule_value`. Release owned capabilities in returned values even when validation fails.
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+id := golem.Must(counterType.AgentID(constructor, golem.None[golem.UUID]()))
+input := golem.Must(add.Input().PackJSON(args))
+dynamic := golem.Must(reflection.BindAgentID(id))
+result, _, err := dynamic.Call("add", input)
+if err != nil {
+    panic(err)
+}
+value, present := result.Get()
+output, declared := add.Output().Get()
+if !present || !declared {
+    panic("add must declare and return a value")
+}
+if err := output.Validate(value); err != nil {
+    panic(err)
+}
+total := golem.Must(output.UnpackJSON(value))
+```
+
+Dynamic clients also expose `CallAsync`, `Trigger`, and `Schedule` with native inputs.
+  </Tabs.Tab>
+</Tabs>
+
+Reflected non-awaited calls have additional restrictions for live streams. Do not use the JSON, trigger, or schedule snippets above as streaming examples; use awaited native calls and follow the SDK's resource rules.
+
+## Discover and call tools
+
+Reflection also exposes native tools. A tool contains a command tree, not agent methods. Inspect the selected command's arguments, input schema, result schema, and stream requirements. A namespace can contain subcommands without having a callable body.
+
+These examples assume a visible tool named `reports` with a callable `summary` command that accepts `name` and requires no input or output streams. Tool errors remain structured and are distinct from remote agent errors.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+
+```typescript
+import { getReflectedToolType } from "@golemcloud/golem-ts-sdk"
+
+const reports = getReflectedToolType("reports")
+const summary = reports?.command(["summary"])
+if (!summary?.inputSchema) throw new Error("summary command unavailable")
+console.log(summary.inputSchema.toJsonSchema())
+const result = await summary.invokeJson({ name: "main" })
+```
+
+Use `invokeValue` for native values. `startJson`/`startValue` expose separate `stdout`, `stderr`, result, collection, and cancellation handles; consume or cancel a started operation. For caller-owned codecs and fully dynamic tool clients, see [Calling tools](/v1.6/how-to-guides/ts/golem-call-tool-ts).
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Inside `Effect.gen` and an open scope:
+
+```typescript
+const reports = yield* Reflection.getToolType("reports")
+if (!reports) return yield* Effect.fail("reports unavailable")
+const summary = reports.client.command(["summary"])
+const result = yield* summary.invokeJson({ name: "main" })
+```
+
+`Reflection.getAllToolTypes()` lists visible tools. Use `invokeValue` for native inputs. `startJson`/`startValue` expose output, result, collection, and cancellation Effects. Keep stream consumption inside the scope; see [Effect tools and middleware](/v1.6/how-to-guides/effect/golem-tools-middleware-effect).
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+Inside an async function whose error type can contain tool reflection errors:
+
+```rust
+let reports = golem_rust::get_tool_type("reports")?;
+let summary = reports.command(&["summary"])?;
+let input_schema = summary.input_schema().to_json_schema(true);
+let result = summary.invoke_json(&json!({ "name": "main" })).await?;
+```
+
+`get_all_tool_types` lists visible tools. Use native value and started-invocation APIs for streams and explicit cancellation; see [Calling tools](/v1.6/how-to-guides/rust/golem-call-tool-rust).
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```scala
+val toolCall = for {
+  reports <- Reflection.getToolType("reports")
+  summary <- reports.command(List("summary"))
+} yield summary.invokeJson(Json.Object("name" -> Json.String("main")))
+```
+
+`Reflection.getAllToolTypes()` lists visible tools. Check that a selected node has a command body before invocation. Started calls expose output streams and cancellation; see [Calling tools](/v1.6/how-to-guides/scala/golem-call-tool-scala).
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```moonbit
+let reports = @reflection.get_tool_type("reports")
+let summary = reports.command(["summary"])
+let input_schema = summary.input_schema().to_json_schema()
+let result = summary.invoke_json(
+  Json::object({ "name": Json::string("main") }),
+)
+```
+
+`get_all_tool_types()` lists visible tools; `is_callable()` distinguishes namespace nodes. A started tool invocation exposes output streams, `get`, `collect`, `cancel`, and `drop`; see [Calling tools](/v1.6/how-to-guides/moonbit/golem-call-tool-moonbit).
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+```go
+reports, found := reflection.DiscoverTool("reports")
+if !found {
+    panic("reports unavailable")
+}
+summary, found := reports.Command([]string{"summary"})
+if !found || !summary.Callable() {
+    panic("summary command unavailable")
+}
+result, err := reports.Bind().Call(summary.Path(), map[string]any{"name": "main"})
+```
+
+`reflection.DiscoverTools()` lists visible tools. Use `Start` for output streams and cancellation, and native values for dynamic calls; see [Calling tools](/v1.6/how-to-guides/go/golem-call-tool-go).
+  </Tabs.Tab>
+</Tabs>
+
+## Validation boundaries
+
+Static and discovered clients validate what they know before opening RPC.
+Discovered schemas include numeric and text restrictions, nested structures,
+defaults, and tool command constraints. Reflected JSON helpers provide
+canonical JSON conversion, and JSON Schema projections make the same shape
+available to JSON-based integrations. An omitted optional record field and an
+explicit `null` both decode as absent; re-encoding may include the field with
+`null`, and optional fields are omitted from JSON Schema `required`.
+
+Canonical JSON uses numbers for integers through 32 bits. Signed and unsigned
+64-bit integers are canonical decimal strings. Duration is
+`{ "nanoseconds": "..." }`, and a quantity's `mantissa` is also a signed decimal
+string. A leading `+`, leading zeroes, `-0`, the wrong JSON type, and values
+outside the declared integer range are rejected. Reflection JSON Schema uses
+matching string patterns and exact string-valued bounds.
+
+Streams, futures, and opaque capabilities cannot be represented as reflected
+JSON and must use schema-native value APIs. Their reflection-specific JSON
+Schema projection is unsatisfiable.
+
+The host remains authoritative for visibility, authorization, effective
+configuration, durable identity resolution, and the deployed target schema.
+Awaited calls also verify whether an output is required and whether the
+returned value matches the declared schema. Remote agent failures, tool
+failures, and custom error payloads remain structured so callers can handle
+them without parsing messages.
+
+Configuration overrides apply when an agent is created. Rebinding an existing
+durable identity does not reconfigure that agent; it keeps its persisted
+initial configuration.
+
+## Further examples
+
+For concrete APIs and language recipes, see the [common reflection
+guide](/v1.6/how-to-guides/common/golem-agent-reflection) and the SDK guides for
+[Rust](/v1.6/how-to-guides/rust/golem-agent-reflection-rust),
+[TypeScript](/v1.6/how-to-guides/ts/golem-agent-reflection-ts),
+[Effect](/v1.6/how-to-guides/effect/golem-agent-reflection-effect),
+[Scala](/v1.6/how-to-guides/scala/golem-agent-reflection-scala),
+[MoonBit](/v1.6/how-to-guides/moonbit/golem-agent-reflection-moonbit), and
+[Go](/v1.6/how-to-guides/go/golem-agent-reflection-go).

@@ -23,7 +23,7 @@ mod tests;
 
 pub use crate::base_model::OplogIndex;
 pub use crate::base_model::oplog::{
-    OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex, public_oplog_entry,
+    OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex, attachment, public_oplog_entry,
 };
 pub use payload::*;
 pub use public_types::*;
@@ -31,23 +31,173 @@ pub use raw_types::*;
 
 use crate::model::component::ComponentRevision;
 
+/// The Store an oplog entry was recorded from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityAttribution {
+    /// The entry kind does not record which Store appended it.
+    Unattributed,
+    /// Appended by the primary agent Store.
+    Agent,
+    /// Appended by the entity body whose entity invocation `Start` is at this index.
+    EntityBody(OplogIndex),
+}
+
+impl EntityAttribution {
+    /// The attribution of an entry recorded with the given `entity_parent_start_index` field.
+    pub fn of_store(entity_parent_start_index: Option<OplogIndex>) -> Self {
+        match entity_parent_start_index {
+            Some(start) => Self::EntityBody(start),
+            None => Self::Agent,
+        }
+    }
+}
+
 impl OplogEntry {
-    pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
-        matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
+    pub fn entity_parent_start_index(&self) -> Option<OplogIndex> {
+        match self.entity_attribution() {
+            EntityAttribution::EntityBody(start) => Some(start),
+            EntityAttribution::Agent | EntityAttribution::Unattributed => None,
+        }
+    }
+
+    /// The Store an entry was recorded from.
+    pub fn entity_attribution(&self) -> EntityAttribution {
+        match self {
+            OplogEntry::Error {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::Jump {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CreateResource {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::DropResource {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::SetRetryPolicy {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::RemoveRetryPolicy {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardEventQueued {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardInstalled {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardInstallFailed {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardRevoked {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardExpired {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardDerived {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferStarted {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferred {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardRevokedCascade {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferConfirmed {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamRegistered {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamItems {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamEnd {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamCancel {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamSession {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::ToolAttachmentRead {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::ToolAttachmentControl {
+                entity_parent_start_index,
+                ..
+            } => EntityAttribution::of_store(*entity_parent_start_index),
+            OplogEntry::Create { .. }
+            | OplogEntry::Start { .. }
+            | OplogEntry::End { .. }
+            | OplogEntry::Cancelled { .. }
+            | OplogEntry::CompletionDiscarded { .. }
+            | OplogEntry::CompletionDelivered { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::RecoverySucceeded { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::Log { .. }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::BeginRemoteTransaction { .. }
+            | OplogEntry::PreCommitRemoteTransaction { .. }
+            | OplogEntry::PreRollbackRemoteTransaction { .. }
+            | OplogEntry::CommittedRemoteTransaction { .. }
+            | OplogEntry::RolledBackRemoteTransaction { .. }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. }
+            | OplogEntry::HostStreamFrame { .. } => EntityAttribution::Unattributed,
+        }
     }
 
     /// True if `self` is the scope-`End` that closes the scope-`Start` at `idx`.
     ///
     /// Scope `End` entries reference their opening `Start` via `start_index`, so this is
-    /// a precise match (the exact equivalent of the old `EndRemoteWrite { begin_index }`
-    /// pairing). Nesting and interleaving are handled correctly because only the `End`
+    /// a precise match. Nesting and interleaving are handled correctly because only the `End`
     /// closing the `Start` at `idx` matches.
     pub fn is_end_remote_write(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::End { start_index, .. } if *start_index == idx)
-    }
-
-    pub fn is_end_remote_write_s<S>(&self, idx: OplogIndex, _: &S) -> bool {
-        self.is_end_remote_write(idx)
     }
 
     pub fn is_pre_commit_remote_transaction(&self, idx: OplogIndex) -> bool {
@@ -62,15 +212,7 @@ impl OplogEntry {
         self.is_pre_commit_remote_transaction(idx) || self.is_pre_rollback_remote_transaction(idx)
     }
 
-    pub fn is_pre_remote_transaction_s<S>(&self, idx: OplogIndex, _: &S) -> bool {
-        self.is_pre_commit_remote_transaction(idx) || self.is_pre_rollback_remote_transaction(idx)
-    }
-
     pub fn is_committed_remote_transaction(&self, idx: OplogIndex) -> bool {
-        matches!(self, OplogEntry::CommittedRemoteTransaction { begin_index, .. } if *begin_index == idx)
-    }
-
-    pub fn is_committed_remote_transaction_s<S>(&self, idx: OplogIndex, _: &S) -> bool {
         matches!(self, OplogEntry::CommittedRemoteTransaction { begin_index, .. } if *begin_index == idx)
     }
 
@@ -78,142 +220,13 @@ impl OplogEntry {
         matches!(self, OplogEntry::RolledBackRemoteTransaction { begin_index, .. } if *begin_index == idx)
     }
 
-    pub fn is_rolled_back_remote_transaction_s<S>(&self, idx: OplogIndex, _: &S) -> bool {
-        matches!(self, OplogEntry::RolledBackRemoteTransaction { begin_index, .. } if *begin_index == idx)
-    }
-
     pub fn is_end_remote_transaction(&self, idx: OplogIndex) -> bool {
         self.is_committed_remote_transaction(idx) || self.is_rolled_back_remote_transaction(idx)
     }
 
-    pub fn is_end_remote_transaction_s<S>(&self, idx: OplogIndex, s: &S) -> bool {
-        self.is_committed_remote_transaction_s(idx, s)
-            || self.is_rolled_back_remote_transaction_s(idx, s)
-    }
-
-    /// Checks that an "intermediate oplog entry" between a scope `Start` and its matching `End`
-    /// does not represent a *foreign* side effect — one that does not belong to the scope rooted at
-    /// `state.root`. Membership is determined by `parent_start_index` nesting, tracked transitively
-    /// in [`ScopeScanState`] (a grandchild's parent is an inner scope, not the root), so it must be
-    /// used together with [`OplogEntry::track_scope_membership`] as the scan's state updater.
-    ///
-    /// Foreign benign operations (`ReadLocal`, `WriteLocal`, `ReadRemote`) are allowed to interleave;
-    /// foreign external writes and foreign batched/transaction scopes are rejected.
-    pub fn no_concurrent_side_effect(
-        &self,
-        _begin_idx: OplogIndex,
-        state: &ScopeScanState,
-    ) -> bool {
-        match self {
-            OplogEntry::Start {
-                durable_function_type,
-                ..
-            } => {
-                if state.current_is_descendant_scope {
-                    // A (transitive) descendant scope of the root — part of this scope.
-                    true
-                } else {
-                    // A foreign scope: only benign reads/local writes may interleave.
-                    matches!(
-                        durable_function_type,
-                        DurableFunctionType::ReadLocal
-                            | DurableFunctionType::WriteLocal
-                            | DurableFunctionType::ReadRemote
-                    )
-                }
-            }
-            // `End` entries are pure markers and do not themselves cause a side effect.
-            OplogEntry::End { .. } => true,
-            OplogEntry::Cancelled { .. } => true,
-            // A delayed terminal for an asynchronous host operation can be
-            // appended after the guest invocation result has already been
-            // recorded (for example a dropped P3 HTTP response body whose
-            // cleanup is driven by resource destruction). The invocation
-            // result marker is not itself a remote side effect, so it must
-            // not make the owning durable scope unreplayable.
-            OplogEntry::AgentInvocationFinished { .. } => true,
-            // Keep this classification exhaustive: a new oplog entry must not be assumed to be
-            // free of concurrent side effects until its semantics have been reviewed.
-            OplogEntry::Create { .. }
-            | OplogEntry::CompletionDiscarded { .. }
-            | OplogEntry::CompletionDelivered { .. }
-            | OplogEntry::AgentInvocationStarted { .. }
-            | OplogEntry::Suspend { .. }
-            | OplogEntry::Error { .. }
-            | OplogEntry::NoOp { .. }
-            | OplogEntry::Jump { .. }
-            | OplogEntry::Interrupted { .. }
-            | OplogEntry::Exited { .. }
-            | OplogEntry::BeginAtomicRegion { .. }
-            | OplogEntry::EndAtomicRegion { .. }
-            | OplogEntry::PendingAgentInvocation { .. }
-            | OplogEntry::PendingUpdate { .. }
-            | OplogEntry::SuccessfulUpdate { .. }
-            | OplogEntry::FailedUpdate { .. }
-            | OplogEntry::GrowMemory { .. }
-            | OplogEntry::CreateResource { .. }
-            | OplogEntry::DropResource { .. }
-            | OplogEntry::Log { .. }
-            | OplogEntry::Restart { .. }
-            | OplogEntry::ActivatePlugin { .. }
-            | OplogEntry::DeactivatePlugin { .. }
-            | OplogEntry::Revert { .. }
-            | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
-            | OplogEntry::BeginRemoteTransaction { .. }
-            | OplogEntry::PreCommitRemoteTransaction { .. }
-            | OplogEntry::PreRollbackRemoteTransaction { .. }
-            | OplogEntry::CommittedRemoteTransaction { .. }
-            | OplogEntry::RolledBackRemoteTransaction { .. }
-            | OplogEntry::Snapshot { .. }
-            | OplogEntry::OplogProcessorCheckpoint { .. }
-            | OplogEntry::SetRetryPolicy { .. }
-            | OplogEntry::RemoveRetryPolicy { .. }
-            | OplogEntry::CardEventQueued { .. }
-            | OplogEntry::CardInstalled { .. }
-            | OplogEntry::CardInstallFailed { .. }
-            | OplogEntry::CardRevoked { .. }
-            | OplogEntry::CardExpired { .. }
-            | OplogEntry::CardDerived { .. }
-            | OplogEntry::CardTransferStarted { .. }
-            | OplogEntry::CardTransferred { .. }
-            | OplogEntry::CardRevokedCascade { .. }
-            | OplogEntry::CardTransferConfirmed { .. }
-            | OplogEntry::HostStreamFrame { .. }
-            | OplogEntry::StreamRegistered { .. }
-            | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
-            | OplogEntry::StreamSession { .. } => true,
-        }
-    }
-
-    /// State updater paired with [`OplogEntry::no_concurrent_side_effect`]. For each scanned entry
-    /// (with its own `idx`) it grows the set of transitive descendant scopes of `state.root`: a
-    /// `Start` whose `parent_start_index` is the root or any
-    /// already-known descendant becomes a descendant itself. `current_is_descendant_scope` records
-    /// the decision for the entry just processed, so the immediately following
-    /// `no_concurrent_side_effect` check can use it.
-    pub fn track_scope_membership(&self, idx: OplogIndex, state: &mut ScopeScanState) {
-        state.current_is_descendant_scope = false;
-        if let OplogEntry::Start {
-            parent_start_index: Some(parent),
-            ..
-        } = self
-            && (*parent == state.root || state.descendants.contains(parent))
-        {
-            state.descendants.insert(idx);
-            state.current_is_descendant_scope = true;
-        }
-    }
-
     pub fn specifies_component_revision(&self) -> Option<ComponentRevision> {
         match self {
-            OplogEntry::Create {
-                component_revision, ..
-            } => Some(*component_revision),
+            OplogEntry::Create { parameters, .. } => Some(parameters.component_revision),
             OplogEntry::SuccessfulUpdate {
                 target_revision, ..
             } => Some(*target_revision),
@@ -228,12 +241,10 @@ impl OplogEntry {
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
-            | OplogEntry::NoOp { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
             | OplogEntry::Exited { .. }
-            | OplogEntry::BeginAtomicRegion { .. }
-            | OplogEntry::EndAtomicRegion { .. }
             | OplogEntry::PendingAgentInvocation { .. }
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
@@ -242,19 +253,18 @@ impl OplogEntry {
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }
             | OplogEntry::PreRollbackRemoteTransaction { .. }
             | OplogEntry::CommittedRemoteTransaction { .. }
             | OplogEntry::RolledBackRemoteTransaction { .. }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
@@ -273,23 +283,11 @@ impl OplogEntry {
             | OplogEntry::StreamItems { .. }
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
-            | OplogEntry::StreamSession { .. } => None,
+            | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentControl { .. }
+            | OplogEntry::ToolAttachmentRead { .. } => None,
         }
     }
-}
-
-/// Mutable state carried by a forward scan that validates a durable scope rooted at `root` has no
-/// foreign concurrent side effects (see [`OplogEntry::no_concurrent_side_effect`] and
-/// [`OplogEntry::track_scope_membership`]).
-#[derive(Debug, Clone)]
-pub struct ScopeScanState {
-    /// The `Start` index of the scope being validated.
-    pub root: OplogIndex,
-    /// All transitive descendant scope `Start` indices seen so far.
-    pub descendants: std::collections::HashSet<OplogIndex>,
-    /// Whether the entry processed most recently by `track_scope_membership` was a descendant scope
-    /// `Start`. Read by the immediately following `no_concurrent_side_effect` check.
-    pub current_is_descendant_scope: bool,
 }
 
 /// Tracks the transitive durable-call tree rooted at one `Start` for owner-oplog projections.
@@ -297,8 +295,6 @@ pub struct ScopeScanState {
 pub struct OplogScopeProjection {
     root: OplogIndex,
     starts: std::collections::HashSet<OplogIndex>,
-    previous_index: Option<OplogIndex>,
-    previous_included_start: Option<OplogIndex>,
 }
 
 impl OplogScopeProjection {
@@ -306,26 +302,20 @@ impl OplogScopeProjection {
         Self {
             root,
             starts: std::collections::HashSet::from([root]),
-            previous_index: None,
-            previous_included_start: None,
         }
     }
 
     /// Returns whether `entry` belongs to the rooted call tree and records descendant Starts for
-    /// subsequent entries. The one adjacency rule is for `BeginRemoteTransaction`, which is
-    /// atomically appended as a pair with its immediately preceding transaction scope Start.
+    /// subsequent entries. Transaction markers reference their owning scope Start explicitly.
     pub fn includes(&mut self, index: OplogIndex, entry: &OplogEntry) -> bool {
-        let mut included_start = false;
-        let included = match entry {
+        match entry {
             OplogEntry::Start {
                 parent_start_index, ..
             } => {
                 if index == self.root {
-                    included_start = true;
                     true
                 } else if parent_start_index.is_some_and(|parent| self.starts.contains(&parent)) {
                     self.starts.insert(index);
-                    included_start = true;
                     true
                 } else {
                     false
@@ -343,79 +333,11 @@ impl OplogScopeProjection {
             | OplogEntry::Log {
                 parent_start_index: Some(parent_start_index),
                 ..
-            }
-            | OplogEntry::StartSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: Some(parent_start_index),
-                ..
             } => self.starts.contains(parent_start_index),
-            OplogEntry::Error { retry_from, .. } => self.starts.contains(retry_from),
-            OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(begin),
-                ..
-            } => self.starts.contains(begin),
-            OplogEntry::BeginRemoteTransaction {
-                original_begin_index: None,
-                ..
-            } => self
-                .previous_index
-                .zip(self.previous_included_start)
-                .is_some_and(|(previous, start)| previous == start && previous.next() == index),
-            OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
-            | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
-            | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
-            | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => {
-                self.starts.contains(begin_index)
-            }
-            // Keep exclusions explicit so adding an oplog variant requires deciding whether and
-            // how it belongs to a durable invocation scope.
-            OplogEntry::Create { .. }
-            | OplogEntry::AgentInvocationStarted { .. }
-            | OplogEntry::AgentInvocationFinished { .. }
-            | OplogEntry::Suspend { .. }
-            | OplogEntry::NoOp { .. }
+            OplogEntry::Error { .. }
             | OplogEntry::Jump { .. }
-            | OplogEntry::Interrupted { .. }
-            | OplogEntry::Exited { .. }
-            | OplogEntry::BeginAtomicRegion { .. }
-            | OplogEntry::EndAtomicRegion { .. }
-            | OplogEntry::PendingAgentInvocation { .. }
-            | OplogEntry::PendingUpdate { .. }
-            | OplogEntry::SuccessfulUpdate { .. }
-            | OplogEntry::FailedUpdate { .. }
-            | OplogEntry::GrowMemory { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
-            | OplogEntry::Log {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::Restart { .. }
-            | OplogEntry::ActivatePlugin { .. }
-            | OplogEntry::DeactivatePlugin { .. }
-            | OplogEntry::Revert { .. }
-            | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::Snapshot { .. }
-            | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
             | OplogEntry::CardEventQueued { .. }
@@ -432,21 +354,48 @@ impl OplogScopeProjection {
             | OplogEntry::StreamItems { .. }
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
-            | OplogEntry::StreamSession { .. } => false,
-        };
-        self.previous_index = Some(index);
-        self.previous_included_start = included_start.then_some(index);
-        included
-    }
-}
-
-impl ScopeScanState {
-    /// Creates a fresh scan state for the scope rooted at `root`.
-    pub fn new(root: OplogIndex) -> Self {
-        Self {
-            root,
-            descendants: std::collections::HashSet::new(),
-            current_is_descendant_scope: false,
+            | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentControl { .. }
+            | OplogEntry::ToolAttachmentRead { .. } => entry
+                .entity_parent_start_index()
+                .is_some_and(|parent| self.starts.contains(&parent)),
+            OplogEntry::BeginRemoteTransaction {
+                original_begin_index: begin,
+                ..
+            } => self.starts.contains(begin),
+            OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
+            | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
+            | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
+            | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => {
+                self.starts.contains(begin_index)
+            }
+            // Keep exclusions explicit so adding an oplog variant requires deciding whether and
+            // how it belongs to a durable invocation scope.
+            OplogEntry::Create { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::RecoverySucceeded { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::Log {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. } => false,
         }
     }
 }

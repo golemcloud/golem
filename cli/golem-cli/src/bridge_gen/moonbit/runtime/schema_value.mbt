@@ -20,9 +20,7 @@
 /// carry field names, case names, or named-ref identifiers — those come from the
 /// schema.
 ///
-/// Capability nodes (quantity, secret, quota-token) and the streaming nodes are
-/// not part of the agent IO surface exercised by the bridge and are
-/// intentionally omitted.
+/// Host-managed capabilities and futures are intentionally omitted.
 pub(all) enum SchemaValue {
   // Primitives
   BoolValue(Bool)
@@ -38,6 +36,7 @@ pub(all) enum SchemaValue {
   F64Value(Double)
   CharValue(Int)
   StringValue(String)
+  UuidValue(String)
   // Structural composites
   RecordValue(Array[SchemaValue])
   VariantValue(Int, SchemaValue?)
@@ -56,6 +55,8 @@ pub(all) enum SchemaValue {
   UrlValue(String)
   DatetimeValue(String)
   DurationValue(Int64)
+  QuantityValue(Int64, Int, String)
+  StreamReferenceValue(String?, String?)
   // Discriminated union
   UnionValue(String, SchemaValue)
 } derive(Debug, Eq)

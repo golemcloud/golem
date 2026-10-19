@@ -26,6 +26,15 @@ pub async fn extract_and_store_component_metadata(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
 ) -> anyhow::Result<ExtractedComponentMetadata> {
+    if let Some(metadata) = ctx
+        .extracted_metadata
+        .lock()
+        .unwrap()
+        .get(component_name)
+        .cloned()
+    {
+        return Ok(metadata);
+    }
     let component = ctx.application().component(component_name);
     let wasm = component.agent_type_extraction_source_wasm();
     let extracted_component_metadata = component.extracted_component_metadata(&wasm);
@@ -67,7 +76,7 @@ pub async fn extract_and_store_component_metadata(
         )
         .await?;
 
-    match metadata {
+    let metadata = match metadata {
         Some(metadata) => Ok(metadata),
         None => {
             let metadata =
@@ -77,7 +86,12 @@ pub async fn extract_and_store_component_metadata(
                 .add_cached_component_metadata(component_name, metadata)
                 .await
         }
-    }
+    }?;
+    ctx.extracted_metadata
+        .lock()
+        .unwrap()
+        .insert(component_name.clone(), metadata.clone());
+    Ok(metadata)
 }
 
 /// Same as [`extract_and_store_component_metadata`], but returns only the

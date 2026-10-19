@@ -1,0 +1,499 @@
+pub mod repository;
+mod snapshot_test;
+
+use golem_rust::bindings::golem::agent::host::Datetime;
+use golem_rust::bindings::golem::api::context::start_span;
+use golem_rust::quota::QuotaToken;
+use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
+
+/// Resource name the chaos suite's quota stream reserves against. Must match the
+/// resource the chaos prep creates on the environment — see
+/// `integration_tests::chaos::prep`.
+const CHAOS_QUOTA_RESOURCE: &str = "chaos-quota";
+
+#[ctor::ctor]
+fn reserve_instantiation_memory_for_growth_counter() {
+    // This constructor runs for every agent exported by the component. Agent IDs
+    // embed the exported type name, so this predicate keeps the extra allocation
+    // from changing the memory footprint of the other agent types.
+    if std::env::var("GOLEM_AGENT_ID")
+        .is_ok_and(|agent_id| agent_id.contains("InstantiationGrowthCounter"))
+    {
+        let previous_pages = core::arch::wasm32::memory_grow::<0>(16);
+        assert_ne!(previous_pages, usize::MAX, "test memory growth failed");
+    }
+}
+
+#[agent_definition]
+trait InstantiationGrowthCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    fn delayed_increment(&mut self, delay_millis: u64) -> u32;
+}
+
+struct InstantiationGrowthCounterImpl {
+    count: u32,
+    _id: String,
+}
+
+#[agent_implementation]
+impl InstantiationGrowthCounter for InstantiationGrowthCounterImpl {
+    fn new(id: String) -> Self {
+        Self { count: 0, _id: id }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn delayed_increment(&mut self, delay_millis: u64) -> u32 {
+        std::thread::sleep(std::time::Duration::from_millis(delay_millis));
+        self.increment()
+    }
+}
+
+#[agent_definition]
+trait Counter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    async fn increment_through_rpc(&mut self) -> u32;
+    async fn increment_through_rpc_to_ephemeral(&mut self) -> u32;
+    async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32;
+    async fn ephemeral_ids_through_rpc(&mut self) -> (String, String);
+
+    /// Reads the counter without touching it. Chaos scenarios compare this
+    /// against the number of increments they submitted, so the read itself must
+    /// not move the number it is measuring.
+    ///
+    /// Named `count` rather than `get` because the generated RPC client already
+    /// exposes `CounterClient::get(name)` as its constructor — an agent method
+    /// called `get` shadows it and breaks every client call site.
+    fn count(&self) -> u32;
+
+    /// Which build of this component is serving the agent.
+    ///
+    /// Read back by S5, which updates the component underneath running agents
+    /// and then has to prove they came up on the new one. Component metadata
+    /// reports the revision the platform *believes* an agent is on; this
+    /// reports what the code actually executing says it is, which is the claim
+    /// the scenario needs. `agent-counters-v2` is byte-for-byte this component
+    /// with the number changed.
+    fn component_version(&self) -> u32;
+
+    /// Waits `millis`, then increments, returning the post-increment count.
+    ///
+    /// The in-flight chaos scenarios need an operation that is still running
+    /// when a pod is killed. Sleeping rather than spinning is the point: a
+    /// spin would pin a core per concurrent operation, which turns a
+    /// crash-recovery experiment into a saturation experiment.
+    ///
+    /// The increment lands *after* the wait, so the state change falls inside
+    /// the fault window rather than before it — that is the mutation whose
+    /// exactly-once behaviour is under test.
+    fn sleep_and_increment(&mut self, millis: u32) -> u32;
+}
+
+struct CounterImpl {
+    count: u32,
+    id: String,
+}
+
+#[agent_implementation]
+impl Counter for CounterImpl {
+    fn new(id: String) -> Self {
+        Self { id, count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    async fn increment_through_rpc(&mut self) -> u32 {
+        let mut client = CounterClient::get(format!("{}-inner", self.id));
+        client.increment().await
+    }
+
+    async fn increment_through_rpc_to_ephemeral(&mut self) -> u32 {
+        let mut client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral", self.id));
+        client.increment().await.value
+    }
+
+    async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
+        let mut client = EphemeralSingletonCounterClient::new_phantom();
+        client.increment().await.value
+    }
+
+    async fn ephemeral_ids_through_rpc(&mut self) -> (String, String) {
+        let client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral-ids", self.id));
+        let id1 = client.get_id().await.value;
+        let id2 = client.get_id().await.value;
+        (id1, id2)
+    }
+
+    fn count(&self) -> u32 {
+        self.count
+    }
+
+    fn component_version(&self) -> u32 {
+        2
+    }
+
+    fn sleep_and_increment(&mut self, millis: u32) -> u32 {
+        std::thread::sleep(std::time::Duration::from_millis(millis as u64));
+        self.count += 1;
+        self.count
+    }
+}
+
+/// Counter that holds a quota token for its whole lifetime.
+///
+/// The point is the *lease*, not the counting. Acquiring a `QuotaToken` makes
+/// the executor take a quota lease from the shard-manager and keep renewing it
+/// — on golem-dev, every 10s against a 60s lease. Holding the token in agent
+/// state keeps that lease live, which is what puts continuous traffic on the
+/// executor→shard-manager link.
+///
+/// That link is otherwise idle during a chaos run: `invoke_and_await` goes
+/// client → worker-service → executor and never touches the shard-manager, and
+/// the shard-manager's health check asks the Kubernetes API rather than the
+/// executor. A partition between the two is invisible to everything else, which
+/// is exactly why S1's first three runs measured nothing.
+#[agent_definition]
+trait QuotaCounter {
+    fn new(id: String) -> Self;
+
+    /// Reserves and commits one unit against the held token, then increments.
+    ///
+    /// Returns the post-increment count, like `Counter.increment`, so the same
+    /// read-back and exactly-once machinery applies unchanged. A reservation
+    /// the platform refuses is reported rather than panicking: under a
+    /// partition, refusal is a legitimate outcome and the scenario needs to
+    /// record it, not die of it.
+    fn reserve_and_increment(&mut self) -> u32;
+
+    /// How many reservations were refused. Read back after the run to see what
+    /// losing the lease actually cost.
+    fn refused(&self) -> u32;
+
+    fn count(&self) -> u32;
+}
+
+struct QuotaCounterImpl {
+    _id: String,
+    count: u32,
+    refused: u32,
+    /// Held for the agent's lifetime — dropping it would release the lease and
+    /// stop the renewal traffic this agent exists to generate.
+    token: QuotaToken,
+}
+
+#[agent_implementation]
+impl QuotaCounter for QuotaCounterImpl {
+    fn new(id: String) -> Self {
+        Self {
+            _id: id,
+            count: 0,
+            refused: 0,
+            token: QuotaToken::new(CHAOS_QUOTA_RESOURCE, 1),
+        }
+    }
+
+    fn reserve_and_increment(&mut self) -> u32 {
+        match self.token.reserve(1) {
+            Ok(reservation) => {
+                reservation.commit(1);
+                self.count += 1;
+            }
+            Err(_) => {
+                self.refused += 1;
+            }
+        }
+        self.count
+    }
+
+    fn refused(&self) -> u32 {
+        self.refused
+    }
+
+    fn count(&self) -> u32 {
+        self.count
+    }
+}
+
+#[agent_definition(ephemeral)]
+trait EphemeralCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    fn get_id(&self) -> String;
+    async fn increment_via_self_rpc(&mut self) -> u32;
+    async fn increment_remote_then_fail(&mut self, target: String) -> u32;
+}
+
+struct EphemeralCounterImpl {
+    count: u32,
+    id: String,
+}
+
+#[agent_implementation]
+impl EphemeralCounter for EphemeralCounterImpl {
+    fn new(id: String) -> Self {
+        Self { id, count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn get_id(&self) -> String {
+        golem_rust::agentic::get_agent_id().agent_id
+    }
+
+    async fn increment_via_self_rpc(&mut self) -> u32 {
+        self.count += 1;
+        let mut client = EphemeralCounterClient::new_phantom(self.id.clone());
+        self.count + client.increment().await.value
+    }
+
+    async fn increment_remote_then_fail(&mut self, target: String) -> u32 {
+        let mut client = CounterClient::get(target);
+        let count = client.increment().await;
+        panic!("failing after remote increment to {count}")
+    }
+}
+
+#[agent_definition(ephemeral)]
+trait EphemeralSingletonCounter {
+    fn new() -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct EphemeralSingletonCounterImpl {
+    count: u32,
+}
+
+#[agent_implementation]
+impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
+    fn new() -> Self {
+        Self { count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
+/// Ceiling on the fire log below.
+///
+/// Far above what a chaos run produces — a few hundred fires per target — so it
+/// only stops a misconfigured cadence from growing agent state without bound.
+/// `polls` keeps counting past it, which is what makes truncation visible: a
+/// reader that gets fewer entries than polls knows the log is short rather than
+/// the fires missing.
+const MAX_FIRE_LOG: usize = 10_000;
+
+/// Wall clock in milliseconds since the epoch.
+///
+/// Read inside the agent rather than passed in, because the question S10 asks is
+/// when the *platform* ran the action. The read is durable, so an agent that
+/// replays reports the original fire time instead of the replay's.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Near-no-op target for scheduled actions. The scheduled action under test is
+/// dispatching this method, not its guest-side work.
+#[agent_definition]
+trait ScheduleCounter {
+    fn new(id: String) -> Self;
+
+    /// Counts the fire rather than doing nothing at all: chaos scenarios need
+    /// some durable trace that a scheduled action actually landed, and the
+    /// increment is far cheaper than anything the dispatch itself costs.
+    fn poll(&mut self);
+
+    /// How many scheduled actions have fired, whether through `poll` or
+    /// `fire`. Read after recovery to compare against the number of actions the
+    /// driver scheduled.
+    fn polls(&self) -> u32;
+
+    /// `poll`, with enough recorded to identify the individual action.
+    ///
+    /// S10 kills the executor holding claimed but unacknowledged scheduled
+    /// actions, and a count cannot answer what it asks. Two questions need the
+    /// individual action: did *this* registration fire, and how far past its due
+    /// time did lease recovery put it. `token` is the registering invocation's
+    /// idempotency key, so a duplicate fire is a repeated token rather than an
+    /// arithmetic argument about totals.
+    fn fire(&mut self, token: String, scheduled_millis: u64);
+
+    /// The fire log: one `(token, scheduled_millis, observed_millis)` per fire,
+    /// in the order the actions ran.
+    fn fires(&self) -> Vec<(String, u64, u64)>;
+}
+
+struct ScheduleCounterImpl {
+    _id: String,
+    polls: u32,
+    fires: Vec<(String, u64, u64)>,
+}
+
+#[agent_implementation]
+impl ScheduleCounter for ScheduleCounterImpl {
+    fn new(id: String) -> Self {
+        Self {
+            _id: id,
+            polls: 0,
+            fires: Vec::new(),
+        }
+    }
+
+    fn poll(&mut self) {
+        self.polls += 1;
+    }
+
+    fn polls(&self) -> u32 {
+        self.polls
+    }
+
+    fn fire(&mut self, token: String, scheduled_millis: u64) {
+        self.polls += 1;
+        if self.fires.len() < MAX_FIRE_LOG {
+            self.fires.push((token, scheduled_millis, now_millis()));
+        }
+    }
+
+    fn fires(&self) -> Vec<(String, u64, u64)> {
+        self.fires.clone()
+    }
+}
+
+/// Schedules no-op polls on durable targets. Keeping scheduling separate from
+/// the target lets the caller prepare the target before registration.
+#[agent_definition]
+trait ScheduleEmitter {
+    fn new(id: String) -> Self;
+    fn warm(&self);
+    fn schedule_poll_at(
+        &self,
+        target_name: String,
+        seconds: u64,
+        nanoseconds: u32,
+        context_spans: u32,
+    );
+
+    /// Registers a `fire` carrying the token that identifies this registration.
+    ///
+    /// A second method rather than a payload on `schedule_poll_at`: the
+    /// scenarios already on the poll path measure dispatch cost, and giving
+    /// their scheduled action an argument and a growing log would change what
+    /// they measure.
+    fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String);
+}
+
+struct ScheduleEmitterImpl {
+    _id: String,
+}
+
+#[agent_implementation]
+impl ScheduleEmitter for ScheduleEmitterImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id }
+    }
+
+    fn warm(&self) {}
+
+    fn schedule_poll_at(
+        &self,
+        target_name: String,
+        seconds: u64,
+        nanoseconds: u32,
+        context_spans: u32,
+    ) {
+        let _spans: Vec<_> = (0..context_spans)
+            .map(|_| start_span("schedule-poll"))
+            .collect();
+        let mut target = ScheduleCounterClient::get(target_name);
+        target
+            .schedule_poll(Datetime {
+                seconds: seconds as i64,
+                nanoseconds,
+            })
+            .expect("failed to schedule poll");
+    }
+
+    fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String) {
+        let mut target = ScheduleCounterClient::get(target_name);
+        let scheduled_millis = seconds * 1000 + (nanoseconds / 1_000_000) as u64;
+        target
+            .schedule_fire(
+                token,
+                scheduled_millis,
+                Datetime {
+                    seconds: seconds as i64,
+                    nanoseconds,
+                },
+            )
+            .expect("failed to schedule fire");
+    }
+}
+
+#[agent_definition(ephemeral)]
+trait HostFunctionTests {
+    fn new(id: String) -> Self;
+    fn generate_idempotency_keys(&mut self) -> (String, String);
+}
+
+struct HostFunctionTestsImpl {
+    _id: String,
+}
+
+#[agent_implementation]
+impl HostFunctionTests for HostFunctionTestsImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id }
+    }
+
+    fn generate_idempotency_keys(&mut self) -> (String, String) {
+        let key1 = generate_idempotency_key();
+        let key2 = generate_idempotency_key();
+        (key1.to_string(), key2.to_string())
+    }
+}
+
+#[agent_definition]
+trait FailingCounter {
+    fn new(id: String) -> Self;
+    fn add(&mut self, value: u64);
+    fn get(&self) -> u64;
+}
+
+struct FailingCounterImpl {
+    total: u64,
+    _id: String,
+}
+
+#[agent_implementation]
+impl FailingCounter for FailingCounterImpl {
+    fn new(id: String) -> Self {
+        Self { total: 0, _id: id }
+    }
+
+    fn add(&mut self, value: u64) {
+        eprintln!("error log message");
+        if value > 10 {
+            panic!("value is too large");
+        }
+        self.total += value;
+    }
+
+    fn get(&self) -> u64 {
+        self.total
+    }
+}

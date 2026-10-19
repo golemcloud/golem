@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tracing::debug;
 
-use golem_common::model::{AgentStatusRecord, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentStatusRecord, OwnedAgentId};
 
 use crate::services::worker::WorkerService;
 
@@ -47,9 +47,8 @@ pub enum CheckpointReason {
     Snapshot,
     /// Written when the worker goes idle. Throttled by the configured min oplog-index delta.
     Idle,
-    /// Written *during* a long-running invocation at a structurally clean boundary (no open
-    /// rollback region) and below the outstanding `get_oplog_index` marker watermark. Throttled
-    /// exactly like [`CheckpointReason::Idle`].
+    /// Written *during* a long-running invocation at a structurally clean boundary.
+    /// Throttled exactly like [`CheckpointReason::Idle`].
     MidInvocation,
 }
 
@@ -74,6 +73,7 @@ struct CheckpointState {
 /// Per-worker coordinator that writes the clean status checkpoint at clean boundaries.
 pub struct StatusCheckpointer {
     owned_agent_id: OwnedAgentId,
+    fingerprint: AgentFingerprint,
     /// Ephemeral workers never persist any cached status; every operation is a no-op for them.
     is_ephemeral: bool,
     /// When `false`, no checkpoint is ever written (recompute falls back to a full from-scratch
@@ -88,28 +88,39 @@ pub struct StatusCheckpointer {
     /// Set once the owning worker starts deleting. After this, no checkpoint is written, so an
     /// in-flight write cannot resurrect the checkpoint after `remove_cached_status` deletes it.
     delete_started: AtomicBool,
+    /// Why the shard moved to another executor, once it has.
+    lost_shard: super::LostShard,
 
     /// Serializes checkpoint writes and guards the persisted baseline.
     state: Mutex<CheckpointState>,
 }
 
 impl StatusCheckpointer {
-    pub fn new(
+    pub(super) fn new(
         owned_agent_id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
         is_ephemeral: bool,
         enabled: bool,
         min_oplog_delta: u64,
         worker_service: Arc<dyn WorkerService>,
+        lost_shard: super::LostShard,
     ) -> Self {
         Self {
             owned_agent_id,
+            fingerprint,
             is_ephemeral,
             enabled,
             min_oplog_delta,
             worker_service,
             delete_started: AtomicBool::new(false),
+            lost_shard,
             state: Mutex::new(CheckpointState { last_written: None }),
         }
+    }
+
+    /// Whether deletion or shard loss prevents this generation from writing a checkpoint.
+    fn writes_stopped(&self) -> bool {
+        self.delete_started.load(Ordering::Acquire) || self.lost_shard.borrow().is_some()
     }
 
     /// Prevents any future checkpoint write from resurrecting the checkpoint after it is deleted.
@@ -144,7 +155,7 @@ impl StatusCheckpointer {
     /// Best-effort: a write failure is logged and metered, the baseline is left unchanged, and the
     /// worker continues. The oplog remains the source of truth.
     pub async fn maybe_checkpoint(&self, status: &AgentStatusRecord, reason: CheckpointReason) {
-        if self.is_ephemeral || !self.enabled || self.delete_started.load(Ordering::Acquire) {
+        if self.is_ephemeral || !self.enabled || self.writes_stopped() {
             return;
         }
 
@@ -152,7 +163,7 @@ impl StatusCheckpointer {
 
         // Re-check after taking the lock: `begin_delete` may have set the flag while we waited for
         // it (it takes this same lock as a barrier), so once we hold the lock the flag is final.
-        if self.delete_started.load(Ordering::Acquire) {
+        if self.writes_stopped() {
             return;
         }
 
@@ -189,6 +200,7 @@ impl StatusCheckpointer {
             .worker_service
             .write_status_checkpoint(
                 &self.owned_agent_id,
+                self.fingerprint,
                 state.last_written.as_ref(),
                 status.clone(),
             )
@@ -228,6 +240,7 @@ mod tests {
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentId, AgentStatus, AgentStatusRecord};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::Mutex as StdMutex;
     use test_r::test;
     use uuid::Uuid;
@@ -242,45 +255,102 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for RecordingWorkerService {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
-            None
+        async fn lookup_durable_stream_public_binding(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _public_session_id: &str,
+        ) -> Result<
+            Option<golem_common::model::DurableStreamPublicBinding>,
+            crate::durable_host::durable_stream::SessionError,
+        > {
+            unimplemented!()
         }
 
-        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
-            Vec::new()
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+            Ok(None)
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn lookup_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _status: &AgentStatusRecord,
+            _key: &golem_common::model::IdempotencyKey,
+        ) -> Result<
+            Option<golem_common::model::DurableStreamSessionStatus>,
+            crate::durable_host::durable_stream::SessionError,
+        > {
+            unimplemented!()
+        }
 
-        async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn get_running_workers_in_shards(
+            &self,
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<Vec<crate::services::worker::GetWorkerMetadataResult>, WorkerExecutorError>
+        {
+            Ok(Default::default())
+        }
 
-        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
-            Some(AgentMode::Durable)
+        async fn remove(
+            &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: AgentFingerprint,
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
+            _after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+
+        async fn remove_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+
+        async fn resolve_agent_identity(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError>
+        {
+            Ok(None)
         }
 
         async fn write_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             Ok(status_value)
         }
 
         async fn read_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _agent_mode: AgentMode,
-        ) -> Option<AgentStatusRecord> {
-            None
+        ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+            Ok(None)
         }
 
         async fn write_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             self.writes.lock().unwrap().push(checkpoint.oplog_idx);
             Ok(checkpoint)
         }
@@ -288,8 +358,19 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _status_value: &AgentStatusRecord,
-        ) {
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn remove_if_stale(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<bool, WorkerExecutorError> {
+            Ok(false)
         }
     }
 
@@ -312,7 +393,34 @@ mod tests {
     }
 
     fn checkpointer(service: Arc<RecordingWorkerService>, min_delta: u64) -> StatusCheckpointer {
-        StatusCheckpointer::new(owned_agent_id(), false, true, min_delta, service)
+        checkpointer_losing(service, min_delta, tokio::sync::watch::channel(None).1)
+    }
+
+    /// A checkpointer whose lost shard `lost_shard` reports.
+    fn checkpointer_losing(
+        service: Arc<RecordingWorkerService>,
+        min_delta: u64,
+        lost_shard: super::super::LostShard,
+    ) -> StatusCheckpointer {
+        StatusCheckpointer::new(
+            owned_agent_id(),
+            AgentFingerprint(Uuid::nil()),
+            false,
+            true,
+            min_delta,
+            service,
+            lost_shard,
+        )
+    }
+
+    #[test]
+    async fn a_worker_service_that_stores_no_rejections_gives_no_rejected_snapshots() {
+        let rejected = RecordingWorkerService::default()
+            .get_rejected_periodic_snapshots(&owned_agent_id(), AgentFingerprint(Uuid::nil()))
+            .await
+            .unwrap();
+
+        assert!(rejected.is_empty());
     }
 
     #[test]
@@ -473,16 +581,54 @@ mod tests {
         assert!(service.writes.lock().unwrap().is_empty());
     }
 
+    // A given-up generation's checkpoint belongs to the shard's new owner: no reason, not even a
+    // snapshot, may write one after the give-up.
+    #[test]
+    async fn a_given_up_checkpointer_writes_no_checkpoint() {
+        let service = Arc::new(RecordingWorkerService::default());
+        let (lose, lost) = tokio::sync::watch::channel(None);
+        let cp = checkpointer_losing(service.clone(), 0, lost);
+
+        lose.send_replace(Some(super::super::RetirementReason::ShardRevoked));
+        cp.maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
+            .await;
+        cp.maybe_checkpoint(&status_at(20), CheckpointReason::Idle)
+            .await;
+        cp.maybe_checkpoint(&status_at(30), CheckpointReason::MidInvocation)
+            .await;
+
+        assert!(
+            service.writes.lock().unwrap().is_empty(),
+            "a given-up generation wrote a status checkpoint"
+        );
+    }
+
     #[test]
     async fn disabled_and_ephemeral_never_write() {
         let service = Arc::new(RecordingWorkerService::default());
 
-        let disabled = StatusCheckpointer::new(owned_agent_id(), false, false, 0, service.clone());
+        let disabled = StatusCheckpointer::new(
+            owned_agent_id(),
+            AgentFingerprint(Uuid::nil()),
+            false,
+            false,
+            0,
+            service.clone(),
+            tokio::sync::watch::channel(None).1,
+        );
         disabled
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
             .await;
 
-        let ephemeral = StatusCheckpointer::new(owned_agent_id(), true, true, 0, service.clone());
+        let ephemeral = StatusCheckpointer::new(
+            owned_agent_id(),
+            AgentFingerprint(Uuid::nil()),
+            true,
+            true,
+            0,
+            service.clone(),
+            tokio::sync::watch::channel(None).1,
+        );
         ephemeral
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
             .await;

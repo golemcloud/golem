@@ -36,6 +36,13 @@ import scala.quoted.*
 object ToolErrorSchemaDerivation {
   inline def derive[E]: ToolErrorSchema[E] = ${ deriveImpl[E] }
 
+  inline def wireDecoder[E]: WireCustomToolError => Either[String, E] = ${ wireDecoderImpl[E] }
+
+  private def wireDecoderImpl[E: Type](using Quotes): Expr[WireCustomToolError => Either[String, E]] = {
+    val core = new ToolMacroCore
+    new ToolErrorSchemaAssembler(core).wireDecoderExpr[E]
+  }
+
   private def deriveImpl[E: Type](using Quotes): Expr[ToolErrorSchema[E]] = {
     val core = new ToolMacroCore
     new ToolErrorSchemaAssembler(core).deriveExpr[E]
@@ -62,11 +69,11 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
         new ToolErrorSchema[E] {
           def errorCases: Either[ToolBuildError, List[ExtendedErrorCase]] = Right(Nil)
 
-          def toErrorPayloadValue(error: E): Either[String, TypedSchemaValue] =
-            ToolErrorSupport.encodeUnitPayload
+          def toErrorValue(error: E): Either[String, NamedToolError] =
+            ToolErrorSupport.encodeUnitPayload.map(NamedToolError("unit", _))
 
-          def fromErrorPayloadValue(value: TypedSchemaValue): Either[String, E] =
-            if (ToolErrorSupport.isUnitPayload(value)) Right(().asInstanceOf[E])
+          def fromErrorValue(value: NamedToolError): Either[String, E] =
+            if (value.name == "unit" && ToolErrorSupport.isUnitPayload(value.payload)) Right(().asInstanceOf[E])
             else Left(ToolErrorSupport.unmatchedPayload)
         }
       }
@@ -81,10 +88,10 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
       new ToolErrorSchema[E] {
         def errorCases: Either[ToolBuildError, List[ExtendedErrorCase]] = Right($casesExpr)
 
-        def toErrorPayloadValue(error: E): Either[String, TypedSchemaValue] =
+        def toErrorValue(error: E): Either[String, NamedToolError] =
           $toPayload(error)
 
-        def fromErrorPayloadValue(value: TypedSchemaValue): Either[String, E] =
+        def fromErrorValue(value: NamedToolError): Either[String, E] =
           $fromPayload(value)
       }
     }
@@ -139,18 +146,57 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
     else
       Apply(Select.unique(Ref(child.companionModule), "apply"), payload.toList)
 
+  def wireDecoderExpr[E: Type]: Expr[WireCustomToolError => Either[String, E]] = {
+    import golem.schema.wire.ConcreteCodec
+    val cases = core.errorCasesOf(TypeRepr.of[E], Position.ofMacroExpansion)
+    if (TypeRepr.of[E] =:= TypeRepr.of[Unit])
+      return '{ error =>
+        if (error.name == "unit")
+          WireToolClientRuntime.decodeError(error, ConcreteCodec.unit).map(_.asInstanceOf[E])
+        else Left("unknown tool error name")
+      }
+    '{ error =>
+      ${
+        cases.foldRight[Expr[Either[String, E]]]('{ Left("unknown tool error name: " + error.name) }) { (ec, next) =>
+          val decoded: Expr[Either[String, E]] = ec.payload match {
+            case None =>
+              '{
+                WireToolClientRuntime
+                  .decodeError(error, ConcreteCodec.unit)
+                  .map(_ => ${ constructCase(ec.caseSym, None).asExprOf[E] })
+              }
+            case Some(tpe) =>
+              tpe.asType match {
+                case '[p] =>
+                  '{
+                    WireToolClientRuntime
+                      .decodeError(error, ConcreteCodec.derived[p])
+                      .map(payload => ${ constructCase(ec.caseSym, Some('payload.asTerm)).asExprOf[E] })
+                  }
+              }
+          }
+          '{ if (error.name == ${ Expr(ec.name) }) $decoded else $next }
+        }
+      }
+    }
+  }
+
   def toPayloadExpr[E: Type](
     cases: List[core.ErrorCaseIR],
     pos: Position
-  ): Expr[E => Either[String, TypedSchemaValue]] = '{ (e: E) =>
+  ): Expr[E => Either[String, NamedToolError]] = '{ (e: E) =>
     ${
-      cases.foldRight[Expr[Either[String, TypedSchemaValue]]](
+      cases.foldRight[Expr[Either[String, NamedToolError]]](
         '{ Left("tool error value did not match any declared error case") }
       ) { (ec, elseExpr) =>
         val child = ec.caseSym
         ec.payload match {
           case None =>
-            '{ if (${ caseMatches[E]('e, child) }) ToolErrorSupport.encodeUnitPayload else $elseExpr }
+            '{
+              if (${ caseMatches[E]('e, child) })
+                ToolErrorSupport.encodeUnitPayload.map(NamedToolError(${ Expr(ec.name) }, _))
+              else $elseExpr
+            }
           case Some(ptype) =>
             ptype.asType match {
               case '[p] =>
@@ -168,7 +214,9 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
                 }
                 '{
                   if (${ caseMatches[E]('e, child) })
-                    ToolErrorSupport.encodePayload[p](${ payloadTerm.asExprOf[p] }, $into)
+                    ToolErrorSupport
+                      .encodePayload[p](${ payloadTerm.asExprOf[p] }, $into)
+                      .map(NamedToolError(${ Expr(ec.name) }, _))
                   else $elseExpr
                 }
             }
@@ -180,7 +228,7 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
   def fromPayloadExpr[E: Type](
     cases: List[core.ErrorCaseIR],
     pos: Position
-  ): Expr[TypedSchemaValue => Either[String, E]] = '{ (value: TypedSchemaValue) =>
+  ): Expr[NamedToolError => Either[String, E]] = '{ (value: NamedToolError) =>
     ${
       cases.foldRight[Expr[Either[String, E]]](
         '{ Left(ToolErrorSupport.unmatchedPayload) }
@@ -189,7 +237,7 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
         ec.payload match {
           case None =>
             '{
-              if (ToolErrorSupport.isUnitPayload(value))
+              if (value.name == ${ Expr(ec.name) } && ToolErrorSupport.isUnitPayload(value.payload))
                 Right(${ constructCase(child, None).asExprOf[E] })
               else $elseExpr
             }
@@ -205,11 +253,13 @@ private[macros] class ToolErrorSchemaAssembler(val core: ToolMacroCore) {
                     )
                   )
                 '{
-                  ToolErrorSupport.decodePayload[p](value, $from) match {
-                    case Right(payload) =>
-                      Right(${ constructCase(child, Some('{ payload }.asTerm)).asExprOf[E] })
-                    case Left(_) => $elseExpr
-                  }
+                  if (value.name != ${ Expr(ec.name) }) $elseExpr
+                  else
+                    ToolErrorSupport.decodePayload[p](value.payload, $from, ${ payloadGraph(ptype, pos) }) match {
+                      case Right(payload) =>
+                        Right(${ constructCase(child, Some('{ payload }.asTerm)).asExprOf[E] })
+                      case Left(_) => $elseExpr
+                    }
                 }
             }
         }

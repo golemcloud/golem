@@ -20,6 +20,7 @@ import {
   schemaValueToWitAsync,
 } from '../internal/schema-model';
 import type { SchemaCodec } from './codec';
+import { ownStream, withNativeStreamScope } from '../internal/schema-model/streamScope';
 
 interface TypedStreamState<T> {
   readonly kind: 'typed';
@@ -32,7 +33,8 @@ interface WireStreamState {
   readonly kind: 'wire';
   endpoint?: GuestSchemaValueStream;
   iterator?: AsyncIterator<SchemaValueTree>;
-  readonly itemCodec: SchemaCodec;
+  acquiring?: Promise<AsyncIterator<SchemaValueTree>>;
+  readonly readItem: (tree: SchemaValueTree) => unknown;
   busy: boolean;
 }
 
@@ -41,13 +43,35 @@ type AgentStreamState<T> = TypedStreamState<T> | WireStreamState;
 const states = new WeakMap<object, AgentStreamState<unknown>>();
 
 /**
- * A demand-driven, single-reader stream that can recursively inhabit an agent
- * method input or output value.
+ * A demand-driven, single-reader stream for values nested anywhere in an agent method input or
+ * output.
+ *
+ * Reading is lazy and non-concurrent: wait for each operation before starting another. Normal
+ * completion returns `{ done: true, value: undefined }`. Encoding or forwarding an `AgentStream`
+ * transfers its ownership; the original object cannot be used again.
+ *
+ * For a stream received through a connected P3 agent invocation, calling `return()`, including the
+ * call made by an early exit from `for await`, closes its readable endpoint. Calling `throw()` also
+ * closes it and rejects with the same local reason; the reason is not transmitted to the producer.
+ *
+ * When a stream created with {@link AgentStream.from} is sent through a connected P3 invocation,
+ * each accepted downstream write gates the next source pull. If a subsequent write observes that
+ * the remote reader was dropped, the runtime stops pulling and invokes and awaits the source
+ * iterator's `return()` exactly once. P3 does not interrupt an arbitrary pending source `next()` or
+ * guarantee cleanup before a later agent invocation. A source or cleanup rejection fails the
+ * active producer, write, or invocation session rather than appearing as clean EOF. P3 streams do
+ * not carry a recoverable terminal error; use an item type such as `Result<T, E>` when errors must
+ * be represented in the stream contract.
  */
 export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
   private constructor() {}
 
-  /** Create a stream from a synchronous or asynchronous iterable. */
+  /**
+   * Create a stream from a synchronous or asynchronous iterable without pulling it eagerly.
+   *
+   * The source iterator's `return()` is used for cleanup when either the local stream is closed or
+   * a connected remote reader is dropped.
+   */
   static from<T>(source: Iterable<T> | AsyncIterable<T>): AgentStream<T> {
     return createAgentStream({
       kind: 'typed',
@@ -60,6 +84,7 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
     return this;
   }
 
+  /** Read the next item, or `{ done: true, value: undefined }` after clean completion. */
   async next(): Promise<IteratorResult<T>> {
     const state = streamState(this);
     if (state.busy) {
@@ -69,43 +94,53 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
     try {
       if (state.kind === 'typed') {
         state.iterator ??= state.source[Symbol.asyncIterator]();
-        return await state.iterator.next();
+        const item = await state.iterator.next();
+        return item.done || !states.has(this) ? { done: true, value: undefined } : item;
       }
 
       const iterator = await wireIterator(state);
+      if (!states.has(this)) return { done: true, value: undefined };
       const item = await iterator.next();
-      return item.done
+      return item.done || !states.has(this)
         ? { done: true, value: undefined }
         : {
             done: false,
-            value: state.itemCodec.fromValue(schemaValueFromWit(item.value)) as T,
+            value: await withNativeStreamScope(() => state.readItem(item.value) as T),
           };
+    } catch (error) {
+      if (state.kind === 'wire' && states.has(this)) {
+        states.delete(this);
+        try {
+          await state.iterator?.return?.();
+        } catch {
+          // Preserve the read or item-decoding failure.
+        }
+      }
+      throw error;
     } finally {
       state.busy = false;
     }
   }
 
+  /**
+   * Close the stream and its underlying iterator. `for await` invokes this automatically on an
+   * early `break` or `return`.
+   */
   async return(value?: unknown): Promise<IteratorResult<T>> {
     const state = streamState(this);
     if (state.busy) {
       throw new Error('an AgentStream operation is already in progress');
     }
-    state.busy = true;
-    try {
-      const iterator =
-        state.kind === 'typed'
-          ? (state.iterator ??= state.source[Symbol.asyncIterator]())
-          : await wireIterator(state);
-      if (iterator.return) {
-        await iterator.return(value);
-      }
-      states.delete(this);
-      return { done: true, value: value as T };
-    } finally {
-      state.busy = false;
-    }
+    return disposeAgentStream(this, value);
   }
 
+  /**
+   * Fail local iteration and close a connected readable endpoint.
+   *
+   * Connected P3 streams reject with the same local reason, but do not transfer that reason to the
+   * producer. Streams created with {@link AgentStream.from} delegate to the source iterator's
+   * `throw()` when it provides one, but the `AgentStream` is consumed regardless of its result.
+   */
   async throw(error?: unknown): Promise<IteratorResult<T>> {
     const state = streamState(this);
     if (state.busy) {
@@ -113,11 +148,11 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
     }
     state.busy = true;
     try {
+      states.delete(this);
       const iterator =
         state.kind === 'typed'
           ? (state.iterator ??= state.source[Symbol.asyncIterator]())
           : await wireIterator(state);
-      states.delete(this);
       if (iterator.throw) {
         return (await iterator.throw(error)) as IteratorResult<T>;
       }
@@ -131,11 +166,52 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
   }
 }
 
+/**
+ * @internal Close an adapter-owned stream even during a pending read. Unlike the public
+ * iterator API, a Web consumer may cancel during pull. The source must cooperate with return().
+ * This disposes only the stream; it does not cancel an active agent invocation.
+ */
+export async function disposeAgentStream<T>(
+  stream: AgentStream<T>,
+  value?: unknown,
+): Promise<IteratorResult<T>> {
+  const state = states.get(stream) as AgentStreamState<T> | undefined;
+  if (!state) return { done: true, value: value as T };
+  states.delete(stream);
+  const iterator =
+    state.kind === 'typed'
+      ? (state.iterator ??= state.source[Symbol.asyncIterator]())
+      : await wireIterator(state);
+  await iterator.return?.(value);
+  return { done: true, value: value as T };
+}
+
 /** @internal Move an AgentStream into a recursive schema value. */
 export function agentStreamToHandle<T>(
   stream: AgentStream<T>,
   itemCodec: SchemaCodec,
 ): GuestSchemaValueStreamHandle {
+  return new GuestSchemaValueStreamHandle(
+    takeAgentStream(stream, (value) =>
+      withNativeStreamScope(() => itemCodec.toValue(value), schemaValueToWitAsync),
+    ),
+  );
+}
+
+/** @internal Reserve a concrete stream without committing ownership until its containing value is valid. */
+export function prepareAgentStream<T>(
+  stream: AgentStream<T>,
+  writeItem: (value: T) => Promise<SchemaValueTree>,
+) {
+  const state = streamState(stream);
+  const endpoint = takeAgentStream(stream, writeItem);
+  return { endpoint, rollback: () => states.set(stream, state as AgentStreamState<unknown>) };
+}
+
+function takeAgentStream<T>(
+  stream: AgentStream<T>,
+  writeItem: (value: T) => Promise<SchemaValueTree>,
+): GuestSchemaValueStream {
   const state = streamState(stream);
   if (state.busy) {
     throw new Error('cannot transfer an AgentStream while an operation is in progress');
@@ -144,39 +220,68 @@ export function agentStreamToHandle<T>(
 
   if (state.kind === 'wire') {
     if (state.endpoint !== undefined) {
-      return new GuestSchemaValueStreamHandle(state.endpoint);
+      return state.endpoint;
     }
     if (state.iterator !== undefined) {
-      return new GuestSchemaValueStreamHandle({
+      return {
         kind: 'native',
         value: iterableFromIterator(state.iterator),
-      });
+      };
     }
     throw new Error('AgentStream was already transferred');
   }
 
   const source = state.iterator === undefined ? state.source : iterableFromIterator(state.iterator);
-  return new GuestSchemaValueStreamHandle({
+  return {
     kind: 'native',
-    value: encodeItems(source, itemCodec),
-  });
+    value: encodeItems(source, writeItem),
+  };
 }
 
 /** @internal Lift a recursive schema-value-stream handle into an AgentStream. */
 export function agentStreamFromHandle<T>(
-  handle: GuestSchemaValueStreamHandle,
+  handle: Pick<GuestSchemaValueStreamHandle, 'take'>,
   itemCodec: SchemaCodec,
 ): AgentStream<T> {
   const endpoint = handle.take();
   if (endpoint === undefined) {
     throw new Error('schema value stream was already transferred');
   }
-  return createAgentStream({
+  return agentStreamFromWire(
+    endpoint,
+    (tree) => itemCodec.fromValue(schemaValueFromWit(tree)) as T,
+  );
+}
+
+/** @internal Lift an owned wire endpoint using the item codec's reader. */
+export function agentStreamFromWire<T>(
+  endpoint: GuestSchemaValueStream,
+  readItem: (tree: SchemaValueTree) => T,
+): AgentStream<T> {
+  const prepared = prepareAgentStreamLift(endpoint, readItem);
+  prepared.commit();
+  return prepared.stream;
+}
+
+/** @internal Defer endpoint adoption until the whole input structure has been checked. */
+export function prepareAgentStreamLift<T>(
+  endpoint: GuestSchemaValueStream,
+  readItem: (tree: SchemaValueTree) => T,
+) {
+  const stream = createAgentStream<T>({
     kind: 'wire',
     endpoint,
-    itemCodec,
+    readItem,
     busy: false,
   });
+  return {
+    stream,
+    commit() {
+      ownStream(async () => {
+        if (states.has(stream)) await stream.return();
+      });
+    },
+  };
 }
 
 function createAgentStream<T>(state: AgentStreamState<T>): AgentStream<T> {
@@ -197,15 +302,19 @@ async function wireIterator(state: WireStreamState): Promise<AsyncIterator<Schem
   if (state.iterator !== undefined) {
     return state.iterator;
   }
+  if (state.acquiring !== undefined) return state.acquiring;
   const endpoint = state.endpoint;
   if (endpoint === undefined) {
     throw new Error('AgentStream was already transferred');
   }
   state.endpoint = undefined;
-  const source =
-    endpoint.kind === 'native' ? endpoint.value : await SchemaValueStream.unwrap(endpoint.value);
-  state.iterator = source[Symbol.asyncIterator]();
-  return state.iterator;
+  state.acquiring = (async () => {
+    const source =
+      endpoint.kind === 'native' ? endpoint.value : await SchemaValueStream.unwrap(endpoint.value);
+    state.iterator = source[Symbol.asyncIterator]();
+    return state.iterator;
+  })();
+  return state.acquiring;
 }
 
 function asAsyncIterable<T>(source: Iterable<T> | AsyncIterable<T>): AsyncIterable<T> {
@@ -213,8 +322,17 @@ function asAsyncIterable<T>(source: Iterable<T> | AsyncIterable<T>): AsyncIterab
     return source as AsyncIterable<T>;
   }
   return {
-    async *[Symbol.asyncIterator]() {
-      yield* source as Iterable<T>;
+    [Symbol.asyncIterator]() {
+      const iterator = (source as Iterable<T>)[Symbol.iterator]();
+      return {
+        next: async () => iterator.next(),
+        return: async (value) => iterator.return?.(value) ?? { done: true, value },
+        throw: async (error) => {
+          if (iterator.throw) return iterator.throw(error);
+          iterator.return?.();
+          throw error;
+        },
+      };
     },
   };
 }
@@ -225,11 +343,45 @@ function iterableFromIterator<T>(iterator: AsyncIterator<T>): AsyncIterable<T> {
   };
 }
 
-async function* encodeItems<T>(
+function encodeItems<T>(
   source: AsyncIterable<T>,
-  itemCodec: SchemaCodec,
+  writeItem: (value: T) => Promise<SchemaValueTree>,
 ): AsyncIterable<SchemaValueTree> {
-  for await (const item of source) {
-    yield await schemaValueToWitAsync(itemCodec.toValue(item));
-  }
+  let iterator: AsyncIterator<T> | undefined;
+  let closed = false;
+  const close = async () => {
+    if (!closed) {
+      closed = true;
+      iterator ??= source[Symbol.asyncIterator]();
+      await iterator.return?.();
+    }
+    return { done: true as const, value: undefined };
+  };
+  return {
+    [Symbol.asyncIterator]: () => ({
+      async next() {
+        if (closed) return { done: true, value: undefined };
+        iterator ??= source[Symbol.asyncIterator]();
+        try {
+          const item = await iterator.next();
+          if (item.done) {
+            closed = true;
+            return { done: true, value: undefined };
+          }
+          return {
+            done: false,
+            value: await writeItem(item.value),
+          };
+        } catch (error) {
+          try {
+            await close();
+          } catch {
+            // Preserve the item failure.
+          }
+          throw error;
+        }
+      },
+      return: close,
+    }),
+  };
 }

@@ -1,32 +1,39 @@
 import { z } from 'zod';
-import { defineAgent, method, http, clientFor, createPromise, awaitPromise } from '@golemcloud/golem-ts-sdk';
+import {
+  defineAgent,
+  method,
+  http,
+  createPromise,
+  awaitPromise,
+} from '@golemcloud/golem-ts-sdk';
 import { HumanAgent, encodePromiseId } from './human-agent.js';
-
-// A typed RPC client factory for the remote HumanAgent (wasm-RPC under the hood).
-const humanClient = clientFor(HumanAgent);
 
 // The workflow side of the loop: it creates a promise, hands it to a human for
 // approval, then PAUSES until the promise is completed — the classic
-// human-in-the-loop pattern. Each workflow instance gets its own generated id.
+// human-in-the-loop pattern. The constructor ID identifies the approval request.
 export const WorkflowAgent = defineAgent({
   name: 'WorkflowAgent',
-  id: { name: z.string() },
-  http: http.mount('/workflows/{name}'),
+  id: { workflowId: z.string() },
+  http: http.mount('/workflows/{workflowId}'),
   methods: {
-    start: method({ input: { approver: z.string() }, returns: z.string(), http: http.post('/start') }),
+    start: method({
+      input: { approver: z.string() },
+      returns: z.string(),
+      http: http.post('/start'),
+    }),
   },
 });
 
 export const WorkflowAgentImpl = WorkflowAgent.implement({
-  init: () => ({ workflowId: crypto.randomUUID() as string }),
+  init: ({ id }) => ({ workflowId: id.workflowId }),
   methods: {
     async start({ approver }) {
       // 1. Create a promise that represents waiting for human input.
       const approvalPromiseId = createPromise();
 
-      // 2. Register the pending approval with the human (remote agent call).
+      // 2. Register the pending approval with the human over agent RPC.
       //    Normally you would surface this in a UI, email, etc.
-      await humanClient({ username: approver }).requestApproval({
+      await HumanAgent.client.get({ username: approver }).requestApproval({
         workflowId: this.workflowId,
         promiseId: encodePromiseId(approvalPromiseId),
       });

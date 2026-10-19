@@ -3,9 +3,12 @@
 // Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 
+use golem_common::model::card::network_target::NetworkTargetError;
+pub use golem_common::model::card::network_target::{
+    http_target, network_target, websocket_target,
+};
 use golem_common::model::card::owner::{
-    AgentOwnerLeafPattern, AgentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
-    ToolOwnerPattern,
+    AgentOwnerLeafPattern, AgentOwnerPattern, EnvironmentOwnerPattern, ToolOwnerPattern,
 };
 use golem_common::model::card::*;
 use sqlparser::ast::{
@@ -14,11 +17,11 @@ use sqlparser::ast::{
     TableConstraint, TableFactor, TableObject, Visit, Visitor, visit_relations,
 };
 use sqlparser::dialect::{GenericDialect, MySqlDialect, PostgreSqlDialect};
+use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 use std::fmt::{Display, Formatter};
-use std::net::IpAddr;
 use std::ops::ControlFlow;
-use url::Url;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::workerctx::WorkerCtx;
@@ -38,8 +41,6 @@ pub fn agent_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> AgentOwnerPat
 pub enum TargetError {
     InvalidPath(String),
     InvalidResource { class: &'static str, value: String },
-    InvalidNetworkAddress(String),
-    InvalidUrl(String),
     SqlNotStaticallyExtractable(String),
 }
 
@@ -50,8 +51,6 @@ impl Display for TargetError {
             Self::InvalidResource { class, value } => {
                 write!(f, "invalid {class} resource: {value}")
             }
-            Self::InvalidNetworkAddress(v) => write!(f, "invalid network address: {v}"),
-            Self::InvalidUrl(v) => write!(f, "invalid outbound URL: {v}"),
             Self::SqlNotStaticallyExtractable(v) => {
                 write!(f, "SQL resource set cannot be extracted safely: {v}")
             }
@@ -142,90 +141,16 @@ pub fn filesystem_target(
     })
 }
 
-pub fn network_target(host: &str, port: Option<u16>) -> Result<PermissionTarget, TargetError> {
-    let host = normalize_host(host)?;
-    Ok(PermissionTarget::Network(ClassPermissionTarget {
-        verb: Some(NetworkVerb::Connect),
-        owner: EmptyOwnerPattern,
-        resource: NetworkResourcePattern::host_port(
-            host,
-            port.map(PortPattern::single)
-                .unwrap_or_else(PortPattern::any),
-        ),
-    }))
-}
-
-pub fn dns_target(host: &str) -> Result<PermissionTarget, TargetError> {
+pub fn dns_target(host: &str) -> Result<PermissionTarget, NetworkTargetError> {
     network_target(host, None)
 }
 
-pub fn tcp_target(host: &str, port: u16) -> Result<PermissionTarget, TargetError> {
+pub fn tcp_target(host: &str, port: u16) -> Result<PermissionTarget, NetworkTargetError> {
     network_target(host, Some(port))
 }
 
-pub fn udp_target(host: &str, port: u16) -> Result<PermissionTarget, TargetError> {
+pub fn udp_target(host: &str, port: u16) -> Result<PermissionTarget, NetworkTargetError> {
     network_target(host, Some(port))
-}
-
-fn normalize_host(host: &str) -> Result<String, TargetError> {
-    let host = host.trim().trim_end_matches('.');
-    if host.is_empty()
-        || host.contains(':')
-        || host.contains('*')
-        || host.chars().any(char::is_whitespace)
-    {
-        return Err(TargetError::InvalidNetworkAddress(host.to_string()));
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return match ip {
-            IpAddr::V4(v4) => Ok(v4.to_string()),
-            IpAddr::V6(_) => Err(TargetError::InvalidNetworkAddress(host.to_string())),
-        };
-    }
-    if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
-        return Err(TargetError::InvalidNetworkAddress(host.to_string()));
-    }
-    let normalized = host.to_ascii_lowercase();
-    resource::<NetworkResourcePattern>("network", &normalized)?;
-    Ok(normalized)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NormalizedHttpTarget {
-    pub scheme: String,
-    pub host: String,
-    pub port: u16,
-    pub path: String,
-    pub permission: PermissionTarget,
-}
-
-pub fn http_target(uri: &str) -> Result<NormalizedHttpTarget, TargetError> {
-    uri_target(uri, &["http", "https"])
-}
-
-pub fn websocket_target(uri: &str) -> Result<NormalizedHttpTarget, TargetError> {
-    uri_target(uri, &["ws", "wss"])
-}
-
-fn uri_target(uri: &str, schemes: &[&str]) -> Result<NormalizedHttpTarget, TargetError> {
-    let url = Url::parse(uri).map_err(|_| TargetError::InvalidUrl(uri.to_string()))?;
-    if !schemes.contains(&url.scheme()) || !url.username().is_empty() || url.password().is_some() {
-        return Err(TargetError::InvalidUrl(uri.to_string()));
-    }
-    let host = normalize_host(
-        url.host_str()
-            .ok_or_else(|| TargetError::InvalidUrl(uri.to_string()))?,
-    )?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| TargetError::InvalidUrl(uri.to_string()))?;
-    Ok(NormalizedHttpTarget {
-        scheme: url.scheme().to_ascii_lowercase(),
-        host: host.clone(),
-        port,
-        path: url.path().to_string(),
-        permission: network_target(&host, Some(port))?,
-    })
 }
 
 pub fn env_target(owner: AgentOwnerPattern, name: &str) -> Result<PermissionTarget, TargetError> {
@@ -372,19 +297,46 @@ pub fn agent_worker_target(
 pub fn tool_target(
     owner: ToolOwnerPattern,
     command_path: &[&str],
-    args: &[&str],
+    args: Vec<ToolArgPattern<ToolInvocationValue>>,
+    definition: Option<&golem_common::schema::tool::Tool>,
 ) -> Result<PermissionTarget, TargetError> {
-    let invocation =
-        ToolInvocationPattern::from_command_and_args(command_path, args).map_err(|value| {
+    let parsed =
+        ToolInvocationPattern::from_command_and_args(command_path, &[]).map_err(|value| {
             TargetError::InvalidResource {
                 class: "tool",
                 value,
             }
         })?;
+    let normalized =
+        parsed
+            .normalize(definition)
+            .map_err(|error| TargetError::InvalidResource {
+                class: "tool",
+                value: error.to_string(),
+            })?;
+    let mut invocation = ToolInvocation {
+        command_path: normalized.command_path,
+        flags: vec![],
+        positionals: vec![],
+    };
+    for arg in args {
+        match arg {
+            ToolArgPattern::LongFlag { name, value } => {
+                invocation.flags.push(CanonicalToolFlag { name, value })
+            }
+            ToolArgPattern::Positional(value) => invocation.positionals.push(value),
+            ToolArgPattern::ShortFlags { .. } => {
+                return Err(TargetError::InvalidResource {
+                    class: "tool",
+                    value: "invocation flags must use primary long names".into(),
+                });
+            }
+        }
+    }
     Ok(PermissionTarget::Tool(ClassPermissionTarget {
         verb: Some(ToolVerb::Invoke),
         owner,
-        resource: ToolResourcePattern::Invocation(invocation),
+        resource: ToolResourcePattern::Request(invocation),
     }))
 }
 
@@ -418,14 +370,18 @@ pub fn rdbms_sql_targets(
     sql: &str,
 ) -> Result<Vec<PermissionTarget>, TargetError> {
     let statements = match engine {
-        RdbmsEngine::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
-        RdbmsEngine::Mysql => Parser::parse_sql(&MySqlDialect {}, sql),
-        RdbmsEngine::Ignite => Parser::parse_sql(&GenericDialect {}, sql),
+        RdbmsEngine::Postgres => {
+            Parser::parse_sql(&PostgreSqlDialect {}, sql).map_err(|error| error.to_string())
+        }
+        RdbmsEngine::Mysql => {
+            Parser::parse_sql(&MySqlDialect {}, sql).map_err(|error| error.to_string())
+        }
+        RdbmsEngine::Ignite => parse_ignite_sql(sql),
     };
     let mut statements = match statements {
         Ok(statements) if statements.len() == 1 => statements,
         Ok(_) => return sql_fallback("exactly one statement is required"),
-        Err(error) => return sql_fallback(&error.to_string()),
+        Err(error) => return sql_fallback(&error),
     };
     let statement = statements.pop().expect("one parsed statement");
     let names = match extract_sql_relations(&statement) {
@@ -461,6 +417,67 @@ pub fn rdbms_sql_targets(
         Ok(targets) => Ok(targets),
         Err(TargetError::SqlNotStaticallyExtractable(reason)) => sql_fallback(&reason),
         Err(error) => Err(error),
+    }
+}
+
+fn parse_ignite_sql(sql: &str) -> Result<Vec<Statement>, String> {
+    let dialect = GenericDialect {};
+    match Parser::parse_sql(&dialect, sql) {
+        Ok(statements) => Ok(statements),
+        Err(original_error) => {
+            let mut tokens = Tokenizer::new(&dialect, sql)
+                .tokenize()
+                .map_err(|error| error.to_string())?;
+            let first = tokens
+                .iter_mut()
+                .find(|token| !matches!(token, Token::Whitespace(_)))
+                .ok_or_else(|| original_error.to_string())?;
+            match first {
+                Token::Word(word)
+                    if word.quote_style.is_none() && word.keyword == Keyword::MERGE =>
+                {
+                    word.value = "INSERT".to_string();
+                    word.keyword = Keyword::INSERT;
+                }
+                _ => return Err(original_error.to_string()),
+            }
+
+            let statements = Parser::new(&dialect)
+                .with_tokens(tokens)
+                .parse_statements()
+                .map_err(|error| error.to_string())?;
+            let [Statement::Insert(insert)] = statements.as_slice() else {
+                return Err("Ignite MERGE shorthand must contain exactly one statement".to_string());
+            };
+            if !insert.into
+                || !matches!(insert.table, TableObject::TableName(_))
+                || insert.source.is_none()
+                || !insert.optimizer_hints.is_empty()
+                || insert.or.is_some()
+                || insert.ignore
+                || insert.table_alias.is_some()
+                || insert.overwrite
+                || !insert.assignments.is_empty()
+                || insert.partitioned.is_some()
+                || !insert.after_columns.is_empty()
+                || insert.has_table_keyword
+                || insert.on.is_some()
+                || insert.returning.is_some()
+                || insert.output.is_some()
+                || insert.replace_into
+                || insert.priority.is_some()
+                || insert.insert_alias.is_some()
+                || insert.settings.is_some()
+                || insert.format_clause.is_some()
+                || insert.multi_table_insert_type.is_some()
+                || !insert.multi_table_into_clauses.is_empty()
+                || !insert.multi_table_when_clauses.is_empty()
+                || insert.multi_table_else_clause.is_some()
+            {
+                return Err("unsupported Ignite MERGE shorthand form".to_string());
+            }
+            Ok(statements)
+        }
     }
 }
 
@@ -930,7 +947,14 @@ mod tests {
         let target = tool_target(
             tool("search"),
             &["documents", "find"],
-            &["--query=two words", "literal value", "-iv"],
+            vec![
+                ToolArgPattern::LongFlag {
+                    name: ToolIdentifier("query".into()),
+                    value: Some(ToolInvocationValue::Literal("two words".into())),
+                },
+                ToolArgPattern::Positional(ToolInvocationValue::Literal("literal *".into())),
+            ],
+            None,
         )
         .unwrap();
 
@@ -938,24 +962,31 @@ mod tests {
             target,
             PermissionTarget::Tool(ClassPermissionTarget {
                 verb: Some(ToolVerb::Invoke),
-                resource: ToolResourcePattern::Invocation(ToolInvocationPattern {
-                    command_path: Some(path),
-                    args,
+                resource: ToolResourcePattern::Request(ToolInvocation {
+                    command_path: path,
+                    flags, positionals,
                 }),
                 ..
             }) if path == vec![ToolIdentifier("documents".into()), ToolIdentifier("find".into())]
-                && args == vec![
-                    ToolArgPattern::LongFlag {
+                && flags == vec![
+                    CanonicalToolFlag {
                         name: ToolIdentifier("query".into()),
-                        value: Some(ToolValuePattern::Literal(ToolValueLiteral("two words".into()))),
+                        value: Some(ToolInvocationValue::Literal("two words".into())),
                     },
-                    ToolArgPattern::Positional(ToolValuePattern::Literal(ToolValueLiteral("literal value".into()))),
-                    ToolArgPattern::ShortFlags { flags: vec!['i', 'v'], value: None },
                 ]
+                && positionals == vec![ToolInvocationValue::Literal("literal *".into())]
         ));
 
-        assert!(tool_target(tool("root"), &[], &["argument"]).is_ok());
-        assert!(tool_target(tool("bad"), &["not.valid"], &[]).is_err());
+        assert!(
+            tool_target(
+                tool("root"),
+                &[],
+                vec![ToolArgPattern::Positional(ToolInvocationValue::Opaque)],
+                None,
+            )
+            .is_ok()
+        );
+        assert!(tool_target(tool("bad"), &["not.valid"], vec![], None).is_err());
     }
     #[test]
     fn paths_are_canonical_and_cannot_escape() {
@@ -976,54 +1007,6 @@ mod tests {
         );
         assert!(root.resolve("../secret").is_err());
         assert!(root.resolve("/secret").is_err());
-    }
-    #[test]
-    fn network_and_http_are_canonical() {
-        assert!(network_target("127.000.000.001", Some(80)).is_err());
-        let h = http_target("HTTPS://Example.COM.:443/a/../b?q=1").unwrap();
-        assert_eq!(
-            (h.scheme.as_str(), h.host.as_str(), h.port, h.path.as_str()),
-            ("https", "example.com", 443, "/b")
-        );
-        assert_eq!(
-            h.permission,
-            network_target("example.com", Some(443)).unwrap()
-        );
-        let websocket = websocket_target("WSS://Example.COM./socket").unwrap();
-        assert_eq!(
-            (websocket.host.as_str(), websocket.port),
-            ("example.com", 443)
-        );
-    }
-
-    #[test]
-    fn parsed_network_grants_use_the_same_hostname_normalization_as_runtime_targets() {
-        let grant = NetworkResourcePattern::parse_resource("Example.COM:443").unwrap();
-        let target = http_target("https://example.com/").unwrap().permission;
-        let PermissionTarget::Network(target) = target else {
-            panic!("HTTP must produce a network target");
-        };
-
-        assert!(grant.subsumes(&target.resource));
-    }
-
-    #[test]
-    fn parsed_network_grants_normalize_trailing_dot_like_runtime_targets() {
-        let grant = NetworkResourcePattern::parse_resource("Example.COM.:443").unwrap();
-        let target = http_target("https://example.com./").unwrap().permission;
-        let PermissionTarget::Network(target) = target else {
-            panic!("HTTP must produce a network target");
-        };
-
-        assert!(grant.subsumes(&target.resource));
-    }
-
-    #[test]
-    fn malformed_network_and_urls_fail_closed() {
-        assert!(network_target("::1", Some(80)).is_err());
-        assert!(network_target("*.example.com", None).is_err());
-        assert!(http_target("ftp://example.com/a").is_err());
-        assert!(http_target("https://u:p@example.com").is_err());
     }
     #[test]
     fn key_and_object_scopes_are_distinct() {
@@ -1153,6 +1136,93 @@ mod tests {
             })
             .collect()
     }
+
+    fn ignite_tables(sql: &str) -> Vec<(RdbmsVerb, String, String, String)> {
+        rdbms_sql_targets(env("prod"), RdbmsEngine::Ignite, "db", "PUBLIC", sql)
+            .unwrap()
+            .into_iter()
+            .map(|target| match target {
+                PermissionTarget::Rdbms(ClassPermissionTarget {
+                    verb: Some(verb),
+                    resource:
+                        RdbmsResourcePattern::Table {
+                            database,
+                            schema,
+                            table,
+                        },
+                    ..
+                }) => (verb, database, schema, table),
+                _ => panic!(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_extracts_parameterized_and_quoted_destinations() {
+        assert_eq!(
+            ignite_tables("MERGE INTO ignite_counters (id, count) VALUES (?, 0)"),
+            vec![(
+                RdbmsVerb::Mutate,
+                "db".to_string(),
+                "PUBLIC".to_string(),
+                "ignite_counters".to_string(),
+            )]
+        );
+        assert_eq!(
+            ignite_tables("MERGE INTO \"Counters\".\"Current\" (\"id\", \"count\") VALUES (?, ?)")
+                [0],
+            (
+                RdbmsVerb::Mutate,
+                "db".to_string(),
+                "Counters".to_string(),
+                "Current".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_extracts_select_sources() {
+        assert_eq!(
+            ignite_tables("MERGE INTO destination (id, count) SELECT id, count FROM source"),
+            vec![
+                (
+                    RdbmsVerb::Mutate,
+                    "db".to_string(),
+                    "PUBLIC".to_string(),
+                    "destination".to_string(),
+                ),
+                (
+                    RdbmsVerb::Query,
+                    "db".to_string(),
+                    "PUBLIC".to_string(),
+                    "source".to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_rejects_malformed_batches_and_key_clause() {
+        for sql in [
+            "MERGE INTO destination (id, count) VALUES (?, 0); SELECT * FROM protected",
+            "MERGE INTO destination (id, count VALUES (?, 0)",
+            "MERGE INTO destination (id, count) KEY (id) VALUES (?, 0)",
+        ] {
+            assert!(
+                rdbms_sql_targets(env("prod"), RdbmsEngine::Ignite, "db", "PUBLIC", sql).is_err(),
+                "accepted unsupported Ignite MERGE: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignite_merge_shorthand_does_not_broaden_other_dialects() {
+        let sql = "MERGE INTO destination (id, count) VALUES (?, 0)";
+        for engine in [RdbmsEngine::Postgres, RdbmsEngine::Mysql] {
+            assert!(rdbms_sql_targets(env("prod"), engine, "db", "public", sql).is_err());
+        }
+    }
+
     #[test]
     fn sql_select_and_joins() {
         assert_eq!(

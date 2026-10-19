@@ -24,7 +24,9 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
 use crate::durable_host::authorization::targets::kv_target;
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::keyvalue::{denial, environment_owner};
@@ -51,54 +53,52 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied) = if begun.is_live() {
-                let environment_id = self.owned_agent_id.environment_id();
-                let bucket = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<BucketEntry>(&bucket)?
-                    .name
-                    .clone();
-                let target = kv_target(environment_owner(self), KvVerb::Read, &bucket, &key);
-                let denied = match target {
-                    Ok(target) => self
-                        .authorize_live_permission(&target)
-                        .await?
-                        .err()
-                        .map(denial),
-                    Err(error) => Some(denial(error)),
-                };
-                let request = HostRequestKVBucketAndKey {
-                    bucket: bucket.clone(),
-                    key: key.clone(),
-                };
-                (
-                    begun.start_live(self, request).await?,
-                    environment_id,
-                    bucket,
-                    denied,
-                )
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let (mut handle, environment_id, bucket) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let environment_id = self.owned_agent_id.environment_id();
+                    let bucket = self
+                        .as_wasi_view()
+                        .table()
+                        .get::<BucketEntry>(&bucket)?
+                        .name
+                        .clone();
+                    let target = kv_target(environment_owner(self), KvVerb::Read, &bucket, &key);
+                    let denied = match target {
+                        Ok(target) => self
+                            .authorize_live_permission(&target)
+                            .await?
+                            .err()
+                            .map(denial),
+                        Err(error) => Some(denial(error)),
+                    };
+                    let request = HostRequestKVBucketAndKey {
+                        bucket: bucket.clone(),
+                        key: key.clone(),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
+                    (
+                        begun.start_live(self, request).await?,
+                        environment_id,
+                        bucket,
+                    )
                 }
-                let environment_id = self.owned_agent_id.environment_id();
-                let bucket = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<BucketEntry>(&bucket)?
-                    .name
-                    .clone();
-                (handle, environment_id, bucket, None)
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    let environment_id = self.owned_agent_id.environment_id();
+                    let bucket = self
+                        .as_wasi_view()
+                        .table()
+                        .get::<BucketEntry>(&bucket)?
+                        .name
+                        .clone();
+                    (handle, environment_id, bucket)
+                }
             };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVGet { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self
@@ -147,87 +147,79 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied, outgoing_value, length) =
-                if begun.is_live() {
-                    let environment_id = self.owned_agent_id.environment_id();
-                    let bucket = self
-                        .as_wasi_view()
-                        .table()
-                        .get::<BucketEntry>(&bucket)?
-                        .name
-                        .clone();
-                    let target = kv_target(environment_owner(self), KvVerb::Write, &bucket, &key);
-                    let denied = match target {
-                        Ok(target) => self
-                            .authorize_live_permission(&target)
-                            .await?
-                            .err()
-                            .map(denial),
-                        Err(error) => Some(denial(error)),
-                    };
-                    let outgoing_value = if denied.is_none() {
-                        self.as_wasi_view()
+            let (mut handle, environment_id, bucket, outgoing_value, length) =
+                match begun.resolve(self).await? {
+                    ResolvedCall::Live(begun) => {
+                        let environment_id = self.owned_agent_id.environment_id();
+                        let bucket = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<BucketEntry>(&bucket)?
+                            .name
+                            .clone();
+                        let target =
+                            kv_target(environment_owner(self), KvVerb::Write, &bucket, &key);
+                        let denied = match target {
+                            Ok(target) => self
+                                .authorize_live_permission(&target)
+                                .await?
+                                .err()
+                                .map(denial),
+                            Err(error) => Some(denial(error)),
+                        };
+                        let body = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<OutgoingValueEntry>(&outgoing_value)?
+                            .body
+                            .clone();
+                        if let Some(denial) = denied {
+                            let request = HostRequestKVBucketKeyAndSize {
+                                bucket,
+                                key,
+                                length: body.read().unwrap().len(),
+                            };
+                            break 'resp begun.start_live_denied(self, request, denial).await?;
+                        }
+                        let outgoing_value = body.read().unwrap().clone();
+                        let length = outgoing_value.len() as u64;
+                        let request = HostRequestKVBucketKeyAndSize {
+                            bucket: bucket.clone(),
+                            key: key.clone(),
+                            length: outgoing_value.len(),
+                        };
+                        (
+                            begun.start_live(self, request).await?,
+                            environment_id,
+                            bucket,
+                            outgoing_value,
+                            length,
+                        )
+                    }
+                    ResolvedCall::Replay(mut handle) => {
+                        match handle.replay(self).await? {
+                            CallReplayOutcome::Replayed(response) => break 'resp response,
+                            CallReplayOutcome::Incomplete(live) => handle = live,
+                        }
+                        let environment_id = self.owned_agent_id.environment_id();
+                        let bucket = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<BucketEntry>(&bucket)?
+                            .name
+                            .clone();
+                        let outgoing_value = self
+                            .as_wasi_view()
                             .table()
                             .get::<OutgoingValueEntry>(&outgoing_value)?
                             .body
                             .read()
                             .unwrap()
-                            .clone()
-                    } else {
-                        Vec::new()
-                    };
-                    let length = outgoing_value.len() as u64;
-                    let request = HostRequestKVBucketKeyAndSize {
-                        bucket: bucket.clone(),
-                        key: key.clone(),
-                        length: outgoing_value.len(),
-                    };
-                    (
-                        begun.start_live(self, request).await?,
-                        environment_id,
-                        bucket,
-                        denied,
-                        outgoing_value,
-                        length,
-                    )
-                } else {
-                    let mut handle = begun.start_replay(self).await?;
-                    match handle.replay(self).await? {
-                        CallReplayOutcome::Replayed(response) => break 'resp response,
-                        CallReplayOutcome::Incomplete(live) => handle = live,
+                            .clone();
+                        let length = outgoing_value.len() as u64;
+                        (handle, environment_id, bucket, outgoing_value, length)
                     }
-                    let environment_id = self.owned_agent_id.environment_id();
-                    let bucket = self
-                        .as_wasi_view()
-                        .table()
-                        .get::<BucketEntry>(&bucket)?
-                        .name
-                        .clone();
-                    let denied = None;
-                    let outgoing_value = self
-                        .as_wasi_view()
-                        .table()
-                        .get::<OutgoingValueEntry>(&outgoing_value)?
-                        .body
-                        .read()
-                        .unwrap()
-                        .clone();
-                    let length = outgoing_value.len() as u64;
-                    (
-                        handle,
-                        environment_id,
-                        bucket,
-                        denied,
-                        outgoing_value,
-                        length,
-                    )
                 };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVUnit { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self
@@ -289,54 +281,52 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied) = if begun.is_live() {
-                let environment_id = self.owned_agent_id.environment_id();
-                let bucket = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<BucketEntry>(&bucket)?
-                    .name
-                    .clone();
-                let target = kv_target(environment_owner(self), KvVerb::Delete, &bucket, &key);
-                let denied = match target {
-                    Ok(target) => self
-                        .authorize_live_permission(&target)
-                        .await?
-                        .err()
-                        .map(denial),
-                    Err(error) => Some(denial(error)),
-                };
-                let request = HostRequestKVBucketAndKey {
-                    bucket: bucket.clone(),
-                    key: key.clone(),
-                };
-                (
-                    begun.start_live(self, request).await?,
-                    environment_id,
-                    bucket,
-                    denied,
-                )
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let (mut handle, environment_id, bucket) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let environment_id = self.owned_agent_id.environment_id();
+                    let bucket = self
+                        .as_wasi_view()
+                        .table()
+                        .get::<BucketEntry>(&bucket)?
+                        .name
+                        .clone();
+                    let target = kv_target(environment_owner(self), KvVerb::Delete, &bucket, &key);
+                    let denied = match target {
+                        Ok(target) => self
+                            .authorize_live_permission(&target)
+                            .await?
+                            .err()
+                            .map(denial),
+                        Err(error) => Some(denial(error)),
+                    };
+                    let request = HostRequestKVBucketAndKey {
+                        bucket: bucket.clone(),
+                        key: key.clone(),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
+                    (
+                        begun.start_live(self, request).await?,
+                        environment_id,
+                        bucket,
+                    )
                 }
-                let environment_id = self.owned_agent_id.environment_id();
-                let bucket = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<BucketEntry>(&bucket)?
-                    .name
-                    .clone();
-                (handle, environment_id, bucket, None)
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    let environment_id = self.owned_agent_id.environment_id();
+                    let bucket = self
+                        .as_wasi_view()
+                        .table()
+                        .get::<BucketEntry>(&bucket)?
+                        .name
+                        .clone();
+                    (handle, environment_id, bucket)
+                }
             };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVUnit { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self
@@ -387,54 +377,52 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied) = if begun.is_live() {
-                let environment_id = self.owned_agent_id.environment_id();
-                let bucket = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<BucketEntry>(&bucket)?
-                    .name
-                    .clone();
-                let target = kv_target(environment_owner(self), KvVerb::Read, &bucket, &key);
-                let denied = match target {
-                    Ok(target) => self
-                        .authorize_live_permission(&target)
-                        .await?
-                        .err()
-                        .map(denial),
-                    Err(error) => Some(denial(error)),
-                };
-                let request = HostRequestKVBucketAndKey {
-                    bucket: bucket.clone(),
-                    key: key.clone(),
-                };
-                (
-                    begun.start_live(self, request).await?,
-                    environment_id,
-                    bucket,
-                    denied,
-                )
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let (mut handle, environment_id, bucket) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let environment_id = self.owned_agent_id.environment_id();
+                    let bucket = self
+                        .as_wasi_view()
+                        .table()
+                        .get::<BucketEntry>(&bucket)?
+                        .name
+                        .clone();
+                    let target = kv_target(environment_owner(self), KvVerb::Read, &bucket, &key);
+                    let denied = match target {
+                        Ok(target) => self
+                            .authorize_live_permission(&target)
+                            .await?
+                            .err()
+                            .map(denial),
+                        Err(error) => Some(denial(error)),
+                    };
+                    let request = HostRequestKVBucketAndKey {
+                        bucket: bucket.clone(),
+                        key: key.clone(),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
+                    (
+                        begun.start_live(self, request).await?,
+                        environment_id,
+                        bucket,
+                    )
                 }
-                let environment_id = self.owned_agent_id.environment_id();
-                let bucket = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<BucketEntry>(&bucket)?
-                    .name
-                    .clone();
-                (handle, environment_id, bucket, None)
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    let environment_id = self.owned_agent_id.environment_id();
+                    let bucket = self
+                        .as_wasi_view()
+                        .table()
+                        .get::<BucketEntry>(&bucket)?
+                        .name
+                        .clone();
+                    (handle, environment_id, bucket)
+                }
             };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVDelete { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self

@@ -10,12 +10,15 @@ description: "Add a new npm package dependency to a TypeScript Golem project. Us
 - Golem TypeScript runs inside a [QuickJS](https://github.com/DelSkayn/rquickjs/) WebAssembly runtime, NOT Node.js.
 - The runtime implements a broad set of Browser and Node.js APIs. Most packages targeting browsers or standard Node.js APIs will work.
 - Packages that use native Node.js C++ addons **will not work** (no native compilation in WASM).
-- Some modules are stubs that throw for compatibility: `node:child_process`, `node:cluster`, `node:http2`, `node:worker_threads`.
+- `node:child_process` supports constrained JavaScript and simple npm script execution inside the
+  runtime. It cannot create host processes or run a general shell. `node:cluster`, `node:http2`, and
+  `node:worker_threads` remain unsupported or stubbed.
 
 ### Supported runtime APIs
 
 - **Web Platform APIs**: `fetch`, `Headers`, `Request`, `Response`, `FormData`, `Blob`, `File`, `URL`, `URLSearchParams`, `console`, timers, `AbortController`, `TextEncoder`/`TextDecoder`, Streams (`ReadableStream`, `WritableStream`, `TransformStream`), `structuredClone`, `crypto.randomUUID`/`crypto.getRandomValues`, `Event`/`EventTarget`, `MessageChannel`/`MessagePort`, `Intl`
-- **Node.js modules**: `node:buffer`, `node:crypto` (hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509), `node:dgram` (UDP), `node:dns`, `node:events`, `node:fs` and `node:fs/promises` (comprehensive filesystem), `node:http`/`node:https` (client and server), `node:net` (TCP sockets and servers), `node:os`, `node:path`, `node:perf_hooks`, `node:process`, `node:querystring`, `node:readline`, `node:sqlite` (embedded, requires feature flag), `node:stream`, `node:test`, `node:timers`, `node:url`, `node:util`, `node:v8`, `node:vm`, `node:zlib` (gzip, deflate, brotli)
+- **Node.js modules**: `node:buffer`, `node:crypto` (hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509), `node:events`, `node:fs` and `node:fs/promises` (comprehensive filesystem), `node:http`/`node:https` (client; servers only through custom HTTP routers with `nodeHttpHandler`), `node:os`, `node:path`, `node:perf_hooks`, `node:process`, `node:querystring`, `node:readline`, `node:sqlite` (embedded, requires feature flag), `node:stream`, `node:test`, `node:timers`, `node:url`, `node:util`, `node:v8`, `node:vm`, `node:zlib` (gzip, deflate, brotli)
+- **Not supported**: `node:net`, `node:dgram` and `node:dns`. The worker executor refuses WASI sockets by default, so packages that open raw TCP or UDP connections or do DNS lookups through these modules (for example `pg`, `mysql2` or `ioredis`) fail. Use `fetch` or `node:http` for HTTP and `golem:rdbms` for PostgreSQL and MySQL.
 
 Check the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs) for the up-to-date list.
 

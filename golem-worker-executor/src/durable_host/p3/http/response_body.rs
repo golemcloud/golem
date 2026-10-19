@@ -16,22 +16,26 @@ use super::rebuild::{AbortOnDropIoTask, P3HttpSendRebuild};
 use super::rebuild::{RebuildOutcome, ResendOutcome, reissue_recorded_request};
 use super::rebuild::{recorded_request_body_replayability, resend_recorded_request};
 use super::replay::ReplayedRequestBodyDrainProgress;
+use super::send::p3_send_span_finished;
 use super::serialization::{deserialize_error_code, serialize_error_code};
 use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DropEvent,
-    DurableDemandItem, DurableDemandStream, ScopeReplayRecovery, demand_channel,
+    AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
+    DurableDemandStream, InvocationIdSource, ScopeReplayDecision, ScopeReplayRecovery,
+    demand_channel, reserve_import_invocation_id,
 };
+use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
+    semantic_trap_retry_override_error,
 };
+use crate::durable_host::http::policy::classify_serializable_http_error_code;
 use crate::durable_host::http::policy::{
     ResumeResponseAction, classify_resume_response, has_guest_range_header,
     parse_content_range_start, resume_range_headers,
 };
-use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, expect_ctx, observe_function_call,
     observe_function_call_store, wasi_http_view,
@@ -77,17 +81,13 @@ use wasmtime_wasi_http::p3::{HostBodyStreamProducer, WasiHttp, WasiHttpView};
 pub(crate) struct OpenP3HttpResponseState {
     /// The `outgoing-http-request` invocation span of the send that produced
     /// this response. Finished when the response body completes (the durable
-    /// consume-body terminal) or via a deferred [`DropEvent::FinishSpan`] when
-    /// the response is dropped unconsumed.
+    /// consume-body terminal) or by a local durable cleanup pair when the
+    /// response is dropped unconsumed.
     pub(crate) span: P3HttpSendSpan,
     /// Request method, for retry properties of body-transfer failures.
     pub(crate) method: String,
     /// Request URI, for retry properties of body-transfer failures.
     pub(crate) uri: String,
-    /// Effective idempotence of the request (the worker-level
-    /// `assume_idempotence` override, or an idempotent HTTP method), applied
-    /// to the retry properties of body-transfer failures.
-    pub(super) is_idempotent: bool,
     /// How to re-send the recorded request without a new guest-visible call.
     /// Used to re-issue the request when a replayed placeholder body's
     /// durable consume-body scope turns out to be incomplete and must
@@ -102,21 +102,6 @@ pub(crate) struct OpenP3HttpResponseState {
     pub(super) observational_owner: Option<OplogIndex>,
 }
 
-/// The send's `outgoing-http-request` invocation-context span together with
-/// how it must be finished.
-///
-/// Spans of sends recorded by the current executor are *derived*: the span id
-/// is a deterministic (UUIDv5-based) function of the send's own host-call
-/// `Start` index, so no `StartSpan`/`FinishSpan` oplog entries exist for them
-/// and finishing is in-memory only. Positional span entries are unsound under
-/// concurrent sends — overlapping sends interleave their entries live and
-/// consume each other's on replay — which is why the span identity is derived
-/// from the (claim-based, order-independent) durable `Start` instead.
-///
-/// Spans reconstructed from a legacy positional `StartSpan` entry (oplogs
-/// written by older executors) keep the legacy durable finish: the matching
-/// positional `FinishSpan` is consumed on replay, or appended when the worker
-/// has switched to live, exactly as the recording executor would have done.
 pub(super) fn register_open_response<Ctx: WorkerCtx, U: Send>(
     store: &Accessor<U, DurableP3<Ctx>>,
     response: &Resource<Response>,
@@ -152,6 +137,19 @@ impl<Ctx: WorkerCtx> types::HostResponse for DurableP3View<'_, Ctx> {
 
 /// Result fed to the guest-facing trailers `FutureReader` once the body closes.
 pub(super) type HttpTrailersOutcome = Result<Option<HeaderMap>, ErrorCode>;
+
+fn body_span_outcome(
+    cancelled: bool,
+    terminal: &HttpTrailersOutcome,
+) -> golem_common::model::oplog::SpanOutcome {
+    if cancelled {
+        golem_common::model::oplog::SpanOutcome::Cancelled
+    } else if terminal.is_ok() {
+        golem_common::model::oplog::SpanOutcome::Completed
+    } else {
+        golem_common::model::oplog::SpanOutcome::Failed
+    }
+}
 
 /// A demand from the body stream producer to the durable [`HttpConsumeBodyTask`].
 pub(super) enum HttpBodyDemand {
@@ -210,10 +208,10 @@ impl HttpBodyDemandSignal {
 }
 
 async fn require_recording_before_response_demand(
-    readiness: impl Future<Output = Result<(), String>>,
+    readiness: impl Future<Output = Result<(), WorkerExecutorError>>,
     demand_signal: Arc<HttpBodyDemandSignal>,
     request_body_progress: Option<Arc<ReplayedRequestBodyDrainProgress>>,
-) -> Result<(), String> {
+) -> Result<(), WorkerExecutorError> {
     let Some(request_body_progress) = request_body_progress else {
         return readiness.await;
     };
@@ -225,10 +223,9 @@ async fn require_recording_before_response_demand(
             tokio::select! {
                 biased;
                 result = &mut readiness => return result,
-                () = std::future::ready(()) => return Err(
-                    "response-body demand arrived while replay was waiting for more guest request-body data"
-                        .to_string(),
-                )
+                () = std::future::ready(()) => return Err(WorkerExecutorError::runtime(
+                    "response-body demand arrived while replay was waiting for more guest request-body data",
+                ))
             }
         }
 
@@ -249,10 +246,9 @@ async fn require_recording_before_response_demand(
     }
 }
 
-/// Settles a persisted chunk completion at the producer's observation boundary rather than when
-/// the background task merely queues the reply. The latter is too early: another concurrent guest
-/// future can win and drop the producer before it consumes the queued reply, making replay observe
-/// a different cancellation order.
+/// Settles a persisted frame when its first bytes (or EOF) reach the reader. Guest reads settle
+/// through Wasmtime's consumption observer, not when the producer queues a buffer. Host reads
+/// and explicit cancellation acknowledgements retain the producer handoff boundary.
 pub(super) struct HttpBodyChunkDelivery {
     delivery: Option<CompletionDelivery>,
     observed: Option<oneshot::Sender<()>>,
@@ -280,6 +276,30 @@ impl HttpBodyChunkDelivery {
             .take()
             .expect("body chunk observation is sent exactly once")
             .send(());
+    }
+
+    fn observe_read<D>(
+        self,
+        store: &mut StoreContextMut<'_, D>,
+        destination: &mut Destination<'_, u8, Bytes>,
+    ) -> wasmtime::Result<()> {
+        if destination.remaining(&mut *store).is_some() {
+            destination.register_read_observer(&mut *store, move |consumption| {
+                match consumption {
+                    TerminalConsumption::Delivered => self.observed(),
+                    TerminalConsumption::NotDelivered => drop(self),
+                    TerminalConsumption::Superseded => {
+                        // Dropping the token poisons replay rather than releasing a recorded
+                        // guest boundary that was not reproduced.
+                        tracing::error!("HTTP body read observer was superseded");
+                        drop(self);
+                    }
+                }
+            })
+        } else {
+            self.observed();
+            Ok(())
+        }
     }
 }
 
@@ -415,17 +435,17 @@ impl Drop for HttpTrailersDeliveryGuard {
 /// demand/reply protocol: when the guest needs more bytes the producer sends a
 /// demand and parks; the task reads (live) or replays (on replay) exactly one
 /// body frame, persists/claims it as a child durable call, and replies with the
-/// bytes. The whole frame is then handed to the runtime's buffer
-/// (`Destination::set_buffer`), which delivers it across however many guest
-/// reads and only calls `poll_produce` again once it is fully drained — so
-/// exactly one child chunk is produced per real demand, identically live and on
-/// replay.
+/// bytes. The producer retains the frame's suffix across read-sized buffers, so the read observer
+/// covers only the bytes accepted by that read. No further durable demand is made until the suffix
+/// is drained. A fresh demand always parks; an already recorded suffix is available inline, both
+/// live and on replay.
 pub(super) struct DurableHttpBodyProducer {
     demand_tx: mpsc::Sender<HttpBodyDemand>,
     demand_signal: Arc<HttpBodyDemandSignal>,
     hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
     pending: Option<PendingHttpBodyRead>,
     pending_cancel: Option<oneshot::Receiver<()>>,
+    buffered: Bytes,
     finished: bool,
 }
 
@@ -449,6 +469,7 @@ impl DurableHttpBodyProducer {
             hook,
             pending: None,
             pending_cancel: None,
+            buffered: Bytes::new(),
             finished: false,
         }
     }
@@ -468,6 +489,13 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
         loop {
             if self.finished {
                 return Poll::Ready(Ok(StreamResult::Dropped));
+            }
+
+            if !self.buffered.is_empty() {
+                let capacity = dst.remaining(&mut store).unwrap_or(self.buffered.len());
+                let count = capacity.min(self.buffered.len());
+                dst.set_buffer(self.buffered.split_to(count));
+                return Poll::Ready(Ok(StreamResult::Completed));
             }
 
             if let Some(rx) = self.pending_cancel.as_mut() {
@@ -531,24 +559,29 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         // the remote peer producing more body bytes.
                         return Poll::Pending;
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::Data { bytes, delivery })) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::Data {
+                        mut bytes,
+                        delivery,
+                    })) => {
                         self.pending = None;
                         if bytes.is_empty() {
                             continue;
                         }
-                        // Hand the whole frame to the runtime; it delivers it
-                        // across as many guest reads as needed and only calls
-                        // us again once it is drained.
-                        dst.set_buffer(bytes);
-                        delivery.observed();
+                        let capacity = dst.remaining(&mut store).unwrap_or(bytes.len());
+                        let count = capacity.min(bytes.len());
+                        delivery.observe_read(&mut store, &mut dst)?;
+                        dst.set_buffer(bytes.split_to(count));
+                        self.buffered = bytes;
                         return Poll::Ready(Ok(StreamResult::Completed));
                     }
                     Poll::Ready(Ok(HttpBodyChunkReply::End { delivery })) => {
                         let cancelling = pending.cancelling;
                         let cancel_ack = pending.cancel_ack.take();
                         self.pending = None;
-                        delivery.observed();
                         if cancelling {
+                            // A cancellation acknowledgement is not a successful EOF read. It
+                            // must release the task before waiting for parent finalization.
+                            delivery.observed();
                             if let Some(cancel_ack) = cancel_ack {
                                 self.pending_cancel = Some(cancel_ack);
                                 continue;
@@ -556,6 +589,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                             self.finished = true;
                             return Poll::Ready(Ok(StreamResult::Cancelled));
                         } else {
+                            delivery.observe_read(&mut store, &mut dst)?;
                             self.finished = true;
                             return Poll::Ready(Ok(StreamResult::Dropped));
                         }
@@ -825,9 +859,9 @@ pub(super) enum ProducedChunk {
     Cancelled,
 }
 
-/// Crosses the final HTTP body delivery boundary after a child terminal is durable. Unlike the
-/// generic demand-stream transfer, queueing the reply is not sufficient: the producer must poll
-/// it and hand it to Wasmtime before the completion is guest-observable.
+/// Waits for the reader's delivery boundary after a child terminal is durable. Queueing a reply
+/// or installing a Wasmtime buffer is not guest consumption; the read observer settles ordinary
+/// data and EOF. Explicit cancellation acknowledgements settle at the producer handoff.
 async fn deliver_http_body_reply(
     activity: &TailActivity,
     mut demand: oneshot::Sender<HttpBodyChunkReply>,
@@ -843,7 +877,7 @@ async fn deliver_http_body_reply(
         return Ok(DemandDelivery::Abandoned);
     }
 
-    delivery.prepare_delivery().await?;
+    delivery.prepare_delivery(Some(activity)).await?;
     let (delivery, observed) = HttpBodyChunkDelivery::new(delivery);
     if let Err(reply) = demand.send(reply(delivery)) {
         // Dropping an armed delivery reserves the discard marker before waking this task.
@@ -886,31 +920,41 @@ pub(super) async fn read_http_body_frame(
     }
 }
 
-/// Why skipping the already-delivered prefix of a re-sent full response failed.
+/// Why the already-delivered prefix of a re-sent full response could not be skipped.
 pub(super) enum SkipBodyPrefixError {
     /// The fresh body ended before the prefix was fully skipped: the resource
     /// shrank since the original response, so the delivered bytes cannot be
     /// continued.
     BodyTooShort,
+    /// The fresh body's prefix differs from the bytes already delivered to the
+    /// guest: the re-sent response is a different response (a nondeterministic
+    /// producer, or a resource that changed), so continuing it would splice two
+    /// responses together.
+    Mismatch,
     /// Reading the fresh body failed while skipping.
     Read(ErrorCode),
 }
 
-/// Reads and discards the first `prefix` bytes of a fresh body (count-only, no
-/// content verification — P2 parity), returning the remainder of a data frame
-/// that straddled the prefix boundary, if any.
+/// Reads and discards the first `prefix` bytes of a fresh body, verifying that
+/// they are exactly the bytes already delivered to the guest (whose digest the
+/// consume-body task accumulates in `delivered`), and returns the remainder of
+/// a data frame that straddled the prefix boundary, if any.
 pub(super) async fn skip_body_prefix(
     body: &mut UnsyncBoxBody<Bytes, ErrorCode>,
     prefix: u64,
+    delivered: &blake3::Hasher,
 ) -> Result<Option<Bytes>, SkipBodyPrefixError> {
     let mut remaining = prefix;
+    let mut fresh = blake3::Hasher::new();
+    let mut leftover = None;
     while remaining > 0 {
         match read_http_body_frame(body).await {
             HttpBodyFrame::Data(mut data) => {
                 if (data.len() as u64) > remaining {
-                    return Ok(Some(data.split_off(remaining as usize)));
+                    leftover = Some(data.split_off(remaining as usize));
                 }
                 remaining -= data.len() as u64;
+                fresh.update(&data);
             }
             HttpBodyFrame::End(_) => return Err(SkipBodyPrefixError::BodyTooShort),
             HttpBodyFrame::Error(code) => return Err(SkipBodyPrefixError::Read(code)),
@@ -919,7 +963,145 @@ pub(super) async fn skip_body_prefix(
             }
         }
     }
-    Ok(None)
+    if fresh.finalize() != delivered.finalize() {
+        return Err(SkipBodyPrefixError::Mismatch);
+    }
+    Ok(leftover)
+}
+
+/// How a replayed response whose body the guest already partly observed continues after a
+/// restart.
+pub(super) enum ResumeOutcome {
+    RecoveryRequired(WorkerExecutorError),
+    /// The fresh response continues the delivered prefix; stream its body from here on.
+    Resumed {
+        body: UnsyncBoxBody<Bytes, ErrorCode>,
+        io_guard: AbortOnDropIoTask,
+        /// The remainder of a data frame that straddled the prefix boundary.
+        leftover: Option<Bytes>,
+    },
+    /// The resend failed on conversion or on the network; classified for worker-level retry
+    /// like any live body failure.
+    Failed(ErrorCode),
+    /// The delivered prefix cannot be continued: the request cannot be resent, the provider
+    /// neither honours the range nor reproduces the response, or the response changed. The body
+    /// stream ends with an explicit incomplete-response error after the bytes the guest already
+    /// observed; it is deterministic for this history, never retry-routed.
+    Interrupted(String),
+}
+
+/// Continues a response body whose `delivered` byte prefix the guest observed before a
+/// restart, by resending the recorded request with a `Range` header. A `206` continuing at the
+/// delivered offset resumes directly; a full response with the original status is accepted
+/// only when its prefix is byte-identical to the delivered bytes. A request that carries a
+/// guest-set `Range` header is resent unchanged (composing a resume range with the guest's own
+/// range is not supported), and any successful response is accepted only through the same
+/// prefix verification. Everything else is an interrupted response: silently combining two
+/// different responses is never an option.
+pub(super) async fn resume_recorded_response<Ctx: WorkerCtx, U: 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    resend: &P3HttpSendRebuild,
+    delivered_bytes: u64,
+    delivered: &blake3::Hasher,
+) -> ResumeOutcome {
+    let guest_range = has_guest_range_header(resend.request.headers.keys().map(String::as_str));
+    let range_headers = if guest_range {
+        Vec::new()
+    } else {
+        resume_range_headers(delivered_bytes)
+    };
+    match resend_recorded_request::<Ctx, U>(accessor, resend, &range_headers).await {
+        ResendOutcome::RecoveryRequired(error) => ResumeOutcome::RecoveryRequired(error),
+        ResendOutcome::Refused(reason) => ResumeOutcome::Interrupted(reason),
+        ResendOutcome::Failed(code) => ResumeOutcome::Failed(code),
+        ResendOutcome::Sent { response, io_guard } if guest_range => {
+            let status = response.status().as_u16();
+            if !(200..300).contains(&status) {
+                return ResumeOutcome::Interrupted(format!(
+                    "the re-sent request with the guest's own Range header returned status \
+                     {status}, which cannot continue the delivered prefix"
+                ));
+            }
+            let mut body = response.into_body();
+            let skipped = skip_body_prefix(&mut body, delivered_bytes, delivered).await;
+            if let Some(error) = io_guard.1.error() {
+                return ResumeOutcome::RecoveryRequired(error);
+            }
+            match skipped {
+                Ok(leftover) => ResumeOutcome::Resumed {
+                    body,
+                    io_guard,
+                    leftover,
+                },
+                Err(SkipBodyPrefixError::BodyTooShort) => ResumeOutcome::Interrupted(
+                    "the re-sent response body is shorter than the bytes already delivered to \
+                     the guest"
+                        .to_string(),
+                ),
+                Err(SkipBodyPrefixError::Mismatch) => ResumeOutcome::Interrupted(
+                    "the re-sent response body differs from the bytes already delivered to the \
+                     guest"
+                        .to_string(),
+                ),
+                Err(SkipBodyPrefixError::Read(code)) => ResumeOutcome::Failed(code),
+            }
+        }
+        ResendOutcome::Sent { response, io_guard } => {
+            let status = response.status().as_u16();
+            let content_range_start = response
+                .headers()
+                .get("content-range")
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_content_range_start);
+            match classify_resume_response(
+                status,
+                content_range_start,
+                delivered_bytes,
+                Some(resend.recorded_status),
+            ) {
+                ResumeResponseAction::Resume => ResumeOutcome::Resumed {
+                    body: response.into_body(),
+                    io_guard,
+                    leftover: None,
+                },
+                ResumeResponseAction::RangeNotSatisfiable => ResumeOutcome::Interrupted(
+                    "the server returned 416 Range Not Satisfiable for the delivered prefix"
+                        .to_string(),
+                ),
+                ResumeResponseAction::SkipPrefix => {
+                    let mut body = response.into_body();
+                    let skipped = skip_body_prefix(&mut body, delivered_bytes, delivered).await;
+                    if let Some(error) = io_guard.1.error() {
+                        return ResumeOutcome::RecoveryRequired(error);
+                    }
+                    match skipped {
+                        Ok(leftover) => ResumeOutcome::Resumed {
+                            body,
+                            io_guard,
+                            leftover,
+                        },
+                        Err(SkipBodyPrefixError::BodyTooShort) => ResumeOutcome::Interrupted(
+                            "the re-sent response body is shorter than the bytes already \
+                             delivered to the guest"
+                                .to_string(),
+                        ),
+                        Err(SkipBodyPrefixError::Mismatch) => ResumeOutcome::Interrupted(
+                            "the re-sent response body differs from the bytes already \
+                             delivered to the guest"
+                                .to_string(),
+                        ),
+                        Err(SkipBodyPrefixError::Read(code)) => ResumeOutcome::Failed(code),
+                    }
+                }
+                ResumeResponseAction::Fallback => ResumeOutcome::Interrupted(format!(
+                    "the re-sent request returned status {status} (recorded status {}, \
+                     content-range start {content_range_start:?}), which cannot continue the \
+                     delivered prefix",
+                    resend.recorded_status
+                )),
+            }
+        }
+    }
 }
 
 /// Durable driver for a `consume-body` response stream.
@@ -950,11 +1132,14 @@ pub(super) struct HttpConsumeBodyTask<Ctx> {
     /// the parent terminal, mirroring the P2 `end_http_request` span
     /// lifecycle. `None` for responses that did not come from `client::send`.
     response_state: Option<OpenP3HttpResponseState>,
+    /// The invocation id of the `consume-body` guest import that spawned the task.
+    invocation_id: InvocationIdSource,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> HttpConsumeBodyTask<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
@@ -962,6 +1147,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
         trailers_delivery: Arc<HttpTrailersDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
+        invocation_id: InvocationIdSource,
         activity: TailActivity,
     ) -> Self {
         Self {
@@ -971,6 +1157,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
             trailers_tx,
             trailers_delivery,
             response_state,
+            invocation_id,
             activity,
             _phantom: PhantomData,
         }
@@ -990,30 +1177,50 @@ where
             trailers_tx,
             trailers_delivery,
             mut response_state,
+            invocation_id,
             activity,
             ..
         } = self;
 
+        let recording_recovery = RequestBodyRecovery::default();
+        let unreconstructable = Arc::new(AtomicBool::new(false));
         let scope_replay_recovery = match response_state.as_mut() {
-            Some(state) if state.body_is_placeholder && state.is_idempotent => {
-                match state.resend.as_mut() {
-                    Some(rebuild) => {
-                        let request_body_progress = rebuild
-                            .replayed_request_body_drain
-                            .as_ref()
-                            .map(|drain| drain.progress.clone());
-                        ScopeReplayRecovery::reexecute_when(
-                            require_recording_before_response_demand(
-                                recorded_request_body_replayability(accessor, rebuild),
-                                demand_signal.clone(),
-                                request_body_progress,
-                            ),
-                        )
-                    }
-                    None => ScopeReplayRecovery::Forbidden,
+            Some(state) if state.body_is_placeholder => match state.resend.as_mut() {
+                Some(rebuild) => {
+                    let request_body_progress = rebuild
+                        .replayed_request_body_drain
+                        .as_ref()
+                        .map(|drain| drain.progress.clone());
+                    let readiness = require_recording_before_response_demand(
+                        recorded_request_body_replayability(
+                            accessor,
+                            rebuild,
+                            recording_recovery.clone(),
+                            false,
+                        ),
+                        demand_signal.clone(),
+                        request_body_progress,
+                    );
+                    let recovery = recording_recovery.clone();
+                    let unreconstructable = unreconstructable.clone();
+                    ScopeReplayRecovery::decide_when(async move {
+                        match readiness.await {
+                            Ok(()) => Ok(ScopeReplayDecision::Reexecute),
+                            Err(_) if recovery.error().is_some() => Err(recovery.error().unwrap()),
+                            Err(_) => {
+                                unreconstructable.store(true, Ordering::Release);
+                                Ok(ScopeReplayDecision::CompleteWithLoss)
+                            }
+                        }
+                    })
                 }
-            }
-            Some(state) if state.body_is_placeholder => ScopeReplayRecovery::Forbidden,
+                // The owner cannot re-issue this response, but still owns completion of its
+                // original scope and chunk calls with HttpResponseIncomplete.
+                None => {
+                    unreconstructable.store(true, Ordering::Release);
+                    ScopeReplayRecovery::CompleteWithLoss
+                }
+            },
             _ => ScopeReplayRecovery::Default,
         };
 
@@ -1026,12 +1233,11 @@ where
             observational_owner,
         ) = match response_state {
             Some(state) => {
-                let mut properties = RetryContext::http(&state.method, &state.uri);
-                apply_method_idempotence(&mut properties, state.is_idempotent);
+                let properties = RetryContext::http(&state.method, &state.uri);
                 (
                     Some(state.span),
                     Some(properties),
-                    Some((state.method, state.uri, state.is_idempotent)),
+                    Some((state.method, state.uri)),
                     state.resend,
                     state.body_is_placeholder,
                     state.observational_owner,
@@ -1039,12 +1245,11 @@ where
             }
             None => (None, None, None, None, false, None),
         };
-        // Keeps the re-issued request's I/O task alive while its body is read;
-        // dropped (aborting the task) when this task finishes. Never read —
-        // it exists only for its drop timing.
+        // Keeps re-issued request I/O alive and carries storage failures from its request body.
         let mut _rebuild_io_guard: Option<AbortOnDropIoTask> = None;
         // Set when a terminal error must not be routed through worker-level
-        // retry: a refused rebuild (request body not reconstructable — a retry
+        // or inline retry: a refused rebuild
+        // (request body not reconstructable — a retry
         // would replay into the same refusal forever) or a content-changed
         // response-body resume (416 / short full response — deterministic for
         // the same request).
@@ -1052,18 +1257,16 @@ where
         // In-function retry budget of the response-body resume path, shared across all resume
         // attempts of this consume-body scope.
         let mut resume_retry_state = InFunctionRetryState::new();
+        let mut resume_semantic_override = None;
         let mut resume_retry_ctx: Option<TaskRetryContext<Ctx>> = None;
         // Bytes delivered to the guest-facing stream so far (replayed chunks +
-        // live frames): the resume offset for `Range` requests.
+        // live frames): the resume offset for `Range` requests, and their digest, which a
+        // re-sent full response must reproduce before its remainder may continue the stream.
         let mut delivered_bytes: u64 = 0;
+        let mut delivered_digest = blake3::Hasher::new();
 
-        // Open the parent batched scope. Children nest under its begin index.
-        // Concurrently consumed response bodies open scopes with identical durable identity, so
-        // the scope name is discriminated by the producing send's own `Start` index — recorded
-        // oplog state that is identical on the live and replay paths and, unlike the derived
-        // span id (a function of the owning agent's id), survives forking the oplog to another
-        // agent. Responses that did not come from `client::send` have no span and keep the plain
-        // scope name.
+        // Open the parent call. Children nest under its Start index. Concurrently
+        // consumed response bodies are told apart by the invocation id of each `consume-body`.
         let mut stream = match DurableDemandStream::<
             P3HttpClientConsumeBody,
             P3HttpClientConsumeBodyChunk,
@@ -1073,16 +1276,14 @@ where
             durable_worker_ctx::<Ctx, U>,
             demand_rx,
             AccessClaimOptions {
-                scope_discriminator: response_span
-                    .as_ref()
-                    .map(|span| format!("consume-body:{}", span.send_start_index)),
-                request_identity: None,
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,
+                invocation_id,
+                ..Default::default()
             },
             DemandDeliveryMode::Deferred,
-            async |_| Ok(HostRequestNoInput {}),
+            HostRequestNoInput {},
         )
         .await
         {
@@ -1091,6 +1292,9 @@ where
             // `WorkerExecutorError` carries no call context but there is no scope
             // to group against either.
             Err(error) => {
+                if let Some(error) = recording_recovery.error() {
+                    return Err(error.into());
+                }
                 return fail_consume_body_task(trailers_tx, wasmtime::Error::from(error), None);
             }
         };
@@ -1099,6 +1303,7 @@ where
         // The trailers / body-error terminal, set on the live path; on replay it
         // is taken from the parent marker instead.
         let mut terminal: HttpTrailersOutcome = Ok(None);
+        let mut body_cancelled = false;
         let mut cancel_ack: Option<oneshot::Sender<()>> = None;
 
         loop {
@@ -1131,6 +1336,9 @@ where
                 .await
             {
                 Ok(item) => item,
+                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
+                    return Err(error.into());
+                }
                 Err(error) => {
                     // Durable-machinery failure (not an HTTP body error): surface
                     // it to the in-flight guest read and leave the parent incomplete.
@@ -1151,13 +1359,9 @@ where
             // the upstream body and persist it (live). Delivery to the guest-facing
             // stream happens afterwards, identically on both paths.
             //
-            // The demand-channel send below is the chunk's real guest-facing
-            // delivery boundary — one more fallible transfer *after* the child's
-            // durable `End` — so the child terminal goes through the
-            // deferred-delivery API: a closed demand receiver after the persisted
-            // `End` records the child's `CompletionDiscarded` marker instead of
-            // replay redelivering a chunk the recorded run never handed to the
-            // guest.
+            // A child terminal is durable before transfer, but its deferred-delivery token
+            // remains owned by the reply until the reader observes it. Dropping an unread reply
+            // records a discard; merely handing bytes to the producer is not delivery.
             let (produced, delivery) = match item {
                 DurableDemandItem::Replayed { response, delivery } => {
                     let replay_at_marker = delivery.is_replay_at_marker();
@@ -1210,21 +1414,68 @@ where
                         durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
                     });
                     let read_frame = async {
-                        if pending_reissue {
+                        let frame = if pending_reissue {
                             // First live read of a replayed response's placeholder body:
                             // the durable consume-body scope was either missing entirely
                             // (the crash happened before its `Start` was committed, so a
                             // synthetic scope was recovered live) or incomplete (the
-                            // original run was interrupted mid-body-stream, so the scope
-                            // claim jumped to live), and the placeholder carries no data.
+                            // original run was interrupted mid-body-stream; its recorded
+                            // chunks replayed and the scope continues live under its
+                            // recorded `Start`), and the placeholder carries no data.
                             // Re-issue the recorded request now and stream the fresh body
                             // instead. This only fires on a real guest demand: a dropped
-                            // stream or a cleanly replaying scope never re-issues.
+                            // stream or a cleanly replaying scope never re-issues. Chunks the
+                            // guest already observed are never re-delivered: the fresh body
+                            // must continue them (`resume_recorded_response`) or the stream
+                            // ends with an explicit incomplete-response error.
                             pending_reissue = false;
-                            match resend.as_ref() {
+                            match resend
+                                .as_ref()
+                                .filter(|_| !unreconstructable.load(Ordering::Acquire))
+                            {
+                                Some(resend) if delivered_bytes > 0 => {
+                                    match resume_recorded_response::<Ctx, U>(
+                                        accessor,
+                                        resend,
+                                        delivered_bytes,
+                                        &delivered_digest,
+                                    )
+                                    .await
+                                    {
+                                        ResumeOutcome::RecoveryRequired(error) => {
+                                            return Err(error);
+                                        }
+                                        ResumeOutcome::Resumed {
+                                            body: fresh_body,
+                                            io_guard,
+                                            leftover,
+                                        } => {
+                                            body = fresh_body;
+                                            _rebuild_io_guard = Some(io_guard);
+                                            match leftover {
+                                                Some(bytes) => HttpBodyFrame::Data(bytes),
+                                                None => read_http_body_frame(&mut body).await,
+                                            }
+                                        }
+                                        ResumeOutcome::Failed(code) => HttpBodyFrame::Error(code),
+                                        ResumeOutcome::Interrupted(reason) => {
+                                            tracing::warn!(
+                                                delivered_bytes,
+                                                %reason,
+                                                "p3 HTTP response body cannot continue after a \
+                                                 restart; the guest observes an incomplete response"
+                                            );
+                                            retry_exempt = true;
+                                            HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete)
+                                        }
+                                    }
+                                }
                                 Some(resend) => {
                                     match reissue_recorded_request::<Ctx, U>(accessor, resend).await
                                     {
+                                        RebuildOutcome::RecoveryRequired(error) => {
+                                            return Err(error);
+                                        }
                                         RebuildOutcome::Rebuilt {
                                             body: fresh_body,
                                             io_guard,
@@ -1235,36 +1486,44 @@ where
                                         }
                                         RebuildOutcome::Failed(code) => HttpBodyFrame::Error(code),
                                         RebuildOutcome::Refused(message) => {
+                                            debug!(%message, "p3 HTTP response rebuild refused");
                                             retry_exempt = true;
-                                            HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                                message,
-                                            )))
+                                            HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete)
                                         }
                                     }
                                 }
                                 None => {
                                     retry_exempt = true;
-                                    HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                "cannot rebuild the in-flight p3 HTTP send after a restart: no \
-                                 resend information was captured for the replayed response"
-                                    .to_string(),
-                            )))
+                                    HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete)
                                 }
-                            }
-                        } else if let Some(cancel_rx) = cancel_rx {
-                            tokio::select! {
-                                _ = cancel_rx => {
-                                    cancel_ack = read_cancel_ack;
-                                    HttpBodyFrame::Cancelled
-                                }
-                                frame = read_http_body_frame(&mut body) => frame,
                             }
                         } else {
                             read_http_body_frame(&mut body).await
+                        };
+                        Ok::<_, WorkerExecutorError>(frame)
+                    };
+                    let cancelled = async {
+                        match cancel_rx {
+                            Some(cancel_rx) => {
+                                let _ = cancel_rx.await;
+                            }
+                            None => std::future::pending().await,
                         }
                     };
                     let mut frame = tokio::select! {
-                        frame = read_frame => frame,
+                        biased;
+                        () = cancelled => {
+                            cancel_ack = read_cancel_ack.take();
+                            HttpBodyFrame::Cancelled
+                        }
+                        frame = read_frame => match frame {
+                            Ok(frame) => frame,
+                            Err(error) => {
+                                child.abandon_for_trap();
+                                stream.abandon_for_trap();
+                                return Err(error.into());
+                            }
+                        },
                         kind = interrupt => {
                             // An interrupt is not a cancellation and not a hard error:
                             // abandon the open chunk child first, then the parent, so
@@ -1277,6 +1536,29 @@ where
                             return Err(wasmtime::Error::from_anyhow(kind.into()));
                         }
                     };
+                    // A frame read without cancellation releases a later cancel-read at once.
+                    // The frame reaches the guest or is discarded through the child's delivery
+                    // token, so cancel-read must not wait for the child's durable terminal.
+                    drop(read_cancel_ack.take());
+
+                    if let Some(error) = _rebuild_io_guard
+                        .as_ref()
+                        .and_then(|guard| guard.1.error())
+                        .or_else(|| {
+                            resend
+                                .as_ref()
+                                .and_then(|resend| resend.durable_body.as_ref())
+                                .and_then(|body| body.recovery.error())
+                        })
+                    {
+                        child.abandon_for_trap();
+                        stream.abandon_for_trap();
+                        return Err(error.into());
+                    }
+                    if matches!(frame, HttpBodyFrame::Cancelled) {
+                        // Stop the resend's connection driver before acknowledging cancellation.
+                        drop(_rebuild_io_guard.take());
+                    }
 
                     // Inline response-body resume, mirroring the P2
                     // `try_resuming_response_body_inline_retry` path: a transient
@@ -1290,7 +1572,7 @@ where
                         if retry_exempt {
                             break;
                         }
-                        let (Some(resend), Some((method, uri, is_idempotent))) =
+                        let (Some(resend), Some((method, uri))) =
                             (resend.as_ref(), resume_context.as_ref())
                         else {
                             break;
@@ -1307,9 +1589,7 @@ where
                         {
                             break;
                         }
-                        // The same worker-state and idempotence gates as the send's
-                        // own inline-retry loop (live, not snapshotting, persistence
-                        // on, no atomic region, idempotence predicate).
+                        // The same live/snapshot and observational gates as the send's retry loop.
                         if observational_owner.is_some()
                             || !inline_retry_eligible_for_method::<Ctx, U>(
                                 accessor,
@@ -1319,9 +1599,8 @@ where
                             break;
                         }
 
-                        let mut properties =
+                        let properties =
                             RetryContext::http_with_response(method, uri, None, "transient");
-                        apply_method_idempotence(&mut properties, *is_idempotent);
                         if resume_retry_ctx.is_none() {
                             resume_retry_ctx = Some(
                                 make_p3_http_retry_task_context::<Ctx, U>(
@@ -1343,7 +1622,11 @@ where
                             AsyncRetryDecision::RetryAfterDelay(delay) => {
                                 tokio::time::sleep(delay).await;
                             }
-                            AsyncRetryDecision::FallBackToTrap | AsyncRetryDecision::Exhausted => {
+                            AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                                resume_semantic_override = semantic_override;
+                                break;
+                            }
+                            AsyncRetryDecision::Exhausted => {
                                 break;
                             }
                         }
@@ -1352,12 +1635,18 @@ where
                         match resend_recorded_request::<Ctx, U>(accessor, resend, &range_headers)
                             .await
                         {
-                            // The recorded request body cannot be reconstructed:
-                            // resume is refused, the original failure falls through
-                            // to the worker-level retry classification (whose replay
-                            // re-issues from a then-complete recording, or fails).
+                            // Storage outages reconstruct with infrastructure backoff. A
+                            // recording that cannot reproduce the request reports typed loss;
+                            // semantic retry cannot make that recording replayable.
+                            ResendOutcome::RecoveryRequired(error) => {
+                                child.abandon_for_trap();
+                                stream.abandon_for_trap();
+                                return Err(error.into());
+                            }
                             ResendOutcome::Refused(reason) => {
                                 debug!(%reason, "p3 HTTP response-body resume refused");
+                                retry_exempt = true;
+                                frame = HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete);
                                 break;
                             }
                             // The resume send itself failed: charge another resume
@@ -1390,23 +1679,29 @@ where
                                         // Deterministic for this request — never
                                         // retry-routed.
                                         retry_exempt = true;
-                                        frame = HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                        "response-body resume failed: the server returned 416 \
-                                         Range Not Satisfiable"
-                                            .to_string(),
-                                    )));
+                                        frame =
+                                            HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete);
                                         break;
                                     }
                                     ResumeResponseAction::SkipPrefix => {
                                         // The server ignored the range and re-sent the
                                         // full response with the original status: skip
-                                        // the already-delivered prefix (count-only, no
-                                        // content verification — P2 parity) and continue
-                                        // from there.
+                                        // the already-delivered prefix, which must be
+                                        // byte-identical to what the guest observed, and
+                                        // continue from there.
                                         let mut fresh_body = response.into_body();
-                                        match skip_body_prefix(&mut fresh_body, delivered_bytes)
-                                            .await
-                                        {
+                                        let skipped = skip_body_prefix(
+                                            &mut fresh_body,
+                                            delivered_bytes,
+                                            &delivered_digest,
+                                        )
+                                        .await;
+                                        if let Some(error) = io_guard.1.error() {
+                                            child.abandon_for_trap();
+                                            stream.abandon_for_trap();
+                                            return Err(error.into());
+                                        }
+                                        match skipped {
                                             Ok(leftover) => {
                                                 body = fresh_body;
                                                 _rebuild_io_guard = Some(io_guard);
@@ -1418,12 +1713,14 @@ where
                                             Err(SkipBodyPrefixError::BodyTooShort) => {
                                                 retry_exempt = true;
                                                 frame = HttpBodyFrame::Error(
-                                                    ErrorCode::InternalError(Some(
-                                                        "response-body resume failed: the re-sent \
-                                                     response body is shorter than the bytes \
-                                                     already delivered to the guest"
-                                                            .to_string(),
-                                                    )),
+                                                    ErrorCode::HttpResponseIncomplete,
+                                                );
+                                                break;
+                                            }
+                                            Err(SkipBodyPrefixError::Mismatch) => {
+                                                retry_exempt = true;
+                                                frame = HttpBodyFrame::Error(
+                                                    ErrorCode::HttpResponseIncomplete,
                                                 );
                                                 break;
                                             }
@@ -1446,6 +1743,13 @@ where
                                 }
                             }
                         }
+                        if let Some(error) =
+                            _rebuild_io_guard.as_ref().and_then(|guard| guard.1.error())
+                        {
+                            child.abandon_for_trap();
+                            stream.abandon_for_trap();
+                            return Err(error.into());
+                        }
                     }
 
                     // Worker-level retry classification for live body-transfer
@@ -1453,43 +1757,51 @@ where
                     // error raises a retry trap here — before anything about this
                     // frame is persisted or delivered, so the guest never observes
                     // a truncated stream — leaving the parent `Start` incomplete.
-                    // The retry's replay then jumps the scope and re-issues the
-                    // recorded request (see `reissue_recorded_request`), re-reading
-                    // the body from a fresh response. Permanent errors — and
+                    // Replay repairs the same scope and re-issues the recorded
+                    // request (see `reissue_recorded_request`), verifying the prefix
+                    // already delivered before continuing. Permanent errors — and
                     // transient ones whose retry budget is exhausted — fall through
                     // and are recorded as the terminal, which is also what a
                     // recorded terminal replays as. A retry-exempt failure (refused
-                    // rebuild, content-changed resume) is never retry-routed: its
-                    // replay would hit the same deterministic failure again.
+                    // rebuild or content-changed resume) is never retry-routed:
+                    // repeating it would fail deterministically.
                     if let HttpBodyFrame::Error(error_code) = &frame
                         && !retry_exempt
                         && let Some(retry_properties) = retry_properties.clone()
                     {
                         let for_retry: Result<(), &ErrorCode> = Err(error_code);
                         let trap_context = stream.trap_context();
-                        if let Err(error) = stream
-                            .parent_mut()
-                            .try_trigger_retry_access(
-                                accessor,
-                                durable_worker_ctx::<Ctx, U>,
-                                &for_retry,
-                                |code| {
-                                    classify_serializable_http_error_code(&serialize_error_code(
-                                        code,
-                                    ))
-                                },
-                                retry_properties,
-                            )
-                            .await
+                        let trap = if let Some(semantic_override) = resume_semantic_override.take()
                         {
-                            // The retry trap tears the invocation down;
-                            // `try_trigger_retry_access` already abandoned the
-                            // parent handle. The child `Start` is persisted but the
-                            // jumped scope discards it on replay; abandon the handle
-                            // so its drop does not record a `Cancelled`. The span is
-                            // deliberately not finished (no `FinishSpan` after an
-                            // incomplete `Start`) — the retry's replay reconstructs
-                            // it.
+                            let failure = semantic_trap_retry_override_error(
+                                semantic_override,
+                                HostFailureKind::Transient,
+                                error_code.to_string(),
+                            );
+                            Some(stream.parent_mut().trap(failure))
+                        } else {
+                            stream
+                                .parent_mut()
+                                .try_trigger_retry_access(
+                                    accessor,
+                                    durable_worker_ctx::<Ctx, U>,
+                                    &for_retry,
+                                    |code| {
+                                        classify_serializable_http_error_code(
+                                            &serialize_error_code(code),
+                                        )
+                                    },
+                                    retry_properties,
+                                )
+                                .await
+                                .err()
+                        };
+                        if let Some(error) = trap {
+                            // The retry trap tears the invocation down after the
+                            // parent handle has been abandoned. The child's original
+                            // `Start` stays incomplete for in-place repair; abandon the
+                            // handle so its drop does not record a `Cancelled`. The span is
+                            // deliberately left open — the retry's replay reconstructs it.
                             child.abandon_for_trap();
                             let _ = demand.send(HttpBodyChunkReply::Failed {
                                 message: error.to_string(),
@@ -1571,7 +1883,7 @@ where
             // single point where chunks reach the guest, identically live and on
             // replay, so the count/order of delivered chunks always matches the
             // count/order of persisted children. It is also where the child's
-            // deferred-delivery token is consumed: producer observation is
+            // deferred-delivery token is consumed: reader observation is
             // `delivered`, a dropped reply reserves the child's `CompletionDiscarded`
             // marker, and a replay-discarded child is never re-sent (the task parks
             // until the replayed guest drops the body reader at the same point it
@@ -1579,6 +1891,7 @@ where
             match produced {
                 ProducedChunk::Data(bytes) => {
                     let chunk_len = bytes.len() as u64;
+                    delivered_digest.update(&bytes);
                     match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
                         HttpBodyChunkReply::Data { bytes, delivery }
                     })
@@ -1624,6 +1937,7 @@ where
                     break;
                 }
                 ProducedChunk::Cancelled => {
+                    body_cancelled = true;
                     match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
                         HttpBodyChunkReply::Cancelled { delivery }
                     })
@@ -1660,17 +1974,41 @@ where
         // finalize failure can tag the guest-facing trailers trap for correct
         // retry grouping.
         let parent_trap_context = stream.trap_context();
-        let (response, mut delivery) = match stream
-            .finish_deferred(
-                accessor,
-                durable_worker_ctx::<Ctx, U>,
+        let repairing_terminal = !stream.is_live();
+        let response = || {
+            let terminal = if repairing_terminal && unreconstructable.load(Ordering::Acquire) {
+                Err(ErrorCode::HttpResponseIncomplete)
+            } else {
+                terminal
+            };
+            (
                 HostResponseP3HttpClientConsumeBodyResult {
                     result: serialize_consume_body_result(&terminal),
                 },
+                body_span_outcome(body_cancelled, &terminal),
             )
-            .await
-        {
+        };
+        let close_span = response_span
+            .as_ref()
+            .is_some_and(P3HttpSendSpan::claim_closure);
+        let finish = if close_span {
+            let span = response_span.as_ref().expect("checked above");
+            stream
+                .finish_deferred_with_span(accessor, durable_worker_ctx::<Ctx, U>, || {
+                    let (response, outcome) = response();
+                    (response, p3_send_span_finished(span, outcome))
+                })
+                .await
+        } else {
+            stream
+                .finish_deferred(accessor, durable_worker_ctx::<Ctx, U>, || response().0)
+                .await
+        };
+        let (response, mut delivery) = match finish {
             Ok(result) => result,
+            Err(error) if matches!(&error.source, WorkerExecutorError::RecoveryRequired { .. }) => {
+                return Err(error.source.into());
+            }
             Err(error) => {
                 return fail_consume_body_task(
                     trailers_tx,
@@ -1684,7 +2022,8 @@ where
         // The response body reached its terminal and the parent marker is
         // committed/replayed: finish the send's `outgoing-http-request` span
         // before resolving the guest-facing trailers.
-        if let Some(span) = &response_span {
+        if close_span {
+            let span = response_span.as_ref().expect("checked above");
             let finish_result = if delivery.is_live_armed() {
                 finish_p3_send_span_in_memory::<Ctx, U>(accessor, span)
             } else {
@@ -1705,6 +2044,16 @@ where
             }
         }
 
+        // Cancellation is settled once the body and send span are durable. Without a recorded
+        // trailers delivery marker, holding its acknowledgement across the delivery wait would
+        // prevent the guest from returning (or dropping trailers) and advancing the replay tail.
+        // Recorded deliveries retain their ordering; their acknowledgement stays below the gate.
+        if !delivery.is_replay_at_marker()
+            && let Some(ack) = cancel_ack.take()
+        {
+            let _ = ack.send(());
+        }
+
         if delivery.is_replay_discarded() {
             // The recorded run persisted the parent terminal but the guest
             // dropped the trailers future before the outcome was delivered
@@ -1713,22 +2062,19 @@ where
             // pending, and park at the delivery boundary until the
             // deterministic guest drops the receiver at the same point it
             // did live.
-            // A cancelling body cannot finish dropping its trailers receiver
-            // until its stream cancellation is acknowledged. The discard is
-            // already durable on replay, so acknowledge before waiting for it.
-            if let Some(ack) = cancel_ack.take() {
-                let _ = ack.send(());
-            }
             let mut trailers_tx = trailers_tx;
             activity.park(trailers_tx.closed()).await;
             drop(trailers_tx);
         } else {
-            delivery.prepare_delivery().await.map_err(|error| {
-                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                    anyhow::Error::from(error),
-                    parent_trap_context,
-                ))
-            })?;
+            delivery
+                .prepare_delivery(Some(&activity))
+                .await
+                .map_err(|error| {
+                    wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                        anyhow::Error::from(error),
+                        parent_trap_context,
+                    ))
+                })?;
             trailers_delivery.arm(delivery);
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => {}
@@ -1811,6 +2157,25 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                     return Ok((stream, upstream_trailers));
                 }
             };
+        // A consume-body inside a custom durable invocation is not claimed on replay, whichever
+        // invocation observed the send, so it takes no ordinal from the root counter.
+        let observed_by_custom_invocation = store
+            .as_context_mut()
+            .guest_task_context::<CustomInvocationContext>()?
+            .as_deref()
+            .and_then(CustomInvocationContext::current)
+            .is_some();
+        let invocation_id = if observed_by_custom_invocation {
+            InvocationIdSource::Reserved(None)
+        } else {
+            let mut store_ctx = store.as_context_mut();
+            reserve_import_invocation_id(
+                durable_worker_ctx::<Ctx, U>(store_ctx.data_mut()),
+                response_state
+                    .as_ref()
+                    .and_then(|state| state.observational_owner),
+            )?
+        };
 
         // We surface trailers through our own future, so discard the built-in
         // trailers future.
@@ -1868,6 +2233,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             trailers_tx,
             trailers_delivery,
             response_state,
+            invocation_id,
             activity,
         ));
         Ok((stream, trailers))
@@ -1880,21 +2246,34 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             "drop",
         );
 
-        // A send-created response dropped before its body was consumed still
-        // owns its `outgoing-http-request` span. This host call is synchronous,
-        // so the finish is deferred to the next drop-event drain point (a
-        // deterministic replay point), mirroring P2's `end_http_request` on response drop.
-        {
+        // Submit the whole live cleanup pair before returning from this synchronous drop.
+        // The next drain joins its receipt (or replays it); cancelling that waiter cannot
+        // cancel the actor job or cause another pair to be submitted.
+        let replay_cleanup = {
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
-            if let Some(state) = ctx.state.open_p3_http_responses.remove(&res.rep())
-                && let Some(sink) = ctx.state.dropped_call_event_sender()
-            {
-                let _ = sink.send(DropEvent::FinishSpan {
-                    span_id: state.span.span_id,
-                    durable: false,
-                });
-            }
+            ctx.state
+                .open_p3_http_responses
+                .remove(&res.rep())
+                .and_then(|state| {
+                    if !state.span.claim_closure() {
+                        return None;
+                    }
+                    crate::durable_host::concurrent::HttpSpanCleanupRecorder::new(
+                        ctx,
+                        state.span.send_start_index,
+                        state.observational_owner,
+                        state.span.persisted,
+                        state.span.invocation_id,
+                    )
+                    .record(p3_send_span_finished(
+                        &state.span,
+                        golem_common::model::oplog::SpanOutcome::Abandoned,
+                    ))
+                })
+        };
+        if let Some(replay_cleanup) = replay_cleanup {
+            store.spawn(replay_cleanup);
         }
 
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
@@ -1916,6 +2295,22 @@ mod tests {
     use test_r::{test, timeout};
 
     #[test]
+    fn body_terminal_maps_to_semantic_span_outcome() {
+        assert_eq!(
+            body_span_outcome(false, &Ok(None)),
+            golem_common::model::oplog::SpanOutcome::Completed
+        );
+        assert_eq!(
+            body_span_outcome(false, &Err(ErrorCode::HttpProtocolError)),
+            golem_common::model::oplog::SpanOutcome::Failed
+        );
+        assert_eq!(
+            body_span_outcome(true, &Ok(None)),
+            golem_common::model::oplog::SpanOutcome::Cancelled
+        );
+    }
+
+    #[test]
     #[timeout("10s")]
     async fn missing_scope_readiness_refuses_pending_proof_after_response_demand() {
         let demand_signal = Arc::new(HttpBodyDemandSignal::default());
@@ -1924,14 +2319,14 @@ mod tests {
         request_body_progress.set_waiting_for_guest_body(true);
 
         let error = require_recording_before_response_demand(
-            std::future::pending::<Result<(), String>>(),
+            std::future::pending::<Result<(), WorkerExecutorError>>(),
             demand_signal,
             Some(request_body_progress),
         )
         .await
         .expect_err("response demand must bound a pending recording proof");
 
-        assert!(error.contains("response-body demand"));
+        assert!(error.to_string().contains("response-body demand"));
     }
 
     #[test]
@@ -1990,9 +2385,12 @@ mod tests {
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
-                durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+                durable_function_type: DurableFunctionType::WriteRemote,
+                span_started: None,
+                denial: None,
             })
-            .await;
+            .await
+            .unwrap();
         let child_start = oplog
             .add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
@@ -2003,11 +2401,12 @@ mod tests {
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
-                durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(
-                    OplogIndex::from_u64(1),
-                )),
+                durable_function_type: DurableFunctionType::WriteRemote,
+                span_started: None,
+                denial: None,
             })
-            .await;
+            .await
+            .unwrap();
         oplog
             .add(OplogEntry::End {
                 timestamp: Timestamp::now_utc(),
@@ -2020,8 +2419,11 @@ mod tests {
                     ),
                 ))),
                 forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
             })
-            .await;
+            .await
+            .unwrap();
         child_start
     }
 

@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::RetryConfig;
+use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+use golem_common::model::{AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    start_with_overrides,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
@@ -36,13 +36,12 @@ inherit_test_dep!(Tracing);
 
 use super::count_oplog_errors_containing;
 use super::http_servers::{
-    start_failing_http_server, start_failing_http_server_any_method,
-    start_status_code_retry_http_server,
+    start_status_code_retry_http_server, start_withheld_status_retry_http_server,
 };
 
 #[test]
 #[tracing::instrument]
-async fn http_status_retry_policy_retries_matching_status(
+async fn http_status_retry_policy_exposes_latest_response_when_exhausted(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -50,21 +49,17 @@ async fn http_status_retry_policy_retries_matching_status(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, Default::default()).await?;
-
-    let (port, counter, idempotency_keys) = start_status_code_retry_http_server(3).await;
-
+    let (port, counter, idempotency_keys) = start_status_code_retry_http_server(20).await;
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-
     let agent_id = agent_id!("HttpClient4");
-    let worker_id = executor
+    executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
-
     let result = executor
         .invoke_and_await_agent(
             &component,
@@ -72,288 +67,183 @@ async fn http_status_retry_policy_retries_matching_status(
             "post_with_status_retry_policy",
             data_value!(),
         )
-        .await?;
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "500 retry-me");
+    assert_eq!(counter.load(Ordering::SeqCst), 11);
+    let idempotency_keys = idempotency_keys.lock().unwrap();
+    let first_key = idempotency_keys[0]
+        .as_ref()
+        .expect("initial request must have an idempotency key");
+    assert_eq!(idempotency_keys.len(), 11);
+    assert!(
+        idempotency_keys
+            .iter()
+            .all(|key| key.as_ref() == Some(first_key))
+    );
+    Ok(())
+}
 
-    assert_eq!(result.into_typed::<String>()?, "200 status-retry-ok");
-    assert_eq!(counter.load(Ordering::SeqCst), 4);
-    {
-        let idempotency_keys = idempotency_keys.lock().unwrap();
-        assert_eq!(idempotency_keys.len(), 4);
-        let first_key = idempotency_keys[0]
-            .as_ref()
-            .expect("initial HTTP request must have idempotency-key");
-        assert!(
-            idempotency_keys
-                .iter()
-                .all(|key| key.as_ref() == Some(first_key)),
-            "status-code retries must preserve the original idempotency-key"
-        );
+#[test]
+#[tracing::instrument]
+async fn p3_status_retry_header_wait_observes_interrupt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+    let (port, attempts, requests, mut replacement) =
+        start_withheld_status_retry_http_server().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let key = IdempotencyKey::fresh();
+    let invocation = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent_id,
+        &key,
+        "post_with_status_retry_policy",
+        data_value!(),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        _ = replacement.accepted() => {}
+        result = &mut invocation => panic!("completed before replacement headers were withheld: {result:?}"),
     }
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn http_zone1_inline_retry_on_transient_connection_failure(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(1),
-                max_delay: Duration::from_millis(5),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_secs(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    let (port, connection_counter) = start_failing_http_server(2).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, http_tests)
-        .store()
-        .await?;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
-
-    let agent_id = agent_id!("HttpClient");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
-        .await?;
-
-    assert_eq!(
-        result.into_typed::<String>()?,
-        "200 response is test-header test-body"
-    );
-
-    // Server received 2 failed + 1 successful = 3 total connections
-    let total_connections = connection_counter.load(Ordering::SeqCst);
-    assert_eq!(
-        total_connections, 3,
-        "Expected 3 total connections (2 dropped + 1 successful)"
-    );
-
-    // Verify oplog contains 2 in-function retry error entries
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
-    assert_eq!(
-        retry_count, 2,
-        "Expected 2 in-function retry error entries in oplog"
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn http_zone1_falls_back_to_trap_when_delay_exceeds_threshold(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(100),
-                max_delay: Duration::from_millis(100),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_millis(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    let (port, _connection_counter) = start_failing_http_server(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, http_tests)
-        .store()
-        .await?;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
-
-    let agent_id = agent_id!("HttpClient");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    // Call should eventually succeed via trap+replay (not inline retry)
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
-        .await?;
-
-    assert_eq!(
-        result.into_typed::<String>()?,
-        "200 response is test-header test-body"
-    );
-
-    // Verify NO in-function retry error entries in oplog
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
-    assert_eq!(
-        retry_count, 0,
-        "Expected 0 in-function retry error entries in oplog (should have fallen back to trap)"
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn http_post_fails_permanently_when_idempotence_disabled(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(1),
-                max_delay: Duration::from_millis(5),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_secs(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    // 1 connection will be dropped; POST with assume_idempotence=false should NOT retry inline
-    let (port, _connection_counter) = start_failing_http_server_any_method(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, http_tests)
-        .store()
-        .await?;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
-
-    let agent_id = agent_id!("HttpClient4");
-    let _worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    // post_non_idempotent sets assume_idempotence=false and uses POST.
-    // POST is not idempotent, so inline retry should NOT happen.
-    // Trap+replay also cannot recover because the non-idempotent remote write
-    // was not completed — replay detects this and fails permanently with
-    // "Non-idempotent remote write operation was not completed, cannot retry".
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "post_non_idempotent", data_value!())
-        .await;
-
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
     assert!(
-        result.is_err(),
-        "Expected the invocation to fail permanently, but it succeeded: {result:?}"
+        tokio::time::timeout(Duration::from_millis(200), &mut invocation)
+            .await
+            .is_err(),
+        "the invocation must stay pending while replacement headers are withheld"
     );
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(
-        err_msg.contains("cannot retry"),
-        "Expected error about non-idempotent write not being retryable, got: {err_msg}"
+    assert!(executor.worker_is_loaded(&owned).await);
+    let before_interrupt = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let send_start = before_interrupt
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "http::client::send" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the HTTP send must have a durable Start before retry");
+    let retry_error = before_interrupt
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::Error(params) if params.retry_from == send_start
+            )
+        })
+        .expect("the retry decision must belong to the HTTP send")
+        .clone();
+    let retry_state = executor
+        .attached_agent_status(&worker_id)
+        .await?
+        .current_retry_state;
+    tokio::time::timeout(Duration::from_secs(2), executor.interrupt(&worker_id)).await??;
+    let error = tokio::time::timeout(Duration::from_secs(2), &mut invocation)
+        .await?
+        .expect_err("interruption must not produce an HTTP result");
+    assert!(error.to_string().contains("Interrupted via the Golem API"));
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(2))
+        .await?;
+    assert!(!executor.worker_is_loaded(&owned).await);
+    tokio::time::timeout(Duration::from_secs(2), replacement.peer_closed()).await?;
+    let retries = count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert_eq!(retries, 1);
+
+    executor.resume(&worker_id, false).await?;
+    let resumed = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent_id,
+        &key,
+        "post_with_status_retry_policy",
+        data_value!(),
     );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn http_get_retried_inline_even_when_idempotence_disabled(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(1),
-                max_delay: Duration::from_millis(5),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_secs(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    // 2 connections will be dropped; GET is inherently idempotent so inline retry should work
-    let (port, connection_counter) = start_failing_http_server_any_method(2).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, http_tests)
-        .store()
-        .await?;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
-
-    let agent_id = agent_id!("HttpClient4");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    // get_idempotent sets assume_idempotence=false and uses GET.
-    // GET is inherently idempotent, so inline retry SHOULD still happen.
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!())
-        .await?;
-
-    let result_value = result.into_typed::<String>()?;
-
-    assert!(
-        result_value.starts_with("200 "),
-        "Expected a successful 200 response, got: {result_value:?}"
-    );
-
-    // Server received 2 failed + 1 successful = 3 total connections
-    let total_connections = connection_counter.load(Ordering::SeqCst);
+    tokio::pin!(resumed);
+    tokio::select! {
+        _ = replacement.resumed_accepted() => {}
+        result = &mut resumed => panic!("completed before reconstructed request was gated: {result:?}"),
+    }
     assert_eq!(
-        total_connections, 3,
-        "Expected 3 total connections (2 dropped + 1 successful)"
+        executor
+            .attached_agent_status(&worker_id)
+            .await?
+            .current_retry_state,
+        retry_state
     );
-
-    // Verify oplog contains in-function retry error entries (GET is idempotent)
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    replacement.release_resumed();
     assert_eq!(
-        retry_count, 2,
-        "Expected 2 in-function retry error entries in oplog (GET is inherently idempotent)"
+        tokio::time::timeout(Duration::from_secs(5), &mut resumed)
+            .await??
+            .into_typed::<String>()?,
+        "200 status-retry-ok"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?,
+        retries
     );
 
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog.contains(&retry_error),
+        "reconstruction must retain the original retry decision"
+    );
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Jump(_))),
+        "HTTP retry must not discard history"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params) if params.function_name == "http::client::send" =>
+                    Some(entry.oplog_index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![send_start],
+        "reconstruction must repair the original send Start"
+    );
+    assert_eq!(oplog.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationStarted(params)
+            if matches!(&params.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == key)
+    )).count(), 1);
+    assert_eq!(oplog.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationFinished(params)
+            if params.method_name.as_ref().is_some_and(|name| name.replace('-', "_") == "post_with_status_retry_policy")
+    )).count(), 1);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    let first_key = requests[0]
+        .idempotency_key
+        .as_deref()
+        .filter(|key| !key.is_empty())
+        .expect("HTTP idempotency key must be present");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.idempotency_key.as_deref() == Some(first_key))
+    );
+    for request in requests.iter() {
+        assert_eq!(request.request_line, "POST / HTTP/1.1");
+        assert_eq!(request.content_length, 9);
+        assert_eq!(request.body, b"test-body");
+    }
     Ok(())
 }

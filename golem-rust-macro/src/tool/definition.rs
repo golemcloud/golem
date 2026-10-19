@@ -1,0 +1,1556 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! `#[tool_definition]` entry point.
+//!
+//! This parses the trait and all tool authoring attributes into a
+//! [`ToolDefinitionIr`], strips the helper attributes from the emitted trait,
+//! and adds the hidden `tool_implementation_annotation` item that forces every
+//! implementation to carry `#[tool_implementation]`. Metadata synthesis and
+//! runtime registration are added later from that IR.
+
+use crate::tool::arg::parse_arg;
+use crate::tool::command::{CommandAttr, parse_command_into};
+use crate::tool::constraint::parse_constraint;
+use crate::tool::doc::parse_doc_full;
+use crate::tool::helpers::{
+    SeenKeys, StreamKind, expr_str_array, fresh_internal_ident, normalize_sdk_paths_in_item_trait,
+    resolve_generated_sdk_paths, stream_type, to_kebab_case,
+};
+use crate::tool::ir::{ArgIr, ArgPlacement, CommandIr, OutputChannelIr, ParamIr, ToolDefinitionIr};
+use crate::tool::result::parse_result;
+use proc_macro::TokenStream;
+use proc_macro2::Span;
+use quote::{ToTokens, format_ident, quote};
+use std::collections::BTreeSet;
+use syn::ext::IdentExt;
+use syn::spanned::Spanned;
+use syn::{
+    Attribute, Error, Expr, FnArg, GenericArgument, ItemTrait, Lit, PathArguments, ReturnType,
+    TraitItem, Type,
+};
+
+const HELPER_ATTRS: [&str; 5] = ["arg", "command", "constraint", "result", "example"];
+
+pub fn tool_definition_impl(
+    attrs: TokenStream,
+    item: TokenStream,
+    golem_rust: &syn::Ident,
+) -> TokenStream {
+    let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let canonical_golem_rust = syn::Ident::new("golem_rust", Span::call_site());
+    let preserved_golem_rust = fresh_internal_ident(
+        &item_trait.to_token_stream(),
+        &format!(
+            "__golem_preserved_golem_rust_identifier_for_{}",
+            item_trait.ident
+        ),
+        item_trait.ident.span(),
+    );
+    let mut ir_item_trait = item_trait.clone();
+    normalize_sdk_paths_in_item_trait(
+        &mut ir_item_trait,
+        golem_rust,
+        &canonical_golem_rust,
+        &preserved_golem_rust,
+    );
+    let resolve_sdk = |tokens| {
+        resolve_generated_sdk_paths(
+            tokens,
+            golem_rust,
+            &canonical_golem_rust,
+            &preserved_golem_rust,
+        )
+    };
+
+    let options = match parse_tool_definition_options(attrs.into()) {
+        Ok(v) => v,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    // Building the IR validates every tool authoring attribute and surfaces
+    // parse errors at compile time.
+    let mut ir = match build_tool_definition_ir(&ir_item_trait, options.version) {
+        Ok(ir) => ir,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    ir.requires_filesystem = options.requires_filesystem;
+    ir.aliases = options.aliases;
+
+    // Metadata synthesis: the hidden free descriptor function that builds the
+    // runtime `ExtendedToolType`. It is emitted as a module-level free function
+    // so a parent tool's `#[command(subtree = path::Child)]` can reach it
+    // through the child trait's module path without a concrete `Self`.
+    let descriptor_fn = match crate::tool::descriptor::synthesize_descriptor_fn(&ir) {
+        Ok(tokens) => resolve_sdk(tokens),
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let wire_descriptor_fn = match crate::tool::descriptor::synthesize_wire_descriptor_fn(&ir) {
+        Ok(tokens) => resolve_sdk(tokens),
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let wire_fn_ident =
+        crate::tool::descriptor::standalone_wire_descriptor_fn_ident(&ir.trait_ident);
+    let client = resolve_sdk(crate::tool::client::synthesize_client(&ir));
+    let middleware_surface =
+        resolve_sdk(crate::tool::middleware_surface::synthesize_middleware_surface(&ir));
+    let descriptor_fn_ident =
+        crate::tool::descriptor::standalone_descriptor_fn_ident(&ir.trait_ident);
+    let prepared_fn_ident = crate::tool::descriptor::prepared_descriptor_fn_ident(&ir.trait_ident);
+
+    strip_helper_attrs(&mut item_trait);
+
+    // A hidden default method delegating to the free descriptor function, so the
+    // `#[tool_implementation]` registration ctor can call it through the trait.
+    let descriptor_item = quote! {
+        #[doc(hidden)]
+        fn __tool_descriptor() -> golem_rust::agentic::ExtendedToolType
+        where
+            Self: Sized,
+        {
+            #descriptor_fn_ident()
+                .expect("tool descriptor build failed")
+        }
+    };
+    let descriptor_item = match syn::parse2::<TraitItem>(resolve_sdk(descriptor_item)) {
+        Ok(item) => item,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    item_trait.items.push(descriptor_item);
+
+    let prepared_item = quote! {
+        #[doc(hidden)]
+        fn __tool_prepared_descriptor() -> golem_rust::agentic::PreparedToolDescriptor
+        where
+            Self: Sized,
+        {
+            #prepared_fn_ident().expect("tool descriptor build failed")
+        }
+    };
+    match syn::parse2::<TraitItem>(resolve_sdk(prepared_item)) {
+        Ok(item) => item_trait.items.push(item),
+        Err(error) => return error.into_compile_error().into(),
+    }
+
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    item_trait.items.push(syn::parse_quote! {
+        #[doc(hidden)]
+        fn __tool_name() -> &'static str where Self: Sized { #tool_name }
+    });
+    let wire_item = quote! {
+        #[doc(hidden)]
+        fn __tool_wire_descriptor() -> golem_rust::schema::tool::wit::wire::Tool
+        where Self: Sized,
+        {
+            let schema = golem_rust::agentic::WireToolSchema::default();
+            let descriptor = #wire_fn_ident(&schema)
+                .expect("tool descriptor build failed");
+            descriptor.into_wire(schema).expect("tool descriptor lowering failed")
+        }
+    };
+    match syn::parse2::<TraitItem>(resolve_sdk(wire_item)) {
+        Ok(item) => item_trait.items.push(item),
+        Err(error) => return error.into_compile_error().into(),
+    }
+
+    let method_paths = tool_method_paths(&ir);
+    let method_paths_item: TraitItem = syn::parse_quote! {
+        #[doc(hidden)]
+        fn __tool_invoke_method_paths() -> &'static [(&'static str, &'static [&'static str])]
+        where
+            Self: Sized,
+        {
+            &[ #(#method_paths),* ]
+        }
+    };
+    item_trait.items.push(method_paths_item);
+
+    let method_param_names = tool_method_param_names(&ir);
+    let method_param_names_item: TraitItem = syn::parse_quote! {
+        #[doc(hidden)]
+        fn __tool_invoke_method_param_names() -> &'static [(&'static str, &'static [&'static str])]
+        where
+            Self: Sized,
+        {
+            &[ #(#method_param_names),* ]
+        }
+    };
+    item_trait.items.push(method_param_names_item);
+
+    let subtree_paths = tool_subtree_paths(&ir);
+    let subtree_paths_item: TraitItem = syn::parse_quote! {
+        #[doc(hidden)]
+        fn __tool_invoke_subtree_paths() -> &'static [(&'static [&'static str], &'static str)]
+        where
+            Self: Sized,
+        {
+            &[ #(#subtree_paths),* ]
+        }
+    };
+    item_trait.items.push(subtree_paths_item);
+
+    for invoker in synthesize_tool_invokers(&ir) {
+        let invoker_item = match syn::parse2::<TraitItem>(resolve_sdk(invoker)) {
+            Ok(item) => item,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        item_trait.items.push(invoker_item);
+    }
+
+    for command_kind in tool_command_kinds(&ir) {
+        let command_kind =
+            match syn::parse2::<TraitItem>(resolve_sdk(command_kind.into_token_stream())) {
+                Ok(item) => item,
+                Err(error) => return error.into_compile_error().into(),
+            };
+        item_trait.items.push(command_kind);
+    }
+
+    let annotation_item: TraitItem = syn::parse_quote! {
+        #[doc(hidden)]
+        fn tool_implementation_annotation() where Self: Sized;
+    };
+    item_trait.items.push(annotation_item);
+
+    quote! {
+        #[allow(async_fn_in_trait)]
+        #item_trait
+
+        #descriptor_fn
+        #wire_descriptor_fn
+
+        #client
+
+        #middleware_surface
+    }
+    .into()
+}
+
+fn tool_method_paths(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream> {
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    ir.commands
+        .iter()
+        .map(|cmd| {
+            let method_name = cmd.method_ident.to_string();
+            let command_name = if to_kebab_case(&method_name) == tool_name {
+                tool_name.clone()
+            } else {
+                cmd.name_override
+                    .clone()
+                    .unwrap_or_else(|| to_kebab_case(&method_name))
+            };
+            if command_name == tool_name {
+                quote! { (#method_name, &[] as &'static [&'static str]) }
+            } else {
+                quote! { (#method_name, &[#command_name] as &'static [&'static str]) }
+            }
+        })
+        .collect()
+}
+
+fn tool_method_param_names(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream> {
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    ir.commands
+        .iter()
+        .map(|cmd| {
+            let method_name = cmd.method_ident.to_string();
+            let param_names = cmd
+                .params
+                .iter()
+                .map(|param| canonical_param_name(ir, cmd, param, &tool_name))
+                .collect::<Vec<_>>();
+            quote! { (#method_name, &[#(#param_names),*] as &'static [&'static str]) }
+        })
+        .collect()
+}
+
+pub(crate) fn canonical_param_name(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &ParamIr,
+    tool_name: &str,
+) -> String {
+    let own_name = to_kebab_case(&param.ident.to_string());
+    if to_kebab_case(&cmd.method_ident.to_string()) == tool_name {
+        return own_name;
+    }
+    let Some(root) = ir
+        .commands
+        .iter()
+        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
+    else {
+        return own_name;
+    };
+    for root_param in &root.params {
+        if !is_global_param(root, root_param) {
+            continue;
+        }
+        let root_name = to_kebab_case(&root_param.ident.to_string());
+        if param_surfaces_intersect(
+            &root_name,
+            &param_aliases(root, root_param),
+            &own_name,
+            &param_aliases(cmd, param),
+        ) {
+            return root_name;
+        }
+    }
+    own_name
+}
+
+fn param_surfaces_intersect(
+    left_name: &str,
+    left_aliases: &[String],
+    right_name: &str,
+    right_aliases: &[String],
+) -> bool {
+    left_name == right_name
+        || left_aliases.iter().any(|alias| alias == right_name)
+        || right_aliases.iter().any(|alias| alias == left_name)
+        || left_aliases
+            .iter()
+            .any(|left| right_aliases.iter().any(|right| right == left))
+}
+
+fn is_global_param(cmd: &CommandIr, param: &ParamIr) -> bool {
+    matches!(
+        cmd.args
+            .iter()
+            .find(|arg| arg.param == param.ident)
+            .and_then(|arg| arg.placement),
+        Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+    )
+}
+
+fn param_aliases(cmd: &CommandIr, param: &ParamIr) -> Vec<String> {
+    cmd.args
+        .iter()
+        .find(|arg| arg.param == param.ident)
+        .map(|arg| arg.aliases.clone())
+        .unwrap_or_default()
+}
+
+fn tool_command_kinds(ir: &ToolDefinitionIr) -> Vec<TraitItem> {
+    ir.commands
+        .iter()
+        .map(|cmd| {
+            let method_ident = tool_command_kind_method_ident(&cmd.method_ident);
+            if cmd.subtree.is_some() {
+                syn::parse_quote! {
+                    #[doc(hidden)]
+                    fn #method_ident() -> golem_rust::agentic::ToolSubtreeCommand
+                    where
+                        Self: Sized,
+                    {
+                        golem_rust::agentic::ToolSubtreeCommand
+                    }
+                }
+            } else {
+                syn::parse_quote! {
+                    #[doc(hidden)]
+                    fn #method_ident() -> golem_rust::agentic::ToolLeafCommand
+                    where
+                        Self: Sized,
+                    {
+                        golem_rust::agentic::ToolLeafCommand
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn tool_command_kind_method_ident(method_ident: &syn::Ident) -> syn::Ident {
+    quote::format_ident!("__tool_invoke_kind_{}", method_ident)
+}
+
+fn tool_subtree_paths(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream> {
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    ir.commands
+        .iter()
+        .filter_map(|cmd| {
+            let subtree = cmd.subtree.as_ref()?;
+            let method_name = cmd.method_ident.to_string();
+            let command_name = if to_kebab_case(&method_name) == tool_name {
+                tool_name.clone()
+            } else {
+                cmd.name_override
+                    .clone()
+                    .unwrap_or_else(|| to_kebab_case(&method_name))
+            };
+            let child_tool_name = subtree
+                .path
+                .segments
+                .last()
+                .map(|segment| to_kebab_case(&segment.ident.to_string()))
+                .unwrap_or_default();
+            let mut paths = Vec::new();
+            if command_name == tool_name {
+                paths.push(quote! { (&[] as &'static [&'static str], #child_tool_name) });
+            } else {
+                paths.push(
+                    quote! { (&[#command_name] as &'static [&'static str], #child_tool_name) },
+                );
+                for alias in &cmd.aliases {
+                    paths.push(quote! { (&[#alias] as &'static [&'static str], #child_tool_name) });
+                }
+            }
+            Some(quote! { #(#paths),* })
+        })
+        .collect()
+}
+
+fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream; 3] {
+    let invoke_arms = synthesize_invoke_arms(ir);
+    let subtree_aliases = ir.commands.iter().filter(|command| command.subtree.is_some()).flat_map(|command| {
+        let command_name = command.name_override.clone()
+            .unwrap_or_else(|| to_kebab_case(&command.method_ident.to_string()));
+        let paths = ::std::iter::once(&command_name).chain(&command.aliases)
+            .map(|name| quote! { __command_path.first().is_some_and(|segment| segment == #name) })
+            .collect::<Vec<_>>();
+        command.params.iter().filter_map(|param| {
+            let aliases = param_aliases(command, param);
+            if aliases.is_empty() { return None; }
+            let name = to_kebab_case(&param.ident.to_string());
+            Some(quote! {
+                if false #(|| #paths)* {
+                    golem_rust::agentic::DirectToolInput::add_root_aliases(
+                        &mut __input.graph, #name, &[#(#aliases),*],
+                    ).map_err(golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput)?;
+                }
+            })
+        }).collect::<Vec<_>>()
+    }).collect::<Vec<_>>();
+    let instance_ident = fresh_tool_trait_method_ident(ir, "__tool_invoke_on");
+    let decoded_ident = fresh_tool_trait_method_ident(ir, "__tool_invoke_decoded");
+    let entry = quote! {
+        #[doc(hidden)]
+        fn __tool_invoke(
+            __command_path: ::std::vec::Vec<::std::string::String>,
+            __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
+            mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            mut __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+        ) -> golem_rust::agentic::ToolInvokeFuture
+        where
+            Self: Sized + 'static,
+        {
+            ::std::boxed::Box::pin(async move {
+                if ::std::mem::size_of::<Self>() != 0 {
+                    return ::std::result::Result::Err(
+                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                            "guest tool invocation requires a zero-sized implementation type".to_string()
+                        )
+                    );
+                }
+                let __impl: &'static Self = unsafe {
+                    &*::std::ptr::NonNull::<Self>::dangling().as_ptr()
+                };
+                __impl
+                    .#decoded_ident(
+                        __command_path,
+                        __input,
+                        __stdin,
+                        __stdout,
+                        __stderr,
+                        __principal,
+                    )
+                    .await
+            })
+        }
+    };
+
+    let instance = quote! {
+        #[doc(hidden)]
+        fn #instance_ident<'a>(
+            &'a self,
+            __command_path: ::std::vec::Vec<::std::string::String>,
+            __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
+            __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+        ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
+        where
+            Self: Sized + 'a,
+        {
+            ::std::boxed::Box::pin(async move {
+                self.#decoded_ident(
+                    __command_path,
+                    __input,
+                    __stdin,
+                    __stdout,
+                    __stderr,
+                    __principal,
+                )
+                .await
+            })
+        }
+    };
+
+    let decoded = quote! {
+        #[doc(hidden)]
+        fn #decoded_ident<'a>(
+            &'a self,
+            __command_path: ::std::vec::Vec<::std::string::String>,
+            __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
+            mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            mut __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+        ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
+        where
+            Self: Sized + 'a,
+        {
+            ::std::boxed::Box::pin(async move {
+                async fn __encode_success_value<T: golem_rust::IntoWire + golem_rust::WireSchema + ?Sized>(
+                    __value: &T,
+                ) -> ::std::result::Result<
+                    golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult,
+                    golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
+                > {
+                    let __value = golem_rust::agentic::encode_direct_tool_value(__value).await
+                        .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
+                    ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
+                        result: ::std::option::Option::Some(__value),
+                        stdout: ::std::option::Option::None,
+                        stderr: ::std::option::Option::None,
+                    })
+                }
+
+                fn __encode_success_unit() -> ::std::result::Result<
+                    golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult,
+                    golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
+                > {
+                    ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
+                        result: ::std::option::Option::None,
+                        stdout: ::std::option::Option::None,
+                        stderr: ::std::option::Option::None,
+                    })
+                }
+
+                async fn __encode_custom_error<T: golem_rust::agentic::DirectToolError + ?Sized>(
+                    __error: &T,
+                ) -> ::std::result::Result<
+                    golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
+                    golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
+                > {
+                    let (__name, __value) = golem_rust::agentic::DirectToolError::direct_error_payload(__error).await
+                        .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
+                    ::std::result::Result::Ok(
+                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(
+                            golem_rust::schema::wit::wire::CustomToolError {
+                                name: __name,
+                                payload: __value,
+                            }
+                        )
+                    )
+                }
+
+                let __impl = self;
+                let mut __input = __input;
+                #(#subtree_aliases)*
+                let mut __input_fields = ::std::option::Option::Some(__input);
+
+                #(#invoke_arms)*
+
+                for (__subtree_path, __subtool_name) in Self::__tool_invoke_subtree_paths() {
+                    if __command_path.len() >= __subtree_path.len()
+                        && __command_path.iter().zip(__subtree_path.iter()).all(|(__actual, __expected)| __actual == __expected)
+                    {
+                        let __subtool_path = __command_path[__subtree_path.len()..].to_vec();
+                        let __subtool_invoker = golem_rust::agentic::get_tool_invoker_by_name(__subtool_name)
+                            .ok_or_else(|| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidToolName((*__subtool_name).to_string()))?;
+                        return __subtool_invoker(
+                            __subtool_path,
+                            __input_fields.take().expect("tool input is forwarded once"),
+                            __stdin,
+                            __stdout,
+                            __stderr,
+                            __principal,
+                        ).await;
+                    }
+                }
+
+                ::std::result::Result::Err(
+                    golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidCommandPath(__command_path)
+                )
+            })
+        }
+    };
+
+    [entry, instance, decoded]
+}
+
+fn fresh_tool_trait_method_ident(ir: &ToolDefinitionIr, preferred: &str) -> syn::Ident {
+    let occupied = ir
+        .commands
+        .iter()
+        .map(|command| command.method_ident.unraw().to_string())
+        .collect::<BTreeSet<_>>();
+    let mut candidate = preferred.to_string();
+    while occupied.contains(&candidate) {
+        candidate.push('_');
+    }
+    format_ident!("{candidate}")
+}
+
+fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream> {
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    ir.commands
+        .iter()
+        .filter(|cmd| cmd.subtree.is_none())
+        .map(|cmd| {
+            let method_ident = &cmd.method_ident;
+            let direct_input = fresh_command_local_ident(cmd, "__golem_direct_input");
+            let stdin_preflight = cmd.params.iter().any(|param| {
+                stream_type(&param.ty) == Some((StreamKind::Input, true))
+            }).then(|| quote! {
+                if __stdin.is_none() {
+                    return ::std::result::Result::Err(
+                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                            "tool invocation did not contain declared stdin stream".to_string()
+                        )
+                    );
+                }
+            });
+            let output_channel = |param: &ParamIr| {
+                cmd.args
+                    .iter()
+                    .find(|arg| arg.param == param.ident)
+                    .and_then(|arg| arg.output_channel)
+                    .unwrap_or(OutputChannelIr::Stdout)
+            };
+            let required_output = |channel| {
+                cmd.params.iter().find_map(|param| match stream_type(&param.ty) {
+                    Some((StreamKind::Output, required)) if output_channel(param) == channel => {
+                        Some(required)
+                    }
+                    _ => None,
+                })
+            };
+            let stdout_required = required_output(OutputChannelIr::Stdout);
+            let stderr_required = required_output(OutputChannelIr::Stderr);
+            let stdout_writer = stdout_required
+                .is_some()
+                .then(|| fresh_command_local_ident(cmd, "__golem_stdout_writer"));
+            let stderr_writer = stderr_required
+                .is_some()
+                .then(|| fresh_command_local_ident(cmd, "__golem_stderr_writer"));
+            let stdout_setup = stdout_writer.as_ref().map(|writer| {
+                if stdout_required == Some(true) {
+                    quote! {
+                        let #writer = golem_rust::agentic::OutputStream::new(__stdout.take().ok_or_else(|| {
+                            golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                                "tool invocation did not contain declared stdout stream".to_string()
+                            )
+                        })?);
+                    }
+                } else {
+                    quote! {
+                        let #writer = __stdout.take().map(golem_rust::agentic::OutputStream::new);
+                    }
+                }
+            });
+            let stderr_setup = stderr_writer.as_ref().map(|writer| {
+                if stderr_required == Some(true) {
+                    quote! {
+                        let #writer = golem_rust::agentic::OutputStream::new(__stderr.take().ok_or_else(|| {
+                            golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                                "tool invocation did not contain declared stderr stream".to_string()
+                            )
+                        })?);
+                    }
+                } else {
+                    quote! {
+                        let #writer = __stderr.take().map(golem_rust::agentic::OutputStream::new);
+                    }
+                }
+            });
+            let args = cmd.params.iter().map(|param| {
+                let ident = &param.ident;
+                let ty = &param.ty;
+                let value_name = canonical_param_name(ir, cmd, param, &tool_name);
+                let value_aliases = param_aliases(cmd, param);
+                if is_auto_injected_principal_type(ty) {
+                    quote! {
+                        let #ident = __principal.clone();
+                    }
+                } else if let Some((kind, required)) = stream_type(ty) {
+                    match (kind, required) {
+                        (StreamKind::Input, true) => quote! {
+                            let #ident = __stdin.take().ok_or_else(|| {
+                                golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                                    "tool invocation did not contain declared stdin stream".to_string()
+                                )
+                            })?;
+                        },
+                        (StreamKind::Input, false) => quote! {
+                            let #ident = __stdin.take();
+                        },
+                        (StreamKind::Output, _) => {
+                            let writer = match output_channel(param) {
+                                OutputChannelIr::Stdout => &stdout_writer,
+                                OutputChannelIr::Stderr => &stderr_writer,
+                            };
+                            quote! { let #ident = #writer.clone(); }
+                        }
+                    }
+                } else {
+                    quote! {
+                        let #ident = #direct_input.take_any_adapted::<#ty>(&[#value_name, #(#value_aliases),*])
+                            .map_err(golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput)?;
+                    }
+                }
+            });
+            let arg_idents = cmd.params.iter().map(|param| &param.ident);
+            let call = if cmd.is_async {
+                quote! { __impl.#method_ident(#(#arg_idents),*).await }
+            } else {
+                quote! { __impl.#method_ident(#(#arg_idents),*) }
+            };
+            // Implicit output completion must not replace the handler's outcome.
+            // These awaits run after a returned outcome, not after a panic.
+            let call = if let Some(stdout_writer) = stdout_writer.as_ref() {
+                if stdout_required == Some(true) {
+                    quote! {{
+                        let __golem_result = #call;
+                        let _ = #stdout_writer.finish().await;
+                        __golem_result
+                    }}
+                } else {
+                    quote! {{
+                        let __golem_result = #call;
+                        if let ::std::option::Option::Some(__golem_stdout_writer) = #stdout_writer {
+                            let _ = __golem_stdout_writer.finish().await;
+                        }
+                        __golem_result
+                    }}
+                }
+            } else {
+                call
+            };
+            let call = if let Some(stderr_writer) = stderr_writer.as_ref() {
+                if stderr_required == Some(true) {
+                    quote! {{
+                        let __golem_result = #call;
+                        let _ = #stderr_writer.finish().await;
+                        __golem_result
+                    }}
+                } else {
+                    quote! {{
+                        let __golem_result = #call;
+                        if let ::std::option::Option::Some(__golem_stderr_writer) = #stderr_writer {
+                            let _ = __golem_stderr_writer.finish().await;
+                        }
+                        __golem_result
+                    }}
+                }
+            } else {
+                call
+            };
+            let encode = encode_invocation_result(&cmd.output, call, None);
+            command_match_arm(ir, cmd, quote! {
+                #stdin_preflight
+                let mut #direct_input = golem_rust::agentic::DirectToolInput::new(
+                    __input_fields.take().expect("tool input is decoded once")
+                ).map_err(golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput)?;
+                #stdout_setup
+                #stderr_setup
+                #(#args)*
+                #direct_input.finish()
+                    .map_err(golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput)?;
+                #encode
+            })
+        })
+        .collect()
+}
+
+fn fresh_command_local_ident(command: &CommandIr, preferred_name: &str) -> syn::Ident {
+    let occupied = command
+        .params
+        .iter()
+        .map(|param| param.ident.unraw().to_string())
+        .collect::<BTreeSet<_>>();
+    if !occupied.contains(preferred_name) {
+        return format_ident!("{preferred_name}");
+    }
+
+    let mut suffix = 1usize;
+    loop {
+        let candidate = format!("{preferred_name}{suffix}");
+        if !occupied.contains(&candidate) {
+            return format_ident!("{candidate}");
+        }
+        suffix += 1;
+    }
+}
+
+fn command_match_arm(
+    ir: &ToolDefinitionIr,
+    command: &CommandIr,
+    body: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    let method_name = command.method_ident.to_string();
+    let command_name = if to_kebab_case(&method_name) == tool_name {
+        tool_name
+    } else {
+        command
+            .name_override
+            .clone()
+            .unwrap_or_else(|| to_kebab_case(&method_name))
+    };
+    let paths = if command_name == to_kebab_case(&ir.trait_ident.to_string()) {
+        vec![quote! { __command_path.is_empty() }]
+    } else {
+        ::std::iter::once(&command_name)
+            .chain(command.aliases.iter())
+            .map(|name| quote! { __command_path.as_slice() == [#name] })
+            .collect()
+    };
+    quote! {
+        if false #(|| #paths)* {
+            #body
+        }
+    }
+}
+
+fn encode_invocation_result(
+    output: &ReturnType,
+    call: proc_macro2::TokenStream,
+    _stdout_reader: Option<&syn::Ident>,
+) -> proc_macro2::TokenStream {
+    let (ok, err) = split_result(output);
+    if err.is_some() {
+        match ok {
+            Some(_) => quote! {
+                match #call {
+                    ::std::result::Result::Ok(__value) => return __encode_success_value(&__value).await,
+                    ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error).await?),
+                }
+            },
+            None => quote! {
+                match #call {
+                    ::std::result::Result::Ok(()) => return __encode_success_unit(),
+                    ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error).await?),
+                }
+            },
+        }
+    } else {
+        match ok {
+            Some(_) => quote! {
+                return __encode_success_value(&#call).await;
+            },
+            None => quote! {
+                #call;
+                return __encode_success_unit();
+            },
+        }
+    }
+}
+
+fn is_auto_injected_principal_type(ty: &Type) -> bool {
+    let Type::Path(tp) = ty else {
+        return false;
+    };
+    let segments = tp
+        .path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
+    matches!(
+        segments.as_slice(),
+        ["golem_rust", "agentic" | "tool", "Principal"]
+            | ["golem_native_tool" | "crate", "Principal"]
+            | [
+                "golem_rust",
+                "golem_agentic",
+                "golem",
+                "agent",
+                "common",
+                "Principal"
+            ]
+    )
+}
+
+pub(crate) fn split_result(output: &ReturnType) -> (Option<&Type>, Option<&Type>) {
+    let ty = match output {
+        ReturnType::Default => return (None, None),
+        ReturnType::Type(_, t) => t.as_ref(),
+    };
+    if let Type::Path(tp) = ty
+        && let Some(seg) = tp.path.segments.last()
+        && seg.ident == "Result"
+        && let PathArguments::AngleBracketed(args) = &seg.arguments
+    {
+        let mut types = args.args.iter().filter_map(|ga| {
+            if let GenericArgument::Type(t) = ga {
+                Some(t)
+            } else {
+                None
+            }
+        });
+        let ok = types.next();
+        let err = types.next();
+        return (ok.filter(|t| !is_unit(t)), err);
+    }
+    if is_unit(ty) {
+        (None, None)
+    } else {
+        (Some(ty), None)
+    }
+}
+
+fn is_unit(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(t) if t.elems.is_empty())
+}
+
+/// Parses a `#[tool_definition]` trait and its authoring attributes into IR.
+pub(crate) fn build_tool_definition_ir(
+    item_trait: &ItemTrait,
+    version: Option<String>,
+) -> Result<ToolDefinitionIr, Error> {
+    reject_misplaced_method_helper_attrs(item_trait)?;
+
+    let mut commands = Vec::new();
+    for item in &item_trait.items {
+        if let TraitItem::Fn(method) = item {
+            commands.push(build_command_ir(method)?);
+        }
+    }
+
+    Ok(ToolDefinitionIr {
+        visibility: item_trait.vis.clone(),
+        trait_ident: item_trait.ident.clone(),
+        version,
+        requires_filesystem: false,
+        aliases: Vec::new(),
+        doc: parse_doc_full(&item_trait.attrs)?,
+        commands,
+    })
+}
+
+fn build_command_ir(method: &syn::TraitItemFn) -> Result<CommandIr, Error> {
+    let mut command_attr = CommandAttr::default();
+    let mut command_seen = SeenKeys::default();
+    let mut args = Vec::new();
+    let mut constraints = Vec::new();
+    let mut result = None;
+
+    for attr in &method.attrs {
+        let path = attr.path();
+        if path.is_ident("command") {
+            parse_command_into(attr, &mut command_attr, &mut command_seen)?;
+        } else if path.is_ident("arg") {
+            args.push(parse_arg(attr)?);
+        } else if path.is_ident("constraint") {
+            constraints.push(parse_constraint(attr)?);
+        } else if path.is_ident("result") {
+            if result.is_some() {
+                return Err(Error::new(
+                    attr.span(),
+                    "a command may have at most one #[result(...)] attribute",
+                ));
+            }
+            result = Some(parse_result(attr)?);
+        }
+    }
+
+    let params = collect_params(&method.sig)?;
+    validate_arg_bindings(&args, &params)?;
+
+    Ok(CommandIr {
+        method_ident: method.sig.ident.clone(),
+        doc: parse_doc_full(&method.attrs)?,
+        aliases: command_attr.aliases,
+        name_override: command_attr.name_override,
+        annotations: command_attr.annotations,
+        subtree: command_attr.subtree,
+        is_async: method.sig.asyncness.is_some(),
+        params,
+        output: method.sig.output.clone(),
+        args,
+        constraints,
+        result,
+    })
+}
+
+/// Ensures every `#[arg(...)]` binds to an existing method parameter and that no
+/// parameter is described by more than one `#[arg(...)]`.
+fn validate_arg_bindings(args: &[ArgIr], params: &[ParamIr]) -> Result<(), Error> {
+    let param_names: BTreeSet<String> = params.iter().map(|p| p.ident.to_string()).collect();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for arg in args {
+        let name = arg.param.to_string();
+        if !param_names.contains(&name) {
+            return Err(Error::new(
+                arg.param.span(),
+                format!(
+                    "#[arg(...)] refers to unknown parameter `{name}`; the method has no such parameter"
+                ),
+            ));
+        }
+        if !seen.insert(name.clone()) {
+            return Err(Error::new(
+                arg.param.span(),
+                format!("duplicate #[arg(...)] for parameter `{name}`"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Collects the typed parameters of a method, excluding the `&self` receiver.
+///
+/// Every typed parameter must be a simple named identifier so that metadata synthesis can
+/// build the command metadata from this IR without re-reading the trait.
+fn collect_params(sig: &syn::Signature) -> Result<Vec<ParamIr>, Error> {
+    let mut params = Vec::new();
+    for input in &sig.inputs {
+        match input {
+            FnArg::Receiver(_) => {}
+            FnArg::Typed(pat_type) => match &*pat_type.pat {
+                syn::Pat::Ident(pat_ident) if pat_ident.subpat.is_none() => {
+                    params.push(ParamIr {
+                        ident: pat_ident.ident.clone(),
+                        ty: (*pat_type.ty).clone(),
+                    });
+                }
+                other => {
+                    return Err(Error::new(
+                        other.span(),
+                        "tool method parameters must be named identifiers, e.g. `name: Type`",
+                    ));
+                }
+            },
+        }
+    }
+    Ok(params)
+}
+
+/// Rejects helper attributes used in positions the IR builder does not read,
+/// where they would otherwise be silently ignored. The method-only helpers
+/// (`#[arg]`, `#[command]`, `#[constraint]`, `#[result]`) are valid only on a
+/// tool method; `#[example]` is valid only on the trait or a method. Anywhere
+/// else — the trait's non-method items or a method's parameters — is rejected.
+fn reject_misplaced_method_helper_attrs(item_trait: &ItemTrait) -> Result<(), Error> {
+    fn reject_method_only(attrs: &[Attribute]) -> Result<(), Error> {
+        const METHOD_ONLY: [&str; 4] = ["arg", "command", "constraint", "result"];
+        for attr in attrs {
+            if METHOD_ONLY.iter().any(|name| attr.path().is_ident(name)) {
+                return Err(Error::new(
+                    attr.span(),
+                    "#[arg], #[command], #[constraint], and #[result] may only be used on tool methods",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn reject_example(attrs: &[Attribute]) -> Result<(), Error> {
+        for attr in attrs {
+            if attr.path().is_ident("example") {
+                return Err(Error::new(
+                    attr.span(),
+                    "#[example] may only be used on the tool trait or its methods",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    // `#[example]` is allowed on the trait itself, so only the method-only
+    // helpers are rejected at trait level.
+    reject_method_only(&item_trait.attrs)?;
+
+    for item in &item_trait.items {
+        match item {
+            TraitItem::Fn(method) => {
+                // A method's own attributes are valid; its parameters' are not.
+                for input in &method.sig.inputs {
+                    let attrs = match input {
+                        FnArg::Receiver(r) => &r.attrs,
+                        FnArg::Typed(t) => &t.attrs,
+                    };
+                    reject_method_only(attrs)?;
+                    reject_example(attrs)?;
+                }
+            }
+            TraitItem::Const(c) => {
+                reject_method_only(&c.attrs)?;
+                reject_example(&c.attrs)?;
+            }
+            TraitItem::Type(t) => {
+                reject_method_only(&t.attrs)?;
+                reject_example(&t.attrs)?;
+            }
+            TraitItem::Macro(m) => {
+                reject_method_only(&m.attrs)?;
+                reject_example(&m.attrs)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn strip_helper_attrs(item_trait: &mut ItemTrait) {
+    item_trait
+        .attrs
+        .retain(|attr| !attr.path().is_ident("example"));
+
+    for item in &mut item_trait.items {
+        if let TraitItem::Fn(method) = item {
+            method
+                .attrs
+                .retain(|attr| !HELPER_ATTRS.iter().any(|h| attr.path().is_ident(h)));
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct ToolDefinitionOptions {
+    pub version: Option<String>,
+    pub requires_filesystem: bool,
+    pub aliases: Vec<String>,
+}
+
+/// Parses the optional `#[tool_definition(...)]` attribute arguments.
+pub(crate) fn parse_tool_definition_options(
+    attrs: proc_macro2::TokenStream,
+) -> Result<ToolDefinitionOptions, Error> {
+    if attrs.is_empty() {
+        return Ok(ToolDefinitionOptions::default());
+    }
+    use syn::parse::Parser;
+    use syn::punctuated::Punctuated;
+    let parser = Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+    let exprs = parser.parse2(attrs)?;
+    let mut options = ToolDefinitionOptions::default();
+    let mut seen = SeenKeys::default();
+    for expr in exprs.iter() {
+        let Expr::Assign(assign) = expr else {
+            return Err(Error::new(
+                expr.span(),
+                "expected `version = \"...\"` in #[tool_definition(...)]",
+            ));
+        };
+        let key = match &*assign.left {
+            Expr::Path(p) if p.path.get_ident().is_some() => p.path.get_ident().unwrap().clone(),
+            other => {
+                return Err(Error::new(
+                    other.span(),
+                    "the only supported #[tool_definition] arguments are `version` and `requires_filesystem`",
+                ));
+            }
+        };
+        if key != "version" && key != "requires_filesystem" && key != "aliases" {
+            return Err(Error::new(
+                key.span(),
+                "the only supported #[tool_definition] arguments are `version`, `requires_filesystem`, and `aliases`",
+            ));
+        }
+        seen.insert(&key)?;
+        match (key.to_string().as_str(), &*assign.right) {
+            (
+                "version",
+                Expr::Lit(syn::ExprLit {
+                    lit: Lit::Str(s), ..
+                }),
+            ) => options.version = Some(s.value()),
+            (
+                "requires_filesystem",
+                Expr::Lit(syn::ExprLit {
+                    lit: Lit::Bool(value),
+                    ..
+                }),
+            ) => options.requires_filesystem = value.value,
+            ("aliases", value) => options.aliases = expr_str_array(value, "aliases")?,
+            ("requires_filesystem", other) => {
+                return Err(Error::new(
+                    other.span(),
+                    "requires_filesystem must be a bool literal",
+                ));
+            }
+            other => {
+                return Err(Error::new(
+                    other.1.span(),
+                    "version must be a string literal",
+                ));
+            }
+        }
+    }
+    Ok(options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn ir(src: &str) -> Result<ToolDefinitionIr, Error> {
+        let item_trait: ItemTrait = syn::parse_str(src).unwrap();
+        build_tool_definition_ir(&item_trait, None)
+    }
+
+    fn version(src: &str) -> Result<Option<String>, Error> {
+        let attrs: proc_macro2::TokenStream = src.parse().unwrap();
+        parse_tool_definition_options(attrs).map(|value| value.version)
+    }
+
+    #[test]
+    fn version_is_parsed() {
+        assert_eq!(version("").unwrap(), None);
+        assert_eq!(
+            version(r#"version = "1.2.3""#).unwrap(),
+            Some("1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn root_aliases_are_parsed() {
+        let attrs: proc_macro2::TokenStream =
+            r#"aliases = ["art", "artifact-build"]"#.parse().unwrap();
+        let options = parse_tool_definition_options(attrs).unwrap();
+
+        assert_eq!(options.aliases, ["art", "artifact-build"]);
+    }
+
+    #[test]
+    fn duplicate_tool_definition_version_is_error() {
+        let err = version(r#"version = "1.0.0", version = "2.0.0""#).unwrap_err();
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn unknown_tool_definition_arg_is_error() {
+        let err = version(r#"flavor = "fast""#).unwrap_err();
+        assert!(err.to_string().contains("only supported"));
+    }
+
+    #[test]
+    fn non_string_version_is_error() {
+        let err = version("version = 3").unwrap_err();
+        assert!(err.to_string().contains("string literal"));
+    }
+
+    #[test]
+    fn generated_dispatch_helpers_avoid_authored_method_names() {
+        let definition = ir(r#"
+            pub trait T {
+                fn __tool_decode_invocation(&self);
+                fn __tool_invoke_on(&self);
+                fn __tool_invoke_decoded(&self);
+            }
+        "#)
+        .unwrap();
+
+        assert_eq!(
+            fresh_tool_trait_method_ident(&definition, "__tool_decode_invocation").to_string(),
+            "__tool_decode_invocation_"
+        );
+        assert_eq!(
+            fresh_tool_trait_method_ident(&definition, "__tool_invoke_on").to_string(),
+            "__tool_invoke_on_"
+        );
+        assert_eq!(
+            fresh_tool_trait_method_ident(&definition, "__tool_invoke_decoded").to_string(),
+            "__tool_invoke_decoded_"
+        );
+    }
+
+    #[test]
+    fn implicit_output_finishes_preserve_returned_outcomes_without_catching_panics() {
+        for output in ["u32", "Result<u32, MyError>"] {
+            for stream in ["OutputStream", "Option<OutputStream>"] {
+                let definition = ir(&format!(
+                    r#"
+                    trait T {{
+                        #[arg(diagnostics, channel = "stderr")]
+                        async fn run(&self, stdout: {stream}, diagnostics: {stream}) -> {output};
+                    }}
+                "#
+                ))
+                .unwrap();
+                let generated = synthesize_invoke_arms(&definition)[0].to_string();
+                assert_eq!(generated.matches(". finish () . await").count(), 2);
+                assert_eq!(generated.matches("let _ =").count(), 2);
+                assert!(!generated.contains(". finish () . await ?"));
+                assert!(!generated.contains("catch_unwind"));
+                assert!(!generated.contains("InvalidResult"));
+            }
+        }
+    }
+
+    #[test]
+    fn renamed_sdk_normalization_preserves_helper_attribute_identifiers_and_paths() {
+        let resolved = proc_macro2::Ident::new("sdk_alias", Span::call_site());
+        let canonical = proc_macro2::Ident::new("golem_rust", Span::call_site());
+        let preserved = proc_macro2::Ident::new("__preserved_golem_rust", Span::call_site());
+        let mut item: ItemTrait = syn::parse_quote! {
+            trait Example {
+                #[arg(golem_rust = "global")]
+                fn run(&self, golem_rust: bool);
+
+                #[command(subtree = golem_rust::Child)]
+                fn child(&self) -> ChildMarker;
+            }
+        };
+
+        normalize_sdk_paths_in_item_trait(&mut item, &resolved, &canonical, &preserved);
+        let definition = build_tool_definition_ir(&item, None).unwrap();
+        assert_eq!(
+            definition.commands[0].args[0].param.to_string(),
+            preserved.to_string()
+        );
+        assert_eq!(
+            definition.commands[0].params[0].ident.to_string(),
+            preserved.to_string()
+        );
+        assert_eq!(
+            definition.commands[1]
+                .subtree
+                .as_ref()
+                .unwrap()
+                .path
+                .segments[0]
+                .ident
+                .to_string(),
+            preserved.to_string()
+        );
+
+        let descriptor = crate::tool::descriptor::synthesize_descriptor_fn(&definition).unwrap();
+        let client = crate::tool::client::synthesize_client(&definition);
+        let middleware =
+            crate::tool::middleware_surface::synthesize_middleware_surface(&definition);
+        let emitted = resolve_generated_sdk_paths(
+            quote::quote! {
+                #item
+                #descriptor
+                #client
+                #middleware
+            },
+            &resolved,
+            &canonical,
+            &preserved,
+        )
+        .to_string();
+        assert!(emitted.contains("arg (golem_rust = \"global\")"));
+        assert!(emitted.contains("fn run (& self , golem_rust : bool)"));
+        assert!(emitted.contains("command (subtree = golem_rust :: Child)"));
+        assert!(emitted.contains("\"golem-rust\""));
+        assert!(!emitted.contains("__preserved_golem_rust"));
+    }
+
+    #[test]
+    fn sdk_path_normalization_keeps_canonical_principal_auto_injected() {
+        let resolved = proc_macro2::Ident::new("golem_rust", Span::call_site());
+        let canonical = proc_macro2::Ident::new("golem_rust", Span::call_site());
+        let preserved = proc_macro2::Ident::new("__preserved_golem_rust", Span::call_site());
+        let mut item: ItemTrait = syn::parse_quote! {
+            trait Example {
+                fn run(&self, principal: golem_rust::tool::Principal, value: String);
+            }
+        };
+
+        normalize_sdk_paths_in_item_trait(&mut item, &resolved, &canonical, &preserved);
+        let definition = build_tool_definition_ir(&item, None).unwrap();
+
+        assert!(
+            crate::tool::client::is_principal_type(&definition.commands[0].params[0].ty),
+            "the SDK Principal parameter must remain classified as auto-injected after path normalization"
+        );
+    }
+
+    #[test]
+    fn grep_like_trait() {
+        let def = ir(r##"
+            /// Search files for a regex pattern.
+            pub trait Grep {
+                #[arg(case_sensitive = "global", short = 'i', kind = "flag")]
+                #[arg(pattern = "positional", regex = r"^.+$")]
+                #[arg(files = "tail", accepts_stdio = true)]
+                #[result(formatters = ["human", "json"], default = "human")]
+                async fn grep(&self, case_sensitive: bool, pattern: RegexString, files: Vec<Path>)
+                    -> Result<Vec<Hit>, GrepError>;
+            }
+        "##)
+        .unwrap();
+        assert_eq!(def.trait_ident.to_string(), "Grep");
+        assert_eq!(def.doc.summary, "Search files for a regex pattern.");
+        assert_eq!(def.commands.len(), 1);
+        let cmd = &def.commands[0];
+        assert_eq!(cmd.method_ident.to_string(), "grep");
+        assert_eq!(cmd.args.len(), 3);
+        assert!(cmd.result.is_some());
+    }
+
+    #[test]
+    fn command_with_subtree_and_constraint() {
+        let def = ir(r#"
+            pub trait Git {
+                #[command(aliases = ["ci"], annotations(destructive = true))]
+                #[arg(message = "option", short = 'm', required = true)]
+                #[constraint(implies(lhs = "reset-author", rhs = "amend"))]
+                async fn commit(&self, message: String) -> Result<(), CommitError>;
+
+                #[command(subtree = path::Remote, aliases = ["rmt"])]
+                fn remote(&self) -> Remote;
+            }
+        "#)
+        .unwrap();
+        assert_eq!(def.commands.len(), 2);
+        let commit = &def.commands[0];
+        assert_eq!(commit.aliases, vec!["ci".to_string()]);
+        assert!(commit.annotations.is_some());
+        assert_eq!(commit.constraints.len(), 1);
+        let remote = &def.commands[1];
+        assert!(remote.subtree.is_some());
+        assert_eq!(remote.aliases, vec!["rmt".to_string()]);
+    }
+
+    #[test]
+    fn duplicate_result_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                #[result(formatters = ["a"])]
+                #[result(formatters = ["b"])]
+                async fn f(&self) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("at most one #[result"));
+    }
+
+    #[test]
+    fn bad_arg_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                #[arg(x = "nope")]
+                async fn f(&self) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid arg placement"));
+    }
+
+    #[test]
+    fn params_and_output_are_captured() {
+        let def = ir(r#"
+            pub trait T {
+                async fn f(&self, name: String, count: u32) -> Result<Vec<Hit>, E>;
+            }
+        "#)
+        .unwrap();
+        let cmd = &def.commands[0];
+        let params: Vec<String> = cmd.params.iter().map(|p| p.ident.to_string()).collect();
+        assert_eq!(params, vec!["name".to_string(), "count".to_string()]);
+        assert!(matches!(cmd.output, syn::ReturnType::Type(..)));
+    }
+
+    #[test]
+    fn trait_level_method_helper_attr_is_error() {
+        let err = ir(r#"
+            #[arg(name = "positional")]
+            pub trait T {
+                async fn f(&self, name: String) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("may only be used on tool methods"));
+    }
+
+    #[test]
+    fn arg_for_unknown_param_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                #[arg(missing = "option")]
+                async fn f(&self, name: String) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn duplicate_arg_for_same_param_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                #[arg(name = "option")]
+                #[arg(name = "flag")]
+                async fn f(&self, name: bool) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn non_ident_param_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                async fn f(&self, (a, b): (u32, u32)) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("named identifiers"));
+    }
+
+    #[test]
+    fn helper_attr_on_associated_type_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                #[arg(name = "option")]
+                type State;
+
+                async fn f(&self) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("may only be used on tool methods"));
+    }
+
+    #[test]
+    fn helper_attr_on_parameter_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                async fn f(
+                    &self,
+                    #[arg(name = "option")]
+                    name: String,
+                ) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("may only be used on tool methods"));
+    }
+
+    #[test]
+    fn example_on_associated_type_is_error() {
+        let err = ir(r#"
+            pub trait T {
+                #[example(body = "ignored")]
+                type State;
+
+                async fn f(&self) -> Result<(), E>;
+            }
+        "#)
+        .unwrap_err();
+        assert!(err.to_string().contains("example"));
+    }
+}

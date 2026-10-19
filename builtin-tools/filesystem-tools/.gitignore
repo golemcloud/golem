@@ -1,0 +1,5 @@
+/target/
+/golem-temp/
+/.agents/
+/.claude
+/AGENTS.md

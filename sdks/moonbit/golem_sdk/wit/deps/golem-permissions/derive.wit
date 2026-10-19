@@ -7,11 +7,22 @@ package golem:permissions@0.1.0;
 /// parent's lattice. The caller specifies which lower-positive and
 /// upper-positive grants to retain and which lower-negative and
 /// upper-negative grants to add, plus an optional lifespan.
+///
+/// Persistent derivation returns a template if any requested grant contains
+/// an owner slot variable (`?agent`, `?env`, ...), otherwise a concrete card.
+/// Resource-ID slots are not supported and return `invalid-pattern`. Slots
+/// name the eventual holder, not the caller. Every possible instantiation
+/// must be bounded by the parent. A template parent in the caller's wallet
+/// is resolved for the caller before validation.
 interface derive {
     use golem:core/types@2.0.0.{permission-card};
-    use types.{pattern-grant, permission-error, duration};
+    use types.{pattern-grant, permission-error, duration, persistent-card};
 
     /// Derive a child card from `parent`, narrowing the grant lattice.
+    ///
+    /// A template parent (one whose grants carry slot variables) must be in
+    /// the caller's wallet and is resolved against the caller's identity.
+    /// Only its grants addressed to the caller can be retained.
     derive: func(
         parent: borrow<permission-card>,
         lower-positive-to-retain: list<pattern-grant>,
@@ -19,7 +30,7 @@ interface derive {
         upper-positive-to-retain: list<pattern-grant>,
         upper-negative-to-add:    list<pattern-grant>,
         lifespan: option<duration>,
-    ) -> result<permission-card, permission-error>;
+    ) -> result<persistent-card, permission-error>;
 
     /// Derive a card directly from the caller's wallet.
     derive-from-wallet: func(
@@ -28,10 +39,11 @@ interface derive {
         upper-positive:  list<pattern-grant>,
         upper-negative:  list<pattern-grant>,
         lifespan:        option<duration>,
-    ) -> result<permission-card, permission-error>;
+    ) -> result<persistent-card, permission-error>;
 
     /// Derive an invocation-local card from one or more persistent or scope
     /// parents. Scope cards are attenuated in-memory and are never persisted.
+    /// Requested grants must be concrete; slots return `invalid-pattern`.
     derive-scope: func(
         parents:        list<borrow<permission-card>>,
         lower-positive: list<pattern-grant>,

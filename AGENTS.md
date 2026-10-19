@@ -25,6 +25,9 @@ explicitly revised, **do not perform backward-compatibility work**.
 - **cargo-make**: Latest version (`cargo install --force cargo-make`)
 - **cargo-test-r**: Match the version CI installs, pinned in
   `.github/actions/restore-binaries/action.yml` (`cargo install --force --locked cargo-test-r@<VERSION>`)
+- **protoc**: Required to build `golem-shard-manager`, and therefore the `golem` binary. The
+  `etcd-client` crate's build script compiles its protos with `tonic-prost-build`, which shells out
+  to the protobuf compiler; the workspace's own protos use `protox` and need no binary
 - **redis-server**: Required by worker-executor, service-integration, and CLI integration tests that
   use spawned test dependencies; not required by every unit test
 - **docker**: Required by tests that use containerized dependencies
@@ -37,7 +40,7 @@ cargo make build-release  # Release build excluding integration-tests and the si
 cargo build -p <crate>    # Build a specific root-workspace crate
 ```
 
-**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
+**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and `golem-go-development` when working on the Go SDK; see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
 
 **Note:** The user-facing documentation site (deployed at [learn.golem.cloud](https://learn.golem.cloud)) lives under `docs/` and is a Next.js / Nextra project built with Bun — see `docs/AGENTS.md`. It is built and deployed by a dedicated workflow (`.github/workflows/docs.yaml`); the main `ci.yaml` skips runs on docs-only changes.
 
@@ -153,6 +156,7 @@ Load these skills for guided workflows on complex tasks:
 | `adding-dependencies` | Adding or updating crate dependencies (covers workspace dependency management, versioning, features) |
 | `testing` | Running and debugging tests (covers test filtering, debugging failures, test components, timeouts) |
 | `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
+| `understanding-durable-execution` | Changing, reviewing, or debugging worker executor replay, oplog, durable host calls, RPC exactly-once, streaming invocations, tool/entity invocations, snapshots, or worker lifecycle |
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
@@ -160,11 +164,14 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `db-migration-scripts` | Writing PostgreSQL and SQLite migration scripts under a `db/migration/` root |
 | `logging` | Adding or reviewing `tracing` statements and following the structured logging conventions |
-| `modifying-builtin-plugins` | Changing built-in plugin source, committed WASM, descriptors, versions, or provisioning |
-| `creating-new-builtin-plugins` | Adding a new built-in WASM plugin embedded in and provisioned by the registry service |
+| `modifying-builtin-plugins` | Changing built-in plugin source, release artifacts, descriptors, versions, or provisioning |
+| `creating-new-builtin-plugins` | Adding a new externally released built-in WASM plugin provisioned by the registry service |
+| `developing-builtin-tools` | Creating or modifying externally released component-backed built-in tools |
+| `publishing-builtin-artifacts` | Publishing immutable built-in tool/plugin WASMs and updating their pinned URLs and checksums |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `migrate-ts-decorator-sdk` | Porting a TypeScript agent from the removed decorator/`BaseAgent` API to `defineAgent` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
+| `golem-go-development` | Build, test, lint, and release the Golem Go SDK modules in `sdks/go/` |
 | `golem-scala-integration-tests` | Running and debugging Scala SDK integration tests |
 | `golem-scala-base-image` | WIT folder structure and regenerating `agent_guest.wasm` for the Scala SDK |
 | `golem-scala-code-generation` | Writing Scala code generators for the Scala SDK |
@@ -184,9 +191,63 @@ Load these skills for guided workflows on complex tasks:
 
 Validate the smallest dependency and behavior scope that fully covers the change. Use package-scoped, non-mutating format, lint, build, and test commands by default. Broaden checks when shared contracts, workspace configuration, generated artifacts, or multiple subsystems are affected.
 
+When changing SDK code generation, guest bridge generation, canonical ABI wrappers, runtime retention, or release profiles, run `cargo make component-size-report`. It builds representative fixtures and writes `tmp/component-size-report/report.md` plus machine-readable details. Compare reports only when the toolchain, lockfile, Cargo configuration, and environment are identical. This is a local analysis capability, not a CI size gate.
+
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 
 Load the `pre-pr-checklist` skill for the change-scope matrix and escalation rules. Repository-wide CI remains the final broad safety net; local verification must still cover the affected code and behavior before opening a PR.
+
+### Writing the PR description
+
+Describe what the change does, then why, in enough detail that a reviewer understands the decisions
+behind it. The description exists to help someone read the diff, not to prove the work happened.
+
+Write it in ASD-STE100 Simplified Technical English, in the ubiquitous language of the code it
+describes.
+
+Simplified Technical English means one word for one meaning, and one meaning for one word. Use the
+active voice. Write short sentences that each carry one idea. Use the simple verb tenses. Keep the
+article: write "the blob at the path", not "blob at path". Do not build a noun cluster longer than
+three words. Prefer a plain verb to a participle.
+
+The ubiquitous language is the vocabulary of the code itself. A blob is a blob in the trait, in the
+test and in the description. Do not invent a second name for a thing that already has one, and do
+not borrow a word that the code uses for something else. Where the domain has no word yet, choose
+one, use it everywhere, and put it in the code too.
+
+Leave out:
+
+- Test and assertion counts, timings and pass/fail tallies. CI reports these, and a number tells a
+  reviewer nothing about whether the change is right.
+- Verification transcripts: the fmt, clippy, build and test commands that were run, red proofs,
+  mutation-gate results, CI run numbers and attempt histories.
+- Commit SHAs. A rebase or a squash merge invalidates them, and a stale hash is worse than none
+  because it resolves to nothing.
+
+Include, where they apply:
+
+- The reasoning a reviewer would otherwise have to reconstruct: why an approach was chosen over the
+  obvious alternative, why a trait method is required rather than defaulted, why one backend needs a
+  guard the others do not.
+- Behaviour changes, especially where a caller's failure mode changes rather than its return value.
+- Anything that makes the diff read as larger or stranger than it is, such as a file whose tests
+  moved out of line, or a rename that touches many call sites.
+- Where the change sits in a stack, and what has to land before it.
+
+Prefer a claim a reviewer can check by opening a file over a number they have to take on trust. When
+a pull request is restacked or rebased, reread the description: anything naming a commit, a branch
+or another pull request may have gone stale with the move.
+
+### Deployment diff model versioning
+
+Changes to the deployment diff representation or hashing under
+`golem-common/src/model/diff/` or `golem-common/src/base_model/diff/` require bumping
+`DIFF_MODEL_VERSION` in `golem-common/src/base_model/diff/mod.rs`. Generate a new
+`golem-common/tests/goldenfiles/diff_model_fingerprint_v<N>.txt` with
+`diff_model_version_matches_diff_module_fingerprint`, then rerun that test without golden-file
+updates enabled. Do not overwrite an existing version's fingerprint to make the test pass;
+preserve historical fingerprints. This version identifies the CLI/server diff contract and does
+not require compatibility parsing or migration support.
 
 ## Code Style
 

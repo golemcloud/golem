@@ -1,0 +1,958 @@
+{
+ "cases": {
+  "jq: aggregate": {
+   "script": "7630388712a585a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[6,1,3,2,true,true,[6,2,4],[1,2,3],[2,1,3],1,[2],[3,1,2]]\n"
+   }
+  },
+  "jq: alternative and optional": {
+   "script": "e15ab9b450516341",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"d\",1,null,\"x\"]\n"
+   }
+  },
+  "jq: an uncaught error ends that input's outputs": {
+   "script": "e3f072352a98b59c",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): x\n"
+   },
+   "stdout": {
+    "text": "1\nstatus=5\n"
+   }
+  },
+  "jq: arg and argjson": {
+   "script": "9baa9aa17620e92c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"ada\",\"bob\",\"cy\"]\n"
+   }
+  },
+  "jq: array extension": {
+   "script": "b15510861c13ba21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,null,null,4]\n"
+   }
+  },
+  "jq: array index too large": {
+   "script": "1aa5d62c16410cb7",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): Array index too large\njq: error (at <unknown>): Array index too large\njq: error (at <unknown>): Array index too large\n"
+   },
+   "stdout": {
+    "text": "status=5\nstatus=5\nstatus=5\n"
+   }
+  },
+  "jq: array iteration": {
+   "script": "478ba405cbc98800",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ada\nbob\ncy\n"
+   }
+  },
+  "jq: ascii output": {
+   "script": "df2e49d451e8299f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u00e9\\ud83d\\ude00\"\n{\"\\u00fc\":1}\n"
+   }
+  },
+  "jq: bad argjson": {
+   "script": "8480658e5c8c5217",
+   "status": 0,
+   "stderr": {
+    "text": "jq: invalid JSON text passed to --argjson\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "jq: combined short flags": {
+   "script": "1911fc6edb1b0db9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "jq: compact tab indent": {
+   "script": "9167d7a454a42e17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n\t\"a\": [\n\t\t1,\n\t\t{\n\t\t\t\"b\": 2\n\t\t}\n\t]\n}\n{\n \"a\": [\n  1\n ]\n}\n{\n\"a\": [\n1\n]\n}\n"
+   }
+  },
+  "jq: conditionals": {
+   "script": "88a03486055fcf8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"s\",\"m\",\"l\"]\n"
+   }
+  },
+  "jq: contains inside has": {
+   "script": "a95d709d1478fcc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[true,true,true,true,[\"a\",\"b\"]]\n"
+   }
+  },
+  "jq: conversions": {
+   "script": "6dc87f34a8e77253",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,\"2\",\"[\\\"1\\\",2,\\\"x\\\"]\",[1,2],\"2.5\",\"2\"]\n"
+   }
+  },
+  "jq: csv of objects": {
+   "script": "3d5b415343c71ae6",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): object ({}) is not valid in a csv row\njq: error (at <unknown>): string (\"x\") cannot be csv-formatted, only array\n"
+   },
+   "stdout": {
+    "text": "status=5\nstatus=5\n"
+   }
+  },
+  "jq: csv tsv": {
+   "script": "d3ab4b471ffe8f9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.5,2,\"a\"\"b\",,true,5\n1.5\t2\ta\"b\t\ttrue\t5\na\\tb\\\\c\\nd\n"
+   }
+  },
+  "jq: dates": {
+   "script": "5ede0914a51b8d3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1425599507,\"2015-03-05T23:51:47Z\",\"2015-03-05 23:51\"]\n\"number\"\n"
+   }
+  },
+  "jq: debug": {
+   "script": "c0a9dc2dd9c6835b",
+   "status": 0,
+   "stderr": {
+    "text": "[\"DEBUG:\",1]\n"
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "jq: debug message": {
+   "script": "5082fc2e1f99c7dd",
+   "status": 0,
+   "stderr": {
+    "text": "[\"DEBUG:\",\"msg\"]\n[\"DEBUG:\",1]\n"
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "jq: default filter": {
+   "script": "8a186e754eb984d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"name\": \"ada\",\n  \"age\": 36,\n  \"tags\": [\n    \"x\",\n    \"y\"\n  ],\n  \"nested\": {\n    \"k\": [\n      1,\n      2,\n      {\n        \"z\": null\n      }\n    ]\n  }\n}\n"
+   }
+  },
+  "jq: early null input ignores stdin": {
+   "script": "40df6f299cfe0573",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"ready\"\n"
+   }
+  },
+  "jq: endless producer": {
+   "script": "046e1572a8fed8c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n1\n"
+   }
+  },
+  "jq: endless raw producer": {
+   "script": "4c03af41d2999a0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"line\"\n"
+   }
+  },
+  "jq: entries": {
+   "script": "5b17baf7111384c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"name\",\"age\",\"tags\"]\n"
+   }
+  },
+  "jq: env": {
+   "script": "f9704bc67e61db65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "val\nval\n"
+   }
+  },
+  "jq: error continues": {
+   "script": "b166ffa162448639",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <stdin>:0): Cannot index number with string (\"a\")\n"
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "jq: error message": {
+   "script": "c3c8247c92043eb1",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): boom\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "jq: error object": {
+   "script": "82d632419af51558",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>) (not a string): {\"a\":1}\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "jq: exit status false then true": {
+   "script": "b39bbb47b9b994c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\n1\nstatus=0\n"
+   }
+  },
+  "jq: exit status no output": {
+   "script": "9e028a70c882834f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "jq: exit status null": {
+   "script": "9951aa6ca803d9e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=1\n"
+   }
+  },
+  "jq: exit status truthy": {
+   "script": "24fcdbff42e9dc76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\n"
+   }
+  },
+  "jq: file operands": {
+   "script": "815b0c26922e63a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "jq: filter from file": {
+   "script": "1cef805e7330a42c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42\n"
+   }
+  },
+  "jq: format interpolation": {
+   "script": "f7dd5a96efb70d0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "row: 1,\"a\"\nx=aGk=\n"
+   }
+  },
+  "jq: formats": {
+   "script": "5fc521798921f5c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a,b\",1,\"x y\"\na,b\t1\tx y\n'a,b' 1 'x y'\n[\"a,b\",1,\"x y\"]\n[\"a,b\",1,\"x y\"]\nx%20y\neCB5\nx y\n&lt;&amp;&gt;\n"
+   }
+  },
+  "jq: group sort unique": {
+   "script": "9686635e7232bdbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2,1]\n[\"bob\",\"ada\",\"cy\"]\n[\"a\",\"b\"]\n\"cy\"\n"
+   }
+  },
+  "jq: halt": {
+   "script": "77f3d8c9b5932d8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "jq: halt error object": {
+   "script": "5ee0aca090f29856",
+   "status": 0,
+   "stderr": {
+    "text": "{\"a\":1}\n"
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "jq: halt error string": {
+   "script": "1cd2e0977f1e64d5",
+   "status": 0,
+   "stderr": {
+    "text": "bye\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "jq: help": {
+   "script": "8d4ec84eafabc739",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq - commandline JSON processor [version 1.8.2]\n"
+   }
+  },
+  "jq: indent limit": {
+   "script": "9a7ea79d5e039bd4",
+   "status": 0,
+   "stderr": {
+    "text": "jq: --indent takes a number between -1 and 7\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "jq: input filename": {
+   "script": "9e025304c3b3b15c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,\"/tmp/a.json\"]\n[2,\"/tmp/b.json\"]\n[3,\"<stdin>\"]\nnull\n"
+   }
+  },
+  "jq: input pairs": {
+   "script": "35b3f9bdd496826b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2]\n[3,4]\n"
+   }
+  },
+  "jq: invalid input": {
+   "script": "848e0d408156c5f1",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 6\n"
+   },
+   "stdout": {
+    "text": "1\nstatus=5\n"
+   }
+  },
+  "jq: join": {
+   "script": "64eff1f671d88624",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1--a-true-1.5\n\"\"\n"
+   }
+  },
+  "jq: join output": {
+   "script": "d13584c225ae19df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a1b\n"
+   }
+  },
+  "jq: join rejects arrays": {
+   "script": "30dd2f57ba700cb5",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): string (\"\") and array ([1]) cannot be added\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "jq: json positional args": {
+   "script": "e3731e7cadd8908c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,{\"a\":2},null]\n"
+   }
+  },
+  "jq: keys length type": {
+   "script": "c2784d1f33d37930",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[\"age\",\"name\",\"nested\",\"tags\"],4,2,\"number\",\"object\"]\n"
+   }
+  },
+  "jq: limit first last range": {
+   "script": "1053771ed0fd6c50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0,1,2]\n5\n[0,4,8]\n3\n"
+   }
+  },
+  "jq: loc": {
+   "script": "8551a729e579517b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"file\":\"<top-level>\",\"line\":1}\n"
+   }
+  },
+  "jq: missing file": {
+   "script": "11c1cef655bfe8a4",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Could not open file /tmp/nope.json: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "1\nstatus=2\n"
+   }
+  },
+  "jq: named args object": {
+   "script": "e83b9aabe636c1d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"positional\":[],\"named\":{\"a\":\"1\",\"b\":{\"c\":[2]}}}\n"
+   }
+  },
+  "jq: nested assignment": {
+   "script": "379472b9b285bd17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"config\":{\"retries\":3},\"list\":[null,null,\"x\"],\"n\":{\"m\":5}}\n"
+   }
+  },
+  "jq: nested path": {
+   "script": "84e8856848808817",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"z\":null}\n"
+   }
+  },
+  "jq: null input inputs": {
+   "script": "363caff8b987d749",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,2,3]\n"
+   }
+  },
+  "jq: null input reduce inputs": {
+   "script": "9cbbb079eebd7b49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "jq: null slice": {
+   "script": "c9cc028cf3b2ccc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\n"
+   }
+  },
+  "jq: number literals": {
+   "script": "a62590f5b44b412d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0.00001,1E+5,0.00,1500,-0.0,1.2E-8,5E-7,0.050]\n"
+   }
+  },
+  "jq: number literals pass through": {
+   "script": "05565dfd055c2362",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1.0,1.50,3E+2,100000000000000000001]\n"
+   }
+  },
+  "jq: number output": {
+   "script": "7382663be5d8e2fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[5,0.3333333333333333,33.333333333333336,1e-05,1e+17,2e+21,1000000000000000.5,3,3.5]\n"
+   }
+  },
+  "jq: numbers": {
+   "script": "1e3f4ea282cb1105",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1.0,1.5,100000000000000000000,3.0E+2,0,0.30000000000000004,1E+1000,1.7976931348623157e+308,null]\n"
+   }
+  },
+  "jq: object construction": {
+   "script": "6420dba541869219",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"who\":\"ada\",\"old\":true}\n{\"who\":\"bob\",\"old\":false}\n{\"who\":\"cy\",\"old\":true}\n"
+   }
+  },
+  "jq: paths and delete": {
+   "script": "d3fb25b9b92597ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":1,\"c\":{\"e\":2}}\n[[\"a\"],[\"c\",\"e\"]]\n"
+   }
+  },
+  "jq: positional args": {
+   "script": "120737c616bd2630",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b c\"]\n"
+   }
+  },
+  "jq: pretty print": {
+   "script": "88bebdfe9bb5cf7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"name\": \"ada\",\n  \"age\": 36,\n  \"tags\": [\n    \"x\",\n    \"y\"\n  ],\n  \"nested\": {\n    \"k\": [\n      1,\n      2,\n      {\n        \"z\": null\n      }\n    ]\n  }\n}\n"
+   }
+  },
+  "jq: raw field": {
+   "script": "6bf8398879556516",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ada\n"
+   }
+  },
+  "jq: raw input lines": {
+   "script": "d9466bc0a54b0c8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\"\n\"b c\"\n\"\"\n\"last\"\n"
+   }
+  },
+  "jq: raw input slurp": {
+   "script": "9c9f92ce259d493b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\n  \"a\",\n  \"b\",\n  \"\"\n]\n"
+   }
+  },
+  "jq: raw input to json": {
+   "script": "86f5d8d3e0d83760",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "jq: raw output0": {
+   "script": "018b1cda0651cb91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^@b^@\n"
+   }
+  },
+  "jq: recurse paths": {
+   "script": "8353c214c9e304cd",
+   "status": 3,
+   "stderr": {
+    "text": "jq: error: leaf_paths/0 is not defined at <top-level>, line 1, column 27:\n    [paths], [.. | numbers], [leaf_paths], getpath([\"a\",\"b\",1,\"c\"])\n                              ^^^^^^^^^^\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "jq: reduce foreach": {
+   "script": "2fa1cf37e1f628b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n[1,3,6,10]\n"
+   }
+  },
+  "jq: regex capture": {
+   "script": "90a93eb69910bedd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"id\":\"42\",\"name\":\"ada\"}\n[\"42\"]\n6\n"
+   }
+  },
+  "jq: select map": {
+   "script": "52f5d3b937221829",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"ada\",\"cy\"]\n"
+   }
+  },
+  "jq: seq": {
+   "script": "283619e1207aae1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "^^1\n^^[2]\n"
+   }
+  },
+  "jq: slurp": {
+   "script": "eb0b648043162ef2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n3\n"
+   }
+  },
+  "jq: slurp files": {
+   "script": "23af0f6bf2466cbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[1],[2]]\n"
+   }
+  },
+  "jq: slurpfile rawfile": {
+   "script": "0440cc7b23774011",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[1,2],\"text\\n\"]\n"
+   }
+  },
+  "jq: sort keys": {
+   "script": "2ee5f5f35d2198a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":{\"c\":2,\"d\":1},\"b\":1}\n"
+   }
+  },
+  "jq: stderr": {
+   "script": "8a25cc27f425f81f",
+   "status": 0,
+   "stderr": {
+    "text": "s{\"a\":1}"
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "jq: stdin operand": {
+   "script": "c0e9b3d88608d1fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "jq: stream refused": {
+   "script": "5fb859b6ab62d0d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\n  [],\n  1\n]\nstatus=0\n"
+   }
+  },
+  "jq: string interpolation": {
+   "script": "bc8fa5c44b2be0a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ada is 36\n"
+   }
+  },
+  "jq: strings": {
+   "script": "5f2f87ce601ba7d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"hello, world\",[\"Hello\",\"World\"],\", World\",true,true,\"Hell0, World\",\"Hell0, W0rld\",\"Hello, World\",12]\n"
+   }
+  },
+  "jq: syntax error": {
+   "script": "65298fe03e516854",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: syntax error, unexpected end of file at <top-level>, line 1, column 2:\n    .[\n     ^\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "jq: type selectors": {
+   "script": "0e50e0ab97cfdee2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,\"a\",null,true,[1],{\"a\":1},1,\"a\",null,true]\n"
+   }
+  },
+  "jq: undefined function": {
+   "script": "7565f4b1aa2b8e8d",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: foo/0 is not defined at <top-level>, line 1, column 5:\n    1 | foo\n        ^^^\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "jq: undefined variable": {
+   "script": "0dcbd3b32102ae00",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: $x is not defined at <top-level>, line 1, column 1:\n    $x\n    ^^\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "jq: unexported var is not env": {
+   "script": "1bb1549ce85881c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\n"
+   }
+  },
+  "jq: unicode": {
+   "script": "342c67a182760a51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"k\":\"ø é 😀\"}\ntab\there\n"
+   }
+  },
+  "jq: unknown option": {
+   "script": "7f0aece470628f1c",
+   "status": 0,
+   "stderr": {
+    "text": "jq: Unknown option --bogus\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "jq: update operators": {
+   "script": "7abe6f0e087696c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"name\":\"ada\",\"age\":37,\"tags\":[\"X\",\"Y\"],\"new\":{\"deep\":true}}\n"
+   }
+  },
+  "jq: with entries": {
+   "script": "93719c4e11fe36c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":\"1\",\"b\":\"2\"}\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

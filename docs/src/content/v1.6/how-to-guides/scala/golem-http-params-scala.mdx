@@ -1,0 +1,177 @@
+# HTTP Request and Response Parameter Mapping (Scala)
+
+## Overview
+
+When an agent is exposed over HTTP, Golem maps parts of each HTTP request to constructor and method parameters. This skill covers how path segments, query parameters, headers, and request bodies are mapped, which types are supported for each, and how return types map to HTTP responses.
+
+## Path Variables
+
+Path variables `{varName}` in mount or endpoint paths map to parameters by name:
+
+```scala
+// Mount path variables → constructor parameters (from class Id)
+@agentDefinition(mount = "/api/tasks/{name}")
+trait TaskAgent extends BaseAgent {
+  class Id(val name: String)
+
+  // Endpoint path variables → method parameters
+  @endpoint(method = "GET", path = "/items/{itemId}")
+  def getItem(itemId: String): Future[Item]
+}
+```
+
+Remaining (catch-all) path variables capture everything after a prefix:
+
+```scala
+@endpoint(method = "GET", path = "/files/{*filePath}")
+def getFile(filePath: String): Future[String]
+// GET .../files/docs/readme.md → filePath = "docs/readme.md"
+```
+
+Catch-all variables can only appear as the **last** path segment and are **not** allowed in mount paths.
+
+## Query Parameters
+
+Specified in the endpoint path using `?key={var}` syntax:
+
+```scala
+@endpoint(method = "GET", path = "/search?q={query}&limit={n}")
+def search(query: String, n: Int): Future[String]
+// GET .../search?q=hello&limit=10
+```
+
+## Header Variables
+
+Map HTTP headers to parameters using the `@header` annotation on individual parameters:
+
+```scala
+import golem.runtime.annotations.header
+
+@endpoint(method = "POST", path = "/report")
+def submitReport(
+  @header("X-Tenant") tenantId: String,
+  data: String
+): Future[String]
+```
+
+## Supported Types for Path, Query, and Header Variables
+
+Only these types can be used for parameters bound to path/query/header variables (the value is parsed from the URL/header string):
+
+| Scala Type | Parsed From |
+|---|---|
+| `String` | Used as-is |
+| `Boolean` | Parsed from `"true"` / `"false"` |
+| `Int` | Parsed as 32-bit signed integer |
+| `Long` | Parsed as 64-bit signed integer |
+| `Float` | Parsed as 32-bit float |
+| `Double` | Parsed as 64-bit float |
+| Enum / sealed trait (unit cases only) | Matched against known case names |
+
+**For query parameters and headers only** (not path variables), two additional wrapper types are supported:
+
+| Scala Type | Behavior |
+|---|---|
+| `Option[T]` (where `T` is a supported type above) | Optional — absent query param or header produces `None` |
+| `List[T]` / `Array[T]` (where `T` is a supported type above) | Repeated query params or comma-separated header values |
+
+**All other types** (case classes, tuples, sealed traits with data, etc.) can only be used as **body parameters**.
+
+## POST Request Body Mapping
+
+User-supplied method parameters **not** bound to path variables, query parameters, or headers are body parameters. Ordinary structured parameters are populated from the JSON request body:
+
+```scala
+@endpoint(method = "POST", path = "/items/{id}")
+def updateItem(id: String, name: String, count: Int): Future[Item]
+// POST .../items/123
+// Body: { "name": "Widget", "count": 5 }
+// → id from path, name and count from body
+```
+
+Each ordinary structured body parameter becomes a top-level field in the expected JSON body object. All custom types require a `zio.blocks.schema.Schema` instance.
+
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body parameter names only** as keys, even for one parameter. `def decide(decision: String)` expects `{"decision": "approved"}`, not a bare string. A single object parameter named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header parameters. Unstructured text and binary parameters instead consume the raw body; see below.
+
+CLI positional invocation is different: pass one argument per user-supplied method parameter in signature order, including parameters bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use Scala native literals for each value, not one JSON object wrapping the full input. A single object parameter is one native case-class literal without the HTTP `payload` wrapper. Load [`golem-invoke-agent-scala`](/v1.6/how-to-guides/scala/golem-invoke-agent-scala) for CLI examples and caller-only input rules.
+
+## Raw Text and Binary Bodies
+
+Use `golem.schema.UnstructuredText[L]` for raw `text/plain` and `golem.schema.UnstructuredBinary[M]`
+for raw binary request and response bodies. The type argument is the allow-list: `String` for no
+restriction, or a string-literal union such as `"en" | "de"` / `"image/png" | "image/jpeg"`.
+
+```scala
+@endpoint(method = "POST", path = "/upload/{bucket}")
+def upload(bucket: String, payload: golem.schema.UnstructuredBinary["image/png" | "image/jpeg"]): Future[Long]
+
+@endpoint(method = "POST", path = "/notes/{id}")
+def addNote(id: String, body: golem.schema.UnstructuredText[String]): Future[Int]
+
+@endpoint(method = "GET", path = "/notes/{id}")
+def getNote(id: String): Future[golem.schema.UnstructuredText["en" | "de"]]
+```
+
+```scala
+import golem.schema.{UnstructuredBinary, UnstructuredText}
+
+override def upload(bucket: String, payload: UnstructuredBinary["image/png" | "image/jpeg"]): Future[Long] =
+  Future.successful(payload match {
+    case UnstructuredBinary.Inline(data, _) => data.length.toLong
+    case UnstructuredBinary.Url(_)          => -1L
+  })
+
+override def getNote(id: String): Future[UnstructuredText["en" | "de"]] =
+  Future.successful(UnstructuredText.fromInline("hello", "en"))
+```
+
+- Values: `UnstructuredText.Inline(text, languageCode)` / `UnstructuredText.Url(url)` and
+  `UnstructuredBinary.Inline(data, mimeType)` / `UnstructuredBinary.Url(url)`; build them with
+  `fromInline(...)` (optionally with a language code / MIME type) or `fromUrl(url)`.
+- A method with an unstructured body parameter may have only **one** body parameter, and it cannot
+  be bound to a path/query/header variable.
+- Text request bodies must have no `Content-Type`, `text/plain`, or `text/plain; charset=utf-8`
+  (otherwise 415); an optional single `Content-Language` is checked against the allow-list.
+- Responses: text is sent as `text/plain; charset=utf-8` with the language code as
+  `Content-Language`; binary uses its MIME type (default `application/octet-stream`); a `Url`
+  value is a 307 redirect.
+- Generated RPC clients do not copy the agent trait file's imports, so use the fully qualified
+  `golem.schema.…` names in the agent trait.
+
+## Return Type to HTTP Response Mapping
+
+Scala `Either[E, T]` maps to WIT `result<T, E>` (`Right` = `Ok`, `Left` = `Err`).
+
+| Return Type | HTTP Status | Response Body |
+|---|---|---|
+| `Future[Unit]` | 204 No Content | empty |
+| `Future[T]` | 200 OK | JSON-serialized `T` |
+| `Future[Option[T]]` | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
+| `Future[Either[E, T]]` | 200 OK if `Right`, 500 Internal Server Error if `Left` | JSON `T` or JSON `E` |
+| `Future[Either[E, Unit]]` | 204 No Content if `Right`, 500 if `Left` | empty or JSON `E` |
+| `Future[Either[E, Option[T]]]` | 200 OK if `Right(Some)`, 404 Not Found if `Right(None)`, 500 if `Left` | JSON `T`, empty, or JSON `E` |
+| `Future[UnstructuredBinary[M]]` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `Future[UnstructuredText[L]]` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+
+The value inside `Some` / `Right` follows the same rules as a top-level value: an unstructured value
+nested in `Option`, `Either[E, _]`, or `Either[E, Option[_]]` is sent as the **raw** body, not as
+JSON. For example, `Future[Either[String, Option[golem.schema.UnstructuredBinary[String]]]]` gives
+raw bytes (200), 404 for `Right(None)`, and a JSON error (500) for `Left`.
+
+## Data Type to JSON Mapping
+
+| Scala Type | JSON Representation |
+|---|---|
+| `String` | JSON string |
+| `Int`, `Long` | JSON number (integer) |
+| `Float`, `Double` | JSON number (float) |
+| `Boolean` | JSON boolean |
+| `Array[T]`, `List[T]` | JSON array |
+| case class (with `Schema`) | JSON object (camelCase field names) |
+| `Option[T]` | value or `null` |
+| sealed trait / enum | JSON variant |
+| `Tuple` | JSON array |
+
+
+### Related Guides
+- Load [`golem-add-http-endpoint-scala`](/v1.6/how-to-guides/scala/golem-add-http-endpoint-scala) for the high-level workflow of defining and mounting HTTP endpoints on an agent

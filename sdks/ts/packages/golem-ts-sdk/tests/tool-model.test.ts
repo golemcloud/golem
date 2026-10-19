@@ -45,9 +45,14 @@ import {
   graftSubtree,
   listCodec,
   normalizeExtendedTool,
+  optionalCanonicalFieldCodec,
   schemaValueConforms,
   validateExtendedTool,
 } from '../src/internal/tool';
+import {
+  permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
+} from './permissionCardTestSupport';
 
 const stringCodec = compileSchema(z.string());
 
@@ -93,6 +98,26 @@ function command(name: string, overrides: Partial<ExtendedCommandNode> = {}): Ex
 }
 
 describe('internal extended tool model', () => {
+  it('encodes optional tool fields under their actual wire schema', () => {
+    const optional = new CanonicalInputModel([
+      {
+        name: 'maybe',
+        aliases: [],
+        codec: optionalCanonicalFieldCodec(stringCodec),
+        optionalCarrier: true,
+      },
+    ]);
+    const required = new CanonicalInputModel([{ name: 'maybe', aliases: [], codec: stringCodec }]);
+    for (const maybe of [undefined, 'supplied']) {
+      const typed = optional.encodeTyped({ maybe });
+      expect(schemaValueConforms(typed.graph, typed.graph.root, typed.value)).toBe(true);
+    }
+    const supplied = optional.encode({ maybe: 'supplied' });
+    expect(required.projectValues(optional.decodeValues(supplied))[0].schemaValue).toEqual(
+      v.string('supplied'),
+    );
+  });
+
   it('compares canonical schema shape across restrictions and recursive definition names', () => {
     expect(
       schemaShapesMatch(
@@ -1372,6 +1397,170 @@ describe('internal extended tool model', () => {
       expect(thrown).toBe(failure);
     },
   );
+
+  it.each([
+    ['secret', s.secret(z.string())],
+    ['quota-token', s.quotaToken()],
+  ] as const)('rolls back partial %s adoption in synthetic list codecs', (_name, schema) => {
+    const raw = {} as never;
+    const item = compileSchema(schema);
+    const list = listCodec(item);
+    expect(() => list.toValue([raw, raw])).toThrow(/already owned/);
+    expect(item.fromValue(item.toValue(raw))).toBe(raw);
+  });
+
+  it.each([
+    ['secret', s.secret(z.string())],
+    ['quota-token', s.quotaToken()],
+  ] as const)('rolls back present optional %s fields on later failure', (_name, schema) => {
+    const raw = {} as never;
+    const capability = compileSchema(schema);
+    const canonical = new CanonicalInputModel([
+      { name: 'capability', aliases: [], codec: optionalCanonicalFieldCodec(capability) },
+      { name: 'later', aliases: [], codec: stringCodec },
+    ]);
+    expect(() =>
+      canonical.encode({
+        capability: raw,
+        get later() {
+          throw new Error('later failed');
+        },
+      }),
+    ).toThrow('later failed');
+    expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+  });
+
+  it.each([
+    {
+      kind: 'concrete',
+      card: () => permissionCardFromRaw({}),
+      schema: () => s.permissionCard({ polymorphic: false }),
+    },
+    {
+      kind: 'template',
+      card: () => polymorphicPermissionCardFromRaw({}),
+      schema: () => s.permissionCard({ polymorphic: true }),
+    },
+  ] as const)('keeps a $kind permission card usable when a later optional field fails', (kind) => {
+    const card = kind.card();
+    const capability = compileSchema(kind.schema());
+    const canonical = new CanonicalInputModel([
+      { name: 'capability', aliases: [], codec: optionalCanonicalFieldCodec(capability) },
+      { name: 'later', aliases: [], codec: stringCodec },
+    ]);
+    expect(() =>
+      canonical.encode({
+        capability: card,
+        get later() {
+          throw new Error('later failed');
+        },
+      }),
+    ).toThrow('later failed');
+    expect(card.isMoved()).toBe(false);
+  });
+
+  it('does not roll back a successful reentrant capability conversion', () => {
+    const outerRaw = { id: 'outer' } as never;
+    const reentrantRaw = { id: 'reentrant' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const outer = compileSchema(z.object({ capability: s.secret(z.string()), later: z.string() }));
+    let reentrantValue: ReturnType<typeof capability.toValue> | undefined;
+
+    expect(() =>
+      outer.toValue({
+        capability: outerRaw,
+        get later() {
+          reentrantValue = capability.toValue(reentrantRaw);
+          throw new Error('outer conversion failed');
+        },
+      }),
+    ).toThrow('outer conversion failed');
+
+    expect(reentrantValue).toBeDefined();
+    expect(capability.fromValue(reentrantValue!)).toBe(reentrantRaw);
+    expect(capability.fromValue(capability.toValue(outerRaw))).toBe(outerRaw);
+  });
+
+  it('isolates successful reentry through the same compiled root codec', () => {
+    const outerRaw = { id: 'outer' } as never;
+    const reentrantRaw = { id: 'reentrant' } as never;
+    const codec = compileSchema(z.object({ capability: s.secret(z.string()), later: z.string() }));
+    let reentrantValue: ReturnType<typeof codec.toValue> | undefined;
+
+    expect(() =>
+      codec.toValue({
+        capability: outerRaw,
+        get later() {
+          reentrantValue = codec.toValue({ capability: reentrantRaw, later: 'ok' });
+          throw new Error('outer conversion failed');
+        },
+      }),
+    ).toThrow('outer conversion failed');
+
+    expect(codec.fromValue(reentrantValue!)).toEqual({ capability: reentrantRaw, later: 'ok' });
+    expect(codec.fromValue(codec.toValue({ capability: outerRaw, later: 'retry' }))).toEqual({
+      capability: outerRaw,
+      later: 'retry',
+    });
+  });
+
+  it('restores the parent journal after a caught failed reentrant root conversion', () => {
+    const first = { id: 'first' } as never;
+    const failed = { id: 'failed' } as never;
+    const after = { id: 'after' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const outer = compileSchema(
+      z.object({
+        first: s.secret(z.string()),
+        trigger: z.string(),
+        after: s.secret(z.string()),
+        final: z.string(),
+      }),
+    );
+
+    expect(() =>
+      outer.toValue({
+        first,
+        get trigger() {
+          expect(() => listCodec(capability).toValue([failed, failed])).toThrow(/already owned/);
+          return 'continue';
+        },
+        after,
+        get final() {
+          throw new Error('parent failed');
+        },
+      }),
+    ).toThrow('parent failed');
+
+    for (const raw of [first, failed, after]) {
+      expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+    }
+  });
+
+  it('rolls back nested synthetic and canonical root conversions atomically', () => {
+    const nestedRaw = { id: 'nested' } as never;
+    const canonicalRaw = { id: 'canonical' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const nested = listCodec(listCodec(capability));
+    const canonical = new CanonicalInputModel([
+      { name: 'capability', aliases: [], codec: capability },
+      { name: 'later', aliases: [], codec: stringCodec },
+    ]);
+
+    expect(() => nested.toValue([[nestedRaw, nestedRaw]])).toThrow(/already owned/);
+    expect(() =>
+      canonical.encode({
+        capability: canonicalRaw,
+        get later() {
+          throw new Error('canonical failed');
+        },
+      }),
+    ).toThrow('canonical failed');
+
+    for (const raw of [nestedRaw, canonicalRaw]) {
+      expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+    }
+  });
 
   it('tries a peeled value-is codec after the whole list codec rejects a scalar', () => {
     const codec = listCodec(stringCodec);

@@ -1,0 +1,266 @@
+import { Callout, Tabs } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
+
+# Artifacts
+
+Agents produce things that people use: an API, a web front-end, a report to download, live progress to watch. Golem calls these **artifacts** and serves them from the same deployment as the agents, so an application needs no separate web server, file host, or streaming service. A single `golem deploy` ships the agents, their tools, and the front-end whose buttons call them.
+
+For example, a reporting application deploys its single-page front-end as static files. The front-end's buttons call HTTP endpoints on `ReportAgent` agents, progress streams back to the page while the agent works, and the finished report, a file the agent wrote, is served from the agent's filesystem. The front-end, the API, the stream, and the file all come from one deployment, and the agents behind them are durable.
+
+## HTTP endpoints for agent methods
+
+An agent type can declare an HTTP mount path, and its methods can declare endpoints under it. The mount path contains every constructor parameter, so the URL identifies the agent. With this declaration, `POST /counters/alice/increment` calls `increment` on `CounterAgent("alice")`:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  id: { name: z.string() },
+  http: http.mount("/counters/{name}"),
+  methods: {
+    increment: method({
+      input: {},
+      returns: z.number(),
+      http: http.post("/increment"),
+    }),
+  },
+});
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/counters/{name}"),
+  methods: {
+    increment: method({
+      input: {},
+      success: Schema.Number,
+      http: [Http.post("/increment")],
+    }),
+  },
+});
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+#[agent_definition(mount = "/counters/{name}")]
+pub trait CounterAgent {
+    fn new(name: String) -> Self;
+
+    #[endpoint(post = "/increment")]
+    fn increment(&mut self) -> u32;
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+@agentDefinition(mount = "/counters/{name}")
+trait CounterAgent extends BaseAgent {
+  class Id(val name: String)
+
+  @endpoint(method = "POST", path = "/increment")
+  def increment(): Future[Int]
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+#derive.agent
+#derive.mount("/counters/{name}")
+struct CounterAgent {
+  name : String
+  mut value : UInt64
+}
+
+fn CounterAgent::new(name : String) -> CounterAgent {
+  { name, value: 0 }
+}
+
+#derive.endpoint(post="/increment")
+pub fn CounterAgent::increment(self : Self) -> UInt64 {
+  self.value += 1
+  self.value
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "CounterAgent",
+	HTTP: &golem.Mount{Path: "/counters/{name}"},
+})
+
+var Increment = Agent.Method[golem.Unit, int64]("increment", golem.HTTP(golem.POST("/increment")))
+```
+  </Tabs.Tab>
+</Tabs>
+
+Path, query, and header parameters map to method inputs, and return values map to responses. Each deployment publishes an OpenAPI document for its endpoints. A deployment can claim a subdomain, such as `my-app.localhost:9006` locally or `my-app.apps.golem.cloud` on Golem Cloud.
+
+## HTTP routers
+
+When an application needs full control over HTTP, for example to serve an existing web framework or handle streaming uploads, it can define an **HTTP router**. A router's handler receives a standard Fetch `Request` and returns a `Response`:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+export const EchoRouter = defineHttpRouter("EchoRouter")
+  .mount("/echo")
+  .implement((request) => new Response(request.body));
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+const routes = Routes.add("POST", "/", Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  return HttpServerResponse.stream(request.stream);
+}));
+
+HttpRouter.define("EchoRouter", {
+  mount: Http.mount("/echo"),
+}).implement(Routes.toHttpEffect(routes));
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+struct EchoRouter;
+
+#[http_router(name = "EchoRouter", mount = "/echo")]
+impl HttpRouter for EchoRouter {
+    type Config = ();
+
+    fn new(_: Config<()>) -> Self {
+        Self
+    }
+
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
+        HttpResponse { status: 200, headers: vec![], body: request.body }
+    }
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+@httpRouter(typeName = "EchoRouter", mount = "/echo")
+trait EchoRouter extends BaseAgent {
+  @httpHandler def serve(request: HttpRequest): Future[HttpResponse]
+}
+
+@agentImplementation()
+final class EchoRouterImpl extends EchoRouter {
+  def serve(request: HttpRequest): Future[HttpResponse] =
+    Future.successful(HttpResponse(UShort(200), Nil, request.body))
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+#derive.http_router
+#derive.mount("/echo")
+struct EchoRouter {}
+
+fn EchoRouter::new() -> EchoRouter { EchoRouter::{ } }
+
+#derive.http_handler
+pub fn EchoRouter::serve(_self : Self, request : @http.HttpRequest) -> @http.HttpResponse {
+  let input = request.body
+  {
+    status: 200,
+    headers: [],
+    body: @schema.AgentStream::produce(
+      async fn(writer) {
+        defer input.drop()
+        for ;; {
+          match input.read() {
+            None => return
+            Some(chunk) =>
+              if writer.write_one(chunk) is @schema.PeerDropped { return }
+          }
+        }
+      },
+      on_unstarted_drop=() => input.drop(),
+    ),
+  }
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+var EchoRouter = golem.DefineHTTPRouter(golem.RouterSpec{Name: "EchoRouter", Mount: "/echo"})
+
+func init() {
+	EchoRouter.Handle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(w, r.Body)
+	}))
+}
+```
+  </Tabs.Tab>
+</Tabs>
+
+A router calls agents through their clients, so one router can serve a single-page app while typed endpoints answer its API calls on the same origin.
+
+## Interactive apps
+
+A web app on Golem is interactive, not static output: its JavaScript runs in the browser and calls the agents' HTTP endpoints, and each call runs durable agent code with the agent's state and permissions. An agent can also generate an app at runtime: it writes HTML and JavaScript into its own filesystem, serves them as live files, and the page calls the agent's endpoints. What Golem does not run is a long-lived server process, such as a development server, inside a tool.
+
+## Static and live files
+
+| | Static files | Live files |
+|---|---|---|
+| What | Files deployed with a router, such as a front-end's HTML, CSS, and JavaScript | Files in a durable agent's filesystem, such as a report the agent just wrote |
+| Served | Directly from storage, without running any agent | From the agent's current filesystem, without running a method |
+| Caching | Cached and revalidated with an `ETag` | Never cached |
+
+A live file is never served half-written: the read waits until the agent's current method call finishes.
+
+## Cached read-only responses
+
+Methods marked read-only can be answered from a cache without loading the agent. On a `GET` endpoint, the response carries an `ETag`, and a client that already has the current version gets `304 Not Modified`.
+
+## Streams that survive reconnects
+
+A method that returns a stream, mounted on an HTTP endpoint, is served using the **Durable Streams** protocol, an open HTTP protocol for resumable streams. The stream belongs to the agent, not to the HTTP connection, so a browser tab that reloads continues from the last position it read. Existing Durable Streams clients work with these endpoints.
+
+## Login
+
+Endpoints can require authentication. A single-page app can sign users in with the OAuth2 authorization code flow with PKCE, and Golem checks the token before any agent code runs.
+
+<Callout type="warning">
+  Authentication tells an agent who is calling; it does not decide which agents a user may reach.
+  A user can put any agent's name in a URL, so a method that serves user data should read the
+  authenticated caller (the principal) and check it against the application's access rules.
+</Callout>
+
+## Keeping an existing web app
+
+You do not have to serve your front-end from Golem. An existing application, such as a Next.js app, can call agents from its server through a client library generated for its language or through the REST API, and keep its own UI and hosting.
+
+## One agent, many entry points
+
+The same agent can be reached from a browser, an MCP client, the CLI, a generated client library in your own application, the REST API, and other agents. Endpoints are declared in agent code, and they become reachable over HTTP or MCP only when an `httpApi` or `mcp` deployment in `golem.yaml` publishes them.
+
+<ThemedImage
+  lightSrc="/images/getting-started/agent-surfaces-light.webp"
+  darkSrc="/images/getting-started/agent-surfaces-dark.webp"
+  alt={`Clients reaching one agent, ReportAgent("acme", "q3"), which has one identity, one state, and one oplog. A browser and an MCP client connect through public endpoints that exist only because an httpApi or mcp deployment in golem.yaml lists the agent. The CLI and REPL, a bridge library in your application, the REST API, and other agents connect through Golem's own interfaces.`}
+  caption="Public endpoints exist only where the manifest declares them. Every entry point reaches the same agent."
+  width={1536}
+  height={1024}
+/>
+
+## Next
+
+[Agent lifecycle](/v1.6/concepts/agent-lifecycle): how agents are created, suspended, updated, inspected, and scaled.
+
+Related guides:
+
+- [Making custom APIs](/v1.6/invoke/making-custom-apis)
+- [HTTP routers and files](/v1.6/invoke/making-custom-apis/http-routers)
+- [Durable Streams](/v1.6/invoke/making-custom-apis/durable-streams)
+- [MCP](/v1.6/invoke/mcp)

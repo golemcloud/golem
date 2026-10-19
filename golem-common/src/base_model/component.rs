@@ -31,7 +31,7 @@ use crate::model::card::recipient::RecipientPattern;
 use crate::model::card::{
     PolymorphicCard, PolymorphicPermissionPattern, default_agent_initial_permission_grants,
 };
-use crate::schema::agent::AgentTypeSchema;
+use crate::schema::agent::{AgentTypeSchema, ComponentConfigSchema};
 use crate::schema::tool::Tool;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -135,6 +135,12 @@ declare_structs! {
         pub component_name: ComponentName,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
+        pub config_schema: ComponentConfigSchema,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub component_provision_config: ComponentProvisionConfigCreation,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
         pub agent_types: Vec<AgentTypeSchema>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -145,10 +151,18 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub tool_deployment_configs: BTreeMap<ToolName, ToolDeploymentConfigCreation>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middlewares: Vec<crate::schema::tool::ToolMiddleware>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middleware_provision_configs: BTreeMap<crate::model::tool_middleware::ToolMiddlewareName, ToolProvisionConfigCreation>,
     }
 
     pub struct ComponentUpdate {
         pub current_revision: ComponentRevision,
+        pub config_schema: Option<ComponentConfigSchema>,
+        pub component_provision_config: Option<ComponentProvisionConfigCreation>,
         pub agent_types: Option<Vec<AgentTypeSchema>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -159,6 +173,12 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub tool_deployment_config_updates: Option<BTreeMap<ToolName, ToolDeploymentConfigUpdate>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middlewares: Option<Vec<crate::schema::tool::ToolMiddleware>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middleware_provision_config_updates: Option<BTreeMap<crate::model::tool_middleware::ToolMiddlewareName, ToolProvisionConfigUpdate>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub allow_incompatible_config: bool,
@@ -181,9 +201,29 @@ declare_structs! {
         pub files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
     }
 
+    #[derive(Default)]
+    pub struct ComponentProvisionConfigCreation {
+        pub initial_permissions: AgentTypeInitialPermissions,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub env: BTreeMap<String, String>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub config: Vec<AgentConfigEntryDto>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub plugin_installations: Vec<PluginInstallation>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+    }
+
     pub struct ToolDeploymentConfigCreation {
         pub provision: ToolProvisionConfigCreation,
         pub environment_binding: Option<ToolBindingInput>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
@@ -208,6 +248,7 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub environment_binding: OptionalFieldUpdate<ToolBindingInput>,
+        pub component_bindings: Option<BTreeMap<ComponentName, ToolBindingInput>>,
         pub agent_bindings: Option<BTreeMap<AgentTypeName, ToolBindingInput>>,
     }
 
@@ -448,6 +489,8 @@ mod tests {
     fn component_creation_with_initial_permission_parses_from_openapi_json() {
         let creation = ComponentCreation {
             component_name: ComponentName("counter:ts-main".to_string()),
+            config_schema: Default::default(),
+            component_provision_config: Default::default(),
             agent_types: Vec::new(),
             agent_type_provision_configs: BTreeMap::from([(
                 AgentTypeName("CounterAgent".to_string()),
@@ -473,6 +516,8 @@ mod tests {
             )]),
             tools: Vec::new(),
             tool_deployment_configs: BTreeMap::new(),
+            tool_middlewares: Vec::new(),
+            tool_middleware_provision_configs: BTreeMap::new(),
         };
         let value = serde_json::to_value(&creation).unwrap();
 

@@ -435,6 +435,17 @@ async fn complete_promise_in_deleted_environment_results_in_404(
         .delete_environment(&env.id.0, env.revision.into())
         .await?;
 
+    // Invalidation is asynchronous. Observe deletion without completing the promise,
+    // so the completion below still targets a pending promise rather than a consumed one.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while user.get_worker_metadata_opt(&worker).await?.is_some() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|_| anyhow!("environment deletion did not become visible through agent metadata"))??;
+
     info!("Completing pending promise");
 
     let error = user

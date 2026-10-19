@@ -16,7 +16,10 @@ pub(all) struct Multimodal[T] {
 }
 pub fn[T] Multimodal::new(Array[T]) -> Self[T]
 pub impl[T : MultimodalModality] @schema.FromSchema for Multimodal[T]
+pub impl[T : @schema.FromWire] @schema.FromWire for Multimodal[T]
 pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T]
+pub impl[T : @schema.IntoWire] @schema.IntoWire for Multimodal[T]
+pub impl[T : @schema.WireSchema] @schema.WireSchema for Multimodal[T]
 
 // Type aliases
 

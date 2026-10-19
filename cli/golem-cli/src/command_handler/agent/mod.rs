@@ -12,23 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod invocation_session;
+pub(crate) mod invocation_session;
+pub mod oplog_serve;
 mod stream;
 mod stream_output;
 
+pub(crate) use stream::insecure_connector;
+
+use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
+use crate::command_handler::agent::oplog_serve::{
+    OplogViewerServer, open_in_browser, oplog_page_entry_view, serve_oplog_viewer,
+};
 use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
+use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, log_action, log_error,
-    log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, end_for_closed_output,
+    error_message_for_output, is_closed_pipe, log_action, log_error, log_error_action,
+    log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
@@ -36,6 +45,9 @@ use crate::model::agent::action_result::{
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog_html::{
+    OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
+};
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
@@ -50,9 +62,11 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 
 use crate::agent_id_display::SourceLanguage;
+use crate::context::GlobalEnvironmentSelector;
 use crate::model::agent::{
-    AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView, AgentUpdateMode,
-    AgentsMetadataResponseView, RawAgentId,
+    AgentActionError, AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView,
+    AgentUpdateMode, AgentsMetadataResponseView, BulkAgentActionResult, RawAgentId,
+    RedeployAgentError,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -70,14 +84,14 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
-use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
@@ -97,9 +111,40 @@ use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
 
+fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::worker::AgentUpdateMode {
+    match mode {
+        AgentUpdateMode::Automatic => golem_common::model::worker::AgentUpdateMode::Automatic,
+        AgentUpdateMode::Manual => golem_common::model::worker::AgentUpdateMode::Manual,
+    }
+}
+
+fn is_selected_update_attempt(
+    pending_update_index: Option<OplogIndex>,
+    selected_update_attempt_index: OplogIndex,
+) -> bool {
+    pending_update_index == Some(selected_update_attempt_index)
+}
+
+fn pending_update_progress(
+    target_revision: ComponentRevision,
+    selected_update_attempt_index: OplogIndex,
+) -> String {
+    format!(
+        "to revision {} for attempt index {} is still pending",
+        target_revision.to_string().log_color_highlight(),
+        selected_update_attempt_index
+            .to_string()
+            .log_color_highlight(),
+    )
+}
+
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
 }
+
+/// Above this many embedded entries the static viewer page becomes slow to open, so the command
+/// points at the served viewer.
+const STATIC_VIEWER_ENTRY_WARNING_THRESHOLD: usize = 20_000;
 
 impl AgentCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
@@ -220,7 +265,12 @@ impl AgentCommandHandler {
                     agent_id,
                     from,
                     query,
-                } => self.cmd_oplog(agent_id, from, query).await,
+                    omit_payloads,
+                    viewer,
+                } => {
+                    self.cmd_oplog(agent_id, from, query, omit_payloads, viewer)
+                        .await
+                }
                 AgentSubcommand::Revert {
                     agent_id,
                     last_oplog_index,
@@ -555,7 +605,6 @@ impl AgentCommandHandler {
                     idempotency_key,
                     stdin_format,
                     stdout_format,
-                    selected_component_id: component.id.0,
                     selected_agent_name,
                     session_mode,
                 },
@@ -608,11 +657,13 @@ impl AgentCommandHandler {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: agent_id.parameters.value().clone(),
+            parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                .map_err(anyhow::Error::msg)?,
             phantom_id: agent_id.phantom_id,
             config: None,
             method_name: method_name.clone(),
-            method_parameters,
+            method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                .map_err(anyhow::Error::msg)?,
             mode,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
@@ -625,7 +676,10 @@ impl AgentCommandHandler {
             .agent
             .invoke_agent(Some(&idempotency_key.value), &request)
             .await
-            .map_service_error()?;
+            .map_service_error()
+            .map_err(|error| {
+                self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
+            })?;
 
         if let Some(handle) = connect_handle.take() {
             let _ = timeout(Duration::from_secs(3), handle).await;
@@ -679,7 +733,10 @@ impl AgentCommandHandler {
         )
         .await?;
 
-        connection.run_forever().await;
+        connection
+            .run_forever()
+            .await
+            .map_err(|error| self.with_previous_invocation_failed_hint(error, &agent_id_match))?;
 
         Ok(())
     }
@@ -712,10 +769,11 @@ impl AgentCommandHandler {
             bail!("Agent type not found: {}", agent_type_name.0);
         };
 
-        let value: SchemaValue = serde_json::from_value(parameters).map_err(|err| {
+        let value: ExternalSchemaValue = serde_json::from_value(parameters).map_err(|err| {
             anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
-        let typed_parameters = typed_constructor_parameters(&agent_type.agent_type, value);
+        let typed_parameters =
+            typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
         let agent_id = build_repl_agent_id(
             &agent_type.agent_type,
             typed_parameters,
@@ -737,7 +795,7 @@ impl AgentCommandHandler {
         )
         .await?;
 
-        connection.run_forever().await;
+        connection.run_forever().await?;
 
         Ok(())
     }
@@ -774,16 +832,52 @@ impl AgentCommandHandler {
         agent_id: AgentIdArgs,
         from: Option<u64>,
         query: Option<String>,
+        omit_payloads: bool,
+        viewer: OplogViewerArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
         let batch_size = self.ctx.http_batch_size();
+        let viewer_document =
+            |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
+                mode,
+                agent_id: format_agent_id_match(&agent_id_match),
+                component_name: component.component_name.0.clone(),
+                component_id: component.id.0.to_string(),
+                generated_at: Utc::now().to_rfc3339(),
+                cli_version: crate::version().to_string(),
+                from,
+                query: query.clone(),
+                page_size: batch_size,
+                entries,
+            };
+
+        if viewer.serve {
+            let page = render_oplog_viewer_html(&viewer_document(OplogViewerMode::Live, vec![]))?;
+            return serve_oplog_viewer(
+                OplogViewerServer {
+                    ctx: self.ctx.clone(),
+                    component_id: component.id.0,
+                    agent_id: agent_id.0.clone(),
+                    page,
+                    page_size: batch_size,
+                    omit_payloads,
+                },
+                viewer.port,
+                !viewer.no_open,
+            )
+            .await;
+        }
+
+        let html = viewer.html;
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
+        let print_entries = html.is_none() || self.ctx.format().is_structured();
+        let mut collected_entries = Vec::<AgentOplogEntryView>::new();
         loop {
-            let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
+            let mut entries = Vec::<PublicOplogPageEntry>::new();
             cursor = {
                 let clients = self.ctx.golem_clients().await?;
 
@@ -800,21 +894,27 @@ impl AgentCommandHandler {
                     .await
                     .map_service_error()?;
 
-                entries.extend(
-                    result
-                        .entries
-                        .into_iter()
-                        .map(|entry| (entry.oplog_index.as_u64(), entry.entry)),
-                );
+                entries.extend(result.entries);
                 result.next
             };
 
             if !entries.is_empty() {
                 had_entries = true;
-                for (index, entry) in entries {
-                    self.ctx
-                        .log_handler()
-                        .log_output(AgentOplogEntryView { index, entry })?;
+                for entry in entries {
+                    let view = oplog_page_entry_view(
+                        &self.ctx,
+                        &component.id.0,
+                        &agent_id.0,
+                        entry,
+                        omit_payloads,
+                    )
+                    .await?;
+                    if html.is_some() {
+                        collected_entries.push(view.clone());
+                    }
+                    if print_entries {
+                        self.ctx.log_handler().log_output(view)?;
+                    }
                 }
             }
 
@@ -823,7 +923,43 @@ impl AgentCommandHandler {
             }
         }
 
-        if !self.ctx.format().is_structured() && !had_entries {
+        if let Some(html_path) = html {
+            let entry_count = collected_entries.len();
+            let rendered = render_oplog_viewer_html(&viewer_document(
+                OplogViewerMode::Static,
+                collected_entries,
+            ))?;
+            if let Some(parent) = html_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write_str(&html_path, rendered)?;
+            log_action(
+                "Generated",
+                format!(
+                    "HTML oplog viewer with {} entries: {}",
+                    entry_count,
+                    html_path.display().to_string().log_color_highlight()
+                ),
+            );
+            if entry_count > STATIC_VIEWER_ENTRY_WARNING_THRESHOLD {
+                log_warn(format!(
+                    "The page embeds {entry_count} entries; large pages are slow to open. Use {} to load the oplog page by page instead.",
+                    "--serve".log_color_highlight()
+                ));
+            }
+            if viewer.open {
+                let absolute = fs::absolute_lexical_path(&html_path)?;
+                match url::Url::from_file_path(&absolute) {
+                    Ok(file_url) => open_in_browser(file_url.as_str()),
+                    Err(()) => log_warn(format!(
+                        "Could not build a file URL for {}",
+                        absolute.display()
+                    )),
+                }
+            }
+        } else if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 
@@ -848,6 +984,14 @@ impl AgentCommandHandler {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        if !self.ctx.interactive_handler().confirm_revert_agent(
+            &agent_id,
+            last_oplog_index,
+            number_of_invocations,
+        )? {
+            bail!(NonSuccessfulExit);
+        }
 
         log_action(
             "Reverting",
@@ -1002,7 +1146,18 @@ impl AgentCommandHandler {
         interval_ms: u64,
     ) -> anyhow::Result<()> {
         let duration = Duration::from_millis(interval_ms);
-        let mut screen = AlternateScreenGuard::enter()?;
+        let mut screen = match AlternateScreenGuard::enter() {
+            Ok(screen) => screen,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) =>
+            {
+                end_for_closed_output();
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         let result: anyhow::Result<()> = async {
             loop {
                 let term_height = terminal_size()
@@ -1029,9 +1184,19 @@ impl AgentCommandHandler {
                     .unwrap_or_else(|e| format!("Error: {e:#}"));
 
                 // Clear and write in one buffered flush — no blank-screen gap
-                queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
-                write!(screen.stdout_mut(), "{output}")?;
-                screen.stdout_mut().flush()?;
+                let drawn = (|| {
+                    queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
+                    write!(screen.stdout_mut(), "{output}")?;
+                    screen.stdout_mut().flush()
+                })();
+                match drawn {
+                    Ok(()) => {}
+                    Err(error) if is_closed_pipe(&error) => {
+                        end_for_closed_output();
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error.into()),
+                }
 
                 tokio::select! {
                     _ = sleep(duration) => {}
@@ -1040,7 +1205,16 @@ impl AgentCommandHandler {
             }
         }
         .await;
-        screen.leave()?;
+        match screen.leave() {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) =>
+            {
+                end_for_closed_output()
+            }
+            other => other?,
+        }
         result
     }
 
@@ -1313,7 +1487,16 @@ impl AgentCommandHandler {
             format!("agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.resume_agent(&component, &agent_id).await?;
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .resume_worker(&component.id.0, &agent_id.0)
+            .await
+            .map(|_| ())
+            .map_service_error()
+            .map_err(|error| {
+                self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
+            })?;
 
         log_action(
             "Resumed",
@@ -1410,11 +1593,13 @@ impl AgentCommandHandler {
             )
             .await
         {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(error) => {
-                update_results
-                    .errors
-                    .insert(agent_id.0.clone(), error.to_string());
+                update_results.errors.push(AgentActionError {
+                    component_name: component.component_name.clone(),
+                    agent_id: agent_id.clone(),
+                    error: error_message_for_output(&error),
+                });
                 self.ctx.log_handler().log_output(update_results)?;
                 return Err(error);
             }
@@ -1565,6 +1750,21 @@ impl AgentCommandHandler {
         path: String,
         output: Option<String>,
     ) -> anyhow::Result<()> {
+        let stream_to_stdout = output.as_deref() == Some("-");
+        // Keep progress and errors separate from the raw byte stream so this
+        // mode is safe to pipe into another process or redirect to a file.
+        let _stderr_logs = stream_to_stdout.then(|| LogOutput::new(LogOutputTarget::Stderr));
+        self.cmd_file_contents_inner(agent_id, path, output, stream_to_stdout)
+            .await
+    }
+
+    async fn cmd_file_contents_inner(
+        &self,
+        agent_id: AgentIdArgs,
+        path: String,
+        output: Option<String>,
+        stream_to_stdout: bool,
+    ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
@@ -1607,6 +1807,11 @@ impl AgentCommandHandler {
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_else(|| "output.bin".to_string())
         };
+
+        if stream_to_stdout {
+            try_print_bytes(&file_contents)?;
+            return Ok(());
+        }
 
         // Check if file exists and ask for confirmation if needed
         if Path::new(&output_path).exists() {
@@ -1905,7 +2110,7 @@ impl AgentCommandHandler {
                 None,
                 None,
                 None,
-                false,
+                true,
             )
             .await?;
 
@@ -1929,7 +2134,9 @@ impl AgentCommandHandler {
             .component_handler()
             .component_version_at(component_id, target_revision)
             .await;
+        let client_update_mode = client_update_mode(update_mode);
         let mut update_results = TryUpdateAllWorkersView::default();
+        let mut agents_awaiting_update = Vec::new();
         for agent in &agents_to_update {
             let result = self
                 .update_agent(
@@ -1943,10 +2150,17 @@ impl AgentCommandHandler {
                 )
                 .await;
 
-            if let Err(error) = &result {
-                update_results
-                    .errors
-                    .insert(agent.agent_id.agent_id.clone(), error.to_string());
+            match result {
+                Ok(update_attempt_index) => {
+                    agents_awaiting_update.push((agent, update_attempt_index));
+                }
+                Err(error) => {
+                    update_results.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
+                }
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
@@ -1963,18 +2177,22 @@ impl AgentCommandHandler {
         }
 
         if await_update {
-            for agent in &agents_to_update {
+            for (agent, update_attempt_index) in agents_awaiting_update {
                 if let Err(error) = self
                     .await_update_result(
                         &agent.agent_id.component_id,
                         &agent.agent_id.agent_id,
                         target_revision,
+                        client_update_mode,
+                        update_attempt_index,
                     )
                     .await
                 {
-                    update_results
-                        .errors
-                        .insert(agent.agent_id.agent_id.clone(), error.to_string());
+                    update_results.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
                 }
             }
         }
@@ -1991,7 +2209,7 @@ impl AgentCommandHandler {
         target_revision: ComponentRevision,
         await_update: bool,
         disable_wakeup: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<OplogIndex> {
         log_warn_action(
             "Triggering update",
             format!(
@@ -2004,37 +2222,38 @@ impl AgentCommandHandler {
         );
 
         let clients = self.ctx.golem_clients().await?;
-
+        let client_update_mode = client_update_mode(update_mode);
         let result = clients
             .worker
             .update_worker(
                 &component_id.0,
                 agent_id,
                 &UpdateWorkerRequest {
-                    mode: match update_mode {
-                        AgentUpdateMode::Automatic => {
-                            golem_client::model::AgentUpdateMode::Automatic
-                        }
-                        AgentUpdateMode::Manual => golem_client::model::AgentUpdateMode::Manual,
-                    },
+                    mode: client_update_mode,
                     target_revision: target_revision.into(),
                     disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await
-            .map(|_| ())
             .map_service_error();
 
         match result {
-            Ok(_) => {
+            Ok(response) => {
                 log_action("Triggered update", "");
+                let update_attempt_index = OplogIndex::from_u64(response.update_attempt_index);
 
                 if await_update {
-                    self.await_update_result(component_id, agent_id, target_revision)
-                        .await?;
+                    self.await_update_result(
+                        component_id,
+                        agent_id,
+                        target_revision,
+                        client_update_mode,
+                        update_attempt_index,
+                    )
+                    .await?;
                 }
 
-                Ok(())
+                Ok(update_attempt_index)
             }
             Err(error) => {
                 log_failed_to("trigger update for agent");
@@ -2050,6 +2269,8 @@ impl AgentCommandHandler {
         component_id: &ComponentId,
         agent_id: &str,
         target_revision: ComponentRevision,
+        update_mode: golem_common::model::worker::AgentUpdateMode,
+        selected_update_attempt_index: OplogIndex,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
         loop {
@@ -2057,26 +2278,38 @@ impl AgentCommandHandler {
                 .worker
                 .get_worker_metadata(&component_id.0, agent_id)
                 .await?;
-            // Aggregate across ALL update records for the target revision, then decide once.
-            // (Deciding per-record would act on whichever record comes first — spuriously erroring on
-            // a non-target record, or reporting a stale outcome instead of the most recent one.)
-            let mut pending_count = 0;
+            let mut pending = false;
             let mut successes = Vec::new();
             let mut failures = Vec::new();
             for update_record in metadata.updates {
                 match update_record {
                     UpdateRecord::PendingUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
                     {
-                        pending_count += 1;
+                        pending = true;
                     }
                     UpdateRecord::SuccessfulUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
                     {
                         successes.push(details);
                     }
                     UpdateRecord::FailedUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                details.pending_update_index,
+                                selected_update_attempt_index,
+                            ) =>
                     {
                         failures.push(details);
                     }
@@ -2094,8 +2327,11 @@ impl AgentCommandHandler {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            if pending_count > 0 {
-                log_action("Agent update", "is still pending");
+            if pending {
+                log_action(
+                    "Agent update",
+                    pending_update_progress(target_revision, selected_update_attempt_index),
+                );
                 tokio::time::sleep(Duration::from_secs(2)).await;
             } else {
                 // An agent can be re-updated to the same revision, so a success and a failure can both
@@ -2141,13 +2377,14 @@ impl AgentCommandHandler {
         }
     }
 
-    /// Redeploys all agents of a component, returning each redeployed agent's id and the revision it
-    /// was running at before (its "from" revision).
+    /// Redeploys all agents of a component. Like updating, this is best-effort: a failure on one
+    /// agent does not stop the others, it is reported in the result instead. Successful agents
+    /// are returned with the revision they were running at before (their "from" revision).
     pub async fn redeploy_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
-    ) -> anyhow::Result<Vec<(RawAgentId, ComponentRevision)>> {
+    ) -> anyhow::Result<BulkAgentActionResult<(RawAgentId, ComponentRevision)>> {
         let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2157,7 +2394,7 @@ impl AgentCommandHandler {
                 "Skipping",
                 format!("redeploying agents for component {component_name}, no agent found"),
             );
-            return Ok(Vec::new());
+            return Ok(BulkAgentActionResult::default());
         }
 
         log_action(
@@ -2178,24 +2415,43 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut redeployed = Vec::with_capacity(agents.len());
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in agents {
-            let agent_id: RawAgentId = agent.agent_id.agent_id.as_str().into();
+            let agent_id = agent.agent_id.agent_id.clone();
             let from_revision = agent.component_revision;
-            self.redeploy_agent(component_name, agent).await?;
-            redeployed.push((agent_id, from_revision));
+            match self.redeploy_agent(component_name, agent).await {
+                Ok(()) => result
+                    .succeeded
+                    .push((agent_id.as_str().into(), from_revision)),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "redeploying agent {}/{}: {error}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.into(),
+                        error: message_for_output(&error),
+                    });
+                }
+            }
         }
 
-        Ok(redeployed)
+        Ok(result)
     }
 
-    /// Deletes all agents of a component, returning the ids of the agents that were deleted.
+    /// Deletes all agents of a component. Best-effort: a failure on one agent does not stop the
+    /// others, it is reported in the result instead.
     pub async fn delete_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
         show_skip: bool,
-    ) -> anyhow::Result<Vec<RawAgentId>> {
+    ) -> anyhow::Result<BulkAgentActionResult<RawAgentId>> {
         let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2207,7 +2463,7 @@ impl AgentCommandHandler {
                     format!("deleting agents for component {component_name}, no agent found"),
                 );
             }
-            return Ok(Vec::new());
+            return Ok(BulkAgentActionResult::default());
         }
 
         log_action(
@@ -2228,20 +2484,39 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut deleted = Vec::with_capacity(agents.len());
+        let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in &agents {
-            self.delete_agent(component_name, agent).await?;
-            deleted.push(agent.agent_id.agent_id.as_str().into());
+            let agent_id = &agent.agent_id.agent_id;
+            match self.delete_agent(component_name, agent).await {
+                Ok(()) => result.succeeded.push(agent_id.as_str().into()),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "deleting agent {}/{}: {error:#}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.push(AgentActionError {
+                        component_name: component_name.clone(),
+                        agent_id: agent_id.as_str().into(),
+                        error: error_message_for_output(&error),
+                    });
+                }
+            }
         }
 
-        Ok(deleted)
+        Ok(result)
     }
 
+    /// Redeploys an agent by deleting and recreating it. The error says which of the two steps
+    /// failed, as a failed recreation leaves the agent deleted.
     async fn redeploy_agent(
         &self,
         component_name: &ComponentName,
         agent_metadata: AgentMetadata,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), RedeployAgentError> {
         log_warn_action(
             "Redeploying",
             format!(
@@ -2252,7 +2527,9 @@ impl AgentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        self.delete_agent(component_name, &agent_metadata).await?;
+        self.delete_agent(component_name, &agent_metadata)
+            .await
+            .map_err(RedeployAgentError::Delete)?;
 
         log_action(
             "Recreating",
@@ -2268,7 +2545,8 @@ impl AgentCommandHandler {
             agent_metadata.env,
             agent_metadata.config,
         )
-        .await?;
+        .await
+        .map_err(RedeployAgentError::Recreate)?;
         log_action("Recreated", "agent");
 
         Ok(())
@@ -2502,21 +2780,33 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
 }
 
 impl AgentCommandHandler {
-    async fn resume_agent(
+    fn with_previous_invocation_failed_hint(
         &self,
-        component: &ComponentDto,
-        agent_id: &RawAgentId,
-    ) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
+        error: anyhow::Error,
+        agent_id_match: &AgentIdMatch,
+    ) -> anyhow::Error {
+        let Some(service_error) = error.downcast_ref::<ServiceError>() else {
+            return error;
+        };
+        if !service_error.is_previous_invocation_failed() {
+            return error;
+        }
 
-        clients
-            .worker
-            .resume_worker(&component.id.0, &agent_id.0)
-            .await
-            .map(|_| ())
-            .map_service_error()?;
+        let command = render_revert_command(
+            &crate::command_name(),
+            self.ctx
+                .explicit_profile_name()
+                .map(|profile_name| profile_name.0.as_str()),
+            self.ctx.global_environment_selector(),
+            agent_id_match.environment_reference(),
+            &agent_id_match.agent_id,
+        );
 
-        Ok(())
+        anyhow!(
+            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
+            service_error.render(),
+            command,
+        )
     }
 
     async fn interrupt_agent(
@@ -2740,59 +3030,62 @@ impl AgentCommandHandler {
         }
 
         match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component.metadata) {
-            Ok((agent_id, agent_type)) => match function_name {
-                Some(function_name) => {
-                    let parsed = match ParsedFunctionName::parse(function_name) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            logln("");
-                            log_error(format!(
-                                "Incompatible agent type ({}) and method ({})",
-                                agent_id.agent_type.as_str().log_color_error_highlight(),
-                                function_name.log_color_error_highlight()
-                            ));
-                            logln("");
-                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                                component,
-                                &agent_id,
-                                &agent_type,
-                            ));
-                            bail!(NonSuccessfulExit);
-                        }
-                    };
+            Ok((agent_id, agent_type)) => {
+                validate_ordinary_agent_type(&agent_type)?;
+                match function_name {
+                    Some(function_name) => {
+                        let parsed = match ParsedFunctionName::parse(function_name) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                logln("");
+                                log_error(format!(
+                                    "Incompatible agent type ({}) and method ({})",
+                                    agent_id.agent_type.as_str().log_color_error_highlight(),
+                                    function_name.log_color_error_highlight()
+                                ));
+                                logln("");
+                                log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                    component,
+                                    &agent_id,
+                                    &agent_type,
+                                ));
+                                bail!(NonSuccessfulExit);
+                            }
+                        };
 
-                    if let ParsedFunctionSite::PackagedInterface {
-                        namespace,
-                        package,
-                        interface,
-                        ..
-                    } = parsed.site()
-                    {
-                        let component_name = format!("{namespace}:{package}");
-                        if *interface == agent_id.agent_type.0
-                            && component.component_name.0 == component_name
+                        if let ParsedFunctionSite::PackagedInterface {
+                            namespace,
+                            package,
+                            interface,
+                            ..
+                        } = parsed.site()
                         {
-                            return Ok(Some((agent_id, agent_type.clone())));
+                            let component_name = format!("{namespace}:{package}");
+                            if *interface == agent_id.agent_type.0
+                                && component.component_name.0 == component_name
+                            {
+                                return Ok(Some((agent_id, agent_type.clone())));
+                            }
                         }
+
+                        logln("");
+                        log_error(format!(
+                            "Incompatible agent type ({}) and method ({})",
+                            agent_id.agent_type.as_str().log_color_error_highlight(),
+                            function_name.log_color_error_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                            component,
+                            &agent_id,
+                            &agent_type,
+                        ));
+                        bail!(NonSuccessfulExit);
                     }
 
-                    logln("");
-                    log_error(format!(
-                        "Incompatible agent type ({}) and method ({})",
-                        agent_id.agent_type.as_str().log_color_error_highlight(),
-                        function_name.log_color_error_highlight()
-                    ));
-                    logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                        component,
-                        &agent_id,
-                        &agent_type,
-                    ));
-                    bail!(NonSuccessfulExit);
+                    None => Ok(Some((agent_id, agent_type.clone()))),
                 }
-
-                None => Ok(Some((agent_id, agent_type.clone()))),
-            },
+            }
             Err(err) => {
                 let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0).ok();
 
@@ -2915,7 +3208,13 @@ fn parse_method_parameters_with_error_table(
         .find(|m| m.name == method_name)
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
-    let InputSchema::Parameters(element_schemas) = &method.input_schema;
+    let InputSchema::Parameters(fields) = &method.input_schema;
+    // Auto-injected fields (the principal) are filled by the host and carry no
+    // value, so the caller supplies only the rest.
+    let element_schemas = fields
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .collect::<Vec<_>>();
 
     if element_schemas.len() != arguments.len() {
         logln("");
@@ -3044,7 +3343,7 @@ pub(super) fn parse_method_argument_schema_value(
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
-    format!("{}/{}", cursor.layer, cursor.cursor)
+    cursor.to_string()
 }
 
 fn secret_config_paths_for_agent_type(
@@ -3112,6 +3411,49 @@ fn all_modes_filter() -> AgentFilter {
         AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
         AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
     ])
+}
+
+fn render_revert_command(
+    executable: &str,
+    explicit_profile_name: Option<&str>,
+    global_environment_selector: Option<&GlobalEnvironmentSelector>,
+    matched_environment_reference: Option<&EnvironmentReference>,
+    agent_id: &RawAgentId,
+) -> String {
+    fn quote(value: &str) -> String {
+        shlex::try_quote(value)
+            .expect("CLI arguments cannot contain NUL bytes")
+            .into_owned()
+    }
+
+    let mut args = vec![quote(executable)];
+    if let Some(profile_name) = explicit_profile_name {
+        args.extend(["--profile".to_string(), quote(profile_name)]);
+    }
+    match global_environment_selector {
+        Some(GlobalEnvironmentSelector::Environment(environment)) => {
+            args.extend(["--environment".to_string(), quote(&environment.to_string())]);
+        }
+        Some(GlobalEnvironmentSelector::Local) => args.push("--local".to_string()),
+        Some(GlobalEnvironmentSelector::Cloud) => args.push("--cloud".to_string()),
+        None => {}
+    }
+    args.extend(["agent".to_string(), "revert".to_string()]);
+
+    let agent_id = match global_environment_selector {
+        Some(_) => agent_id.to_string(),
+        None => match matched_environment_reference {
+            Some(environment) => format!("{environment}/{agent_id}"),
+            None => agent_id.to_string(),
+        },
+    };
+    args.extend([
+        quote(&agent_id),
+        "--number-of-invocations".to_string(),
+        "1".to_string(),
+    ]);
+
+    args.join(" ")
 }
 
 fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
@@ -3183,6 +3525,16 @@ fn split_agent_id(agent_id: &str) -> Vec<&str> {
     }
 }
 
+fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<()> {
+    if agent_type.kind == AgentTypeKind::HttpRouter {
+        bail!(
+            "HTTP router '{}' is managed by its HTTP deployment and cannot be created or invoked as an ordinary agent",
+            agent_type.type_name
+        );
+    }
+    Ok(())
+}
+
 fn build_repl_agent_id(
     agent_type: &AgentTypeSchema,
     typed_parameters: TypedSchemaValue,
@@ -3228,20 +3580,140 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_schema_value, split_agent_id, validate_public_invocation_agent_id,
+        AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
+        is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
+        parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
+        split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
+    use crate::context::GlobalEnvironmentSelector;
+    use crate::model::agent::RawAgentId;
+    use crate::model::environment::EnvironmentReference;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
-    use golem_common::model::{Empty, IdempotencyKey};
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
+        NamedField, OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {
+        let selected = OplogIndex::from_u64(11);
+        assert!(!is_selected_update_attempt(
+            Some(OplogIndex::from_u64(10)),
+            selected,
+        ));
+        assert!(is_selected_update_attempt(
+            Some(OplogIndex::from_u64(11)),
+            selected,
+        ));
+        assert!(!is_selected_update_attempt(
+            Some(OplogIndex::from_u64(12)),
+            selected,
+        ));
+        assert!(!is_selected_update_attempt(None, selected));
+    }
+
+    #[test]
+    fn pending_update_progress_identifies_exact_attempt() {
+        let progress =
+            pending_update_progress(ComponentRevision::new(3).unwrap(), OplogIndex::from_u64(17));
+        assert_eq!(
+            strip_ansi_escapes::strip_str(progress),
+            "to revision 3 for attempt index 17 is still pending"
+        );
+    }
+
+    #[test]
+    fn update_mode_exposes_only_automatic_and_manual() {
+        assert_eq!(
+            "auto".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Automatic
+        );
+        assert_eq!(
+            "manual".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Manual
+        );
+        assert!(
+            "snapshot-assisted-automatic"
+                .parse::<AgentUpdateMode>()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn revert_command_preserves_scope_and_shell_sensitive_arguments() {
+        let environment = EnvironmentReference::ApplicationEnvironment {
+            application_name: ApplicationName("my app".to_string()),
+            environment_name: EnvironmentName("staging env".to_string()),
+        };
+        let command = render_revert_command(
+            "/opt/Golem CLI/golem",
+            Some("team profile"),
+            None,
+            Some(&environment),
+            &RawAgentId("MyAgent(\"a b's\")".to_string()),
+        );
+
+        assert_eq!(
+            shlex::split(&command).unwrap(),
+            vec![
+                "/opt/Golem CLI/golem",
+                "--profile",
+                "team profile",
+                "agent",
+                "revert",
+                "my app/staging env/MyAgent(\"a b's\")",
+                "--number-of-invocations",
+                "1",
+            ]
+        );
+        assert!(!command.contains("--yes"));
+    }
+
+    #[test]
+    fn revert_command_preserves_global_environment_selector() {
+        let short_environment = EnvironmentReference::Environment {
+            environment_name: EnvironmentName("staging env".to_string()),
+        };
+        let full_environment = EnvironmentReference::ApplicationEnvironment {
+            application_name: ApplicationName("another app".to_string()),
+            environment_name: EnvironmentName("production".to_string()),
+        };
+        let agent_id = RawAgentId("MyAgent(\"id\")".to_string());
+
+        for selector in [
+            GlobalEnvironmentSelector::Environment(short_environment),
+            GlobalEnvironmentSelector::Environment(full_environment),
+            GlobalEnvironmentSelector::Local,
+            GlobalEnvironmentSelector::Cloud,
+        ] {
+            let command = render_revert_command("golem", None, Some(&selector), None, &agent_id);
+            let args = shlex::split(&command).unwrap();
+
+            assert!(!args.contains(&"--profile".to_string()));
+
+            match selector {
+                GlobalEnvironmentSelector::Environment(environment) => {
+                    assert!(args.windows(2).any(|args| {
+                        args == ["--environment".to_string(), environment.to_string()]
+                    }));
+                }
+                GlobalEnvironmentSelector::Local => assert!(args.contains(&"--local".to_string())),
+                GlobalEnvironmentSelector::Cloud => assert!(args.contains(&"--cloud".to_string())),
+            }
+            assert!(args.contains(&agent_id.0));
+        }
+    }
 
     #[test]
     fn apply_list_mode_filter_default_durable_with_no_filters_injects_durable() {
@@ -3291,6 +3763,7 @@ mod tests {
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("repl-agent".to_string()),
             description: String::new(),
             source_language: String::new(),
@@ -3316,6 +3789,98 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
+    }
+
+    /// The host fills an auto-injected principal, so the CLI neither asks for
+    /// it nor sends a value for it.
+    #[test]
+    fn method_arguments_skip_the_auto_injected_principal() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
+            golem_common::schema::agent::NamedField::auto_injected(
+                "principal",
+                golem_common::schema::agent::AutoInjectedKind::Principal,
+                SchemaType::record(vec![]),
+            ),
+        ]);
+        let parsed = parse_method_parameters_with_error_table(
+            &agent_type,
+            "run",
+            vec!["5".into()],
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::S64(5)]
+            }
+        );
+    }
+
+    #[test]
+    fn method_arguments_omit_host_injected_fields() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        let principal = NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            principal.clone(),
+            NamedField::user_supplied("count", SchemaType::u32()),
+        ]);
+        for language in [
+            SourceLanguage::TypeScript,
+            SourceLanguage::Rust,
+            SourceLanguage::Scala,
+            SourceLanguage::MoonBit,
+            SourceLanguage::Go,
+        ] {
+            let arguments = ["\"alice\"", "7"].map(str::to_string).to_vec();
+            assert_eq!(
+                parse_method_parameters_with_error_table(&agent_type, "run", arguments, &language)
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("alice".to_string()),
+                        SchemaValue::U32(7)
+                    ],
+                },
+            );
+        }
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        assert_eq!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec![],
+                &SourceLanguage::TypeScript,
+            )
+            .unwrap(),
+            SchemaValue::Record { fields: vec![] },
+        );
+    }
+
+    #[test]
+    fn ordinary_create_and_invoke_reject_http_routers_by_kind() {
+        let regular = test_agent_type_schema(AgentMode::Durable);
+        validate_ordinary_agent_type(&regular).unwrap();
+
+        let mut router = regular;
+        router.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        router.type_name = AgentTypeName("OrdinaryLookingName".to_string());
+        let error = validate_ordinary_agent_type(&router)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("HTTP router 'OrdinaryLookingName'"),
+            "{error}"
+        );
+        assert!(error.contains("cannot be created or invoked"), "{error}");
     }
 
     fn empty_typed_parameters() -> TypedSchemaValue {
@@ -3449,5 +4014,140 @@ mod tests {
         .unwrap();
 
         assert!(matches!(parsed, SchemaValue::Binary(_)));
+    }
+
+    // The shapes the SDKs produce for unstructured and multimodal parameters, as seen in the
+    // extracted agent types of the code-first test apps. The literals below are the ones used
+    // by the `*_with_rpc_and_all_types` integration tests, pinned here so a parser regression
+    // shows up without a server round-trip.
+
+    fn variant_case(name: &str, payload: SchemaType) -> VariantCaseType {
+        VariantCaseType {
+            name: name.to_string(),
+            payload: Some(payload),
+            metadata: Default::default(),
+        }
+    }
+
+    fn unstructured_text_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::text(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn unstructured_binary_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::binary(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn multimodal_type() -> SchemaType {
+        SchemaType::list(SchemaType::variant(vec![
+            variant_case("Text", unstructured_text_type()),
+            variant_case("Binary", unstructured_binary_type()),
+        ]))
+    }
+
+    /// `MultimodalAdvanced<TextImageData>` with `Data` being a user-defined (named) record, as
+    /// the Rust SDK extracts it.
+    fn multimodal_advanced_graph() -> SchemaGraph {
+        let data_id = TypeId("rust_code_first_rust_main.model.Data".to_string());
+        SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: data_id.clone(),
+                name: Some("Data".to_string()),
+                body: SchemaType::record(vec![
+                    NamedFieldType {
+                        name: "id".to_string(),
+                        body: SchemaType::u32(),
+                        metadata: Default::default(),
+                    },
+                    NamedFieldType {
+                        name: "name".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    },
+                ]),
+            }],
+            root: SchemaType::list(SchemaType::variant(vec![
+                variant_case("Text", SchemaType::string()),
+                variant_case("Image", SchemaType::list(SchemaType::u8())),
+                variant_case("Data", SchemaType::ref_to(data_id)),
+            ])),
+        }
+    }
+
+    fn assert_parses(language: SourceLanguage, ty: SchemaType, input: &str) {
+        assert_parses_in_graph(language, SchemaGraph::anonymous(ty), input);
+    }
+
+    fn assert_parses_in_graph(language: SourceLanguage, graph: SchemaGraph, input: &str) {
+        parse_method_argument_schema_value(input, &graph, &graph.root, &language)
+            .unwrap_or_else(|err| panic!("failed to parse {input:?} as {language:?}: {err}"));
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_rust_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Text("foo"))"#,
+            r#"Inline(Text("foo", "en"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Binary("data:text/plain;base64,Zm9v"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_binary_type(), input);
+        }
+        assert_parses(
+            SourceLanguage::Rust,
+            multimodal_type(),
+            r#"[Text(Url(Url("https://example.com/foo"))), Binary(Inline(Binary("data:text/plain;base64,Zm9v")))]"#,
+        );
+        assert_parses_in_graph(
+            SourceLanguage::Rust,
+            multimodal_advanced_graph(),
+            r#"[Text("foo"), Image([1, 2, 3]), Data(Data { id: 1, name: "foo" })]"#,
+        );
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_ts_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Text("foo")}"#,
+        ] {
+            assert_parses(SourceLanguage::TypeScript, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Binary("data:application/json;base64,e30")}"#,
+        ] {
+            assert_parses(
+                SourceLanguage::TypeScript,
+                unstructured_binary_type(),
+                input,
+            );
+        }
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("text", unstructured_text_type()),
+                variant_case("binary", unstructured_binary_type()),
+            ])),
+            r#"[{tag: "text", value: {tag: "inline", value: Text("data")}}, {tag: "binary", value: {tag: "url", value: Url("https://example.com/foo")}}]"#,
+        );
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("image", SchemaType::list(SchemaType::u8())),
+                variant_case("text", SchemaType::string()),
+            ])),
+            r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#,
+        );
     }
 }

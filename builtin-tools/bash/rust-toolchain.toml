@@ -1,0 +1,6 @@
+# The toolchain that builds bash.wasm (golem.yaml's release preset).
+[toolchain]
+channel = "1.98.0"
+targets = ["wasm32-wasip2"]
+components = ["rustfmt", "clippy"]
+profile = "minimal"

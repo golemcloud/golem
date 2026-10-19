@@ -18,6 +18,7 @@ fn schema_kind_name(body : @model.SchemaTypeBody) -> String {
     Text(_) => "text"
     Path(_) => "path"
     Url(_) => "url"
+    Uuid => "uuid"
     Record(_) => "record"
     Variant(_) => "variant"
     Enum(_) => "enum"
@@ -98,6 +99,7 @@ pub fn refine_path(
   direction : @types.PathDirection?,
   kind : @types.PathKind?,
   mime_types : Array[String]?,
+  extensions? : Array[String]? = None,
 ) -> @model.SchemaGraph raise ToolBuildError {
   let root = refinement_root(graph, "path")
   let spec = match root.body {
@@ -111,7 +113,7 @@ pub fn refine_path(
         direction: direction.unwrap_or(spec.direction),
         kind: kind.unwrap_or(spec.kind),
         allowed_mime_types: overlay(mime_types, spec.allowed_mime_types),
-        allowed_extensions: spec.allowed_extensions,
+        allowed_extensions: overlay(extensions, spec.allowed_extensions),
       }),
       metadata: root.metadata,
     },

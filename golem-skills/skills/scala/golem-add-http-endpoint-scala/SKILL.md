@@ -107,6 +107,40 @@ Endpoint paths are relative to the mount path. Supported HTTP methods: `GET`, `P
 
 For details on how path variables, query parameters, headers, and request bodies map to method parameters, load the `golem-http-params-scala` skill.
 
+## Durable Stream Route Customization
+
+For a method with stream inputs or outputs, use `@durableStreamSlot` for each customized slot and `@durableStreams` for route policy:
+
+```scala
+@endpoint(method = "POST", path = "/events")
+@durableStreamSlot(source = "input", slot = "input", name = "uploads")
+@durableStreamSlot(
+  source = "output",
+  slot = "$result",
+  name = "events",
+  contentType = "application/vnd.example.events"
+)
+@durableStreams(
+  allowExternalWrites = true,
+  allowStreamDelete = false,
+  allowInvocationDelete = false,
+  maxConcurrentReadersPerStream = 8,
+  maxAppendRequestsPerSecondPerStream = 25
+)
+def events(
+  input: golem.schema.AgentStream[golem.UByte]
+): Future[golem.schema.AgentStream[golem.UByte]]
+```
+
+Import `durableStreamSlot` and `durableStreams` from `golem.runtime.annotations`. If a method has multiple `@endpoint` annotations, identify the target in each durable-stream annotation with matching `endpointMethod` and `endpointPath` arguments.
+
+- `source` and `slot` select canonical top-level stream slots. `$result` is the only implicit result selector.
+- `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
+- `contentType` is allowed only for a direct `AgentStream[golem.UByte]` slot and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. JSON-shaped streams stay `application/json`; do not use `text/plain` for `AgentStream[String]`. SSE still uses `text/event-stream` and base64 data.
+- The three `allow*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
+- Omit either numeric argument to use the worker-service default. An explicit live-reader limit must be 1 through 16 and applies to long-poll and SSE. An explicit append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
+- Limits are maintained per route and worker-service node, not as a cluster-wide quota.
+
 ## Phantom Agents
 
 Set `phantomAgent = true` to create a new agent instance for each HTTP request, enabling fully parallel processing:
@@ -148,7 +182,37 @@ Scala `Either[E, T]` is mapped to the WIT `result<T, E>` type, with `Right` trea
 | `Future[Either[E, T]]` | 200 OK if `Right`, 500 Internal Server Error if `Left` | JSON `T` or JSON `E` |
 | `Future[Either[E, Unit]]` | 204 No Content if `Right`, 500 if `Left` | empty or JSON `E` |
 | `Future[Either[Unit, T]]` | 200 OK if `Right`, 500 if `Left` | JSON `T` or empty |
-| `Future[UnstructuredBinary]` | 200 OK | Raw binary with Content-Type |
+| `Future[Either[E, Option[T]]]` | 200 OK if `Right(Some)`, 404 Not Found if `Right(None)`, 500 if `Left` | JSON `T`, empty, or JSON `E` |
+| `Future[golem.schema.UnstructuredBinary[M]]` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `Future[golem.schema.UnstructuredText[L]]` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+
+### Raw Text and Binary Responses
+
+Return `golem.schema.UnstructuredText[L]` or `golem.schema.UnstructuredBinary[M]` for a raw body
+instead of JSON (`L` / `M` is `String` for no restriction, or a string-literal union allow-list
+such as `"image/png" | "image/jpeg"`). The value inside `Some` / `Right` follows the same rules as a
+top-level value, so an unstructured value nested in `Option`, `Either[E, _]`, or
+`Either[E, Option[_]]` is still sent **raw**. A guarded raw download (raw bytes / 404 / JSON error 500):
+
+```scala
+@endpoint(method = "GET", path = "/files/{name}")
+def download(name: String): Future[Either[String, Option[golem.schema.UnstructuredBinary[String]]]]
+```
+
+```scala
+import golem.schema.UnstructuredBinary
+
+override def download(name: String): Future[Either[String, Option[UnstructuredBinary[String]]]] =
+  Future.successful(name match {
+    case "missing" => Right(None)                       // 404
+    case "pending" => Left("pending")                   // 500, JSON body
+    case _         => Right(Some(UnstructuredBinary.fromInline(Array[Byte](1, 2, 3), "image/png"))) // 200, raw bytes
+  })
+```
+
+Generated RPC clients copy method signatures but not the imports of the agent trait's file, so use
+the fully qualified `golem.schema.UnstructuredBinary` / `golem.schema.UnstructuredText` names in the
+agent trait. Load `golem-http-params-scala` for unstructured request bodies.
 
 ## Complete Example
 

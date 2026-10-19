@@ -33,6 +33,7 @@ import golem.tool._
 
 final case class WitTool(
   version: String,
+  requiresFilesystem: Boolean,
   commands: WitCommandTree,
   schema: WitSchemaGraph
 )
@@ -61,6 +62,7 @@ final case class WitCommandBody(
   constraints: List[WitConstraint],
   stdin: Option[StreamSpec],
   stdout: Option[StreamSpec],
+  stderr: Option[StreamSpec],
   result: Option[WitResultSpec],
   errors: List[WitErrorCase],
   annotations: Option[CommandAnnotations]
@@ -192,12 +194,14 @@ final case class WitErrorCase(
  * shaped so its root type matches one of the body's declared `error-case`
  * payload types.
  */
+final case class WitCustomToolError(name: String, payload: WitTypedSchemaValue)
+
 sealed trait WitToolError extends Product with Serializable
 object WitToolError {
-  final case class InvalidToolName(name: String)             extends WitToolError
-  final case class InvalidCommandPath(path: List[String])    extends WitToolError
-  final case class InvalidInput(message: String)             extends WitToolError
-  final case class ConstraintViolation(message: String)      extends WitToolError
-  final case class InvalidResult(message: String)            extends WitToolError
-  final case class CustomError(payload: WitTypedSchemaValue) extends WitToolError
+  final case class InvalidToolName(name: String)          extends WitToolError
+  final case class InvalidCommandPath(path: List[String]) extends WitToolError
+  final case class InvalidInput(message: String)          extends WitToolError
+  final case class ConstraintViolation(message: String)   extends WitToolError
+  final case class InvalidResult(message: String)         extends WitToolError
+  final case class CustomError(error: WitCustomToolError) extends WitToolError
 }

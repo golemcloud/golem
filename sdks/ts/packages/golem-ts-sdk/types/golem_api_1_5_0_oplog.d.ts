@@ -33,12 +33,12 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CardId = golemCore200Types.CardId;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type ToolRpcError = golemCore200Types.ToolRpcError;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
   export type EnvironmentId = golemApi150Host.EnvironmentId;
   export type Uuid = golemApi150Host.Uuid;
   export type AgentId = golemApi150Host.AgentId;
-  export type Snapshot = golemApi150Host.Snapshot;
   export type Duration = wasiClocks030Types.Duration;
   export type Attribute = golemApi150Context.Attribute;
   export type AttributeValue = golemApi150Context.AttributeValue;
@@ -129,23 +129,6 @@ declare module 'golem:api/oplog@1.5.0' {
   /** The side-effect manipulates external state (for example an RPC call) */
   {
     tag: 'write-remote'
-  } |
-  /**
-   * The side-effect manipulates external state through multiple invoked functions (for example
-   * a HTTP request where reading the response involves multiple host function calls)
-   * On the first invocation of the batch, the parameter should be `None` - this triggers
-   * writing a scope `Start` entry in the oplog. Followup invocations should contain this
-   * entry's index as the parameter so their host-call `Start` entries can point back to the
-   * scope. In batched remote writes it is the caller's responsibility to manually write the
-   * matching scope `End` entry (using `end_function`) when the operation is completed.
-   */
-  {
-    tag: 'write-remote-batched'
-    val: OplogIndex | undefined
-  } |
-  {
-    tag: 'write-remote-transaction'
-    val: OplogIndex | undefined
   };
   export type PluginInstallationDescription = {
     environmentPluginGrantId: EnvironmentPluginGrantId;
@@ -162,9 +145,11 @@ declare module 'golem:api/oplog@1.5.0' {
     path: string[];
     value: TypedSchemaValue;
   };
+  export type OwnerKind = "component-agent" | "ephemeral-external-tool";
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
@@ -179,21 +164,83 @@ declare module 'golem:api/oplog@1.5.0' {
     instanceId: Uuid;
   };
   /**
+   * Identifies a durable call by its place in a call order.
+   * `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+   * entity invocation or the parent custom durable invocation that made it. `ordinal` is the
+   * place of the call among the calls numbered under `anchor`, starting at 0.
+   */
+  export type DurableInvocationId = {
+    anchor: OplogIndex;
+    ordinal: bigint;
+  };
+  export type SpanKind = "internal" | "client" | "server";
+  export type SpanOutcome = "completed" | "failed" | "cancelled" | "abandoned" | "denied";
+  export type SpanLink = {
+    traceId: TraceId;
+    spanId: SpanId;
+    traceStates: string[];
+  };
+  /**
+   * The span name remains in the `name` attribute. An embedded opening must
+   * be explicitly closed; invocation boundaries do not close it automatically.
+   */
+  export type SpanStarted = {
+    spanId: SpanId;
+    traceId: TraceId;
+    traceStates: string[];
+    parentSpanId?: SpanId;
+    links: SpanLink[];
+    startedAt: Datetime;
+    attributes: Attribute[];
+    kind: SpanKind;
+  };
+  /**
    * Parameters of an enriched durable host-call `start` entry.
    * The recorded `request` payload of every durable host call — including
    * durable P3 async calls such as HTTP send/consume-body, sockets, keyvalue,
    * and blobstore operations — surfaces as a generic `typed-schema-value`
    * tree, identified by `function-name`; there are no per-interface named WIT
    * variants for the payload shapes.
+   * `denial` is the reason the host denied the call before it ran. A denied
+   * call never runs its operation, and its `end` holds the denied response.
    */
   export type StartParameters = {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
-    invocationId?: Uuid;
+    invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
+    spanStarted?: SpanStarted;
+    denial?: string;
+  };
+  /**
+   * A compact close records the outcome but no error-message payload. Consumers
+   * must not decode the opaque host request to manufacture one.
+   */
+  export type SpanFinished = {
+    spanId: SpanId;
+    finishedAt: Datetime;
+    outcome: SpanOutcome;
+  };
+  /**
+   * Parameters of an enriched durable host-call `cancelled` entry. Like the
+   * `start` `request`, the optional recorded `partial` result surfaces as a
+   * generic `typed-schema-value` tree (no per-interface named WIT variants).
+   */
+  export type CancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: TypedSchemaValue;
+    spanFinished?: SpanFinished;
+  };
+  /**
+   * Attributes applied by `end` before the span is closed.
+   */
+  export type SpanAttributes = {
+    spanId: SpanId;
+    attributes: Attribute[];
   };
   /**
    * Parameters of an enriched durable host-call `end` entry. Like the
@@ -205,16 +252,8 @@ declare module 'golem:api/oplog@1.5.0' {
     startIndex: OplogIndex;
     response?: TypedSchemaValue;
     forcedCommit: boolean;
-  };
-  /**
-   * Parameters of an enriched durable host-call `cancelled` entry. Like the
-   * `start` `request`, the optional recorded `partial` result surfaces as a
-   * generic `typed-schema-value` tree (no per-interface named WIT variants).
-   */
-  export type CancelledParameters = {
-    timestamp: Datetime;
-    startIndex: OplogIndex;
-    partial?: TypedSchemaValue;
+    spanFinished?: SpanFinished;
+    spanAttributes?: SpanAttributes;
   };
   /**
    * Parameters of a `completion-discarded` entry: the durable host call started at
@@ -257,11 +296,25 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'external-span'
     val: ExternalSpanData
   };
+  export type WalletVersionToken = {
+    walletIdHash: Uint8Array;
+    generation: bigint;
+  };
+  export type PublicInvocationWalletPin = {
+    walletToken: WalletVersionToken;
+    scopeCardId?: CardId;
+  };
+  export type RawInvocationWalletPin = {
+    walletToken: WalletVersionToken;
+    pinnedCardIds: CardId[];
+    scopeCardId?: CardId;
+  };
+  export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
     timestamp: Datetime;
+    kind: OplogErrorKind;
     error: string;
     retryFrom: OplogIndex;
-    insideAtomicRegion: boolean;
     /** Persistent retry policy state, if a semantic retry policy is active. */
     retryPolicyState?: RetryPolicyState;
   };
@@ -316,6 +369,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex?: OplogIndex;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Raw parameters for a card-installed oplog entry.
@@ -324,6 +378,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex?: OplogIndex;
     card: Uint8Array;
+    walletGeneration: bigint;
   };
   export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
   /**
@@ -342,6 +397,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex: OplogIndex;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Parameters for a card-expired oplog entry.
@@ -349,6 +405,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CardExpiredParameters = {
     timestamp: Datetime;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
@@ -367,15 +424,27 @@ declare module 'golem:api/oplog@1.5.0' {
     payload: TypedSchemaValue;
   };
   /**
+   * A consumed attachment read with inline observation metadata.
+   */
+  export type ToolAttachmentReadParameters = {
+    timestamp: Datetime;
+    observation: TypedSchemaValue;
+    payload?: Uint8Array;
+  };
+  /**
+   * An effective attachment control transition without a byte payload.
+   */
+  export type ToolAttachmentControlParameters = {
+    timestamp: Datetime;
+    attachment: TypedSchemaValue;
+    transition: TypedSchemaValue;
+  };
+  /**
    * A public durable-stream producer record rendered as a typed schema value.
    */
   export type DurableStreamRecordParameters = {
     timestamp: Datetime;
     record: TypedSchemaValue;
-  };
-  export type EndAtomicRegionParameters = {
-    timestamp: Datetime;
-    beginIndex: OplogIndex;
   };
   export type AgentInitializationParameters = {
     idempotencyKey: string;
@@ -398,37 +467,78 @@ declare module 'golem:api/oplog@1.5.0' {
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
   };
+  export type ExternalToolInvocationParameters = {
+    idempotencyKey: string;
+    toolName: string;
+    commandPath: string[];
+    input: TypedSchemaValue;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[][];
+  };
+  export type ToolInvocationResult = {
+    result?: TypedSchemaValue;
+  };
+  export type ExternalToolResultParameters = {
+    result: Result<ToolInvocationResult, ToolRpcError>;
+  };
   export type AgentInvocationOutputParameters = {
     output: TypedSchemaValue;
   };
   export type FallibleResultParameters = {
     error?: string;
   };
+  export type SnapshotBasedUpdateParameters = {
+    payload: Uint8Array;
+    mimeType: string;
+    /** The filesystem snapshot taken with the application snapshot, if any */
+    filesystemSnapshot?: string;
+  };
   export type UpdateDescription =
   /** Automatic update by replaying the oplog on the new version */
   {
     tag: 'auto-update'
   } |
+  /** Automatic update assisted by the latest eligible periodic snapshot */
+  {
+    tag: 'snapshot-assisted-automatic'
+  } |
   /** Custom update by loading a given snapshot on the new version */
   {
     tag: 'snapshot-based'
-    val: Snapshot
+    val: SnapshotBasedUpdateParameters
   };
   export type PendingUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     description: UpdateDescription;
+    updateAttemptIndex: OplogIndex;
+  };
+  export type SnapshotAssistedUpdateDetails = {
+    pendingUpdateIndex: OplogIndex;
+    sourceComponentRevision: ComponentRevision;
+    sourceRevisionStartIndex: OplogIndex;
+    snapshotIndex: OplogIndex;
   };
   export type SuccessfulUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     newComponentSize: bigint;
     newActivePlugins: PluginInstallationDescription[];
+    snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
+  };
+  export type FailedSnapshotAssistedUpdateDetails = {
+    pendingUpdateIndex: OplogIndex;
+    sourceComponentRevision: ComponentRevision;
+    sourceRevisionStartIndex: OplogIndex;
+    snapshotIndex: OplogIndex;
   };
   export type FailedUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     details?: string;
+    snapshotAssistedDetails?: FailedSnapshotAssistedUpdateDetails;
+    updateAttemptIndex?: OplogIndex;
   };
   export type GrowMemoryParameters = {
     timestamp: Datetime;
@@ -448,11 +558,16 @@ declare module 'golem:api/oplog@1.5.0' {
     owner: string;
   };
   export type LogLevel = "stdout" | "stderr" | "trace" | "debug" | "info" | "warn" | "error" | "critical";
+  export type LogTraceContext = {
+    traceId: TraceId;
+    spanId: SpanId;
+  };
   export type LogParameters = {
     timestamp: Datetime;
     level: LogLevel;
     context: string;
     message: string;
+    traceContext?: LogTraceContext;
   };
   export type ActivatePluginParameters = {
     timestamp: Datetime;
@@ -469,23 +584,6 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CancelPendingInvocationParameters = {
     timestamp: Datetime;
     idempotencyKey: string;
-  };
-  export type StartSpanParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-    parent?: SpanId;
-    linkedContextId?: SpanId;
-    attributes: Attribute[];
-  };
-  export type FinishSpanParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-  };
-  export type SetSpanAttributeParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-    key: string;
-    value: AttributeValue;
   };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
@@ -512,6 +610,10 @@ declare module 'golem:api/oplog@1.5.0' {
     val: AgentMethodInvocationParameters
   } |
   {
+    tag: 'external-tool'
+    val: ExternalToolInvocationParameters
+  } |
+  {
     tag: 'save-snapshot'
   } |
   {
@@ -529,6 +631,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentInvocationStartedParameters = {
     timestamp: Datetime;
     invocation: AgentInvocation;
+    walletPin: PublicInvocationWalletPin;
   };
   export type SaveSnapshotResultParameters = {
     snapshot: SnapshotData;
@@ -541,6 +644,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-method'
     val: AgentInvocationOutputParameters
+  } |
+  {
+    tag: 'external-tool'
+    val: ExternalToolResultParameters
   } |
   {
     tag: 'manual-update'
@@ -571,6 +678,15 @@ declare module 'golem:api/oplog@1.5.0' {
   export type SnapshotParameters = {
     timestamp: Datetime;
     data: SnapshotData;
+    /** The filesystem snapshot taken with the application snapshot, if any */
+    filesystemSnapshot?: string;
+  };
+  /**
+   * The store holds the named filesystem snapshot from this point
+   */
+  export type SnapshotConfirmedParameters = {
+    timestamp: Datetime;
+    filesystemSnapshot: string;
   };
   export type OplogProcessorCheckpointParameters = {
     timestamp: Datetime;
@@ -686,6 +802,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawCreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
@@ -703,21 +820,26 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
-    invocationId?: Uuid;
+    invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
+    spanStarted?: SpanStarted;
+    denial?: string;
   };
   export type RawEndParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     response?: OplogPayload;
     forcedCommit: boolean;
+    spanFinished?: SpanFinished;
+    spanAttributes?: SpanAttributes;
   };
   export type RawCancelledParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     partial?: OplogPayload;
+    spanFinished?: SpanFinished;
   };
   export type RawCompletionDiscardedParameters = {
     timestamp: Datetime;
@@ -738,11 +860,59 @@ declare module 'golem:api/oplog@1.5.0' {
     payload: OplogPayload;
   };
   /**
+   * A consumed attachment read; only original data observations own payloads.
+   */
+  export type RawToolAttachmentReadParameters = {
+    timestamp: Datetime;
+    entityParentStartIndex?: OplogIndex;
+    observation: TypedSchemaValue;
+    payload?: OplogPayload;
+  };
+  /**
+   * An effective attachment control transition without a byte payload.
+   */
+  export type RawToolAttachmentControlParameters = {
+    timestamp: Datetime;
+    entityParentStartIndex?: OplogIndex;
+    attachment: TypedSchemaValue;
+    transition: TypedSchemaValue;
+  };
+  export type DurableStreamOutcome = "success" | "error";
+  export type DurableStreamEventSummary =
+  {
+    tag: 'registered'
+  } |
+  {
+    tag: 'items'
+    val: bigint
+  } |
+  {
+    tag: 'end'
+    val: DurableStreamOutcome
+  } |
+  {
+    tag: 'cancelled'
+  } |
+  {
+    tag: 'session-result'
+  } |
+  {
+    tag: 'session-finished'
+    val: DurableStreamOutcome
+  } |
+  {
+    tag: 'session-cancellation'
+  } |
+  {
+    tag: 'session-expired'
+  };
+  /**
    * A raw durable-stream producer record, stored inline or in external payload storage.
    */
   export type RawDurableStreamRecordParameters = {
     timestamp: Datetime;
     record: OplogPayload;
+    summary?: DurableStreamEventSummary;
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
@@ -751,6 +921,7 @@ declare module 'golem:api/oplog@1.5.0' {
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[];
+    walletPin: RawInvocationWalletPin;
   };
   export type RawAgentInvocationFinishedParameters = {
     timestamp: Datetime;
@@ -761,9 +932,9 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawErrorParameters = {
     timestamp: Datetime;
+    kind: OplogErrorKind;
     error: WorkerError;
     retryFrom: OplogIndex;
-    insideAtomicRegion: boolean;
     /** Persistent retry policy state, if a semantic retry policy is active. */
     retryPolicyState?: RetryPolicyState;
   };
@@ -775,10 +946,20 @@ declare module 'golem:api/oplog@1.5.0' {
     traceStates: string[];
     invocationContext: SpanData[];
   };
+  export type RawSnapshotAssistedAutomaticUpdate = {
+    targetRevision: ComponentRevision;
+    sourceComponentRevision: ComponentRevision;
+    sourceRevisionStartIndex: OplogIndex;
+    snapshotIndex: OplogIndex;
+    snapshotRevision: ComponentRevision;
+    /** The filesystem snapshot of the selected record, if it has one */
+    filesystemSnapshot?: string;
+  };
   export type RawSnapshotBasedUpdate = {
     targetRevision: ComponentRevision;
     payload: OplogPayload;
     mimeType: string;
+    filesystemSnapshot?: string;
   };
   /**
    * Raw update description used in oplog entries
@@ -789,6 +970,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'automatic'
     val: ComponentRevision
   } |
+  /** Automatic update assisted by the latest eligible periodic snapshot */
+  {
+    tag: 'snapshot-assisted-automatic'
+    val: RawSnapshotAssistedAutomaticUpdate
+  } |
   /** Custom update by loading a given snapshot on the new version */
   {
     tag: 'snapshot-based'
@@ -797,12 +983,14 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawPendingUpdateParameters = {
     timestamp: Datetime;
     description: RawUpdateDescription;
+    updateAttemptIndex?: OplogIndex;
   };
   export type RawSuccessfulUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     newComponentSize: bigint;
     newActivePlugins: EnvironmentPluginGrantId[];
+    snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
   };
   export type ResourceTypeId = {
     name: string;
@@ -829,12 +1017,15 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawBeginRemoteTransactionParameters = {
     timestamp: Datetime;
     transactionId: string;
-    originalBeginIndex?: OplogIndex;
+    originalBeginIndex: OplogIndex;
   };
   export type RawSnapshotParameters = {
     timestamp: Datetime;
     data: OplogPayload;
     mimeType: string;
+    activeCards: Uint8Array[];
+    walletGeneration: bigint;
+    filesystemSnapshot?: string;
   };
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;
@@ -888,12 +1079,9 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'error'
     val: RawErrorParameters
   } |
-  /**
-   * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
-   * more predictable.
-   */
+  /** A previously failed startup or replay completed successfully. */
   {
-    tag: 'no-op'
+    tag: 'recovery-succeeded'
     val: Timestamp
   } |
   /**
@@ -918,23 +1106,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'exited'
     val: Timestamp
-  } |
-  /**
-   * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-   * recovery except if there is a corresponding `EndAtomicRegion` entry.
-   */
-  {
-    tag: 'begin-atomic-region'
-    val: Timestamp
-  } |
-  /**
-   * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-   * entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-   * compaction.
-   */
-  {
-    tag: 'end-atomic-region'
-    val: EndAtomicRegionParameters
   } |
   /** An invocation request arrived while the agent was busy */
   {
@@ -981,6 +1152,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'restart'
     val: Timestamp
   } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
+    val: Timestamp
+  } |
   /** Activates a plugin */
   {
     tag: 'activate-plugin'
@@ -1000,21 +1176,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'cancel-pending-invocation'
     val: CancelPendingInvocationParameters
-  } |
-  /** Start a new span in the invocation context */
-  {
-    tag: 'start-span'
-    val: StartSpanParameters
-  } |
-  /** Finish an open span in the invocation context */
-  {
-    tag: 'finish-span'
-    val: FinishSpanParameters
-  } |
-  /** Set an attribute on an open span in the invocation context */
-  {
-    tag: 'set-span-attribute'
-    val: SetSpanAttributeParameters
   } |
   /** Begins a transaction operation */
   {
@@ -1094,6 +1255,14 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'host-stream-frame'
     val: RawHostStreamFrameParameters
   } |
+  {
+    tag: 'tool-attachment-read'
+    val: RawToolAttachmentReadParameters
+  } |
+  {
+    tag: 'tool-attachment-control'
+    val: RawToolAttachmentControlParameters
+  } |
   /** Registers a durable stream before exposing its handle */
   {
     tag: 'stream-registered'
@@ -1135,6 +1304,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-delivered'
     val: RawCompletionDeliveredParameters
+  } |
+  /** The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable */
+  {
+    tag: 'snapshot-confirmed'
+    val: SnapshotConfirmedParameters
   };
   export type PublicOplogEntry =
   /** The initial agent oplog entry */
@@ -1180,12 +1354,9 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'error'
     val: ErrorParameters
   } |
-  /**
-   * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
-   * more predictable.
-   */
+  /** A previously failed startup or replay completed successfully. */
   {
-    tag: 'no-op'
+    tag: 'recovery-succeeded'
     val: Timestamp
   } |
   /**
@@ -1210,23 +1381,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'exited'
     val: Timestamp
-  } |
-  /**
-   * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-   * recovery except if there is a corresponding `EndAtomicRegion` entry.
-   */
-  {
-    tag: 'begin-atomic-region'
-    val: Timestamp
-  } |
-  /**
-   * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-   * entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-   * compaction.
-   */
-  {
-    tag: 'end-atomic-region'
-    val: EndAtomicRegionParameters
   } |
   /** An invocation request arrived while the agent was busy */
   {
@@ -1273,6 +1427,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'restart'
     val: Timestamp
   } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
+    val: Timestamp
+  } |
   /** Activates a plugin */
   {
     tag: 'activate-plugin'
@@ -1292,21 +1451,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'cancel-pending-invocation'
     val: CancelPendingInvocationParameters
-  } |
-  /** Start a new span in the invocation context */
-  {
-    tag: 'start-span'
-    val: StartSpanParameters
-  } |
-  /** Finish an open span in the invocation context */
-  {
-    tag: 'finish-span'
-    val: FinishSpanParameters
-  } |
-  /** Set an attribute on an open span in the invocation context */
-  {
-    tag: 'set-span-attribute'
-    val: SetSpanAttributeParameters
   } |
   /** Begins a transaction operation */
   {
@@ -1386,6 +1530,14 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'host-stream-frame'
     val: HostStreamFrameParameters
   } |
+  {
+    tag: 'tool-attachment-read'
+    val: ToolAttachmentReadParameters
+  } |
+  {
+    tag: 'tool-attachment-control'
+    val: ToolAttachmentControlParameters
+  } |
   /** Registers a durable stream before exposing its handle */
   {
     tag: 'stream-registered'
@@ -1427,6 +1579,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-delivered'
     val: CompletionDeliveredParameters
+  } |
+  /** The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable */
+  {
+    tag: 'snapshot-confirmed'
+    val: SnapshotConfirmedParameters
   };
   export type OplogReadError =
   {

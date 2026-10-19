@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::optional_field_update::OptionalFieldUpdate;
+#[cfg(feature = "full")]
+use crate::base_model::canonicalize_agent_path;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::render_config_path;
 use crate::schema::{SchemaGraph, SchemaValue};
@@ -43,8 +45,7 @@ declare_transparent_newtypes! {
 impl CanonicalAgentSecretPath {
     #[cfg(feature = "full")]
     pub fn from_path_in_unknown_casing(value: &[String]) -> Self {
-        use heck::ToLowerCamelCase;
-        Self(value.iter().map(|s| s.to_lower_camel_case()).collect())
+        Self(canonicalize_agent_path(value))
     }
 }
 

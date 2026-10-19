@@ -1,0 +1,407 @@
+import { Callout, Tabs } from "nextra/components"
+
+# External Bridge Libraries
+
+Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates, Node.js TypeScript and Effect TypeScript npm packages, Scala sbt projects, MoonBit modules, and Go modules that implement a fully typed client for specific agents.
+
+Methods without streams use the existing REST invocation API and remain compatible with previously generated clients. A method whose input or output contains a stream instead opens the public streaming WebSocket endpoint described below.
+
+## Configuring Bridge Generation in golem.yaml
+
+To generate bridge libraries, add a `bridge` section to your `golem.yaml`:
+
+```yaml
+bridge:
+  ts:
+    external:
+      agents:
+        - InboxAgent
+        - EscalationAgent
+  effect:
+    external:
+      agents: WorkflowAgent
+  rust:
+    external:
+      agents: AuditAgent
+  scala:
+    external:
+      agents: BillingAgent
+  moonbit:
+    external:
+      agents: ReportAgent
+  go:
+    external:
+      agents: SyncAgent
+```
+
+This will generate TypeScript packages for `InboxAgent` and `EscalationAgent`, an Effect-native TypeScript package for `WorkflowAgent`, a Rust crate for `AuditAgent`, a Scala sbt project for `BillingAgent`, a MoonBit module for `ReportAgent`, and a Go module for `SyncAgent`.
+
+## Using Bridge Libraries
+
+Once generated, you can use the bridge libraries like any other typed client. First configure the connection, then interact with agents:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+import { CounterAgent, configure } from 'counter-agent-client/counter-agent-client.js'
+
+configure({
+  server: { type: 'local' },
+  application: 'bridgetest',
+  environment: 'local'
+})
+
+const c1 = await CounterAgent.get('c1')
+const value = await c1.increment()
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+import { CounterAgent, configure } from "counter-agent-client/counter-agent-client.js"
+
+configure({
+  server: { type: "local" },
+  application: "bridgetest",
+  environment: "local",
+})
+
+const program = Effect.gen(function* () {
+  const c1 = yield* CounterAgent.get("c1")
+  return yield* c1.increment()
+})
+
+const value = await Effect.runPromise(program)
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+use counter_agent_client::{configure, CounterAgent, GolemServer};
+
+configure(GolemServer::Local, "bridgetest", "local");
+let c1 = CounterAgent::get("c1").await?;
+let value = c1.increment().await?;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.bridge.client.counter_agent.CounterAgentClient
+import golem.bridge.runtime.GolemServer
+
+import scala.concurrent.Await
+import scala.concurrent.duration._
+
+CounterAgentClient.configure(GolemServer.Local, "bridgetest", "local")
+val c1 = Await.result(CounterAgentClient.get("c1"), 30.seconds)
+val value = Await.result(c1.increment(), 30.seconds)
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+// In moon.pkg, import the generated client and the bundled runtime:
+//   "counter-agent-client/client" @client
+//   "counter-agent-client/runtime" @runtime
+async fn main {
+  @client.CounterAgent::configure(@runtime.Local, "bridgetest", "local")
+  let c1 = @client.CounterAgent::get("c1")
+  let value = c1.increment()
+  println(value)
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```go
+// go.mod requires golem.local/bridge/counter-agent-client and replaces it with
+// the generated directory.
+import (
+	"context"
+	"fmt"
+
+	"github.com/golemcloud/golem/sdks/go/bridge"
+	client "golem.local/bridge/counter-agent-client"
+)
+
+func run(ctx context.Context) error {
+	if err := bridge.Configure(bridge.Configuration{
+		Server: bridge.Local(), AppName: "bridgetest", EnvName: "local",
+	}); err != nil {
+		return err
+	}
+	c1, err := client.GetCounterAgent(client.CounterAgentID{Name: "c1"})
+	if err != nil {
+		return err
+	}
+	value, err := c1.Increment(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Println(value)
+	return nil
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+## Streaming Methods
+
+Generated clients preserve streams wherever they occur in a method's typed input or output, including nested values and multiple sibling streams. The examples below assume a `MediaAgent` with input-only `upload`, output-only `transcribe`, and mixed `transform` methods. The generated method names and parameter order follow the agent definition; there is no separate streaming method suffix.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+import { agentStream } from '@golemcloud/golem-ts-bridge'
+import { MediaAgent, configure } from 'media-agent-client/media-agent-client.js'
+
+configure({ server: { type: 'local' }, application: 'media-app', environment: 'prod' })
+const agent = await MediaAgent.get('studio-a')
+
+async function* samples() {
+  yield 1
+  yield 2
+}
+
+// Input-only. agentStream enforces a single call to Symbol.asyncIterator.
+await agent.upload(agentStream(samples()))
+
+// Output-only.
+for await (const word of await agent.transcribe()) console.log(word)
+
+// Mixed, with explicit whole-invocation cancellation.
+const controller = new AbortController()
+const output = await agent.transform.abortable(controller.signal, agentStream(samples()))
+for await (const item of output) {
+  console.log(item)
+  controller.abort()
+  break // Returning from iteration drops and cancels this unread output stream.
+}
+```
+
+<Callout type="warning">
+  Streaming TypeScript bridges run on **Node.js only**. Browser WebSocket streaming is not supported. Non-streaming generated TypeScript methods can still use `fetch` in their existing supported environments.
+</Callout>
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect, Stream } from "effect"
+import { MediaAgent, configure } from "media-agent-client/media-agent-client.js"
+
+configure({ server: { type: "local" }, application: "media-app", environment: "prod" })
+
+const program = Effect.scoped(
+  Effect.gen(function* () {
+    const agent = yield* MediaAgent.get("studio-a")
+
+    yield* agent.upload(Stream.make(1, 2))
+
+    const words = yield* agent.transcribe()
+    yield* Stream.runForEach(words, (word) => Effect.logInfo(word))
+
+    const output = yield* agent.transform(Stream.make(10))
+    return yield* Stream.runHead(output)
+  }),
+)
+
+const first = await Effect.runPromise(program)
+```
+
+Effect bridges expose nested streams as native `Stream.Stream` values. Streaming calls require a `Scope`; `Effect.scoped` closes it and propagates interruption to the underlying invocation.
+
+<Callout type="warning">
+  Effect external bridges use the same Node.js WebSocket transport as TypeScript bridges. Browser streaming is not supported.
+</Callout>
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+use futures_util::{stream, StreamExt};
+use golem_client::invocation_session::AgentStream;
+use media_agent_client::{configure, GolemServer, MediaAgent};
+
+configure(GolemServer::Local, "media-app", "prod");
+let agent = MediaAgent::get("studio-a").await?;
+
+// Input-only: AgentStream::input accepts a Stream<Item = Result<T, E>>.
+let samples = AgentStream::input(stream::iter([
+    Ok::<_, std::io::Error>(1_u8),
+    Ok(2_u8),
+]));
+agent.upload(samples).await?;
+
+// Output-only: AgentStream implements futures_core::Stream.
+let mut words = agent.transcribe().await?;
+while let Some(word) = words.next().await {
+    println!("{}", word?);
+}
+
+// Mixed: input ownership moves into the invocation and output is affine.
+let input = AgentStream::input(stream::iter([Ok::<_, std::io::Error>(10_u8)]));
+let mut output = agent.transform(input).await?;
+if let Some(first) = output.next().await {
+    println!("{}", first?);
+}
+output.cancel(); // Dropping an unread output also sends consumer-drop cancellation.
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.bridge.client.media_agent.MediaAgentClient
+import golem.bridge.runtime.{AgentStream, AgentStreamStep, GolemServer}
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration._
+
+implicit val ec: ExecutionContext = ExecutionContext.global
+MediaAgentClient.configure(GolemServer.Local, "media-app", "prod")
+val agent = Await.result(MediaAgentClient.get("studio-a"), 30.seconds)
+
+var samples = List(1.toByte, 2.toByte)
+val input = AgentStream.fromPull(() => Future.successful(samples match {
+  case head :: tail => samples = tail; AgentStreamStep.Item(head)
+  case Nil => AgentStreamStep.End
+}))
+Await.result(agent.upload(input), 30.seconds) // Input-only.
+
+val words = Await.result(agent.transcribe(), 30.seconds) // Output-only.
+val consumer = Await.result(words.consume(), 30.seconds)
+Await.result(consumer.pull(), 30.seconds)
+Await.result(consumer.drop(), 30.seconds) // Explicit unread-output cancellation.
+
+val mixed = Await.result(agent.transform(AgentStream.fromPull(() =>
+  Future.successful(AgentStreamStep.End)
+)), 30.seconds)
+val mixedConsumer = Await.result(mixed.consume(), 30.seconds)
+Await.result(mixedConsumer.cancel(), 30.seconds)
+```
+
+`consume()` is affine: a second consumer fails deterministically. `pull()` is the back-pressure boundary; use `cancel()` for explicit cancellation or `drop()` when abandoning an unread output.
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+// Generated package imports in moon.pkg:
+//   "media-agent-client/client" @client
+//   "media-agent-client/runtime" @runtime
+async fn main {
+  @client.MediaAgent::configure(@runtime.Local, "media-app", "prod")
+  let agent = @client.MediaAgent::get("studio-a")
+  let mut samples = [1, 2]
+  let input = @runtime.AgentStream::from_next(async fn() { samples.remove(0) })
+  agent.upload(input) // Input-only; ownership moves into the invocation.
+
+  let words = agent.transcribe() // Output-only.
+  match words.next() {
+    Some(word) => println(word)
+    None => ()
+  }
+  words.drop() // Propagates consumer-drop for an unread output.
+
+  let empty = @runtime.AgentStream::from_next(async fn() { None })
+  let mixed = agent.transform(empty)
+  mixed.cancel()
+}
+```
+
+An `AgentStream` allows only one reader and one outstanding `next()` call. After an input stream is passed to an invocation, client code can no longer read or cancel it.
+</Tabs.Tab>
+<Tabs.Tab>
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/golemcloud/golem/sdks/go/bridge"
+	client "golem.local/bridge/media-agent-client"
+)
+
+func run(ctx context.Context) error {
+	if err := bridge.Configure(bridge.Configuration{
+		Server: bridge.Local(), AppName: "media-app", EnvName: "prod",
+	}); err != nil {
+		return err
+	}
+	agent, err := client.GetMediaAgent(client.MediaAgentID{Name: "studio-a"})
+	if err != nil {
+		return err
+	}
+
+	// Input-only: a stream passed to a method is given away to the invocation.
+	if err := agent.Upload(ctx, bridge.StreamOf[uint8](1, 2)); err != nil {
+		return err
+	}
+
+	// Output-only.
+	words, err := agent.Transcribe(ctx)
+	if err != nil {
+		return err
+	}
+	for word, err := range words.All(ctx) {
+		if err != nil {
+			return err
+		}
+		fmt.Println(word)
+	}
+
+	// Mixed: ProduceStream writes the input from its own goroutine.
+	input := bridge.ProduceStream(func(w *bridge.AgentStreamWriter[uint8]) error {
+		return w.Write(10)
+	})
+	output, err := agent.Transform(ctx, input)
+	if err != nil {
+		return err
+	}
+	if first, ok, err := output.Next(ctx); err != nil {
+		return err
+	} else if ok {
+		fmt.Println(first)
+	}
+	return output.Close() // Closing an unread output sends consumer-drop cancellation.
+}
+```
+
+A stream is read once: reading it again after passing it to a method, or passing it twice, fails with `bridge.ErrStreamConsumed`. A returned stream ends with a `*bridge.StreamError` when the producer failed, or a `*bridge.StreamCancelled` when either side cancelled it.
+</Tabs.Tab>
+</Tabs>
+
+### Raw binary lanes
+
+Direct `stream<u8>` and `stream<binary>` values use binary WebSocket frames rather than JSON/base64 for their item data. `stream<u8>` treats every byte as one logical item. `stream<binary>` treats each frame chunk as an `AgentBinary` item with bytes and an optional MIME type. Streams nested inside another value still retain their structural position, while their bytes travel on the corresponding binary lane.
+
+For example, a video-processing client can stream a multi-megabyte recording without constructing one enormous JSON value:
+
+```typescript
+import { createReadStream } from 'node:fs'
+import { agentStream, type AgentBinary } from '@golemcloud/golem-ts-bridge'
+
+async function* videoChunks(path: string): AsyncGenerator<AgentBinary> {
+  for await (const chunk of createReadStream(path, { highWaterMark: 1024 * 1024 })) {
+    yield { bytes: new Uint8Array(chunk), mimeType: 'video/mp4' }
+  }
+}
+
+// A 250 MiB video is sent as 1 MiB binary items with normal stream back-pressure.
+const preview = await agent.makePreview(agentStream(videoChunks('recording.mp4')))
+for await (const audioChunk of preview) {
+  await audioSink.write(audioChunk.bytes) // e.g. AgentBinary with audio/aac
+}
+```
+
+Use a stream of structured records instead when each item needs additional application metadata.
+
+The generated runtime manages the WebSocket connection and reconnects using in-memory
+session state. Applications do not need to open the socket directly. See the
+[streaming protocol reference](/v1.6/stream-session-public-protocol-v1) for
+transport and recovery details, or [CLI streaming methods](/v1.6/invoke/cli#streaming-methods)
+for command-line usage and persistent checkpoints.
+
+## Configuration Options
+
+The TypeScript, Effect TypeScript, Rust, Scala, MoonBit and Go bridge libraries require three configuration parameters:
+
+| Parameter | Description |
+|-----------|-------------|
+| **Server** | `Local` for the default local Golem server, `Cloud` for Golem Cloud, or a custom deployment URL and bearer token |
+| **Application name** | The `app:` key from your `golem.yaml` |
+| **Environment** | The target environment (e.g., `local`, `staging`, `prod`) |
+
+## Type Safety
+
+The generated libraries define all custom data types used in parameters and return types of agent methods. This means you get full compile-time type checking and IDE autocompletion when interacting with agents from external applications.
+
+Bridge libraries follow the same conventions as agent-to-agent RPC, providing `get`, `getPhantom`, and `newPhantom` constructors for agent instances.

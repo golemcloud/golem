@@ -16,3 +16,13 @@ pub suberror SchemaModelError {
   /// A `SchemaBuilder` reservation was never committed before `finish`.
   BuilderError(String)
 } derive(Debug, Eq)
+
+///|
+/// Failures while acquiring or reading a retained schema-value stream.
+#doc(hidden)
+pub suberror SchemaValueStreamReadError {
+  /// The affine readable endpoint is no longer owned by this handle.
+  Ownership(String)
+  /// The component-model endpoint could not be unwrapped or read.
+  Transport(String)
+} derive(Debug, Eq)

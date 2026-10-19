@@ -83,29 +83,69 @@ sealed trait JsHostCallParameters extends js.Object {
 // --- Durable host-call markers ---
 
 @js.native
+sealed trait JsDurableInvocationId extends js.Object {
+  def anchor: js.BigInt  = js.native
+  def ordinal: js.BigInt = js.native
+}
+
+@js.native
 sealed trait JsStartParameters extends js.Object {
-  def timestamp: JsDatetime                      = js.native
-  def parentStartIndex: js.UndefOr[js.BigInt]    = js.native
-  def functionName: String                       = js.native
-  def invocationId: js.UndefOr[JsUuid]           = js.native
-  def observationalOwner: js.UndefOr[js.BigInt]  = js.native
-  def request: js.UndefOr[JsTypedSchemaValue]    = js.native
-  def durableFunctionType: JsWrappedFunctionType = js.native
+  def timestamp: JsDatetime                           = js.native
+  def parentStartIndex: js.UndefOr[js.BigInt]         = js.native
+  def functionName: String                            = js.native
+  def invocationId: js.UndefOr[JsDurableInvocationId] = js.native
+  def observationalOwner: js.UndefOr[js.BigInt]       = js.native
+  def request: js.UndefOr[JsTypedSchemaValue]         = js.native
+  def durableFunctionType: JsWrappedFunctionType      = js.native
+  def spanStarted: js.UndefOr[JsSpanStarted]          = js.native
+  def denial: js.UndefOr[String]                      = js.native
 }
 
 @js.native
 sealed trait JsEndParameters extends js.Object {
-  def timestamp: JsDatetime                    = js.native
-  def startIndex: js.BigInt                    = js.native
-  def response: js.UndefOr[JsTypedSchemaValue] = js.native
-  def forcedCommit: Boolean                    = js.native
+  def timestamp: JsDatetime                        = js.native
+  def startIndex: js.BigInt                        = js.native
+  def response: js.UndefOr[JsTypedSchemaValue]     = js.native
+  def forcedCommit: Boolean                        = js.native
+  def spanFinished: js.UndefOr[JsSpanFinished]     = js.native
+  def spanAttributes: js.UndefOr[JsSpanAttributes] = js.native
 }
 
 @js.native
 sealed trait JsCancelledParameters extends js.Object {
-  def timestamp: JsDatetime                   = js.native
-  def startIndex: js.BigInt                   = js.native
-  def partial: js.UndefOr[JsTypedSchemaValue] = js.native
+  def timestamp: JsDatetime                    = js.native
+  def startIndex: js.BigInt                    = js.native
+  def partial: js.UndefOr[JsTypedSchemaValue]  = js.native
+  def spanFinished: js.UndefOr[JsSpanFinished] = js.native
+}
+
+@js.native
+sealed trait JsSpanLink extends js.Object {
+  def traceId: String               = js.native
+  def spanId: String                = js.native
+  def traceStates: js.Array[String] = js.native
+}
+@js.native
+sealed trait JsSpanStarted extends js.Object {
+  def spanId: String                    = js.native
+  def traceId: String                   = js.native
+  def traceStates: js.Array[String]     = js.native
+  def parentSpanId: js.UndefOr[String]  = js.native
+  def links: js.Array[JsSpanLink]       = js.native
+  def startedAt: JsDatetime             = js.native
+  def attributes: js.Array[JsAttribute] = js.native
+  def kind: String                      = js.native
+}
+@js.native
+sealed trait JsSpanFinished extends js.Object {
+  def spanId: String         = js.native
+  def finishedAt: JsDatetime = js.native
+  def outcome: String        = js.native
+}
+@js.native
+sealed trait JsSpanAttributes extends js.Object {
+  def spanId: String                    = js.native
+  def attributes: js.Array[JsAttribute] = js.native
 }
 
 @js.native
@@ -169,6 +209,7 @@ sealed trait JsExternalSpanData extends js.Object {
 @js.native
 sealed trait JsErrorParameters extends js.Object {
   def timestamp: JsDatetime = js.native
+  def kind: String          = js.native
   def error: String         = js.native
   def retryFrom: js.BigInt  = js.native
 }
@@ -203,14 +244,6 @@ sealed trait JsSetRetryPolicyParameters extends js.Object {
 sealed trait JsRemoveRetryPolicyParameters extends js.Object {
   def timestamp: JsDatetime = js.native
   def name: String          = js.native
-}
-
-// --- EndAtomicRegionParameters ---
-
-@js.native
-sealed trait JsEndAtomicRegionParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def beginIndex: js.BigInt = js.native
 }
 
 // --- EndRemoteWriteParameters ---
@@ -330,12 +363,30 @@ sealed trait JsAgentInvocationResultWithValue extends JsAgentInvocationResult {
   @JSName("val") def value: js.Any = js.native
 }
 
+@js.native
+sealed trait JsCardId extends js.Object {
+  def uuid: JsUuid = js.native
+}
+
+@js.native
+sealed trait JsWalletVersionToken extends js.Object {
+  def walletIdHash: Uint8Array = js.native
+  def generation: js.BigInt    = js.native
+}
+
+@js.native
+sealed trait JsPublicInvocationWalletPin extends js.Object {
+  def walletToken: JsWalletVersionToken = js.native
+  def scopeCardId: js.UndefOr[JsCardId] = js.native
+}
+
 // --- AgentInvocationStartedParameters ---
 
 @js.native
 sealed trait JsAgentInvocationStartedParameters extends js.Object {
-  def timestamp: JsDatetime         = js.native
-  def invocation: JsAgentInvocation = js.native
+  def timestamp: JsDatetime                  = js.native
+  def invocation: JsAgentInvocation          = js.native
+  def walletPin: JsPublicInvocationWalletPin = js.native
 }
 
 // --- AgentInvocationFinishedParameters ---
@@ -365,14 +416,33 @@ sealed trait JsUpdateDescription extends js.Object {
 
 @js.native
 sealed trait JsUpdateDescriptionSnapshotBased extends JsUpdateDescription {
-  @JSName("val") def value: JsSnapshot = js.native
+  @JSName("val") def value: JsSnapshotBasedUpdateParameters = js.native
+}
+
+@js.native
+sealed trait JsSnapshotBasedUpdateParameters extends js.Object {
+  def payload: Uint8Array                    = js.native
+  def mimeType: String                       = js.native
+  def filesystemSnapshot: js.UndefOr[String] = js.native
+}
+
+object JsSnapshotBasedUpdateParameters {
+  def apply(
+    payload: Uint8Array,
+    mimeType: String,
+    filesystemSnapshot: js.UndefOr[String] = js.undefined
+  ): JsSnapshotBasedUpdateParameters = {
+    val obj = js.Dynamic.literal("payload" -> payload, "mimeType" -> mimeType)
+    filesystemSnapshot.foreach(name => obj.updateDynamic("filesystemSnapshot")(name))
+    obj.asInstanceOf[JsSnapshotBasedUpdateParameters]
+  }
 }
 
 object JsUpdateDescription {
   def autoUpdate: JsUpdateDescription =
     JsShape.tagOnly[JsUpdateDescription]("auto-update")
 
-  def snapshotBased(snapshot: JsSnapshot): JsUpdateDescription =
+  def snapshotBased(snapshot: JsSnapshotBasedUpdateParameters): JsUpdateDescription =
     JsShape.tagged[JsUpdateDescription]("snapshot-based", snapshot)
 }
 
@@ -435,11 +505,18 @@ sealed trait JsDropResourceParameters extends js.Object {
 // --- LogParameters ---
 
 @js.native
+sealed trait JsLogTraceContext extends js.Object {
+  def traceId: String = js.native
+  def spanId: String  = js.native
+}
+
+@js.native
 sealed trait JsLogParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def level: String         = js.native
-  def context: String       = js.native
-  def message: String       = js.native
+  def timestamp: JsDatetime                       = js.native
+  def level: String                               = js.native
+  def context: String                             = js.native
+  def message: String                             = js.native
+  def traceContext: js.UndefOr[JsLogTraceContext] = js.native
 }
 
 // --- ActivatePluginParameters ---
@@ -474,35 +551,6 @@ sealed trait JsCancelPendingInvocationParameters extends js.Object {
   def idempotencyKey: String = js.native
 }
 
-// --- StartSpanParameters ---
-
-@js.native
-sealed trait JsStartSpanParameters extends js.Object {
-  def timestamp: JsDatetime               = js.native
-  def spanId: String                      = js.native
-  def parent: js.UndefOr[String]          = js.native
-  def linkedContextId: js.UndefOr[String] = js.native
-  def attributes: js.Array[JsAttribute]   = js.native
-}
-
-// --- FinishSpanParameters ---
-
-@js.native
-sealed trait JsFinishSpanParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def spanId: String        = js.native
-}
-
-// --- SetSpanAttributeParameters ---
-
-@js.native
-sealed trait JsSetSpanAttributeParameters extends js.Object {
-  def timestamp: JsDatetime   = js.native
-  def spanId: String          = js.native
-  def key: String             = js.native
-  def value: JsAttributeValue = js.native
-}
-
 // --- BeginRemoteTransactionParameters ---
 
 @js.native
@@ -531,8 +579,17 @@ sealed trait JsSnapshotData extends js.Object {
 
 @js.native
 sealed trait JsSnapshotParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def data: JsSnapshotData  = js.native
+  def timestamp: JsDatetime                  = js.native
+  def data: JsSnapshotData                   = js.native
+  def filesystemSnapshot: js.UndefOr[String] = js.native
+}
+
+// --- SnapshotConfirmedParameters ---
+
+@js.native
+sealed trait JsSnapshotConfirmedParameters extends js.Object {
+  def timestamp: JsDatetime      = js.native
+  def filesystemSnapshot: String = js.native
 }
 
 // --- OplogProcessorCheckpointParameters ---

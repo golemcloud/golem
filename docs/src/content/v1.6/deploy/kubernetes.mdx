@@ -1,0 +1,17 @@
+# Deploy to Kubernetes
+
+Golem currently does not provide an official Helm chart or equivalent for Kubernetes deployments. However all the Golem services are containerized and deployed to Docker Hub, and configurable though environment variables, so it is possible to create your own Kubernetes manifests.
+
+The images run as uid and gid 65534 and need no Linux capability. A container `securityContext` for every service:
+
+```yaml
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+```
+
+Set `fsGroup: 65534` in the pod `securityContext`, so that the volumes of the pod are writable by the service, and `fsGroupChangePolicy: OnRootMismatch`, so that the kubelet does not walk a large volume each time the pod starts. See [User and Permissions](/v1.6/deploy#user-and-permissions). `ManagedXfs` agent filesystem storage also needs `xfs-quotad`, a native sidecar with `CAP_SYS_ADMIN`; see [Run xfs-quotad](/v1.6/operate/filesystem_snapshots/xfs#run-xfs-quotad).

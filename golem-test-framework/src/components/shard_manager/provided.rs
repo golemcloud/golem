@@ -40,10 +40,10 @@ impl ShardManager for ProvidedShardManager {
     }
 
     async fn kill(&self) {
-        panic!("Cannot kill provided shard manager");
+        // Nothing to do — we do not own this shard manager process.
     }
 
     async fn restart(&self, _number_of_shards_override: Option<usize>) {
-        panic!("Cannot restart provided shard manager");
+        // Nothing to do — we do not own this shard manager process.
     }
 }

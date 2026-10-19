@@ -21,11 +21,31 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::custom_api::PathSegment;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
+    #[error("Invalid MCP import {index}: {reason}")]
+    InvalidMcpImport { index: u32, reason: String },
+    #[error("MCP import {index} references unknown security scheme {security_scheme}")]
+    McpImportSecuritySchemeNotFound {
+        index: u32,
+        security_scheme: SecuritySchemeName,
+    },
+    #[error(
+        "MCP import {index} supplies a tool named '{tool_name}', which is the name of a default tool and of a tool of this deployment; give the import a prefix, or exclude the tool from the import"
+    )]
+    McpImportToolHasDefaultToolName { index: u32, tool_name: String },
+    #[error(
+        "MCP import {index} can supply a tool named '{tool_name}', which is the name of a default tool and of a tool of this deployment, and the tools of the MCP imports cannot be read now ({reason}); give the import a prefix or exclude that name from the import, or deploy again when the imports can be read"
+    )]
+    McpImportNotReadWithDefaultToolName {
+        index: u32,
+        tool_name: String,
+        reason: String,
+    },
     #[error(
         "Agent type {missing_agent_type} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
     )]
@@ -58,6 +78,23 @@ pub enum DeployValidationError {
     McpDeploymentUnknownSecurityScheme {
         mcp_deployment_domain: Domain,
         security_scheme: SecuritySchemeName,
+    },
+    #[error(
+        "Domain {domain} has both an HTTP API deployment and an MCP deployment. A domain may hold an HTTP API deployment or an MCP deployment, not both"
+    )]
+    DomainHasHttpApiAndMcpDeployments { domain: Domain },
+    #[error("MCP deployment {mcp_deployment_domain} is empty")]
+    McpDeploymentEmpty { mcp_deployment_domain: Domain },
+    #[error("MCP deployment {mcp_deployment_domain} tool {tool_name}: {error}")]
+    McpDeploymentInvalidTool {
+        mcp_deployment_domain: Domain,
+        tool_name: ToolName,
+        error: String,
+    },
+    #[error("MCP deployment {mcp_deployment_domain} exports duplicate tool name {name}")]
+    McpDeploymentToolNameCollision {
+        mcp_deployment_domain: Domain,
+        name: String,
     },
     #[error(
         "Method {agent_method} of agent {agent_type} used by http api at {method} {domain}/{path} is invalid: {error}"
@@ -172,6 +209,14 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         errors: Vec<String>,
     },
+    #[error("Tool {tool_name} filesystem configuration is invalid: {error}")]
+    ToolFilesystemRequirement { tool_name: ToolName, error: String },
+    #[error("Tool {tool_name} in component {component_name} could not be serialized: {error}")]
+    ToolMetadataSerialization {
+        component_name: ComponentName,
+        tool_name: ToolName,
+        error: String,
+    },
     #[error(
         "Tool {tool_name} is implemented by multiple components: {components}",
         components = components.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
@@ -179,6 +224,54 @@ pub enum DeployValidationError {
     DuplicateToolImplementation {
         tool_name: ToolName,
         components: Vec<ComponentName>,
+    },
+    #[error(
+        "Tool {tool_name} has multiple local or remote sources: {sources}",
+        sources = sources.join(", ")
+    )]
+    ToolSourceCollision {
+        tool_name: ToolName,
+        sources: Vec<String>,
+    },
+    #[error("Remote tool {tool_name} is unavailable in this environment")]
+    RemoteToolUnavailable { tool_name: ToolName },
+    #[error("Remote tool declaration {tool_name} selected a release for tool {release_name}")]
+    RemoteToolNameMismatch {
+        tool_name: ToolName,
+        release_name: ToolName,
+    },
+    #[error("Remote tool {tool_name} release definition has root name {definition_name:?}")]
+    RemoteToolDefinitionNameMismatch {
+        tool_name: ToolName,
+        definition_name: Option<String>,
+    },
+    #[error(
+        "Remote tool {tool_name} release version {release_version} does not match its definition version {definition_version}"
+    )]
+    RemoteToolVersionMismatch {
+        tool_name: ToolName,
+        release_version: String,
+        definition_version: String,
+    },
+    #[error("Remote tool {tool_name} uses unsupported metadata schema version {metadata_version}")]
+    RemoteToolUnsupportedMetadataVersion {
+        tool_name: ToolName,
+        metadata_version: String,
+    },
+    #[error("Remote tool {tool_name} has an invalid metadata digest")]
+    RemoteToolMetadataDigestMismatch { tool_name: ToolName },
+    #[error(
+        "Remote tool {tool_name} is invalid: {errors}",
+        errors = errors.join(", ")
+    )]
+    InvalidRemoteTool {
+        tool_name: ToolName,
+        errors: Vec<String>,
+    },
+    #[error("Remote tool {tool_name} has a binding for unknown agent type {agent_type}")]
+    RemoteToolBindingUnknownAgent {
+        tool_name: ToolName,
+        agent_type: AgentTypeName,
     },
     #[error(
         "Tool {tool_name} in component {component_name} has a binding for unknown agent type {agent_type}"
@@ -216,6 +309,15 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         agent_type: Option<AgentTypeName>,
     },
+    #[error("middleware merge mode is only valid on agent binding for tool {tool_name}")]
+    ToolBindingEnvironmentMiddlewareMergeMode { tool_name: ToolName },
+    #[error("Tool middleware{middleware}{tool}{agent} is invalid: {message}", middleware = middleware_name.as_ref().map(|name| format!(" {name}")).unwrap_or_default(), tool = tool_name.as_ref().map(|name| format!(" for tool {name}")).unwrap_or_default(), agent = agent_type_name.as_ref().map(|name| format!(" owned by agent {name}")).unwrap_or_default())]
+    ToolMiddleware {
+        middleware_name: Option<ToolMiddlewareName>,
+        agent_type_name: Option<AgentTypeName>,
+        tool_name: Option<ToolName>,
+        message: String,
+    },
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -230,4 +332,25 @@ pub fn format_validation_errors(errors: &[DeployValidationError]) -> String {
         .map(|err| format!("{err}"))
         .collect::<Vec<_>>()
         .join(",\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn middleware_validation_error_identifies_adjacent_tool_for_component_owner() {
+        let error = DeployValidationError::ToolMiddleware {
+            middleware_name: Some(ToolMiddlewareName::try_from("adapter").unwrap()),
+            agent_type_name: None,
+            tool_name: Some(ToolName::try_from("leaf").unwrap()),
+            message: "incompatible".to_string(),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "Tool middleware adapter for tool leaf is invalid: incompatible"
+        );
+    }
 }

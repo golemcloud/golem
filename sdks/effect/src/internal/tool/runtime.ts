@@ -1,0 +1,234 @@
+import type * as Common from "golem:tool/common@0.1.0"
+import type * as Host from "golem:tool/host@0.1.0"
+import type * as Streams from "golem:tool/streams@0.1.0"
+import { Cause, Effect, Layer, Stream } from "effect"
+import { HostLive } from "../../host/HostLive.js"
+import { findCommand, implementationAt, registeredTools, ToolInvokeError } from "./model.js"
+
+const asError = (cause: Common.ToolError) => new ToolInvokeError(cause)
+const encodeResult = <A, E, R>(encode: () => Effect.Effect<A, E, R>) =>
+  Effect.suspend(encode).pipe(
+    Effect.catchCause(
+      (cause): Effect.Effect<never, E | ToolInvokeError> =>
+        Cause.hasInterrupts(cause)
+          ? Effect.failCause(cause)
+          : Effect.fail(asError({ tag: "invalid-result", val: Cause.pretty(cause) })),
+    ),
+  )
+const bytes = (source: AsyncIterator<Host.ByteStreamItem> | undefined) =>
+  source === undefined
+    ? undefined
+    : Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => source }, (e) =>
+        asError({ tag: "invalid-input", val: String(e) }),
+      ).pipe(
+        Stream.mapEffect((item) =>
+          item.tag === "ok"
+            ? item.val.length > 0
+              ? Effect.succeed(item.val)
+              : Effect.fail(asError({ tag: "invalid-input", val: "stdin yielded an empty chunk" }))
+            : Effect.fail(asError({ tag: "invalid-input", val: `stdin ${item.val.tag}` })),
+        ),
+      )
+
+export async function invokeRegistered(
+  toolName: string,
+  path: string[],
+  input: Common.TypedSchemaValue,
+  stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
+  stdout: Streams.ToolOutputWriter | undefined,
+  stderr: Streams.ToolOutputWriter | undefined,
+  principal: unknown,
+): Promise<Common.InvocationResult> {
+  const stdinIterator = stdin?.[Symbol.asyncIterator]()
+  const output = (name: "stdout" | "stderr", writer: Streams.ToolOutputWriter | undefined) => {
+    let completed = false
+    const consume = writer
+      ? <R>(source: Stream.Stream<Uint8Array, ToolInvokeError, R>) =>
+          Stream.runForEach(source, (chunk) =>
+            completed
+              ? Effect.fail(asError({ tag: "invalid-result", val: `${name} is already completed` }))
+              : Effect.tryPromise({
+                  try: () => writer.write(chunk),
+                  catch: (e) => asError({ tag: "invalid-result", val: String(e) }),
+                }),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.promise(() => target.fail(cause)).pipe(
+                Effect.ignoreCause,
+                Effect.andThen(Effect.failCause(cause)),
+              ),
+            ),
+          )
+      : undefined
+    const target = {
+      finish: () => {
+        if (!writer || completed) return Promise.resolve()
+        completed = true
+        return writer.finish()
+      },
+      fail: (error: unknown) => {
+        if (!writer || completed) return Promise.resolve()
+        completed = true
+        return writer.fail({ tag: "failed", val: String(error) })
+      },
+      consume,
+    }
+    return target
+  }
+  const stdoutOutput = output("stdout", stdout)
+  const stderrOutput = output("stderr", stderr)
+  const settleOutputs = async (operation: "finish" | "fail", error?: unknown) => {
+    const start = (target: typeof stdoutOutput) => {
+      try {
+        return operation === "finish" ? target.finish() : target.fail(error)
+      } catch (cause) {
+        return Promise.reject(cause)
+      }
+    }
+    await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
+  }
+  try {
+    const registered = registeredTools().find((x) => x.definition.name === toolName)
+    if (!registered) throw asError({ tag: "invalid-tool-name", val: toolName })
+    const body = findCommand(registered, path)
+    if (!body) throw asError({ tag: "invalid-command-path", val: path })
+    const handler = implementationAt(registered.implementation, toolName, path)
+    if (!handler) throw asError({ tag: "invalid-command-path", val: path })
+
+    const encodeFailure = (failure: { readonly name: string; readonly value: unknown }) => {
+      const declared = body.errors.find((x) => x.spec.name === failure.name)
+      if (!declared)
+        return Effect.fail(
+          asError({ tag: "invalid-result", val: `undeclared error '${failure.name}'` }),
+        )
+      return Effect.flatMap(
+        encodeResult(() => declared.codec.encodeAsync(failure.value)),
+        (value) =>
+          Effect.fail(
+            asError({
+              tag: "custom-error",
+              val: {
+                name: declared.spec.name,
+                payload: { graph: declared.codec.schemaGraph, value },
+              },
+            }),
+          ),
+      )
+    }
+    const isFailure = (
+      value: unknown,
+    ): value is { _tag: "ToolFailure"; name: string; value: unknown } =>
+      typeof value === "object" && value !== null && "_tag" in value && value._tag === "ToolFailure"
+    const isSuccess = (value: unknown): value is { _tag: "ToolSuccess"; value: unknown } =>
+      typeof value === "object" && value !== null && "_tag" in value && value._tag === "ToolSuccess"
+
+    const program = Effect.gen(function* () {
+      if (body.model.stdin?.required && !stdinIterator)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation did not contain declared stdin stream",
+          }),
+        )
+      if (!body.model.stdin && stdinIterator)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation contained undeclared stdin stream",
+          }),
+        )
+      if (body.model.stdout?.required && !stdout)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation did not contain declared stdout stream",
+          }),
+        )
+      if (!body.model.stdout && stdout)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation contained undeclared stdout stream",
+          }),
+        )
+      if (body.model.stderr?.required && !stderr)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation did not contain declared stderr stream",
+          }),
+        )
+      if (!body.model.stderr && stderr)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation contained undeclared stderr stream",
+          }),
+        )
+
+      const decoded = yield* body
+        .decodeInput(input)
+        .pipe(Effect.mapError((cause) => asError({ tag: "invalid-input", val: String(cause) })))
+      const invocation = handler(decoded, {
+        principal,
+        stdin: bytes(stdinIterator),
+        stdout: stdoutOutput.consume,
+        stderr: stderrOutput.consume,
+      }).pipe(Effect.catchIf(isFailure, encodeFailure))
+      const result = yield* invocation
+      if (isFailure(result)) return yield* encodeFailure(result)
+      if (isSuccess(result) && !("value" in result))
+        return yield* Effect.fail(asError({ tag: "invalid-result", val: "malformed success" }))
+      const value = isSuccess(result) ? result.value : result
+      if (!body.output && value !== undefined)
+        return yield* Effect.fail(asError({ tag: "invalid-result", val: "unexpected result" }))
+      const encoded = body.output
+        ? yield* encodeResult(() => body.output!.encodeAsync(value))
+        : undefined
+      return {
+        result:
+          body.output && encoded ? { graph: body.output.schemaGraph, value: encoded } : undefined,
+      } satisfies Common.InvocationResult
+    })
+    const runtimeLayer = registered.layer
+      ? registered.layer.pipe(Layer.provideMerge(HostLive))
+      : HostLive
+    const result = await Effect.runPromise(
+      Effect.scoped(Effect.provide(program, runtimeLayer)) as Effect.Effect<
+        Common.InvocationResult,
+        unknown,
+        never
+      >,
+    )
+    await settleOutputs("finish")
+    return result
+  } catch (error) {
+    if (error instanceof ToolInvokeError) await settleOutputs("finish")
+    else await settleOutputs("fail", error)
+    if (error instanceof ToolInvokeError) throw error.cause
+    throw error
+  } finally {
+    for (const writer of [stdout, stderr]) {
+      try {
+        ;(writer as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.()
+      } catch {
+        // Release each output independently without replacing the structured outcome.
+      }
+    }
+    try {
+      await stdinIterator?.return?.()
+    } catch {
+      // Input cleanup cannot replace the invocation result.
+    }
+  }
+}
+
+export const toolGuest = {
+  discoverTools: (): Common.Tool[] => registeredTools().map((x) => x.wire),
+  getTool: (name: string): Common.Tool => {
+    const value = registeredTools().find((x) => x.definition.name === name)
+    if (!value) throw { tag: "invalid-tool-name", val: name } satisfies Common.ToolError
+    return value.wire
+  },
+  invoke: invokeRegistered,
+}

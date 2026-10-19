@@ -1,0 +1,823 @@
+import { describe, expect, it, vi } from "vitest"
+import type * as Common from "golem:tool/common@0.1.0"
+import { Effect, Result, Schema, Scope } from "effect"
+import { c, compileDefinition, toolDefinition } from "../src/internal/tool/model.js"
+import { DynamicToolClient, ToolType } from "../src/ToolReflection.js"
+import * as ToolSchema from "../src/Schema.js"
+import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
+import { ToolClient } from "../src/host/ToolClient.js"
+import { compile } from "../src/WitCodec.js"
+import { t } from "../src/internal/schema-model/model.js"
+import { schemaGraphToWit, schemaValueFromWit } from "../src/internal/schema-model/wit.js"
+import { SchemaRef, type JsonValue } from "../src/SchemaRef.js"
+import { Binary, restrict, Uint8, Uint32 } from "../src/WitTypes.js"
+import { SchemaValueStream } from "golem:core/types@2.0.0"
+
+const definition = toolDefinition("effect-reflection").body((body) =>
+  body.positional("name", Schema.String).returns(Schema.String),
+)
+const registered = {
+  lookupName: "effect-reflection",
+  definition: compileDefinition(definition).wire,
+  implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+}
+
+describe("native tool reflection", () => {
+  it.each(
+    [
+      "rejected",
+      "startJson",
+      "invokeJson",
+      "stdout",
+      "stderr",
+      "bothOutputs",
+      "collect",
+      "result",
+      "dynamic",
+      "custom",
+    ].flatMap((mode) => [
+      { mode, tag: "secret-value", schema: ToolSchema.Secret(Schema.String) },
+      { mode, tag: "quota-token-handle", schema: ToolSchema.QuotaToken() },
+      {
+        mode,
+        tag: "permission-card-handle",
+        schema: ToolSchema.PermissionCard,
+      },
+      { mode, tag: "stream-value", schema: ToolSchema.AgentStream(Schema.Number) },
+    ]),
+  )("releases only undisclosed $tag payloads: $mode", async ({ mode, tag, schema }) => {
+    const definition = toolDefinition("ownership").body((body) =>
+      body.returns(schema).error("custom", schema).output().stderr(),
+    )
+    const registration = { ...registered, definition: compileDefinition(definition).wire }
+    const dispose = vi.fn()
+    const next = vi.fn()
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }))
+    const raw =
+      tag === "stream-value"
+        ? await SchemaValueStream.wrap({ [Symbol.asyncIterator]: () => ({ next, return: close }) })
+        : {}
+    Object.assign(raw, { [Symbol.dispose]: dispose })
+    const payload: Common.TypedSchemaValue = {
+      graph: Effect.runSync(compile(schema)).schemaGraph,
+      value: { root: 0, valueNodes: [{ tag, val: raw } as never] },
+    }
+    if (mode === "rejected") payload.graph = schemaGraphToWit({ defs: new Map(), root: t.bool() })
+    const failedOutput = async function* () {
+      yield { tag: "err", val: { tag: "failed", val: "output failed" } } as const
+    }
+    const transport = ToolTransport.of({
+      start: () =>
+        Effect.succeed({
+          result:
+            mode === "custom"
+              ? Effect.fail({
+                  tag: "remote-tool-error",
+                  val: { tag: "custom-error", val: { name: "custom", payload } },
+                } as const)
+              : Effect.succeed({ result: payload }),
+          stdout: ["stdout", "bothOutputs", "collect", "result", "dynamic", "custom"].includes(mode)
+            ? failedOutput()
+            : undefined,
+          stderr: ["stderr", "bothOutputs", "custom"].includes(mode) ? failedOutput() : undefined,
+          cancel: Effect.void,
+          detach: Effect.void,
+        }),
+    })
+    const command = new ToolType(registration).client.command([])
+    const input = command.packJson({})
+    const call: Effect.Effect<unknown, unknown, ToolClient | Scope.Scope> =
+      mode === "startJson"
+        ? command.startJson({}).pipe(Effect.flatMap((started) => started.result))
+        : mode === "invokeJson"
+          ? command.invokeJson({})
+          : mode === "collect"
+            ? command.startValue(input).pipe(Effect.flatMap((started) => started.collect))
+            : mode === "result"
+              ? command.startValue(input).pipe(Effect.flatMap((started) => started.result))
+              : mode === "dynamic"
+                ? new DynamicToolClient("ownership").invoke([], {
+                    graph: schemaGraphToWit(command.inputSchema!.graph),
+                    value: input,
+                  })
+                : command.invokeValue(input)
+    const failure = vi.fn()
+    const exit = await Effect.runPromiseExit(
+      call.pipe(
+        Effect.tapError((error) => Effect.sync(() => failure(error))),
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(
+          ToolClient,
+          ToolClient.of({
+            getAllTools: () => [registration],
+            getTool: () => registration,
+            createStdin: vi.fn() as never,
+            createStdinFromStream: vi.fn() as never,
+            createOutput: vi.fn() as never,
+            rpc: vi.fn() as never,
+            createRpc: vi.fn() as never,
+          }),
+        ),
+        Effect.scoped,
+      ),
+    )
+    if (mode === "collect" || mode === "result") {
+      expect(exit._tag).toBe("Success")
+      expect(dispose).not.toHaveBeenCalled()
+      expect(payload.value.valueNodes[0].val).toBe(raw)
+      if (exit._tag === "Success" && mode === "collect") {
+        expect(exit.value).toMatchObject({ result: Result.succeed(payload.value) })
+        expect(Result.isFailure((exit.value as any).stdout)).toBe(true)
+      }
+    } else {
+      expect(exit._tag).toBe("Failure")
+      expect(dispose).toHaveBeenCalledOnce()
+      expect(payload.value.valueNodes[0].val).toBeUndefined()
+      if (tag === "stream-value") expect(close).toHaveBeenCalledOnce()
+      if (["stdout", "stderr", "bothOutputs", "dynamic"].includes(mode))
+        expect(failure).toHaveBeenCalledWith({
+          tag: "rpc",
+          error: {
+            tag: "protocol-error",
+            val: `tool ${mode === "stderr" ? "stderr" : "stdout"} failed`,
+          },
+        })
+      else expect(failure).toHaveBeenCalledWith(expect.objectContaining({ phase: "output" }))
+    }
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it("emits the authored tool version while retaining the default", () => {
+    expect(compileDefinition(toolDefinition("default-version")).wire.version).toBe("0.1.0")
+    expect(
+      compileDefinition(toolDefinition("authored-version", { version: "1.0.0" })).wire.version,
+    ).toBe("1.0.0")
+  })
+
+  it("treats a default-true negatable flag as present when set to false", () => {
+    const definition = toolDefinition("negatable-reflection").body((body) =>
+      body
+        .flag("enabled", { default: true, negatable: true })
+        .constraint(c.requiresAll(c.present("enabled"))),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "negatable-reflection",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    expect(command.validateJson({ enabled: false }).success).toBe(true)
+    expect(command.validateJson({ enabled: true }).success).toBe(false)
+  })
+
+  it("matches ValueIs through an optional positional carrier", () => {
+    const expected = Effect.runSync(
+      compile(Schema.String).pipe(Effect.flatMap((codec) => codec.encode("needle"))),
+    )
+    const definition = toolDefinition("nested-value-is").body((body) =>
+      body
+        .positional("maybe", Schema.String, { required: false })
+        .constraint(c.requiresAll(c.valueIs("maybe", expected))),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "nested-value-is",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    expect(command.validateJson({ maybe: "needle" }).success).toBe(true)
+    expect(command.validateJson({ maybe: null }).success).toBe(false)
+    expect(command.validateJson({ maybe: "other" }).success).toBe(false)
+  })
+
+  it("applies schema restrictions through command-level packing and validation", () => {
+    const definition = toolDefinition("restricted-reflection").body((body) =>
+      body.positional("count", Schema.Number.pipe(restrict({ min: 10 }))),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "restricted-reflection",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    expect(command.validateJson({ count: 9 }).success).toBe(false)
+    expect(() => command.packJson({ count: 9 })).toThrow()
+    expect(command.validateJson({ count: 10 }).success).toBe(true)
+  })
+
+  it("owns a deeply immutable discovery snapshot", () => {
+    const definition = toolDefinition("immutable-reflection").body((body) =>
+      body
+        .flag("enabled", { default: true, negatable: true })
+        .constraint(c.requiresAll(c.present("enabled"))),
+    )
+    const wire = compileDefinition(definition).wire
+    const command = new ToolType({
+      ...registered,
+      lookupName: "immutable-reflection",
+      definition: wire,
+    }).client.command([])
+    const constraints = wire.commands.nodes[0].body!.constraints as unknown as Array<unknown>
+    constraints[0] = { tag: "requires-all", val: [{ tag: "present", val: "missing" }] }
+    expect(command.validateJson({ enabled: false }).success).toBe(true)
+    expect(Object.isFrozen(command.constraints[0])).toBe(true)
+  })
+
+  it("owns binary defaults without exposing their mutable bytes", () => {
+    const source = new Uint8Array([1, 255])
+    const definition = toolDefinition("effect-binary-snapshot").body((body) =>
+      body.option("payload", Binary(), { default: source }),
+    )
+    const wire = compileDefinition(definition).wire
+    const command = new ToolType({
+      ...registered,
+      lookupName: "effect-binary-snapshot",
+      definition: wire,
+    }).client.command([])
+    source[0] = 8
+    const first = command.arguments[0].default
+    expect(first).toMatchObject({ tag: "binary", bytes: new Uint8Array([1, 255]) })
+    if (first?.tag !== "binary") throw new Error("expected binary default")
+    first.bytes[1] = 9
+    expect(command.arguments[0].default).toMatchObject({
+      tag: "binary",
+      bytes: new Uint8Array([1, 255]),
+    })
+  })
+
+  it("invokes with one authored option carrier for omitted and supplied inputs", async () => {
+    const definition = toolDefinition("effect-single-option").body((body) =>
+      body
+        .positional("position", Schema.UndefinedOr(Schema.String), { required: false })
+        .option("choice", Schema.UndefinedOr(Schema.String)),
+    )
+    const compiled = compileDefinition(definition)
+    const optionalRegistered = {
+      ...registered,
+      lookupName: "effect-single-option",
+      definition: compiled.wire,
+    }
+    const sent: Array<Parameters<ToolTransport["start"]>[2]> = []
+    const transport = ToolTransport.of({
+      start: (_tool, _path, input) => {
+        sent.push(input)
+        return Effect.succeed({
+          result: Effect.succeed({ result: undefined }),
+          cancel: Effect.void,
+          detach: Effect.void,
+        })
+      },
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [optionalRegistered],
+      getTool: () => optionalRegistered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const command = new ToolType(optionalRegistered).client.command([])
+    for (const argument of command.arguments) {
+      expect(argument.schema.root.body.tag).toBe("option")
+      if (argument.schema.root.body.tag === "option") {
+        expect(argument.schema.root.body.element.body.tag).not.toBe("option")
+      }
+    }
+    const expectedSchema = new SchemaRef(compiled.bodies.get("")!.input.schemaGraph).toJsonSchema()
+    for (const [position, choice] of [
+      [null, null],
+      ["p", null],
+      [null, "c"],
+      ["p", "c"],
+    ] as const) {
+      expect(command.validateJson({ position, choice }).success).toBe(true)
+      await expect(
+        Effect.runPromise(
+          command
+            .invokeJson({ position, choice })
+            .pipe(
+              Effect.provideService(ToolTransport, transport),
+              Effect.provideService(ToolClient, host),
+            ),
+        ),
+      ).resolves.toBeUndefined()
+      const value = sent.at(-1)!
+      const wire = new SchemaRef(value.graph)
+      expect(wire.validateValue(value.value).success).toBe(true)
+      expect(wire.toJsonSchema()).toEqual(expectedSchema)
+    }
+    expect(sent).toHaveLength(4)
+  })
+
+  it("sends optional inputs with a graph that accepts both carriers", async () => {
+    const optionalDefinition = toolDefinition("effect-optional-reflection").body((body) =>
+      body.option("maybe", Schema.String).returns(Schema.String),
+    )
+    const compiled = compileDefinition(optionalDefinition)
+    const optionalRegistered = {
+      ...registered,
+      lookupName: "effect-optional-reflection",
+      definition: compiled.wire,
+    }
+    const codec = Effect.runSync(compile(Schema.String))
+    const sent: Array<Parameters<ToolTransport["start"]>[2]> = []
+    const transport = ToolTransport.of({
+      start: (_tool, _path, input) => {
+        sent.push(input)
+        return Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: codec.schemaGraph,
+              value: Effect.runSync(codec.encode("ok") as Effect.Effect<any, any>),
+            },
+          }),
+          cancel: Effect.void,
+          detach: Effect.void,
+        })
+      },
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [optionalRegistered],
+      getTool: () => optionalRegistered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const command = new ToolType(optionalRegistered).client.command([])
+    expect(new SchemaRef(compiled.bodies.get("")!.input.schemaGraph).toJsonSchema()).toEqual(
+      command.inputSchema?.toJsonSchema(),
+    )
+    for (const maybe of [null, "supplied"]) {
+      await expect(
+        Effect.runPromise(
+          command
+            .invokeJson({ maybe })
+            .pipe(
+              Effect.provideService(ToolTransport, transport),
+              Effect.provideService(ToolClient, host),
+            ),
+        ),
+      ).resolves.toBe("ok")
+      const value = sent.at(-1)!
+      const wire = new SchemaRef(value.graph)
+      expect(wire.validateValue(value.value).success).toBe(true)
+      expect(wire.toJsonSchema()).toEqual(command.inputSchema?.toJsonSchema())
+    }
+    expect(sent).toHaveLength(2)
+  })
+
+  it("decodes a discovered command with a selected schema root", () => {
+    const tool = new ToolType(registered)
+    const command = tool.client.command([])
+    expect(command.path).toEqual([])
+    expect(command.validateJson({ name: "hello" }).success).toBe(true)
+    const invalid = command.validateJson({ name: 4 })
+    expect(invalid.success).toBe(false)
+    if (!invalid.success) {
+      expect(invalid.issues[0]?.phase).toBe("input")
+      expect(invalid.issues[0]?.cause).toBeInstanceOf(Error)
+      expect(invalid.issues[0]?.path).toEqual(["name"])
+    }
+    expect(command.result?.toJsonSchema()).toBeDefined()
+  })
+
+  it("preserves command annotations and enforces schema restrictions during validation", () => {
+    const annotated = toolDefinition("annotated-reflection").body((body) =>
+      body.positional("bounded", Uint8.pipe(restrict({ min: 10 }))).annotate({
+        readOnly: true,
+        destructive: false,
+        idempotent: true,
+        openWorld: false,
+      }),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "annotated-reflection",
+      definition: compileDefinition(annotated).wire,
+    }).client.command([])
+
+    expect(command.annotations).toEqual({
+      readOnly: true,
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+    })
+    expect(command.validateJson({ bounded: 9 }).success).toBe(false)
+    expect(command.validateJson({ bounded: 10 }).success).toBe(true)
+  })
+
+  it("returns a validated result and releases its scoped invocation", async () => {
+    const codec = Effect.runSync(compile(Schema.String))
+    const cancel = vi.fn()
+    const detach = vi.fn()
+    const transport = ToolTransport.of({
+      start: () =>
+        Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: codec.schemaGraph,
+              value: Effect.runSync(codec.encode("ok") as Effect.Effect<any, any>),
+            },
+          }),
+          cancel: Effect.sync(cancel),
+          detach: Effect.sync(detach),
+        }),
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [registered],
+      getTool: () => registered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const call = new ToolType(registered).client
+      .command([])
+      .invokeJson({ name: "hello" })
+      .pipe(
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, host),
+      )
+    await expect(Effect.runPromise(call)).resolves.toBe("ok")
+    expect(cancel).not.toHaveBeenCalled()
+    expect(detach).toHaveBeenCalledOnce()
+  })
+
+  it("settles result and stdout and preserves both failures", async () => {
+    const streaming = toolDefinition("settle-both").body((body) =>
+      body.positional("name", Schema.String).output().returns(Schema.String),
+    )
+    const registration = {
+      ...registered,
+      lookupName: "settle-both",
+      definition: compileDefinition(streaming).wire,
+    }
+    let stdoutSettled = false
+    const transport = ToolTransport.of({
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            try {
+              yield { tag: "err", val: { tag: "failed", val: "stdout failed" } } as const
+            } finally {
+              stdoutSettled = true
+            }
+          })(),
+          result: Effect.fail({ tag: "denied", val: "result failed" } as const),
+          cancel: Effect.void,
+          detach: Effect.void,
+        }),
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [registration],
+      getTool: () => registration,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const collected = new ToolType(registration).client
+      .command([])
+      .startJson({ name: "hello" })
+      .pipe(
+        Effect.flatMap((started) => started.collect),
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, host),
+        Effect.scoped,
+      )
+
+    const outcomes = await Effect.runPromise(collected)
+    expect(Result.isFailure(outcomes.result) && outcomes.result.failure).toMatchObject({
+      tag: "rpc",
+      error: { tag: "denied", val: "result failed" },
+    })
+    expect(Result.isFailure(outcomes.stdout) && outcomes.stdout.failure).toMatchObject({
+      tag: "rpc",
+      error: { tag: "protocol-error", val: "tool stdout failed" },
+    })
+    expect(outcomes.stderr).toEqual(Result.succeed(undefined))
+    expect(stdoutSettled).toBe(true)
+  })
+
+  it("uses fallible reflected RPC creation for triggers and preserves its structured error", async () => {
+    const createRpc = vi.fn(() => {
+      throw { tag: "denied", val: "not granted" }
+    })
+    const rpc = vi.fn(() => {
+      throw new Error("infallible constructor must not be used")
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [registered],
+      getTool: () => registered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: rpc as never,
+      createRpc: createRpc as never,
+    })
+    const command = new ToolType(registered).client.command([])
+    const failure = command
+      .triggerJson({ name: "hello" })
+      .pipe(Effect.provideService(ToolClient, host), Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toEqual({
+      tag: "rpc",
+      error: { tag: "denied", val: "not granted" },
+    })
+    const startFailure = command
+      .startJson({ name: "hello" })
+      .pipe(Effect.provideService(ToolClient, host), Effect.scoped, Effect.flip)
+    await expect(Effect.runPromise(startFailure)).resolves.toEqual({
+      tag: "rpc",
+      error: { tag: "denied", val: "not granted" },
+    })
+    expect(createRpc).toHaveBeenCalledTimes(2)
+    expect(createRpc).toHaveBeenCalledWith("effect-reflection")
+    expect(rpc).not.toHaveBeenCalled()
+  })
+
+  it("rejects a remote result whose graph differs from the declaration", async () => {
+    const codec = Effect.runSync(compile(Schema.String))
+    const transport = ToolTransport.of({
+      start: () =>
+        Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: schemaGraphToWit({ defs: new Map(), root: t.bool() }),
+              value: Effect.runSync(codec.encode("ok") as Effect.Effect<any, any>),
+            },
+          }),
+          cancel: Effect.void,
+          detach: Effect.void,
+        }),
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [registered],
+      getTool: () => registered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const call = new ToolType(registered).client
+      .command([])
+      .invokeJson({ name: "hello" })
+      .pipe(
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, host),
+        Effect.flip,
+      )
+    await expect(Effect.runPromise(call)).resolves.toMatchObject({ phase: "output" })
+  })
+
+  it("constructs definition-owned and caller-defined typed clients", () => {
+    const transport = ToolTransport.of({ start: () => Effect.die("unused") })
+    expect(typeof definition.client({ transport })).toBe("function")
+    expect(typeof toolClientDefinition(definition).client("another-tool", { transport })).toBe(
+      "function",
+    )
+    expect(() => toolClientDefinition(definition).client()).toThrow("requires a target name")
+  })
+})
+
+describe("declared defaults in canonical JSON input", () => {
+  const bashDefinition = toolDefinition("effect-bash").body((body) =>
+    body
+      .positional("script", Schema.String)
+      .option("cwd", Schema.String, { default: "" })
+      .option("timeout", Uint32, { default: 600 })
+      .option("env-file", Schema.String)
+      .flag("login")
+      .flag("strict", { default: true, negatable: true })
+      .countFlag("verbose")
+      .returns(Schema.String),
+  )
+  const bashCompiled = compileDefinition(bashDefinition)
+  const bashRegistered = {
+    ...registered,
+    lookupName: "effect-bash",
+    definition: bashCompiled.wire,
+  }
+  const bash = () => new ToolType(bashRegistered).client.command([])
+  const unpacked = (input: Common.TypedSchemaValue["value"]) =>
+    bash().inputSchema!.unpackJson(input)
+
+  it("fills omitted defaulted arguments and keeps explicit values", () => {
+    const command = bash()
+    expect(unpacked(command.packJson({ script: "echo ok" }))).toEqual({
+      script: "echo ok",
+      cwd: "",
+      timeout: 600,
+      "env-file": null,
+      login: false,
+      strict: true,
+      verbose: 0,
+    })
+    expect(
+      unpacked(
+        command.packJson({
+          script: "echo ok",
+          cwd: "/tmp",
+          timeout: 30,
+          "env-file": ".env",
+          login: true,
+          strict: false,
+          verbose: 2,
+        }),
+      ),
+    ).toEqual({
+      script: "echo ok",
+      cwd: "/tmp",
+      timeout: 30,
+      "env-file": ".env",
+      login: true,
+      strict: false,
+      verbose: 2,
+    })
+    expect(unpacked(command.packJson({ script: "sleep 1", timeout: 120000 }))).toMatchObject({
+      timeout: 120000,
+    })
+    expect(unpacked(command.packJson({ script: "true", "env-file": null }))).toMatchObject({
+      "env-file": null,
+    })
+    expect(command.validateJson({ script: "true" }).success).toBe(true)
+  })
+
+  it("rejects unknown keys and names a missing required argument", async () => {
+    const command = bash()
+    const unknown = command.validateJson({ script: "true", shell: "zsh" })
+    expect(unknown.success).toBe(false)
+    if (!unknown.success) expect(unknown.issues[0]?.path).toEqual(["shell"])
+
+    const missing = command.validateJson({ timeout: 5 })
+    expect(missing.success).toBe(false)
+    if (!missing.success) {
+      expect(missing.issues[0]?.path).toEqual(["script"])
+      expect(missing.issues[0]?.message).toBe("missing field 'script'")
+    }
+    const failure = await Effect.runPromise(
+      command
+        .invokeJson({})
+        .pipe(
+          Effect.provideService(
+            ToolTransport,
+            ToolTransport.of({ start: () => Effect.die("unused") }),
+          ),
+          Effect.provideService(ToolClient, ToolClient.of({} as never)),
+          Effect.flip,
+        ),
+    )
+    expect(failure).toMatchObject({ phase: "input", message: "missing field 'script'" })
+  })
+
+  it("renders defaults in the input JSON Schema", () => {
+    const command = bash()
+    const compiled = new SchemaRef(bashCompiled.bodies.get("")!.input.schemaGraph).toJsonSchema()
+    const rendered = command.inputSchema!.toJsonSchema() as Record<string, any>
+    expect(rendered.required).toEqual(["script"])
+    expect(rendered.properties.cwd.default).toBe("")
+    expect(rendered.properties.timeout.default).toBe(600)
+    expect(rendered.properties.login.default).toBe(false)
+    expect(rendered.properties.strict.default).toBe(true)
+    expect(rendered.properties.verbose.default).toBe(0)
+    expect(rendered.properties.script).not.toHaveProperty("default")
+    expect(rendered.properties["env-file"]).not.toHaveProperty("default")
+    const withoutDefaults = Object.fromEntries(
+      Object.entries(rendered.properties as Record<string, Record<string, unknown>>).map(
+        ([name, property]) => {
+          const { default: _default, ...rest } = property
+          return [name, rest]
+        },
+      ),
+    )
+    expect({ ...rendered, properties: withoutDefaults, required: undefined }).toEqual({
+      ...(compiled as Record<string, unknown>),
+      required: undefined,
+    })
+  })
+
+  it("sends the unchanged wire record for filled defaults", async () => {
+    const sent: Array<Parameters<ToolTransport["start"]>[2]> = []
+    const codec = Effect.runSync(compile(Schema.String))
+    const transport = ToolTransport.of({
+      start: (_tool, _path, input) => {
+        sent.push(input)
+        return Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: codec.schemaGraph,
+              value: Effect.runSync(codec.encode("ok") as Effect.Effect<any, any>),
+            },
+          }),
+          cancel: Effect.void,
+          detach: Effect.void,
+        })
+      },
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [bashRegistered],
+      getTool: () => bashRegistered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const command = bash()
+    await expect(
+      Effect.runPromise(
+        command
+          .invokeJson({ script: "echo ok" })
+          .pipe(
+            Effect.provideService(ToolTransport, transport),
+            Effect.provideService(ToolClient, host),
+          ),
+      ),
+    ).resolves.toBe("ok")
+    const input = sent[0]!
+    const wire = new SchemaRef(input.graph)
+    const compiled = new SchemaRef(bashCompiled.bodies.get("")!.input.schemaGraph)
+    expect(wire.toJsonSchema()).toEqual(compiled.toJsonSchema())
+    expect((wire.toJsonSchema() as Record<string, unknown>).required).toEqual([
+      "script",
+      "cwd",
+      "timeout",
+      "login",
+      "strict",
+      "verbose",
+    ])
+    expect(wire.validateValue(input.value).success).toBe(true)
+    expect(wire.validateJson({ script: "echo ok" }).success).toBe(false)
+    expect(wire.unpackJson(input.value)).toEqual({
+      script: "echo ok",
+      cwd: "",
+      timeout: 600,
+      "env-file": null,
+      login: false,
+      strict: true,
+      verbose: 0,
+    })
+    expect(command.inputSchema!.validateValue(input.value).success).toBe(true)
+  })
+
+  it("fills defaulted positionals and optional scalars but not tails or repeatable options", () => {
+    const definition = toolDefinition("effect-default-shapes").body((body) =>
+      body
+        .positional("source", Schema.String, { default: "stdin" })
+        .tail("files", Schema.String)
+        .option("color", Schema.UndefinedOr(Schema.String), {
+          optionalScalar: true,
+          default: "auto",
+        })
+        .option("include", Schema.String, { repeatable: "repeated" })
+        .option("define", ToolSchema.Map(Schema.String, Schema.Number), {
+          repeatable: "either",
+          delim: ",",
+          default: new Map([["a", 1]]),
+        })
+        .option("ratio", Schema.Number, { default: Number.NaN }),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "effect-default-shapes",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    const source = command.arguments.find((argument) => argument.name === "source")!
+    expect(source.required).toBe(true)
+
+    const packed = schemaValueFromWit(command.packJson({ files: [], include: [], define: [] }))
+    if (packed.tag !== "record") throw new Error("expected a record")
+    expect(packed.fields[0]).toEqual({ tag: "string", value: "stdin" })
+    expect(packed.fields[2]).toMatchObject({ tag: "option", value: { value: "auto" } })
+    expect(packed.fields[5]).toMatchObject({ tag: "f64" })
+    expect(Number.isNaN((packed.fields[5] as { value: number }).value)).toBe(true)
+    const explicitNone = schemaValueFromWit(
+      command.packJson({ files: [], include: [], define: [], color: null }),
+    )
+    if (explicitNone.tag !== "record") throw new Error("expected a record")
+    expect(explicitNone.fields[2]).toEqual({ tag: "option" })
+
+    for (const omitted of ["files", "include", "define"]) {
+      const input: Record<string, JsonValue> = { files: [], include: [], define: [] }
+      delete input[omitted]
+      const result = command.validateJson(input)
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.issues[0]?.path).toEqual([omitted])
+        expect(result.issues[0]?.message).toBe(`missing field '${omitted}'`)
+      }
+    }
+
+    const rendered = command.inputSchema!.toJsonSchema() as Record<string, any>
+    expect(rendered.required).toEqual(["files", "include", "define"])
+    expect(rendered.properties.source.default).toBe("stdin")
+    expect(rendered.properties.color.default).toBe("auto")
+    expect(rendered.properties).not.toHaveProperty(["ratio", "default"])
+    expect(rendered.properties.files).not.toHaveProperty("default")
+    expect(rendered.properties.include).not.toHaveProperty("default")
+    expect(rendered.properties.define).not.toHaveProperty("default")
+  })
+})

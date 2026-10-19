@@ -19,7 +19,13 @@ package golem.codegen.pipeline
 import golem.codegen.autoregister.AutoRegisterCodegen
 import golem.codegen.discovery.SourceDiscovery
 import golem.codegen.ir.AgentSurfaceIR
-import golem.codegen.rpc.{RpcCodegen, ToolMiddlewareCodegen, ToolProjectionIR, ToolRpcCodegen}
+import golem.codegen.rpc.{
+  RpcCodegen,
+  ToolCallProjectionCodegen,
+  ToolMiddlewareCodegen,
+  ToolProjectionIR,
+  ToolRpcCodegen
+}
 
 /**
  * Shared codegen pipeline consumed by both sbt and mill plugins.
@@ -97,17 +103,24 @@ object CodegenPipeline {
             projection.errors.map(error => SourceDiscovery.Error(Some(error.path), error.message))
           )
 
-        val agents           = discoveredToIR(discovered)
-        val result           = RpcCodegen.generate(agents, discovered.objects)
+        val agents = discoveredToIR(discovered)
+        val result = RpcCodegen.generate(agents, discovered.objects)
+        if (result.errors.nonEmpty)
+          throw new PipelineException(result.errors.map(error => SourceDiscovery.Error(None, error.message)))
+        val callProjection   = ToolCallProjectionCodegen.generate(projection.tools, discovered.objects)
         val toolResult       = ToolRpcCodegen.generateFromIR(projection.tools, discovered.objects)
         val middlewareResult = ToolMiddlewareCodegen.generate(projection.tools, discovered.objects)
-        if (middlewareResult.errors.nonEmpty)
+        val projectionErrors = callProjection.errors ++ middlewareResult.errors.map(error =>
+          ToolCallProjectionCodegen.Error(error.path, error.message)
+        )
+        if (projectionErrors.nonEmpty)
           throw new PipelineException(
-            middlewareResult.errors.map(error => SourceDiscovery.Error(error.path, error.message))
+            projectionErrors.map(error => SourceDiscovery.Error(error.path, error.message))
           )
 
         RpcResult(
           files = (result.files.map(f => GeneratedFile(f.relativePath, f.content)) ++
+            callProjection.files.map(f => GeneratedFile(f.relativePath, f.content)) ++
             toolResult.files.map(f => GeneratedFile(f.relativePath, f.content)) ++
             middlewareResult.files.map(f => GeneratedFile(f.relativePath, f.content))),
           warnings = result.warnings.map(_.message) ++ toolResult.warnings.map(_.message)
@@ -132,7 +145,8 @@ object CodegenPipeline {
         metadata = AgentSurfaceIR.AgentMetadataSurface(
           description = t.descriptionValue,
           mode = t.mode.getOrElse("durable"),
-          snapshotting = "disabled"
+          snapshotting = "disabled",
+          kind = t.kind
         ),
         methods = t.methods.map(m =>
           AgentSurfaceIR.MethodSurface(

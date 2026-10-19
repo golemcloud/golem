@@ -15,7 +15,7 @@
 use crate::config::{RegistryServiceConfig, StaticRegistryServiceConfig};
 use crate::service::ComponentCompilationService;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationService as GrpcCompilationServer;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
@@ -26,6 +26,7 @@ use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::ComponentId;
 use golem_common::recorded_grpc_api_request;
+use golem_schema::proto::golem::common::Empty;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -72,7 +73,7 @@ impl GrpcCompilationServer for CompileGrpcService {
         ) {
             (RegistryServiceConfig::Dynamic(_), Some(addr), Some(port)) => {
                 Some(StaticRegistryServiceConfig {
-                    host: addr.ip().to_string(),
+                    host: addr.ip().to_canonical().to_string(),
                     port: port as u16,
                 })
             }
@@ -119,6 +120,12 @@ impl CompileGrpcService {
 impl From<crate::model::CompilationError> for ComponentCompilationError {
     fn from(value: crate::model::CompilationError) -> Self {
         let error = match value {
+            crate::model::CompilationError::QueueFull => {
+                component_compilation_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::INTERNAL_COMPILATION_QUEUE_FULL.to_string(),
+                })
+            }
             crate::model::CompilationError::ComponentNotFound(_) => {
                 component_compilation_error::Error::NotFound(ErrorBody {
                     error: value.to_string(),
@@ -138,6 +145,7 @@ impl From<crate::model::CompilationError> for ComponentCompilationError {
                 })
             }
             crate::model::CompilationError::ComponentUploadFailed(_)
+            | crate::model::CompilationError::QueueClosed
             | crate::model::CompilationError::Unexpected(_) => {
                 component_compilation_error::Error::InternalError(ErrorBody {
                     error: value.to_string(),
@@ -194,6 +202,11 @@ impl ApiErrorDetails for ComponentCompilationTraceErrorKind<'_> {
             Some(error) => match error {
                 component_compilation_error::Error::BadRequest(_) => "BadRequest",
                 component_compilation_error::Error::NotFound(_) => "NotFound",
+                component_compilation_error::Error::InternalError(body)
+                    if body.code == api::error_code::INTERNAL_COMPILATION_QUEUE_FULL =>
+                {
+                    "QueueFull"
+                }
                 component_compilation_error::Error::InternalError(_) => "InternalError",
             },
         }
@@ -205,7 +218,9 @@ impl ApiErrorDetails for ComponentCompilationTraceErrorKind<'_> {
             Some(error) => match error {
                 component_compilation_error::Error::BadRequest(_) => true,
                 component_compilation_error::Error::NotFound(_) => true,
-                component_compilation_error::Error::InternalError(_) => false,
+                component_compilation_error::Error::InternalError(body) => {
+                    body.code == api::error_code::INTERNAL_COMPILATION_QUEUE_FULL
+                }
             },
         }
     }

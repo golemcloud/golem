@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{SessionStoreConfig, WorkerServiceConfig};
+use crate::config::{SessionStoreConfig, WebSocketTransportLimits, WorkerServiceConfig};
 use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
 use crate::custom_api::call_agent::CallAgentHandler;
+use crate::custom_api::durable_streams::DurableStreamsHandler;
 use crate::custom_api::oidc::handler::OidcHandler;
-use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, SqliteSessionStore};
+use crate::custom_api::oidc::session_store::{
+    PostgresSessionStore, RedisSessionStore, SessionStore, SqliteSessionStore,
+};
 use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhooks::WebhookCallbackHandler;
+use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, RemoteAuthService};
@@ -33,9 +37,15 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::clients::shard_manager::{GrpcShardManager, ShardManager};
+use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::service::routing_table::RoutingTableService;
+use golem_service_base::storage::blob::{
+    BlobStorage, fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, s3::S3BlobStorage,
+    sqlite::SqliteBlobStorage,
+};
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
 
@@ -45,17 +55,47 @@ pub struct Services {
     pub limit_service: Arc<dyn LimitService>,
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
+    pub connect_websocket: WebSocketTransportLimits,
     pub request_handler: Arc<RequestHandler>,
+    pub openapi_service: Arc<crate::custom_api::openapi::OpenApiService>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
     pub registry_service: Arc<dyn RegistryService>,
     pub agent_resolution_cache: Arc<AgentResolutionCache>,
     pub route_resolver: Arc<RouteResolver>,
     pub identity_provider: Arc<dyn IdentityProvider>,
     pub session_store: Arc<dyn SessionStore>,
+    pub invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+    pub invocation_session_config: crate::config::InvocationSessionConfig,
+    pub mcp_config: crate::config::McpConfig,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
+        config.http_session.validate().map_err(anyhow::Error::msg)?;
+        config.validate_keep_alive().map_err(anyhow::Error::msg)?;
+        config
+            .worker_executor
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+        config.blob_storage.validate()?;
+        let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
+            BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+            BlobStorageConfig::LocalFileSystem(config) => {
+                Arc::new(FileSystemBlobStorage::new(&config.root).await?)
+            }
+            BlobStorageConfig::Sqlite(config) => {
+                Arc::new(SqliteBlobStorage::new(SqlitePool::configured(config).await?).await?)
+            }
+            BlobStorageConfig::InMemory(_) => Arc::new(InMemoryBlobStorage::new()),
+            BlobStorageConfig::KVStoreSqlite(_) => {
+                anyhow::bail!("Worker-service does not support KVStoreSqlite blob storage")
+            }
+        };
+        let initial_files = Arc::new(InitialAgentFilesService::new(blob_storage));
+        let invocation_session_token_keyring = Arc::new(
+            InvocationSessionTokenKeyring::new(&config.invocation_session_tokens)
+                .map_err(anyhow::Error::msg)?,
+        );
         let registry_service_client: Arc<dyn RegistryService> =
             Arc::new(GrpcRegistryService::new(&config.registry_service));
 
@@ -96,6 +136,7 @@ impl Services {
             worker_executor_clients.clone(),
             config.worker_executor.retries.clone(),
             routing_table_service.clone(),
+            config.worker_executor.max_concurrent_oplog_entry_reads,
         ));
 
         let agent_resolution_cache = Arc::new(AgentResolutionCache::new(
@@ -127,6 +168,11 @@ impl Services {
         ));
 
         let call_agent_handler = Arc::new(CallAgentHandler::new(worker_service.clone()));
+        let durable_streams_handler = Arc::new(DurableStreamsHandler::new(
+            worker_service.clone(),
+            call_agent_handler.clone(),
+            &config.durable_streams,
+        ));
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
 
@@ -145,16 +191,11 @@ impl Services {
             }
 
             SessionStoreConfig::Sqlite(inner) => {
-                let pool = SqlitePool::configured(&inner.sqlite_config).await?;
+                Arc::new(SqliteSessionStore::configured(inner).await?)
+            }
 
-                let gateway_session_with_sqlite = SqliteSessionStore::new(
-                    pool,
-                    inner.pending_login_expiration.as_secs().try_into()?,
-                    inner.cleanup_interval,
-                )
-                .await?;
-
-                Arc::new(gateway_session_with_sqlite)
+            SessionStoreConfig::Postgres(inner) => {
+                Arc::new(PostgresSessionStore::configured(inner).await?)
             }
         };
 
@@ -168,11 +209,19 @@ impl Services {
             config.webhook_callback_handler.hmac_key.0.clone(),
         ));
 
+        let openapi_service = Arc::new(crate::custom_api::openapi::OpenApiService::new(
+            worker_service.clone(),
+        ));
         let request_handler = Arc::new(RequestHandler::new(
             route_resolver.clone(),
             call_agent_handler.clone(),
+            durable_streams_handler,
             oidc_handler.clone(),
             webhook_callback_handler.clone(),
+            worker_service.clone(),
+            config.http_session.clone(),
+            initial_files,
+            openapi_service.clone(),
         ));
 
         Ok(Self {
@@ -180,13 +229,18 @@ impl Services {
             limit_service,
             component_service,
             worker_service,
+            connect_websocket: config.connect_websocket.clone(),
             request_handler,
+            openapi_service,
             mcp_capability_lookup,
             registry_service: registry_service_client,
             agent_resolution_cache,
             route_resolver,
             identity_provider,
             session_store,
+            invocation_session_token_keyring,
+            invocation_session_config: config.invocation_session.clone(),
+            mcp_config: config.mcp.clone(),
         })
     }
 }

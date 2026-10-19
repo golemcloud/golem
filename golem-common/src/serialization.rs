@@ -13,6 +13,31 @@
 // limitations under the License.
 
 use desert_rust::{BinaryDeserializer, BinarySerializer};
+use std::fmt::{Display, Formatter};
+
+/// Why versioned serialized data could not be decoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    MissingVersion,
+    UnknownVersion(u8),
+    UnsupportedVersion(u8),
+    InvalidData(String),
+}
+
+impl Display for DecodeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingVersion => f.write_str("missing serialization version"),
+            Self::UnknownVersion(version) => write!(f, "unknown serialization version: {version}"),
+            Self::UnsupportedVersion(version) => {
+                write!(f, "serialization version {version} is no longer supported")
+            }
+            Self::InvalidData(error) => f.write_str(error),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// serde_json - no longer supported
 pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
@@ -43,11 +68,30 @@ pub fn deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, String> {
 }
 
 pub fn try_deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<Option<T>, String> {
-    if bytes.is_empty() {
-        Ok(None)
-    } else {
-        let (version, data) = bytes.split_at(1);
-        try_deserialize_with_version(data, version[0])
+    match decode(bytes) {
+        Ok(value) => Ok(Some(value)),
+        Err(DecodeError::MissingVersion | DecodeError::UnknownVersion(_)) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Decodes versioned data without panicking or discarding the reason it does not decode.
+pub fn decode<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, DecodeError> {
+    let (&version, data) = bytes.split_first().ok_or(DecodeError::MissingVersion)?;
+    decode_with_version(data, version)
+}
+
+pub fn decode_with_version<T: BinaryDeserializer>(
+    data: &[u8],
+    version: u8,
+) -> Result<T, DecodeError> {
+    match version {
+        SERIALIZATION_VERSION_V1 | SERIALIZATION_VERSION_V2 => {
+            Err(DecodeError::UnsupportedVersion(version))
+        }
+        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data)
+            .map_err(|error| DecodeError::InvalidData(error.to_string())),
+        _ => Err(DecodeError::UnknownVersion(version)),
     }
 }
 
@@ -72,17 +116,10 @@ pub fn try_deserialize_with_version<T: BinaryDeserializer>(
     data: &[u8],
     version: u8,
 ) -> Result<Option<T>, String> {
-    match version {
-        SERIALIZATION_VERSION_V1 => {
-            panic!("Support for v1 serialization format has been dropped");
-        }
-        SERIALIZATION_VERSION_V2 => {
-            panic!("Support for v2 serialization format has been dropped");
-        }
-        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data)
-            .map_err(|err| err.to_string())
-            .map(Some),
-        _ => Ok(None),
+    match decode_with_version(data, version) {
+        Ok(value) => Ok(Some(value)),
+        Err(DecodeError::UnknownVersion(_)) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -152,5 +189,59 @@ mod tests {
             let result: Option<Example> = super::try_deserialize(&serialized).unwrap();
             assert_eq!(result, None);
         }
+    }
+
+    #[test]
+    pub fn dropped_versions_are_an_error() {
+        for version in [
+            super::SERIALIZATION_VERSION_V1,
+            super::SERIALIZATION_VERSION_V2,
+        ] {
+            let bytes = [version, 0u8, 0u8, 0u8, 0u8];
+            let result: Result<Option<Example>, String> = super::try_deserialize(&bytes);
+            let err = result.expect_err("a dropped version must not deserialize");
+            assert_eq!(
+                err,
+                format!("serialization version {version} is no longer supported")
+            );
+        }
+    }
+
+    #[test]
+    fn decode_distinguishes_version_errors_from_invalid_data() {
+        use super::{DecodeError, decode, decode_with_version, try_deserialize};
+
+        assert_eq!(decode::<String>(&[]), Err(DecodeError::MissingVersion));
+        assert_eq!(try_deserialize::<String>(&[]), Ok(None));
+        for version in [0, 255] {
+            assert_eq!(
+                decode::<String>(&[version]),
+                Err(DecodeError::UnknownVersion(version))
+            );
+            assert_eq!(try_deserialize::<String>(&[version]), Ok(None));
+        }
+        for version in [1, 2] {
+            assert_eq!(
+                decode::<String>(&[version]),
+                Err(DecodeError::UnsupportedVersion(version))
+            );
+            assert!(try_deserialize::<String>(&[version]).is_err());
+        }
+        assert!(matches!(
+            decode::<String>(&[SERIALIZATION_VERSION_V3]),
+            Err(DecodeError::InvalidData(_))
+        ));
+        assert!(try_deserialize::<String>(&[SERIALIZATION_VERSION_V3]).is_err());
+
+        let bytes = super::serialize(&"archived entry".to_string()).unwrap();
+        assert_eq!(decode::<String>(&bytes), Ok("archived entry".to_string()));
+        assert_eq!(
+            decode_with_version::<String>(&bytes[1..], SERIALIZATION_VERSION_V3),
+            Ok("archived entry".to_string())
+        );
+        assert_eq!(
+            try_deserialize::<String>(&bytes),
+            Ok(Some("archived entry".to_string()))
+        );
     }
 }

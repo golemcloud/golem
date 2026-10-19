@@ -14,24 +14,21 @@
 
 use crate::durable_host::authorization::targets::{agent_worker_target, oplog_target};
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
-    drain_dropped_call_events_access, drain_queued_dropped_call_events,
+    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable, ResolvedCall,
+    drain_dropped_call_events_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::suspendable_wait::{
-    ParkOutcome, SuspendableWaitContext, ephemeral_sleep_too_long_error, park_suspendable_wait,
+    ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
 };
-use crate::durable_host::{
-    ActiveAtomicRegion, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
-};
-use crate::get_oplog_entry;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
-    HostGetPromiseResultWithStore,
+    HostGetPromiseResultWithStore, HostWithStore,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogReadError, SearchOplog,
@@ -45,7 +42,7 @@ use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -70,10 +67,9 @@ use golem_common::model::oplog::{
     HostResponseGolemApiPromiseId, HostResponseGolemApiPromiseResult,
     HostResponseGolemApiSelfAgentMetadata, HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
-use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, Timestamp};
+use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_common::model::{OplogIndex, PromiseId, RetryContext};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
@@ -94,6 +90,10 @@ fn classify_worker_proxy_error(err: &WorkerProxyError) -> HostFailureKind {
 }
 
 const AGENT_OPERATION_PERMISSION_DENIED: &str = "agent operation permission denied";
+
+fn agent_operation_denial(denied: bool) -> Option<String> {
+    denied.then(|| AGENT_OPERATION_PERMISSION_DENIED.to_string())
+}
 
 fn agent_operation_error(error: String) -> golem_api_1_x::host::AgentOperationError {
     if error == AGENT_OPERATION_PERMISSION_DENIED {
@@ -123,13 +123,13 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
     }
 }
 
-async fn resolve_agent_owner<Ctx: WorkerCtx>(
+pub(super) async fn resolve_agent_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     component_id: &ComponentId,
     agent: Option<&str>,
 ) -> Result<(AgentOwnerPattern, EnvironmentId), WorkerExecutorError> {
     let component = if *component_id == ctx.owned_agent_id.component_id() {
-        ctx.component_metadata().clone()
+        ctx.owner_component_metadata().clone()
     } else {
         ctx.state
             .component_service
@@ -155,7 +155,7 @@ async fn resolve_agent_owner<Ctx: WorkerCtx>(
     Ok((owner, environment_id))
 }
 
-async fn agent_operation_denied<Ctx: WorkerCtx>(
+pub(super) async fn agent_operation_denied<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     agent_id: &AgentId,
     verb: AgentVerb,
@@ -229,6 +229,15 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
     Ok(ctx.authorize_live_permissions(&targets).await?.is_err())
 }
 
+/// A denied oplog read does not advance the resource: its response carries the position of the
+/// recorded request, which does not hold the resource's component revision before the first read.
+fn is_denied_oplog_read(response: &HostResponseGolemApiOplogChunk) -> bool {
+    response
+        .result
+        .as_ref()
+        .is_err_and(|error| error == AGENT_OPERATION_PERMISSION_DENIED)
+}
+
 type SerializedOplogEntries = Vec<(u64, Vec<u8>)>;
 type OplogEntryConversion = Result<Vec<(u64, OplogEntry)>, String>;
 
@@ -273,12 +282,14 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
 ) -> Result<crate::model::public_oplog::PublicOplogChunk, String> {
-    let agent_mode = ctx
+    let identity = ctx
         .state
         .worker_service
-        .get_agent_mode(&entry.owned_agent_id)
+        .resolve_agent_identity(&entry.owned_agent_id)
         .await
+        .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
@@ -310,12 +321,14 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &SearchOplogEntry,
 ) -> Result<crate::model::public_oplog::PublicOplogSearchResult, String> {
-    let agent_mode = ctx
+    let identity = ctx
         .state
         .worker_service
-        .get_agent_mode(&entry.owned_agent_id)
+        .resolve_agent_identity(&entry.owned_agent_id)
         .await
+        .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
@@ -389,46 +402,45 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
             })?;
 
         if let Some(cursor) = cursor {
-            let denied =
-                self.state.is_live() && component_agents_view_denied(self, &component_id).await?;
-            let handle = DurableCallSession::<GolemApiGetAgents, NotCancellable>::start(
+            let begun = DurableCallSession::<GolemApiGetAgents, NotCancellable>::begin(
                 self,
-                HostRequestGolemApiGetAgents { component_id },
                 DurableFunctionType::ReadRemote,
             )
             .await?;
-            let result = handle
-                .run(self, async |ctx| {
-                    if denied {
-                        return Ok::<_, anyhow::Error>(HostResponseGolemApiAgents {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                        });
+            let result = 'result: {
+                let handle = match begun.resolve(self).await? {
+                    ResolvedCall::Live(begun) => {
+                        let denied = component_agents_view_denied(self, &component_id).await?;
+                        let request = HostRequestGolemApiGetAgents { component_id };
+                        if let Some(denial) = agent_operation_denial(denied) {
+                            break 'result begun.start_live_denied(self, request, denial).await?;
+                        }
+                        begun.start_live(self, request).await?
                     }
-                    let result = ctx
-                        .state
-                        .get_workers(&component_id, filter, cursor, count, precise)
-                        .await
-                        .map(|(new_cursor, workers)| {
-                            (
-                                new_cursor.map(|cursor| (cursor.cursor, cursor.layer as u64)),
-                                workers
-                                    .into_iter()
-                                    .map(AgentMetadataForGuests::from)
-                                    .collect(),
-                            )
-                        })
-                        .map_err(|error| error.to_string());
-                    Ok::<_, anyhow::Error>(HostResponseGolemApiAgents { result })
-                })
-                .await?;
+                    ResolvedCall::Replay(handle) => handle,
+                };
+                handle
+                    .run(self, async |ctx| {
+                        let result = ctx
+                            .state
+                            .get_workers(&component_id, filter, cursor, count, precise)
+                            .await
+                            .map(|(new_cursor, workers)| {
+                                (
+                                    new_cursor,
+                                    workers
+                                        .into_iter()
+                                        .map(AgentMetadataForGuests::from)
+                                        .collect(),
+                                )
+                            })
+                            .map_err(|error| error.to_string());
+                        Ok::<_, anyhow::Error>(HostResponseGolemApiAgents { result })
+                    })
+                    .await?
+            };
             let (new_cursor, workers) = match result.result {
-                Ok((cursor, workers)) => (
-                    cursor.map(|(cursor, layer)| ScanCursor {
-                        cursor,
-                        layer: layer as usize,
-                    }),
-                    workers,
-                ),
+                Ok((cursor, workers)) => (cursor, workers),
                 Err(error) => return Ok(Err(agent_operation_error(error))),
             };
 
@@ -450,40 +462,71 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
-        let mut handle = DurableCallSession::<GolemApiCreatePromise, NotCancellable>::start(
-            self,
-            HostRequestNoInput {},
+impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn create_promise(
+        accessor: &Accessor<U, Self>,
+    ) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
+        // A synchronous guest import must still let concurrent host admissions release their
+        // authority boundary; holding an exclusive Store borrow here would deadlock them.
+        let mut handle = DurableCallSession::<GolemApiCreatePromise, NotCancellable>::start_access_with(
+            accessor,
+            accessor.getter(),
             DurableFunctionType::WriteLocal,
+            |context, accessor| {
+                Box::pin(async move {
+                    if context.is_live {
+                        crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
+                            accessor,
+                            accessor.getter(),
+                        )
+                        .await?;
+                    }
+                    Ok(HostRequestNoInput {})
+                })
+            },
         )
         .await?;
 
-        let result = 'result: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+        if !handle.is_live() {
+            match handle.replay_access(accessor, accessor.getter()).await? {
+                CallReplayOutcome::Replayed(response) => return Ok(response.promise_id.into()),
+                CallReplayOutcome::Incomplete(live) => {
+                    handle = live;
+                    crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
+                        accessor,
+                        accessor.getter(),
+                    )
+                    .await?;
                 }
             }
-
-            // The promise oplog index is the host-call `Start` index: with the legacy atomic pair
-            // this equalled `current_oplog_index().next()` captured before the pair was written.
-            // It is stable across an incomplete-replay re-execution because the `Start` is reused.
-            let oplog_idx = handle.start_index();
-            let promise_id = self
-                .public_state
-                .promise_service
-                .create(&self.owned_agent_id.agent_id, oplog_idx)
-                .await;
-            handle
-                .complete(self, HostResponseGolemApiPromiseId { promise_id })
-                .await?
+        }
+        let (promise_service, agent_id) = accessor.with(|mut access| {
+            let ctx = access.get();
+            (
+                ctx.public_state.promise_service.clone(),
+                ctx.agent_id().clone(),
+            )
+        });
+        // The Start index remains the promise identity across incomplete replay.
+        let promise_id = match promise_service
+            .create(&agent_id, handle.start_index())
+            .await
+        {
+            Ok(promise_id) => promise_id,
+            Err(error) => return Err(handle.trap(error)),
         };
-
+        let result = handle
+            .complete_access(
+                accessor,
+                accessor.getter(),
+                HostResponseGolemApiPromiseId { promise_id },
+            )
+            .await?;
         Ok(result.promise_id.into())
     }
+}
 
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_promise(
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,
@@ -608,105 +651,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(result.completed)
     }
 
-    async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
-        self.observe_function_call("golem::api", "get_oplog_index");
-        if self.state.durability_is_suppressed() {
-            Ok(self.state.current_oplog_index().await.into())
-        } else if self.state.is_live() {
-            // Use the index returned by `add` — a concurrently running host task (a durable
-            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
-            // between this `add` and a subsequent `current_oplog_index` read, so re-reading the
-            // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
-            // discard writes and return `NONE` from `add`; fall back to the session's replay
-            // target there so the guest never observes an invalid index.
-            let marker = match self.state.oplog.add(OplogEntry::no_op()).await {
-                OplogIndex::NONE => self.state.current_oplog_index().await,
-                index => index,
-            };
-            // This `NoOp` index is the realistic `set_oplog_index` target; pin the mid-invocation
-            // checkpoint watermark to the earliest one so a checkpoint at `<= marker` survives a
-            // later jump back to it. (No checkpoint is taken here — there is no commit at this
-            // point; the next post-commit boundary at/below the marker takes it.)
-            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
-                Some(existing) => existing.min(marker),
-                None => marker,
-            });
-            Ok(marker.into())
-        } else {
-            let (oplog_index, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::NoOp)?;
-            // The replayed `get_oplog_index` returns this same marker to the guest, which may feed
-            // it to `set_oplog_index` after switching to live. Pin the watermark here too (mirroring
-            // the live branch) so a post-replay mid-invocation checkpoint never advances past it.
-            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
-                Some(existing) => existing.min(oplog_index),
-                None => oplog_index,
-            });
-            Ok(oplog_index.into())
-        }
-    }
-
-    async fn set_oplog_index(
-        &mut self,
-        oplog_idx: golem_api_1_x::oplog::OplogIndex,
-    ) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "set_oplog_index");
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        }
-        if self.state.is_live() {
-            // A jump deletes the oplog region between the target and the Jump entry; no durable
-            // call may span that boundary. First drain already-dropped cancellable calls so their
-            // `Cancelled` terminal is recorded before the Jump (inside the deleted region), then
-            // refuse to jump while any live durable call is still in flight — its `End`/
-            // `Cancelled` would be recorded after the Jump and reference a `Start` inside the
-            // deleted region (mirrors the `mark_end_operation` boundary guard).
-            drain_queued_dropped_call_events(self)
-                .await
-                .map_err(anyhow::Error::from)?;
-            if self.state.has_in_flight_live_host_calls() {
-                return Err(anyhow!(
-                    "Cannot jump to oplog index {oplog_idx}: durable host calls are still in flight"
-                ));
-            }
-        }
-        let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
-        let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
-        let original_target = OplogIndex::from_u64(oplog_idx); // the actual oplog entry the user wants to jump to
-        if jump_target > jump_source {
-            Err(anyhow!(
-                "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
-            ))
-        } else if self
-            .state
-            .replay_state
-            .is_in_skipped_region(original_target)
-            .await
-            .map_err(anyhow::Error::from)?
-        {
-            Err(anyhow!(
-                "Attempted to jump to a deleted region in oplog to index {original_target} from {jump_source}"
-            ))
-        } else if self.state.is_live() {
-            let jump = OplogRegion {
-                start: jump_target,
-                end: jump_source,
-            };
-
-            // Write an oplog entry with the new jump and then restart the worker
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::jump(jump))
-                .await;
-
-            debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
-            Err(InterruptKind::Jump.into())
-        } else {
-            // In replay mode we never have to do anything here
-            debug!("Ignoring replayed set_oplog_index");
-            Ok(())
-        }
-    }
-
     async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "oplog_commit");
         if self.state.is_live() {
@@ -714,7 +658,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             debug!("Worker committing oplog to {replicas} replicas");
             loop {
                 // Applying a timeout to make sure the worker remains interruptible
-                if self.state.oplog.wait_for_replicas(replicas, timeout).await {
+                // A refusal means the shard has a new owner, so nothing was committed and nothing
+                // can be. It surfaces as `ShardLost`, which gives the agent up without writing,
+                // instead of acknowledging a commit that did not happen or retrying one that never
+                // will.
+                let committed = self
+                    .state
+                    .oplog
+                    .wait_for_replicas(replicas, timeout)
+                    .await
+                    .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?;
+                if committed {
                     debug!("Worker committed oplog to {replicas} replicas");
                     return Ok(());
                 } else {
@@ -730,165 +684,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn mark_begin_operation(&mut self) -> anyhow::Result<golem_api_1_x::host::OplogIndex> {
-        self.observe_function_call("golem::api", "mark_begin_operation");
-
-        if self.state.durability_is_suppressed() {
-            Ok(self.state.current_oplog_index().await.into())
-        } else if self.state.is_live() {
-            let next_idempotency_key_oplog_index = self
-                .state
-                .current_atomic_region_idempotency_key_oplog_index();
-            // Use the index returned by `add` — a concurrently running host task (a durable
-            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
-            // between this `add` and a subsequent `current_oplog_index` read. Reading the tip
-            // afterwards would record a begin index past the `BeginAtomicRegion` entry, making
-            // `Error.retry_from` diverge from the persisted region marker and breaking the
-            // retry-budget grouping keyed on it. Debugging sessions discard writes and return
-            // `NONE` from `add`; fall back to the session's replay target there, matching the
-            // index the guest observed before.
-            let begin_index = match self
-                .state
-                .oplog
-                .add(OplogEntry::begin_atomic_region())
-                .await
-            {
-                OplogIndex::NONE => self.state.current_oplog_index().await,
-                index => index,
-            };
-            let next_idempotency_key_oplog_index =
-                next_idempotency_key_oplog_index.unwrap_or_else(|| begin_index.next());
-            self.state
-                .active_atomic_regions
-                .push(ActiveAtomicRegion::new(
-                    begin_index,
-                    next_idempotency_key_oplog_index,
-                ));
-            Ok(begin_index.into())
-        } else {
-            let (begin_index, _) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::BeginAtomicRegion)?;
-
-            match self
-                .state
-                .replay_state
-                .lookup_oplog_entry(begin_index, OplogEntry::is_end_atomic_region)
-                .await
-            {
-                Some(end_index) => {
-                    debug!(
-                        "Worker's atomic operation starting at {} is already committed at {}",
-                        begin_index, end_index
-                    );
-                }
-                None => {
-                    debug!(
-                        "Worker's atomic operation starting at {} is not committed, ignoring persisted entries",
-                        begin_index
-                    );
-
-                    // We need to jump to the end of the oplog
-                    self.switch_to_live().await;
-
-                    // But this is not enough, because if the retried transactional block succeeds,
-                    // and later we replay it, we need to skip the first attempt and only replay the second.
-                    // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
-                    };
-
-                    self.public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
-                        .await;
-
-                    // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
-                }
-            }
-
-            self.state
-                .active_atomic_regions
-                .push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
-            Ok(begin_index.into())
-        }
-    }
-
-    async fn mark_end_operation(
-        &mut self,
-        begin: golem_api_1_x::oplog::OplogIndex,
-    ) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "mark_end_operation");
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        }
-        let begin_index = OplogIndex::from_u64(begin);
-        if self.state.is_live() {
-            // Atomic-region legality under overlap: closing a region does not require all member
-            // calls to have completed. Each member call holds a transferable ownership lease
-            // (`AtomicRegionLease`); on close, surviving members transfer to the enclosing open
-            // atomic region if one exists, and at the outermost close they detach — allowed only
-            // for calls that replay can safely re-execute from an incomplete `Start` (reads,
-            // local writes, idempotent remote writes). A pending non-repairable write (a
-            // non-idempotent / batched / transactional remote write) still blocks the outermost
-            // close: its terminal must be able to record against the region that made it
-            // retry-relevant, and replay cannot repair it if it never lands.
-            //
-            // A member call the guest already awaited may still hold its lease here: its cleanup
-            // (terminal join, scope close, lease release) is queued as a dropped-call event and
-            // drained at the next safe worker-access window. Ending the region is such a window,
-            // so drain first — otherwise a fully completed call would spuriously count as a
-            // surviving member (mirrors the jump boundary guard).
-            drain_queued_dropped_call_events(self)
-                .await
-                .map_err(anyhow::Error::from)?;
-            if !self.state.atomic_region_has_parent(begin_index)
-                && self
-                    .state
-                    .atomic_region_surviving_members(begin_index)
-                    .iter()
-                    .any(|lease| !lease.repairable_when_incomplete())
-            {
-                return Err(anyhow!(
-                    "Cannot end atomic region {begin_index}: non-re-executable durable calls initiated in it are still in flight"
-                ));
-            }
-            // The `EndAtomicRegion` entry is the durable linearization point of the transfer /
-            // detach decision: append it first, then transition the leases, so a crash before the
-            // append leaves the region uncommitted and replay retries it as a whole.
-            self.state
-                .oplog
-                .add(OplogEntry::end_atomic_region(begin_index))
-                .await;
-        } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
-        }
-
-        // Same transition on live and replay: transfer surviving members to the parent region (or
-        // detach them at the outermost close) and remove the region, so replayed calls observe the
-        // same ownership changes as live ones did. The replay path deliberately skips the
-        // non-repairable validation above — a committed `EndAtomicRegion` is a fact of the oplog
-        // and must replay even for layouts a newer live executor would reject.
-        self.state.close_atomic_region(begin_index);
-
-        Ok(())
-    }
-
     async fn trap(&mut self, reason: String) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "trap");
-        Err(anyhow::anyhow!("guest-requested trap: {reason}"))
-    }
-
-    async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
-        self.observe_function_call("golem::api", "get_idempotence_mode");
-        Ok(self.state.assume_idempotence)
-    }
-
-    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "set_idempotence_mode");
-        self.state.assume_idempotence = idempotent;
-        Ok(())
+        Err(anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached)
+            .context(format!("guest-requested trap: {reason}")))
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem_api_1_x::host::Uuid> {
@@ -903,11 +702,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // derived key depends on the oplog index. `begin_index()` is the durable-scope index of this
         // call; reusing it (rather than reading the live oplog index again) keeps the derived key
         // stable across an incomplete-replay re-execution, since the `Start` is reused.
-        let oplog_index = handle.begin_index();
+        // Reserve the logical position on replay too, even when the recorded result is returned.
+        let key = self.derive_idempotency_key(handle.begin_index());
 
         let result = handle
-            .run(self, async |ctx| {
-                let key = ctx.derive_idempotency_key(oplog_index);
+            .run(self, async |_| {
                 let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
                 Ok::<_, anyhow::Error>(HostResponseGolemApiIdempotencyKey { uuid })
             })
@@ -940,44 +739,40 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let target_revision: ComponentRevision =
             target_version.try_into().map_err(|e: String| anyhow!(e))?;
 
-        let denied = self.state.is_live()
-            && agent_operation_denied(
+        let begun =
+            DurableCallSession::<GolemApiUpdateWorker, NotCancellable>::begin_with_agent_authority(
                 self,
-                &agent_id,
-                AgentVerb::UpdateRevision,
-                AgentResourcePattern::Empty,
-            )
-            .await?;
-
-        let mut handle =
-            DurableCallSession::<GolemApiUpdateWorker, NotCancellable>::start_with_agent_authority(
-                self,
-                HostRequestGolemApiUpdateAgent {
-                    agent_id,
-                    target_revision,
-                    mode,
-                },
                 DurableFunctionType::WriteRemote,
             )
             .await?;
 
         let result = 'result: {
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = agent_operation_denied(
+                        self,
+                        &agent_id,
+                        AgentVerb::UpdateRevision,
+                        AgentResourcePattern::Empty,
+                    )
+                    .await?;
+                    let request = HostRequestGolemApiUpdateAgent {
+                        agent_id: agent_id.clone(),
+                        target_revision,
+                        mode,
+                    };
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'result begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
+            };
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
-            }
-
-            if denied {
-                break 'result handle
-                    .complete(
-                        self,
-                        HostResponseGolemApiUnit {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                        },
-                    )
-                    .await?;
             }
 
             let retry_properties = RetryContext::golem_api("update-agent");
@@ -1020,40 +815,45 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<
         Result<golem_api_1_x::host::AgentMetadata, golem_api_1_x::host::AgentOperationError>,
     > {
-        let self_agent_id = self.agent_id().clone();
-        let denied = self.state.is_live()
-            && agent_operation_denied(
-                self,
-                &self_agent_id,
-                AgentVerb::View,
-                AgentResourcePattern::Empty,
-            )
-            .await?;
-        let handle = DurableCallSession::<GolemApiGetSelfMetadata, NotCancellable>::start(
+        let begun = DurableCallSession::<GolemApiGetSelfMetadata, NotCancellable>::begin(
             self,
-            HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
         )
         .await?;
 
-        let result = handle
-            .run(self, async |ctx| {
-                if denied {
-                    return Ok::<_, anyhow::Error>(HostResponseGolemApiSelfAgentMetadata {
-                        result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                    });
+        let result = 'result: {
+            let handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let self_agent_id = self.agent_id().clone();
+                    let denied = agent_operation_denied(
+                        self,
+                        &self_agent_id,
+                        AgentVerb::View,
+                        AgentResourcePattern::Empty,
+                    )
+                    .await?;
+                    let request = HostRequestNoInput {};
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'result begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
                 }
-                let metadata = ctx
-                    .public_state
-                    .worker()
-                    .get_latest_worker_metadata()
-                    .await
-                    .into();
-                Ok::<_, anyhow::Error>(HostResponseGolemApiSelfAgentMetadata {
-                    result: Ok(metadata),
+                ResolvedCall::Replay(handle) => handle,
+            };
+            handle
+                .run(self, async |ctx| {
+                    let metadata = ctx
+                        .public_state
+                        .worker()
+                        .get_latest_worker_metadata()
+                        .await
+                        .into();
+                    Ok::<_, anyhow::Error>(HostResponseGolemApiSelfAgentMetadata {
+                        result: Ok(metadata),
+                    })
                 })
-            })
-            .await?;
+                .await?
+        };
 
         Ok(result.result.map(Into::into).map_err(agent_operation_error))
     }
@@ -1064,59 +864,65 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentMetadata>> {
         let agent_id: AgentId = agent_id.into();
 
-        let denied = self.state.is_live()
-            && agent_operation_denied(
-                self,
-                &agent_id,
-                AgentVerb::View,
-                AgentResourcePattern::Empty,
-            )
-            .await?;
-
-        let handle = DurableCallSession::<GolemApiGetAgentMetadata, NotCancellable>::start(
+        let begun = DurableCallSession::<GolemApiGetAgentMetadata, NotCancellable>::begin(
             self,
-            HostRequestGolemApiAgentId {
-                agent_id: agent_id.clone(),
-            },
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
-        let result = handle
-            .run(self, async |ctx| {
-                if denied {
-                    return Ok::<_, anyhow::Error>(HostResponseGolemApiAgentMetadata {
-                        result: Ok(None),
-                    });
-                }
-                let owned_agent_id =
-                    OwnedAgentId::new(ctx.owned_agent_id.environment_id, &agent_id);
-                let result = ctx.state.worker_service.get(&owned_agent_id).await;
-                let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
-                    let mut metadata = result.initial_worker_metadata;
-                    if let Some(last_known_status) = &result.last_known_status {
-                        metadata.last_known_status = last_known_status.clone();
-                    }
-                    let agent_mode = metadata.agent_mode;
-                    if let Some(status) = calculate_last_known_status_with_checkpoint(
-                        &ctx.state,
-                        &owned_agent_id,
-                        agent_mode,
-                        result.last_known_status,
+        let result = 'result: {
+            let handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = agent_operation_denied(
+                        self,
+                        &agent_id,
+                        AgentVerb::View,
+                        AgentResourcePattern::Empty,
                     )
-                    .await
-                    {
-                        metadata.last_known_status = status;
+                    .await?;
+                    let request = HostRequestGolemApiAgentId {
+                        agent_id: agent_id.clone(),
+                    };
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'result begun.start_live_denied(self, request, denial).await?;
                     }
-                    Some(metadata.into())
-                } else {
-                    None
-                };
-                Ok::<_, anyhow::Error>(HostResponseGolemApiAgentMetadata {
-                    result: Ok(metadata),
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
+            };
+            handle
+                .run(self, async |ctx| {
+                    let owned_agent_id =
+                        OwnedAgentId::new(ctx.owned_agent_id.environment_id, &agent_id);
+                    let result = ctx.state.worker_service.get(&owned_agent_id).await?;
+                    let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
+                        let mut metadata = result.initial_worker_metadata;
+                        if let Some(last_known_status) = &result.last_known_status {
+                            metadata.last_known_status = last_known_status.clone();
+                        }
+                        let agent_mode = metadata.agent_mode;
+                        if let Some(status) = calculate_last_known_status_with_checkpoint(
+                            &ctx.state,
+                            &owned_agent_id,
+                            metadata.fingerprint,
+                            agent_mode,
+                            result.last_known_status,
+                        )
+                        .await
+                        .map_err(|error| anyhow::Error::from(WorkerExecutorError::from(error)))?
+                        {
+                            metadata.last_known_status = status;
+                        }
+                        Some(metadata.into())
+                    } else {
+                        None
+                    };
+                    Ok::<_, anyhow::Error>(HostResponseGolemApiAgentMetadata {
+                        result: Ok(metadata),
+                    })
                 })
-            })
-            .await?;
+                .await?
+        };
 
         result
             .result
@@ -1135,44 +941,40 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
 
-        let denied = self.state.is_live()
-            && agent_operation_denied(
+        let begun =
+            DurableCallSession::<GolemApiForkWorker, NotCancellable>::begin_with_agent_authority(
                 self,
-                &source_agent_id,
-                AgentVerb::Fork,
-                AgentResourcePattern::Empty,
-            )
-            .await?;
-
-        let mut handle =
-            DurableCallSession::<GolemApiForkWorker, NotCancellable>::start_with_agent_authority(
-                self,
-                HostRequestGolemApiForkAgent {
-                    source_agent_id: source_agent_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    oplog_index_cut_off,
-                },
                 DurableFunctionType::WriteRemote,
             )
             .await?;
 
         let result = 'result: {
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = agent_operation_denied(
+                        self,
+                        &source_agent_id,
+                        AgentVerb::Fork,
+                        AgentResourcePattern::Empty,
+                    )
+                    .await?;
+                    let request = HostRequestGolemApiForkAgent {
+                        source_agent_id: source_agent_id.clone(),
+                        target_agent_id: target_agent_id.clone(),
+                        oplog_index_cut_off,
+                    };
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'result begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
+            };
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
-            }
-
-            if denied {
-                break 'result handle
-                    .complete(
-                        self,
-                        HostResponseGolemApiUnit {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                        },
-                    )
-                    .await?;
             }
 
             let retry_properties = RetryContext::golem_api("fork-agent");
@@ -1215,62 +1017,80 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         revert_target: golem_api_1_x::host::RevertAgentTarget,
     ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
         let agent_id: AgentId = agent_id.into();
+        let is_self = agent_id == self.owned_agent_id.agent_id;
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-        let mut resolved_revert = if self.state.is_live() {
-            match &target {
-                golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(_) => None,
-                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) => {
-                    let owned_agent_id =
-                        OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-                    match Worker::<Ctx>::resolve_revert_last_invocations(
-                        &self.state,
-                        &owned_agent_id,
-                        target.number_of_invocations,
-                    )
-                    .await
-                    {
-                        Ok(resolved) => Some(resolved),
-                        Err(WorkerExecutorError::AgentNotFound { .. }) => {
-                            return Ok(Err(agent_operation_error(format!(
-                                "agent {owned_agent_id} does not exist"
-                            ))));
-                        }
-                        Err(error) => return Ok(Err(agent_operation_error(error.to_string()))),
-                    }
-                }
-            }
-        } else {
-            None
-        };
-        let resource = match (&target, &resolved_revert) {
-            (golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(index), _) => {
-                AgentResourcePattern::OplogIndex(index.last_oplog_index.into())
-            }
-            (
-                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(_),
-                Some(resolved),
-            ) => AgentResourcePattern::OplogIndex(resolved.last_oplog_index.into()),
-            (golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(_), None) => {
-                AgentResourcePattern::Empty
-            }
-        };
-        let denied = self.state.is_live()
-            && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource).await?;
-
-        let mut handle =
-            DurableCallSession::<GolemApiRevertWorker, NotCancellable>::start_with_agent_authority(
+        let mut resolved_revert = None;
+        let begun =
+            DurableCallSession::<GolemApiRevertWorker, NotCancellable>::begin_with_agent_authority(
                 self,
-                HostRequestGolemApiRevertAgent {
-                    agent_id: agent_id.clone(),
-                    target: target.clone(),
-                    resolved_revert: resolved_revert.clone(),
-                },
                 DurableFunctionType::WriteRemote,
             )
             .await?;
 
         let result = 'result: {
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    if !is_self
+                        && let golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(count) = &target {
+                            let owned_agent_id =
+                                OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
+                            resolved_revert = match Worker::<Ctx>::resolve_revert_last_invocations(
+                                &self.state,
+                                &owned_agent_id,
+                                count.number_of_invocations,
+                            )
+                            .await
+                            {
+                                Ok(resolved) => Some(resolved),
+                                Err(error) => {
+                                    let error = match error {
+                                        WorkerExecutorError::AgentNotFound { .. } => {
+                                            format!("agent {owned_agent_id} does not exist")
+                                        }
+                                        error => error.to_string(),
+                                    };
+                                    // Freeze the refusal in Start too: incomplete recovery must
+                                    // not resolve a formerly invalid target against newer history.
+                                    break 'result begun.start_live_denied(
+                                        self,
+                                        HostRequestGolemApiRevertAgent {
+                                            agent_id: agent_id.clone(),
+                                            target: target.clone(),
+                                            resolved_revert: None,
+                                        },
+                                        error,
+                                    ).await?;
+                                }
+                            };
+                        }
+                    let resource = match (&target, &resolved_revert) {
+                        (
+                            golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
+                                index,
+                            ),
+                            _,
+                        ) => AgentResourcePattern::OplogIndex(index.last_oplog_index.into()),
+                        (_, Some(resolved)) => {
+                            AgentResourcePattern::OplogIndex(resolved.last_oplog_index.into())
+                        }
+                        (_, None) => AgentResourcePattern::Empty,
+                    };
+                    let denied = !is_self
+                        && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource)
+                            .await?;
+                    let request = HostRequestGolemApiRevertAgent {
+                        agent_id: agent_id.clone(),
+                        target: target.clone(),
+                        resolved_revert: resolved_revert.clone(),
+                    };
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'result begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
+            };
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
@@ -1282,12 +1102,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if denied {
+            if is_self {
                 break 'result handle
                     .complete(
                         self,
                         HostResponseGolemApiUnit {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                            result: Err(
+                                "Self-revert is not supported; revert this agent through the external API or CLI"
+                                    .to_string(),
+                            ),
                         },
                     )
                     .await?;
@@ -1354,9 +1177,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .component_service
                     .resolve_component(
                         component_slug.clone(),
-                        self.state.component_metadata.environment_id,
-                        self.state.component_metadata.application_id,
-                        self.state.component_metadata.account_id,
+                        self.owner_component_metadata().environment_id,
+                        self.owner_component_metadata().application_id,
+                        self.owner_component_metadata().account_id,
                     )
                     .await;
                 match handle
@@ -1410,25 +1233,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             component_id: component_id.into(),
             agent_id: agent_name.clone(),
         };
-        let denied = self.state.is_live()
-            && agent_operation_denied(
-                self,
-                &agent_id,
-                AgentVerb::View,
-                AgentResourcePattern::Empty,
-            )
-            .await?;
-        let mut handle = DurableCallSession::<GolemApiResolveAgentIdStrict, NotCancellable>::start(
+        let begun = DurableCallSession::<GolemApiResolveAgentIdStrict, NotCancellable>::begin(
             self,
-            HostRequestGolemApiComponentSlugAndAgentName {
-                component_slug,
-                agent_name,
-            },
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
         let result = 'result: {
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = agent_operation_denied(
+                        self,
+                        &agent_id,
+                        AgentVerb::View,
+                        AgentResourcePattern::Empty,
+                    )
+                    .await?;
+                    let request = HostRequestGolemApiComponentSlugAndAgentName {
+                        component_slug,
+                        agent_name,
+                    };
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'result begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
+            };
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
@@ -1436,17 +1267,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if denied {
-                break 'result handle
-                    .complete(self, HostResponseGolemApiAgentId { result: Ok(None) })
-                    .await?;
-            }
-
             let retry_properties = RetryContext::golem_api("resolve-agent-id-strict");
             let result = loop {
                 let owned_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
                 let result = Ok(
-                    if self.state.worker_service.get(&owned_id).await.is_some() {
+                    if self.state.worker_service.get(&owned_id).await?.is_some() {
                         Some(agent_id.clone())
                     } else {
                         None
@@ -1481,24 +1306,46 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn fork(
         &mut self,
     ) -> anyhow::Result<Result<ForkResult, golem_api_1_x::host::AgentOperationError>> {
-        let self_agent_id = self.agent_id().clone();
-        let denied = self.state.is_live()
-            && agent_operation_denied(
-                self,
-                &self_agent_id,
-                AgentVerb::Fork,
-                AgentResourcePattern::Empty,
-            )
-            .await?;
-        let mut handle =
-            DurableCallSession::<GolemApiFork, NotCancellable>::start_with_agent_authority(
-                self,
-                HostRequestNoInput {},
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
-
+        let begun = DurableCallSession::<GolemApiFork, NotCancellable>::begin_with_agent_authority(
+            self,
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
         let result = 'result: {
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let self_agent_id = self.agent_id().clone();
+                    let denied = agent_operation_denied(
+                        self,
+                        &self_agent_id,
+                        AgentVerb::Fork,
+                        AgentResourcePattern::Empty,
+                    )
+                    .await?;
+                    let request = HostRequestNoInput {};
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        // The replay of the denied call reserves the logical counter below, so
+                        // the live denial reserves it too.
+                        let _ = self.derive_idempotency_key(begun.begin_index());
+                        break 'result begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
+            };
+
+            // Reserve the logical counter on replay too so subsequent calls keep their keys.
+            // The recorded Start, unlike the pre-call cursor, is unaffected by skipped hints.
+            let fork_key = self.derive_idempotency_key(handle.start_index());
+            let source_fingerprint = self
+                .public_state
+                .worker()
+                .get_initial_worker_metadata()
+                .fingerprint;
+            let forked_phantom_id = Uuid::new_v5(
+                &source_fingerprint.0,
+                format!("golem:agent-fork:{}", fork_key.value).as_bytes(),
+            );
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
@@ -1506,20 +1353,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if denied {
-                break 'result handle
-                    .complete(
-                        self,
-                        HostResponseGolemApiFork {
-                            forked_phantom_id: Uuid::nil(),
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                        },
-                    )
-                    .await?;
-            }
-
             let retry_properties = RetryContext::golem_api("fork");
-            let forked_phantom_id = Uuid::new_v4();
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
                 match ParsedAgentId::try_new(
@@ -1541,20 +1375,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_id: new_name.clone(),
             };
             // The forked worker must inherit the source state from the source-side fork call's
-            // durable replay point. In non-idempotent mode this is the outer `WriteRemote` scope
-            // `Start`; `fork_and_write_fork_result` completes that copied scope around a synthetic
-            // child call carrying `ForkResult::Forked`. The source call completes later with
-            // `ForkResult::Original`. We still force a commit so the eager `Start` is durable for
-            // this (source) worker's own crash recovery.
-            let oplog_index_cut_off = handle.begin_index();
-            let copied_scope_start = self
-                .state
-                .opens_durable_scope(&DurableFunctionType::WriteRemote)
-                .then_some(oplog_index_cut_off);
+            // durable replay point. The source call completes with `ForkResult::Original`.
+            // Force a commit so the eager `Start` is durable for the source's crash recovery.
+            let copied_scope_start = None;
+            let oplog_index_cut_off = handle.start_index().previous();
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
 
             let created_by = self.created_by();
             let fork_result = loop {
@@ -1567,6 +1395,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &target_agent_id,
                         oplog_index_cut_off,
                         copied_scope_start,
+                        handle.invocation_id(),
                         forked_phantom_id,
                         handle.agent_auth_ctx(),
                     )
@@ -1649,55 +1478,52 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let response = 'response: {
-            let (handle, entry, denied) = if begun.is_live() {
-                let entry = self.as_wasi_view().table().get(&self_)?.clone();
-                let denied = oplog_read_denied(
-                    self,
-                    &entry.owned_agent_id,
-                    entry.next_oplog_index,
-                    entry.page_size,
-                )
-                .await?;
-                let request = HostRequestGolemApiOplogRead {
-                    agent_id: entry.owned_agent_id.agent_id(),
-                    next_oplog_index: entry.next_oplog_index,
-                    query: None,
-                    page_size: entry.page_size,
-                    current_component_revision: entry
-                        .initialized
-                        .then_some(entry.current_component_revision),
-                };
-                (begun.start_live(self, request).await?, entry, denied)
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'response response,
-                    CallReplayOutcome::Incomplete(live) => {
-                        handle = live;
-                    }
-                }
-                let entry = self.as_wasi_view().table().get(&self_)?.clone();
-                (handle, entry, false)
-            };
-
-            if denied {
-                break 'response handle
-                    .complete(
+            let (handle, entry) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                    let denied = oplog_read_denied(
                         self,
-                        HostResponseGolemApiOplogChunk {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                            next_oplog_index: entry.next_oplog_index,
-                            current_component_revision: entry.current_component_revision,
-                        },
+                        &entry.owned_agent_id,
+                        entry.next_oplog_index,
+                        entry.page_size,
                     )
                     .await?;
-            }
+                    let request = HostRequestGolemApiOplogRead {
+                        agent_id: entry.owned_agent_id.agent_id(),
+                        next_oplog_index: entry.next_oplog_index,
+                        query: None,
+                        page_size: entry.page_size,
+                        current_component_revision: entry
+                            .initialized
+                            .then_some(entry.current_component_revision),
+                    };
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'response begun.start_live_denied(self, request, denial).await?;
+                    }
+                    (begun.start_live(self, request).await?, entry)
+                }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'response response,
+                        CallReplayOutcome::Incomplete(live) => {
+                            handle = live;
+                        }
+                    }
+                    let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                    (handle, entry)
+                }
+            };
 
             let result = get_oplog_chunk(self, &entry).await;
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    let entries = chunk
+                        .entries
+                        .into_iter()
+                        .map(|entry| entry.entry)
+                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&chunk.entries)
+                        result: serde_json::to_vec(&entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
@@ -1718,10 +1544,17 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             handle.complete(self, response).await?
         };
 
-        self.as_wasi_view().table().get_mut(&self_)?.update(
-            response.next_oplog_index,
-            response.current_component_revision,
-        );
+        let denied = is_denied_oplog_read(&response);
+        self.as_wasi_view().table().get_mut(&self_).map(|entry| {
+            if denied {
+                entry.update(entry.next_oplog_index, entry.current_component_revision);
+            } else {
+                entry.update(
+                    response.next_oplog_index,
+                    response.current_component_revision,
+                );
+            }
+        })?;
         match response.result {
             Ok(Some(entries)) => {
                 let entries: Vec<PublicOplogEntry> = serde_json::from_slice(&entries)
@@ -1753,27 +1586,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, resource: Resource<GetPromiseResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::promise-result", "drop");
-        let resource_rep = resource.rep();
         let _ = self.table().delete(resource)?;
-
-        // This is optional because the entry is only created if we actually turn the GetPromiseResultEntry into a Pollable
-        let dyn_pollable_reps = self
-            .state
-            .promise_dyn_pollables
-            .write()
-            .await
-            .remove(&resource_rep);
-
-        if let Some(set) = dyn_pollable_reps {
-            for dyn_pollable_rep in set {
-                let _ = self
-                    .state
-                    .promise_backed_pollables
-                    .write()
-                    .await
-                    .remove(&dyn_pollable_rep);
-            }
-        };
 
         self.state.promise_service.cleanup().await;
 
@@ -1788,6 +1601,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
         accessor: &Accessor<U, Self>,
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Vec<u8>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let resource_rep = resource.rep();
         let (entry, self_agent_id) = accessor.with(|mut access| {
             let ctx = access.get();
@@ -1836,50 +1650,64 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
         let promise_handle = match entry.get_handle().await {
             Ok(handle) => handle,
             Err(err) => {
-                return Err(handle.trap(WorkerExecutorError::runtime(err.clone())));
+                return Err(handle.trap(err.clone()));
             }
         };
-        let (wait_context, interrupt) = accessor.with(|mut access| {
-            let ctx = access.get();
-            let interrupt = ctx.create_interrupt_signal();
-            (
-                SuspendableWaitContext {
-                    wait_id: ctx.state.next_suspendable_wait_id(),
-                    agent_mode: ctx.agent_mode(),
-                    suspend: ctx.state.config.suspend.clone(),
-                    wait_deadline: None,
-                    suspendable_waits: ctx.state.suspendable_waits(),
-                    wakeup_scheduler: ctx.state.wakeup_scheduler(),
-                },
+        let (coordinated_wait, mode, max_sleep, interrupt) = accessor
+            .with(|mut access| {
+                let ctx = access.get();
+                let interrupt = ctx.create_interrupt_signal();
+                let coordinated_wait = if ctx.agent_mode() == AgentMode::Durable
+                    && !ctx.state.durability_is_suppressed()
+                {
+                    Some(
+                        accessor
+                            .runtime_activity()
+                            .and_then(|activity| {
+                                ctx.runtime_suspension
+                                    .as_ref()
+                                    .and_then(|runtime| runtime.promise(activity))
+                            })
+                            .ok_or_else(|| anyhow!("promise runtime activity is not registered"))?,
+                    )
+                } else {
+                    None
+                };
+                Ok::<_, anyhow::Error>((
+                    coordinated_wait,
+                    ctx.agent_mode(),
+                    ctx.state.config.suspend.ephemeral_max_sleep,
+                    interrupt,
+                ))
+            })
+            .map_err(|err| handle.trap(err))?;
+        let outcome = if let Some(wait) = coordinated_wait {
+            match wait
+                .wait(
+                    {
+                        let promise_handle = promise_handle.clone();
+                        async move { promise_handle.await_ready().await }
+                    },
+                    interrupt,
+                )
+                .await
+            {
+                Ok(()) => ParkOutcome::Ready,
+                Err(kind) => ParkOutcome::Interrupted(kind),
+            }
+        } else {
+            wait_for_ready(
+                mode,
+                max_sleep,
+                None,
                 interrupt,
+                promise_handle.await_ready(),
             )
-        });
-        let outcome = park_suspendable_wait(
-            wait_context,
-            interrupt,
-            || {
-                let promise_handle = promise_handle.clone();
-                async move {
-                    promise_handle.await_ready().await;
-                }
-            },
-            || promise_handle.is_ready_now(),
-            || {
-                accessor.with(|mut access| {
-                    let ctx = access.get();
-                    ctx.state.safe_to_suspend()
-                })
-            },
-            || None,
-        )
-        .await
-        .map_err(|err| handle.trap(err))?;
+            .await
+        };
 
         match outcome {
             ParkOutcome::Ready => {}
-            ParkOutcome::SuspendWorker => {
-                return Err(handle.trap(InterruptKind::Suspend(Timestamp::now_utc())));
-            }
             ParkOutcome::Interrupted(kind) => {
                 // An interrupt is non-error control flow: abandon the durable call without a
                 // trap context so the error classifies as `TrapType::Interrupt`.
@@ -2004,55 +1832,52 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let response = 'response: {
-            let (handle, entry, denied) = if begun.is_live() {
-                let entry = self.as_wasi_view().table().get(&self_)?.clone();
-                let denied = oplog_read_denied(
-                    self,
-                    &entry.owned_agent_id,
-                    entry.next_oplog_index,
-                    entry.page_size,
-                )
-                .await?;
-                let request = HostRequestGolemApiOplogRead {
-                    agent_id: entry.owned_agent_id.agent_id(),
-                    next_oplog_index: entry.next_oplog_index,
-                    query: Some(entry.query.clone()),
-                    page_size: entry.page_size,
-                    current_component_revision: entry
-                        .initialized
-                        .then_some(entry.current_component_revision),
-                };
-                (begun.start_live(self, request).await?, entry, denied)
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'response response,
-                    CallReplayOutcome::Incomplete(live) => {
-                        handle = live;
-                    }
-                }
-                let entry = self.as_wasi_view().table().get(&self_)?.clone();
-                (handle, entry, false)
-            };
-
-            if denied {
-                break 'response handle
-                    .complete(
+            let (handle, entry) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                    let denied = oplog_read_denied(
                         self,
-                        HostResponseGolemApiOplogChunk {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                            next_oplog_index: entry.next_oplog_index,
-                            current_component_revision: entry.current_component_revision,
-                        },
+                        &entry.owned_agent_id,
+                        entry.next_oplog_index,
+                        entry.page_size,
                     )
                     .await?;
-            }
+                    let request = HostRequestGolemApiOplogRead {
+                        agent_id: entry.owned_agent_id.agent_id(),
+                        next_oplog_index: entry.next_oplog_index,
+                        query: Some(entry.query.clone()),
+                        page_size: entry.page_size,
+                        current_component_revision: entry
+                            .initialized
+                            .then_some(entry.current_component_revision),
+                    };
+                    if let Some(denial) = agent_operation_denial(denied) {
+                        break 'response begun.start_live_denied(self, request, denial).await?;
+                    }
+                    (begun.start_live(self, request).await?, entry)
+                }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'response response,
+                        CallReplayOutcome::Incomplete(live) => {
+                            handle = live;
+                        }
+                    }
+                    let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                    (handle, entry)
+                }
+            };
 
             let result = get_search_oplog_chunk(self, &entry).await;
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    let entries = chunk
+                        .entries
+                        .into_iter()
+                        .map(|entry| (entry.oplog_index, entry.entry))
+                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&chunk.entries)
+                        result: serde_json::to_vec(&entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
@@ -2073,10 +1898,17 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             handle.complete(self, response).await?
         };
 
-        self.as_wasi_view().table().get_mut(&self_)?.update(
-            response.next_oplog_index,
-            response.current_component_revision,
-        );
+        let denied = is_denied_oplog_read(&response);
+        self.as_wasi_view().table().get_mut(&self_).map(|entry| {
+            if denied {
+                entry.update(entry.next_oplog_index, entry.current_component_revision);
+            } else {
+                entry.update(
+                    response.next_oplog_index,
+                    response.current_component_revision,
+                );
+            }
+        })?;
         match response.result {
             Ok(Some(entries)) => {
                 let entries: Vec<(OplogIndex, PublicOplogEntry)> = serde_json::from_slice(&entries)
@@ -2168,54 +2000,24 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
 
         let response = 'response: {
             let mut raw_entries = Some(entries);
-            let (handle, owned_agent_id, denied, prepared_entries) = if begun.is_live() {
-                let environment_id =
-                    golem_common::model::environment::EnvironmentId::from(Uuid::from_u64_pair(
-                        environment_id.uuid.high_bits,
-                        environment_id.uuid.low_bits,
-                    ));
-                let agent_id: AgentId = agent_id.into();
-                let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-                let entry_indexes = raw_entries
-                    .as_ref()
-                    .expect("raw oplog entries must be present")
-                    .iter()
-                    .map(|(index, _)| OplogIndex::from_u64(*index))
-                    .collect::<Vec<_>>();
-                let denied = oplog_entries_denied(self, &owned_agent_id, &entry_indexes).await?;
-                let (request_entries, prepared_entries) = if denied {
-                    (
-                        entry_indexes
-                            .iter()
-                            .map(|index| (index.as_u64(), Vec::new()))
-                            .collect(),
-                        None,
-                    )
-                } else {
-                    let (request_entries, prepared_entries) = prepare_oplog_enrichment_entries(
-                        self,
-                        raw_entries
-                            .take()
-                            .expect("raw oplog entries must be present"),
-                    );
-                    (request_entries, Some(prepared_entries))
-                };
-                let request = HostRequestGolemApiOplogEnrich {
-                    environment_id,
-                    agent_id,
-                    entries: request_entries,
-                    component_revision,
-                };
-                (
-                    begun.start_live(self, request).await?,
-                    owned_agent_id,
-                    denied,
-                    prepared_entries,
-                )
-            } else {
-                let mut handle = begun.start_replay(self).await?;
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => {
+            let (handle, owned_agent_id, prepared_entries) = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let environment_id =
+                        golem_common::model::environment::EnvironmentId::from(Uuid::from_u64_pair(
+                            environment_id.uuid.high_bits,
+                            environment_id.uuid.low_bits,
+                        ));
+                    let agent_id: AgentId = agent_id.into();
+                    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+                    let entry_indexes = raw_entries
+                        .as_ref()
+                        .expect("raw oplog entries must be present")
+                        .iter()
+                        .map(|(index, _)| OplogIndex::from_u64(*index))
+                        .collect::<Vec<_>>();
+                    let denied =
+                        oplog_entries_denied(self, &owned_agent_id, &entry_indexes).await?;
+                    if let Some(denial) = agent_operation_denial(denied) {
                         let _ =
                             crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
                                 raw_entries
@@ -2223,48 +2025,69 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                                     .expect("raw oplog entries must be present"),
                                 self,
                             );
-                        break 'response response;
+                        let request = HostRequestGolemApiOplogEnrich {
+                            environment_id,
+                            agent_id,
+                            entries: entry_indexes
+                                .iter()
+                                .map(|index| (index.as_u64(), Vec::new()))
+                                .collect(),
+                            component_revision,
+                        };
+                        break 'response begun.start_live_denied(self, request, denial).await?;
                     }
-                    CallReplayOutcome::Incomplete(live) => {
-                        handle = live;
-                    }
+                    let (request_entries, prepared_entries) = prepare_oplog_enrichment_entries(
+                        self,
+                        raw_entries
+                            .take()
+                            .expect("raw oplog entries must be present"),
+                    );
+                    let request = HostRequestGolemApiOplogEnrich {
+                        environment_id,
+                        agent_id,
+                        entries: request_entries,
+                        component_revision,
+                    };
+                    (
+                        begun.start_live(self, request).await?,
+                        owned_agent_id,
+                        prepared_entries,
+                    )
                 }
-                let environment_id =
-                    golem_common::model::environment::EnvironmentId::from(Uuid::from_u64_pair(
-                        environment_id.uuid.high_bits,
-                        environment_id.uuid.low_bits,
-                    ));
-                let agent_id: AgentId = agent_id.into();
-                let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-                let (_, prepared_entries) = prepare_oplog_enrichment_entries(
-                    self,
-                    raw_entries
-                        .take()
-                        .expect("raw oplog entries must be present"),
-                );
-                (handle, owned_agent_id, false, Some(prepared_entries))
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => {
+                            let _ =
+                            crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
+                                raw_entries
+                                    .take()
+                                    .expect("raw oplog entries must be present"),
+                                self,
+                            );
+                            break 'response response;
+                        }
+                        CallReplayOutcome::Incomplete(live) => {
+                            handle = live;
+                        }
+                    }
+                    let environment_id =
+                        golem_common::model::environment::EnvironmentId::from(Uuid::from_u64_pair(
+                            environment_id.uuid.high_bits,
+                            environment_id.uuid.low_bits,
+                        ));
+                    let agent_id: AgentId = agent_id.into();
+                    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+                    let (_, prepared_entries) = prepare_oplog_enrichment_entries(
+                        self,
+                        raw_entries
+                            .take()
+                            .expect("raw oplog entries must be present"),
+                    );
+                    (handle, owned_agent_id, prepared_entries)
+                }
             };
 
-            if denied {
-                let _ = crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
-                    raw_entries
-                        .take()
-                        .expect("raw oplog entries must be present"),
-                    self,
-                );
-                break 'response handle
-                    .complete(
-                        self,
-                        HostResponseGolemApiOplogEntries {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
-                        },
-                    )
-                    .await?;
-            }
-
-            let entries = match prepared_entries
-                .expect("authorized oplog enrichment must have prepared entries")
-            {
+            let entries = match prepared_entries {
                 Ok(entries) => entries,
                 Err(error) => {
                     break 'response handle
@@ -2282,12 +2105,14 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                 let agent_type =
                     ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
                 let mut current_revision = ComponentRevision::try_from(component_revision)?;
-                let agent_mode = self
+                let identity = self
                     .state
                     .worker_service
-                    .get_agent_mode(&owned_agent_id)
+                    .resolve_agent_identity(&owned_agent_id)
                     .await
+                    .map_err(|err| err.to_string())?
                     .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
+                let agent_mode = identity.agent_mode;
 
                 let mut result = Vec::with_capacity(entries.len());
                 for (index, entry) in entries {
@@ -2565,7 +2390,7 @@ impl GetAgentsEntry {
 pub struct GetPromiseResultEntry {
     promise_id: PromiseId,
     promise_service: Arc<dyn PromiseService>,
-    handle: Arc<OnceCell<Result<PromiseHandle, String>>>,
+    handle: Arc<OnceCell<PromiseHandle>>,
 }
 
 impl GetPromiseResultEntry {
@@ -2577,26 +2402,20 @@ impl GetPromiseResultEntry {
         }
     }
 
-    pub async fn get_handle(&self) -> Result<&PromiseHandle, &String> {
+    /// Resolves the backing promise handle, memoizing only success.
+    ///
+    /// A failed `poll` is deliberately not cached. Polling reads the key-value storage, so a
+    /// transient storage failure would otherwise poison this pollable for the rest of the
+    /// resource's lifetime; every call retries until a handle is resolved.
+    pub async fn get_handle(&self) -> Result<&PromiseHandle, WorkerExecutorError> {
         self.handle
-            .get_or_init(|| async {
-                self.promise_service
-                    .poll(self.promise_id.clone())
-                    .await
-                    .map_err(|err| {
-                        format!(
-                            "Failed constructing backing promise handle for {}: {err}",
-                            self.promise_id
-                        )
-                    })
-            })
+            .get_or_try_init(|| self.promise_service.poll(self.promise_id.clone()))
             .await
-            .as_ref()
     }
 
     /// Returns true if the underlying promise handle is ready, OR if constructing the
-    /// handle failed (so that the pollable resolves immediately and the cached error
-    /// is surfaced on the next `get` call).
+    /// handle failed (so that the pollable resolves immediately and the error is
+    /// surfaced on the next `get` call, which retries the poll).
     pub async fn is_ready(&self) -> bool {
         match self.get_handle().await {
             Ok(handle) => handle.is_ready().await,
@@ -2608,10 +2427,163 @@ impl GetPromiseResultEntry {
 #[async_trait]
 impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
     async fn ready(&mut self) {
-        // A cached error is treated as immediately ready so that the pollable
+        // A failed poll is treated as immediately ready so that the pollable
         // resolves and the subsequent `get` surfaces the error to the agent.
         if let Ok(handle) = self.get_handle().await {
             handle.await_ready().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GetPromiseResultEntry;
+    use crate::services::promise::{
+        DefaultPromiseService, PromiseHandle, PromiseService, PromiseWorkerAccess,
+    };
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use async_trait::async_trait;
+    use golem_common::base_model::component::ComponentId;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{AgentId, PromiseId};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use test_r::test;
+    use uuid::Uuid;
+
+    test_r::enable!();
+
+    struct NoopPromiseWorkerAccess;
+
+    #[async_trait]
+    impl PromiseWorkerAccess for NoopPromiseWorkerAccess {
+        async fn activate_worker_if_needed(
+            &self,
+            _promise_id: &PromiseId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+    }
+
+    /// Fails the first `remaining_failures` polls the way a key-value storage outage would, then
+    /// delegates to a working promise service.
+    struct FlakyPromiseService {
+        inner: DefaultPromiseService,
+        remaining_failures: AtomicU32,
+        polls: AtomicU32,
+    }
+
+    impl FlakyPromiseService {
+        fn new(failures: u32) -> Self {
+            Self {
+                inner: DefaultPromiseService::new(
+                    Arc::new(InMemoryKeyValueStorage::new()),
+                    Arc::new(NoopPromiseWorkerAccess),
+                ),
+                remaining_failures: AtomicU32::new(failures),
+                polls: AtomicU32::new(0),
+            }
+        }
+
+        fn polls(&self) -> u32 {
+            self.polls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl PromiseService for FlakyPromiseService {
+        async fn create(
+            &self,
+            agent_id: &AgentId,
+            oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
+            self.inner.create(agent_id, oplog_idx).await
+        }
+
+        async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
+            if self
+                .remaining_failures
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(WorkerExecutorError::runtime(
+                    "key-value storage unavailable",
+                ));
+            }
+            self.inner.poll(promise_id).await
+        }
+
+        async fn complete(
+            &self,
+            promise_id: PromiseId,
+            data: Vec<u8>,
+        ) -> Result<bool, WorkerExecutorError> {
+            self.inner.complete(promise_id, data).await
+        }
+
+        async fn cleanup(&self) {
+            self.inner.cleanup().await
+        }
+    }
+
+    fn agent_id() -> AgentId {
+        AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "promise-pollable-test".to_string(),
+        }
+    }
+
+    #[test]
+    async fn transient_poll_failure_is_not_memoized() {
+        let promise_service = Arc::new(FlakyPromiseService::new(1));
+        let promise_id = promise_service
+            .create(&agent_id(), OplogIndex::from_u64(1))
+            .await
+            .unwrap();
+        let entry = GetPromiseResultEntry::new(
+            promise_id.clone(),
+            promise_service.clone() as Arc<dyn PromiseService>,
+        );
+
+        assert!(entry.get_handle().await.is_err());
+        // The failure must not be cached: the next call retries and resolves the handle.
+        assert!(entry.get_handle().await.is_ok());
+        assert_eq!(promise_service.polls(), 2);
+
+        // And once resolved, the handle is memoized rather than re-polled.
+        assert!(entry.get_handle().await.is_ok());
+        assert_eq!(promise_service.polls(), 2);
+    }
+
+    #[test]
+    async fn resolved_handle_observes_completion() {
+        let promise_service = Arc::new(FlakyPromiseService::new(1));
+        let promise_id = promise_service
+            .create(&agent_id(), OplogIndex::from_u64(1))
+            .await
+            .unwrap();
+        let entry = GetPromiseResultEntry::new(
+            promise_id.clone(),
+            promise_service.clone() as Arc<dyn PromiseService>,
+        );
+
+        assert!(entry.get_handle().await.is_err());
+        assert!(!entry.is_ready().await);
+
+        assert!(
+            promise_service
+                .complete(promise_id, vec![42])
+                .await
+                .unwrap()
+        );
+        assert!(entry.is_ready().await);
+        assert_eq!(
+            entry.get_handle().await.unwrap().get().await,
+            Some(vec![42])
+        );
     }
 }

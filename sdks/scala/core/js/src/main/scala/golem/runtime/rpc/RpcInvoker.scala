@@ -17,6 +17,7 @@
 package golem.runtime.rpc
 
 import golem.Datetime
+import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
 
 import scala.concurrent.Future
@@ -26,25 +27,39 @@ import scala.concurrent.Future
  * `schema-value-tree` (the parameter-list record) and awaited results are an
  * `option<schema-value-tree>` (modelled as a Scala [[Option]]): `None` for a
  * `unit` output, `Some(tree)` for a `single` output.
+ *
+ * Only the await variants take a `scopeCard`. The implementation borrows the
+ * card for the host call and leaves it usable.
  */
 private[rpc] trait RpcInvoker {
-  def invokeAndAwait(functionName: String, input: JsSchemaValueTree): Either[String, Option[JsSchemaValueTree]]
+  def invokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard]
+  ): Either[String, Option[JsSchemaValueTree]]
 
   def invokeAndAwaitWithMetadata(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard]
   ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
 
-  def asyncInvokeAndAwait(functionName: String, input: JsSchemaValueTree): Future[Option[JsSchemaValueTree]]
+  def asyncInvokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard]
+  ): Future[Option[JsSchemaValueTree]]
 
   def asyncInvokeAndAwaitWithMetadata(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard]
   ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
 
   def cancelableAsyncInvokeAndAwait(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard]
   ): (Future[Option[JsSchemaValueTree]], CancellationToken)
 
   def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit]

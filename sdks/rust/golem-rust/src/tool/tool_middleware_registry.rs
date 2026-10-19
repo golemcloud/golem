@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    InputStream, Principal, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture, ToolMiddlewareScope,
-    UnderlyingTool,
+    InputStream, OutputStream, Principal, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture,
+    ToolMiddlewareScope, UnderlyingTool,
 };
 use crate::TypedSchemaValue;
 use crate::schema::tool::validation::validate_tool;
@@ -26,9 +26,12 @@ use std::collections::BTreeMap;
 pub type ToolMiddlewareInvoker = fn(
     String,
     Tool,
+    TypedSchemaValue,
     Vec<String>,
     TypedSchemaValue,
     Option<InputStream>,
+    Option<OutputStream>,
+    Option<OutputStream>,
     Principal,
     UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture;
@@ -120,8 +123,8 @@ pub(crate) fn clear_tool_middlewares_for_tests() {
 #[test_r::sequential]
 mod tests {
     use super::*;
-    use crate::schema::SchemaGraph;
     use crate::schema::tool::{CommandNode, CommandTree, Doc, Globals};
+    use crate::schema::{SchemaGraph, try_into_schema_graph};
     use crate::tool::InvocationResult;
     use test_r::test;
 
@@ -134,6 +137,7 @@ mod tests {
     fn universal(name: &str) -> ToolMiddleware {
         ToolMiddleware {
             name: name.to_string(),
+            version: "0.0.0".to_string(),
             aliases: vec![],
             doc: Doc {
                 summary: String::new(),
@@ -141,12 +145,15 @@ mod tests {
                 examples: vec![],
             },
             scope: ToolMiddlewareScope::Universal,
+            parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                .unwrap(),
         }
     }
 
     fn tool(name: &str) -> Tool {
         Tool {
             version: "0.1.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
@@ -168,9 +175,12 @@ mod tests {
     fn invoker(
         _tool_name: String,
         _tool: Tool,
+        _parameters: TypedSchemaValue,
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
         _stdin: Option<InputStream>,
+        _stdout: Option<OutputStream>,
+        _stderr: Option<OutputStream>,
         _principal: Principal,
         _underlying: UnderlyingTool,
     ) -> ToolMiddlewareInvokeFuture {
@@ -178,6 +188,7 @@ mod tests {
             Ok(InvocationResult {
                 result: None,
                 stdout: None,
+                stderr: None,
             })
         })
     }
@@ -217,7 +228,7 @@ mod tests {
         impl RegistryDispatchEchoMiddleware for RegistryPolicy {
             async fn echo(
                 &self,
-                underlying: &mut RegistryDispatchEchoUnderlying,
+                underlying: &RegistryDispatchEchoUnderlying,
                 value: String,
             ) -> Result<String, ToolInvokeError<Infallible>> {
                 if value == "short" {
@@ -258,6 +269,7 @@ mod tests {
                     Ok(crate::tool::wire::InvocationResult {
                         result: Some(crate::encode_typed_schema_value_owned(value).unwrap()),
                         stdout: None,
+                        stderr: None,
                     })
                 })
             }))
@@ -265,14 +277,19 @@ mod tests {
 
         async fn invoke(
             value: TypedSchemaValue,
-        ) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+        ) -> Result<InvocationResult, ToolInvokeError<crate::tool::RawCustomToolError>> {
             let invoker = get_tool_middleware_invoker_by_name("phase-five-authored-dispatch")
                 .expect("authored middleware ctor registered its invoker");
             invoker(
                 "registry-dispatch-echo".to_string(),
                 <RegistryDispatchEchoUnderlying as ToolUnderlying>::__golem_tool_descriptor(),
+                crate::tool::EmptyMiddlewareParameters {}
+                    .into_typed_schema_value()
+                    .unwrap(),
                 vec!["echo".to_string()],
                 value,
+                None,
+                None,
                 None,
                 Principal::Anonymous,
                 underlying(),
@@ -368,18 +385,21 @@ mod tests {
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-invalid-presented".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: String::new(),
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented,
                         expected: None,
                     },
-                ),
+                )),
+                parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                    .unwrap(),
             },
             invoker,
         );
@@ -391,18 +411,21 @@ mod tests {
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-missing-expected".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: String::new(),
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: tool("registry-missing-expected"),
                         expected: None,
                     },
-                ),
+                )),
+                parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                    .unwrap(),
             },
             invoker,
         );
@@ -413,18 +436,21 @@ mod tests {
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-shared-name".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: String::new(),
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: tool("registry-shared-name"),
                         expected: Some(tool("registry-shared-name")),
                     },
-                ),
+                )),
+                parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                    .unwrap(),
             },
             invoker,
         );
@@ -432,10 +458,7 @@ mod tests {
         assert!(get_tool_middleware_by_name("registry-shared-name").is_some());
     }
 
-    #[cfg(any(
-        feature = "export_golem_tool_middleware",
-        feature = "export_golem_agentic_tool_middleware"
-    ))]
+    #[cfg(feature = "export_golem_agentic")]
     #[test]
     fn guest_discovery_and_lookup_encode_complete_scope_metadata() {
         let presented = tool("registry-presented");
@@ -443,24 +466,28 @@ mod tests {
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-boundary-monomorphic".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec!["registry-boundary-alias".to_string()],
                 doc: Doc {
                     summary: "Boundary summary".to_string(),
                     description: "Boundary description".to_string(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: presented.clone(),
                         expected: Some(expected.clone()),
                     },
-                ),
+                )),
+                parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                    .unwrap(),
             },
             invoker,
         );
         register_tool_middleware(
             ToolMiddleware {
                 name: "registry-boundary-universal".to_string(),
+                version: "0.0.0".to_string(),
                 aliases: vec![],
                 doc: Doc {
                     summary: "Universal summary".to_string(),
@@ -468,6 +495,8 @@ mod tests {
                     examples: vec![],
                 },
                 scope: ToolMiddlewareScope::Universal,
+                parameter_schema: try_into_schema_graph::<crate::tool::EmptyMiddlewareParameters>()
+                    .unwrap(),
             },
             invoker,
         );
@@ -490,6 +519,7 @@ mod tests {
             "registry-boundary-monomorphic".to_string(),
         )
         .unwrap();
+        assert_eq!(encoded.version, "0.0.0");
         assert_eq!(encoded.aliases, vec!["registry-boundary-alias"]);
         assert_eq!(encoded.doc.summary, "Boundary summary");
         match encoded.scope {

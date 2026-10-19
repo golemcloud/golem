@@ -1,7 +1,9 @@
 ## Generated from default config
+bind_address = "0.0.0.0"
 cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
 http_port = 8081
+runtime_metrics_sampling_interval = "5s"
 workspace = "release"
 
 [blob_storage]
@@ -9,6 +11,12 @@ type = "LocalFileSystem"
 
 [blob_storage.config]
 root = "../data/blob_storage"
+
+[body_limits]
+api = 33554432
+upload = 2147483648
+
+[builtin_artifacts.source_overrides]
 
 [builtin_plugins]
 type = "Disabled"
@@ -20,7 +28,13 @@ type = "Enabled"
 
 [component_compilation.config]
 connect_timeout = "10s"
+connection_pool_size = 4
+enqueue_timeout = "1s"
 host = "localhost"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 port = 9091
 
@@ -36,17 +50,25 @@ type = "Disabled"
 
 [component_compilation.config.tls.config]
 
+[component_file_upload]
+max_concurrent_files = 16
+max_uncompressed_archive_size = 1073741824
+max_uncompressed_file_size = 536870912
+
 [db]
 type = "Sqlite"
 
 [db.config]
-database = "golem_registry_service.db"
-foreign_keys = false
+database = "../data/golem_registry_service.db"
+foreign_keys = true
 max_connections = 10
 
 [deployment_events]
 cleanup_interval = "1h"
 retention = "1day"
+
+[domain_registration]
+reserved_domains = []
 
 [domain_registration.available_domains]
 type = "Unrestricted"
@@ -61,10 +83,25 @@ type = "Disabled"
 
 [grpc.tls.config]
 
+[http_server]
+http2_adaptive_window = false
+http2_initial_connection_window_size = 1048576
+http2_initial_stream_window_size = 1048576
+http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
+
 [initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
 id = "adb2694f-cd9f-425d-905d-ca2888c9c5de"
 name = "Builtin Plugin Owner"
+plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
+role = "builtin-plugin-owner"
+
+[initial_accounts.builtin_tool_owner]
+email = "builtin-tool-owner@golem.cloud"
+id = "58bda34c-10d4-4bfb-8abd-d5e67f09ba3c"
+name = "Builtin Tool Owner"
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 role = "builtin-plugin-owner"
 
@@ -86,6 +123,7 @@ token = "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28"
 
 [initial_plans.default]
 app_limit = 10
+blob_storage_limit = 1000000000000000000
 component_limit = 100
 env_limit = 40
 max_concurrent_agents_per_executor = 1000000000000000000
@@ -122,6 +160,48 @@ redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback"
 allowed_redirect_domains = ["localhost", "golem.cloud"]
 cli_redirect = "https://golem.cloud/"
 webflow_state_expiry = "5m"
+
+[mcp_import]
+cache_entries = 128
+cache_ttl = "5m"
+failure_ttl = "1s"
+fetch_concurrency = 16
+operation_timeout = "25s"
+refresh_interval = "1m"
+
+[mcp_import.projection]
+max_listing_bytes = 8388608
+max_tools = 1024
+
+[mcp_import.projection.content]
+max_blocks = 256
+max_decoded_bytes = 4194304
+max_json_depth = 32
+max_total_bytes = 8388608
+
+[mcp_import.projection.schema]
+instanceBytes = 4194304
+instanceDepth = 256
+schemaBytes = 1048576
+schemaDepth = 128
+schemaNodes = 16384
+
+[mcp_import.transport]
+concurrency = 16
+json_depth = 512
+listing_bytes = 16777216
+notifications = 1024
+pages = 64
+request_bytes = 8388608
+response_bytes = 16777216
+timeout = "20s"
+tools = 1024
+
+[mcp_oauth]
+challenge_bytes = 16384
+document_bytes = 1048576
+request_bytes = 65536
+timeout = "20s"
 
 [security_scheme]
 strict_issuer_url_validation = true

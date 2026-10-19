@@ -81,12 +81,11 @@ impl SpawnedRegistryService {
         let low_http_calls_plan_id = PlanId(uuid!("b3c4d5e6-f7a8-9012-bcde-f01234567890"));
         let low_rpc_calls_plan_id = PlanId(uuid!("c4d5e6f7-a8b9-0123-cdef-012345678901"));
 
-        let otlp_wasm = working_directory.join("../plugins/otlp-exporter.wasm");
-        let otlp_wasm_path = if otlp_wasm.exists() {
-            Some(otlp_wasm.as_path())
-        } else {
-            None
-        };
+        let repository_root = working_directory
+            .parent()
+            .expect("registry service working directory is inside the repository");
+        let builtin_artifact_cache_dir =
+            repository_root.join("target/integration-builtin-artifacts");
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -109,7 +108,7 @@ impl SpawnedRegistryService {
                     low_http_calls_plan_id,
                     low_rpc_calls_plan_id,
                     otlp,
-                    otlp_wasm_path,
+                    &builtin_artifact_cache_dir,
                 )
                 .await,
             )
@@ -130,7 +129,7 @@ impl SpawnedRegistryService {
             "localhost",
             grpc_port,
             http_port,
-            Duration::from_secs(90),
+            Duration::from_secs(180),
             Some(&mut child),
         )
         .await;

@@ -22,20 +22,14 @@ pub fn param_type_to_type_string(pt : ParamType) -> String {
 }
 
 // ============================================================
-// Agent registration + dispatch emission (new schema model)
-//
-// Generates `golem_agents.mbt` for the recursive schema model
-// (`golem:core/types@2.0.0`): the `init` block builds an
-// `@agents.AgentTypeDef` per agent (per-parameter `@schema.into_schema_graph`
-// roots), registers it, and the generated `@agents.RawAgent` dispatch decodes
-// the `@types.SchemaValueTree` input record and encodes the output via the SDK
-// runtime helpers in `agents/dispatch.mbt`. Built as a MoonBit-source string and
-// parsed back via `parse_generated_impls` (see `value_types_emit.mbt`).
+// Agent registration and dispatch use the flat WIT schema and value carriers.
+// Each agent appends type nodes to one shared pool, avoiding recursive models
+// and graph merging. Source is parsed back through `parse_generated_impls`.
 // ============================================================
 
 ///|
 /// Lowercases the first character of a name so it can be used as a MoonBit value
-/// identifier (the local `AgentTypeDef` binding in the generated `init` block).
+/// identifier in the generated `init` block.
 fn lower_first(s : String) -> String {
   let chars = s.to_array()
   if chars.length() == 0 {
@@ -104,15 +98,13 @@ fn read_only_str(info : MethodInfo) -> String {
 }
 
 ///|
-/// Renders the `source` of a single input parameter. A `Principal` parameter is
-/// auto-injected by the platform; every other parameter carries its own schema
-/// graph (built from `T`'s `@schema.into_schema_graph`).
+/// Renders the source and wire type index of a single input parameter.
 fn input_param_source_str(pt : ParamType) -> String {
   if is_principal_type(pt) {
-    "@agents.InputParamSource::AutoInjected(@common.AutoInjectedKind::PRINCIPAL)"
+    "@common.FieldSource::AutoInjected(@common.AutoInjectedKind::PRINCIPAL), schema: schema_encoder.push(@types.RecordType([]))"
   } else {
     let ts = param_type_to_type_string(pt)
-    "@agents.InputParamSource::UserSupplied(@schema.into_schema_graph((@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])))"
+    "@common.FieldSource::UserSupplied, schema: @schema.append_wire_type_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}]))"
   }
 }
 
@@ -128,20 +120,20 @@ fn emit_input_params(
     let (name, pt) = p
     if !is_config_type(pt) {
       buf.write_string(
-        "\{indent}{ name: \"\{escape_string_lit(name)}\", source: \{input_param_source_str(pt)} },\n",
+        "\{indent}{ name: \"\{escape_string_lit(name)}\", source: \{input_param_source_str(pt)}, metadata: @schema.empty_wire_metadata() },\n",
       )
     }
   }
 }
 
 ///|
-/// Renders a method/constructor `output` schema (`None` for a unit return).
+/// Renders a method output's index in the shared wire type pool.
 fn output_schema_str(return_type : ParamType?) -> String {
   match return_type {
-    None => "None"
+    None => "@common.OutputSchema::Unit"
     Some(pt) => {
       let ts = param_type_to_type_string(pt)
-      "Some(@schema.into_schema_graph((@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])))"
+      "@common.OutputSchema::Single(@schema.append_wire_type_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])))"
     }
   }
 }
@@ -153,19 +145,25 @@ fn config_entries_str(agent : AgentInfo) -> String {
   match agent.config_type {
     None => "[]"
     Some(ct) =>
-      "@config.collect_entries_of((@schema.TypeTag::{  } : @schema.TypeTag[\{ct}]), [])"
+      "@config.append_wire_entries_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ct}]), [])"
   }
 }
 
 ///|
-/// Emits the `AgentTypeDef` literal bound to `var_name`.
+/// Emits the wire `AgentType` literal bound to `var_name`.
 fn emit_agent_type_def(
   buf : StringBuilder,
   agent : AgentInfo,
   var_name : String,
 ) -> Unit {
-  buf.write_string("    let \{var_name} : @agents.AgentTypeDef = {\n")
+  buf.write_string("    let schema_encoder = @schema.WireTypeEncoder::new()\n")
+  buf.write_string(
+    "    let schema_root = schema_encoder.push(@types.RecordType([]))\n",
+  )
+  buf.write_string("    let \{var_name} : @common.AgentType = {\n")
   buf.write_string("      type_name: \"\{escape_string_lit(agent.name)}\",\n")
+  let kind = if agent.is_http_router() { "HTTP_ROUTER" } else { "REGULAR" }
+  buf.write_string("      kind: @common.AgentTypeKind::\{kind},\n")
   buf.write_string(
     "      description: \"\{escape_string_lit(agent.description)}\",\n",
   )
@@ -178,9 +176,9 @@ fn emit_agent_type_def(
   buf.write_string(
     "        prompt_hint: \{opt_string_lit(agent.constructor_prompt_hint)},\n",
   )
-  buf.write_string("        input: [\n")
+  buf.write_string("        input_schema: @common.InputSchema::Parameters([\n")
   emit_input_params(buf, agent.constructor_params, "          ")
-  buf.write_string("        ],\n")
+  buf.write_string("        ]),\n")
   buf.write_string("      },\n")
   buf.write_string("      methods: [\n")
   for m in agent.methods {
@@ -195,10 +193,14 @@ fn emit_agent_type_def(
     buf.write_string(
       "          prompt_hint: \{opt_string_lit(m.prompt_hint)},\n",
     )
-    buf.write_string("          input: [\n")
+    buf.write_string(
+      "          input_schema: @common.InputSchema::Parameters([\n",
+    )
     emit_input_params(buf, m.params, "            ")
-    buf.write_string("          ],\n")
-    buf.write_string("          output: \{output_schema_str(m.return_type)},\n")
+    buf.write_string("          ]),\n")
+    buf.write_string(
+      "          output_schema: \{output_schema_str(m.return_type)},\n",
+    )
     buf.write_string("          read_only: \{read_only_str(m)},\n")
     buf.write_string("        },\n")
   }
@@ -210,7 +212,31 @@ fn emit_agent_type_def(
     "      snapshotting: \{snapshotting_str(agent.snapshotting)},\n",
   )
   buf.write_string("      config: \{config_entries_str(agent)},\n")
+  buf.write_string(
+    "      schema: { type_nodes: schema_encoder.nodes, defs: schema_encoder.defs, root: schema_root },\n",
+  )
   buf.write_string("    }\n")
+}
+
+///|
+/// Emits a complete constructed-agent bundle for a local `agent` value.
+fn emit_constructed_agent(
+  buf : StringBuilder,
+  indent : String,
+  snapshot_format : String?,
+  multipart? : Bool = false,
+) -> Unit {
+  let (snapshottable, format) = match snapshot_format {
+    None => ("None", "None")
+    Some(format) => ("Some(agent)", "Some(@agents.SnapshotFormat::\{format})")
+  }
+  // Bind the ConstructedAgent to a local before `Ok(...)`. The MoonBit
+  // formatter crashes when a call's sole trailing argument is a qualified
+  // struct-constructor literal.
+  buf.write_string(
+    "\{indent}let constructed = @agents.ConstructedAgent::{ raw: agent, snapshottable: \{snapshottable}, snapshot_format: \{format}, multipart_snapshottable: \{if multipart { "Some(agent)" } else { "None" }} }\n",
+  )
+  buf.write_string("\{indent}Ok(constructed)\n")
 }
 
 ///|
@@ -222,19 +248,13 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   buf.write_string("      construct: async fn(input, principal) {\n")
   buf.write_string("        let _ = principal\n")
   buf.write_string("        try {\n")
-  if arity > 0 {
+  buf.write_string(
+    "          let params = @agents.decode_wire_input(input, \{arity}, \"\{ctx}\")\n          defer params.abort()\n",
+  )
+  for j, p in user_params {
+    let (name, pt) = p
     buf.write_string(
-      "          let params = @agents.decode_invocation_input(input, \{arity}, \"\{ctx}\")\n",
-    )
-    for j, p in user_params {
-      let (name, pt) = p
-      buf.write_string(
-        "          let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_param(params, \{j}, \"\{ctx}\")\n",
-      )
-    }
-  } else {
-    buf.write_string(
-      "          let _ = @agents.decode_invocation_input(input, 0, \"\{ctx}\")\n",
+      "          let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_wire_param(params, \{j}, \"\{ctx}\")\n",
     )
   }
   match find_config_param(agent.constructor_params) {
@@ -247,58 +267,117 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   let args = agent.constructor_params
     .map(fn(p) { if is_principal_type(p.1) { "principal" } else { p.0 } })
     .join(", ")
+  buf.write_string("          params.finish()\n")
   buf.write_string("          let agent = \{agent.name}::new(\{args})\n")
-  let use_auto_json = agent.has_json_derives && !agent.has_snapshottable
-  let (snap, fmt) = if agent.has_snapshottable || use_auto_json {
-    let f = if agent.has_snapshottable { "Binary" } else { "Json" }
-    ("Some(agent)", "Some(@agents.SnapshotFormat::\{f})")
+  let use_auto_json = agent.has_json_derives &&
+    !agent.has_snapshottable &&
+    !agent.has_multipart_snapshottable &&
+    !agent.is_http_router()
+  let format = if agent.has_snapshottable {
+    Some("Binary")
+  } else if use_auto_json {
+    Some("Json")
   } else {
-    ("None", "None")
+    None
   }
-  // NOTE: bind the ConstructedAgent to a local before `Ok(...)`. The MoonBit
-  // formatter (0.1.5) crashes when a call's sole trailing argument is a
-  // qualified struct-constructor literal (`Ok(@pkg.Type::{...})`), so we emit
-  // `let constructed = @agents.ConstructedAgent::{...}; Ok(constructed)`.
-  buf.write_string(
-    "          let constructed = @agents.ConstructedAgent::{ raw: agent, snapshottable: \{snap}, snapshot_format: \{fmt} }\n",
+  emit_constructed_agent(
+    buf,
+    "          ",
+    format,
+    multipart=agent.has_multipart_snapshottable,
   )
-  buf.write_string("          Ok(constructed)\n")
   buf.write_string("        } catch {\n")
-  buf.write_string("          e => Err(e)\n")
+  for
+    variant in [
+      "InvalidInput", "InvalidMethod", "InvalidType", "InvalidAgentId", "CustomError",
+    ] {
+    buf.write_string(
+      "          @common.AgentError::\{variant}(value) => Err(@common.AgentError::\{variant}(value))\n",
+    )
+  }
+  buf.write_string("          e => raise e\n")
   buf.write_string("        }\n")
   buf.write_string("      },\n")
 }
 
 ///|
-/// Emits a single agent's `let <var> : AgentTypeDef = {...}` +
-/// `@agents.register_agent({...})` block inside the `init` try.
+/// Emits the snapshot restoration factory for an agent's registration.
+fn emit_load_snapshot(buf : StringBuilder, agent : AgentInfo) -> Unit {
+  let use_auto_json = agent.has_json_derives &&
+    !agent.has_snapshottable &&
+    !agent.has_multipart_snapshottable &&
+    !agent.is_http_router()
+  if !agent.has_snapshottable &&
+    !agent.has_multipart_snapshottable &&
+    !use_auto_json {
+    buf.write_string("      load_snapshot: None,\n")
+    return
+  }
+  buf.write_string("      load_snapshot: Some(async fn(snapshot, context) {\n")
+  if agent.has_multipart_snapshottable {
+    buf.write_string(
+      "        guard snapshot is @agents.SnapshotData::Multipart(parts) else { return Err(\"Expected multipart snapshot\") }\n",
+    )
+    buf.write_string(
+      "        let agent = match \{agent.name}::load_snapshot_parts(parts, context) {\n          Ok(agent) => agent\n          Err(e) => return Err(e)\n        }\n",
+    )
+    emit_constructed_agent(buf, "        ", None, multipart=true)
+  } else if agent.has_snapshottable {
+    buf.write_string(
+      "        guard snapshot is @agents.SnapshotData::Binary(bytes) else { return Err(\"Expected binary snapshot\") }\n",
+    )
+    buf.write_string(
+      "        let agent = match \{agent.name}::load_snapshot(bytes, context) {\n",
+    )
+    buf.write_string("          Ok(agent) => agent\n")
+    buf.write_string("          Err(e) => return Err(e)\n")
+    buf.write_string("        }\n")
+    emit_constructed_agent(buf, "        ", Some("Binary"))
+  } else {
+    buf.write_string(
+      "        guard snapshot is @agents.SnapshotData::Json(bytes) else { return Err(\"Expected JSON snapshot\") }\n",
+    )
+    buf.write_string("        let _ = context\n")
+    buf.write_string("        let json_str = @utf8.decode_lossy(bytes[:])\n")
+    buf.write_string("        let json = @json.parse(json_str) catch {\n")
+    buf.write_string(
+      "          e => return Err(\"Failed to parse snapshot JSON: \" + e.to_string())\n",
+    )
+    buf.write_string("        }\n")
+    buf.write_string(
+      "        let agent : \{agent.name} = @json.from_json(json) catch {\n",
+    )
+    buf.write_string(
+      "          e => return Err(\"Failed to deserialize snapshot: \" + e.to_string())\n",
+    )
+    buf.write_string("        }\n")
+    emit_constructed_agent(buf, "        ", Some("Json"))
+  }
+  buf.write_string("      }),\n")
+}
+
+///|
+/// Emits a single agent's wire descriptor and
+/// `@agents.register_agent({...})` block.
 fn emit_register(buf : StringBuilder, agent : AgentInfo) -> Unit {
   let var_name = lower_first(agent.name) + "_type_def"
   emit_agent_type_def(buf, agent, var_name)
   buf.write_string("    @agents.register_agent({\n")
   buf.write_string("      name: \"\{escape_string_lit(agent.name)}\",\n")
-  buf.write_string("      agent_type: \{var_name}.to_agent_type(),\n")
+  buf.write_string("      agent_type: \{var_name},\n")
   emit_construct(buf, agent)
+  emit_load_snapshot(buf, agent)
   buf.write_string("    })\n")
 }
 
 ///|
-/// Emits the `init` block that registers every agent. The whole body is wrapped
-/// in a `try/catch` because `to_agent_type()` (and `collect_entries_of`) raise.
+/// Emits the `init` block that registers every agent.
 fn emit_init(buf : StringBuilder, agents : Array[AgentInfo]) -> Unit {
   buf.write_string("///|\n")
   buf.write_string("fn init {\n")
-  buf.write_string("  try {\n")
   for a in agents {
     emit_register(buf, a)
   }
-  buf.write_string("  } catch {\n")
-  // Use string concatenation, not `\{e}` interpolation: the formatter (0.1.5)
-  // drops interpolation segments when round-tripping generated source.
-  buf.write_string(
-    "    e =>\n      @agents.panic_with_message(\"init\", \"Failed to register agents: \" + e.to_string())\n",
-  )
-  buf.write_string("  }\n")
   buf.write_string("}\n\n")
 }
 
@@ -313,21 +392,16 @@ fn emit_method_arm(
   let arity = user_params.length()
   let ctx = escape_string_lit("\{agent.name}.\{m.name}")
   buf.write_string("      \"\{escape_string_lit(m.name)}\" => {\n")
-  if arity > 0 {
+  buf.write_string(
+    "        let params = @agents.decode_wire_input(input, \{arity}, \"\{ctx}\")\n        defer params.abort()\n",
+  )
+  for j, p in user_params {
+    let (name, pt) = p
     buf.write_string(
-      "        let params = @agents.decode_invocation_input(input, \{arity}, \"\{ctx}\")\n",
-    )
-    for j, p in user_params {
-      let (name, pt) = p
-      buf.write_string(
-        "        let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_param(params, \{j}, \"\{ctx}\")\n",
-      )
-    }
-  } else {
-    buf.write_string(
-      "        let _ = @agents.decode_invocation_input(input, 0, \"\{ctx}\")\n",
+      "        let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_wire_param(params, \{j}, \"\{ctx}\")\n",
     )
   }
+  buf.write_string("        params.finish()\n")
   let args = m.params
     .map(fn(p) { if is_principal_type(p.1) { "principal" } else { p.0 } })
     .join(", ")
@@ -338,7 +412,7 @@ fn emit_method_arm(
     }
     Some(_) => {
       buf.write_string("        let result = self.\{m.name}(\{args})\n")
-      buf.write_string("        Ok(Some(@agents.encode_output(result)))\n")
+      buf.write_string("        Ok(Some(@agents.encode_wire_output(result)))\n")
     }
   }
   buf.write_string("      }\n")
@@ -382,11 +456,13 @@ fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
 }
 
 ///|
-/// Emits a direct `@agents.Snapshottable` impl for an agent that derives JSON
-/// (`ToJson` + `FromJson`) and has no hand-written `Snapshottable`. Uses
-/// UTF-8-safe byte conversion for the JSON snapshot envelope.
+/// Emits the instance-based snapshot saver for an agent that derives JSON
+/// (`ToJson` + `FromJson`) and has no hand-written `Snapshottable`.
 fn emit_snapshottable(buf : StringBuilder, agent : AgentInfo) -> Unit {
-  if !agent.has_json_derives || agent.has_snapshottable {
+  if !agent.has_json_derives ||
+    agent.has_snapshottable ||
+    agent.has_multipart_snapshottable ||
+    agent.is_http_router() {
     return
   }
   let name = agent.name
@@ -396,36 +472,12 @@ fn emit_snapshottable(buf : StringBuilder, agent : AgentInfo) -> Unit {
   )
   buf.write_string("  @utf8.encode(ToJson::to_json(self).stringify()[:])\n")
   buf.write_string("}\n\n")
-  buf.write_string("///|\n")
-  buf.write_string(
-    "impl @agents.Snapshottable for \{name} with load_snapshot(self, bytes) -> Result[\n",
-  )
-  buf.write_string("  Unit,\n  String,\n] {\n")
-  buf.write_string("  let json_str = @utf8.decode_lossy(bytes[:])\n")
-  buf.write_string("  let json = @json.parse(json_str) catch {\n")
-  buf.write_string(
-    "    e => return Err(\"Failed to parse snapshot JSON: \" + e.to_string())\n",
-  )
-  buf.write_string("  }\n")
-  buf.write_string("  let new_val : \{name} = @json.from_json(json) catch {\n")
-  buf.write_string(
-    "    e => return Err(\"Failed to deserialize snapshot: \" + e.to_string())\n",
-  )
-  buf.write_string("  }\n")
-  for f in agent.fields {
-    let (fname, is_mut) = f
-    if is_mut {
-      buf.write_string("  self.\{fname} = new_val.\{fname}\n")
-    }
-  }
-  buf.write_string("  Ok(())\n")
-  buf.write_string("}\n\n")
 }
 
 ///|
 /// Generates all agent registration code: the `init` block calling
-/// `register_agent`, the `RawAgent` dispatch impls, and `Snapshottable` impls
-/// for JSON-deriving agents.
+/// `register_agent`, the `RawAgent` dispatch impls, and snapshot savers for
+/// JSON-deriving agents.
 pub fn generate_agent_registration(
   agents : Array[AgentInfo],
 ) -> @list.List[@syntax.Impl] {

@@ -1,0 +1,20 @@
+version: "2"
+
+# There is no generated code in this module, so nothing is excluded. The
+# settings match the guest SDK's, so a rule holds the same way across the three
+# Go modules.
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  settings:
+    staticcheck:
+      # Keep the doc-comment-form checks (ST1020-1022), which golangci-lint
+      # disables by default, so a declaration comment that does not start with
+      # the identifier fails lint. The opt-outs are style checks we do not
+      # enforce: package comments, initialism naming, receiver-name
+      # consistency, gopls quick-fix hints.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -QF1008

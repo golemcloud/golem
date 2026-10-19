@@ -1,0 +1,253 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::{
+    ExternalRevision, NO_REVISION, RoutingTablePersistence, check_prev_revision,
+    check_state_for_write, check_stored_revision, decode_shard_state,
+};
+use crate::config::EtcdConfig;
+use crate::sharding::error::ShardManagerError;
+use crate::sharding::etcd_connection::connect_for_requests;
+use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until, send_again_while_unsent};
+use crate::sharding::leader_election::LeaderFence;
+use crate::sharding::model::ShardLeaseState;
+use async_trait::async_trait;
+use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp, TxnResponse};
+use golem_common::serialization::serialize;
+use std::sync::atomic::{AtomicI64, Ordering};
+use tonic::Code;
+use tracing::{debug, info};
+
+/// Key holding the serialized [`ShardLeaseState`].
+pub const STATE_KEY: &str = "/golem/shard-manager/state";
+
+pub struct EtcdRoutingTablePersistence {
+    client: Client,
+    number_of_shards: usize,
+    /// Proof that this process won the leadership campaign, added to every write.
+    fence: LeaderFence,
+    /// How much history to keep behind the state; see [`RoutingTablePersistence::compact`].
+    /// `0` disables compaction.
+    compaction_retention_revisions: u64,
+    read_retry: ReadRetry,
+    /// The revision this process last compacted to, so a pass that stored nothing new skips the
+    /// round trip.
+    last_compacted_to: AtomicI64,
+}
+
+impl EtcdRoutingTablePersistence {
+    pub async fn new(
+        config: &EtcdConfig,
+        number_of_shards: usize,
+        fence: LeaderFence,
+    ) -> Result<Self, ShardManagerError> {
+        let client = connect_for_requests(config).await?;
+        info!(
+            endpoints = config.endpoints.join(", "),
+            state_key = STATE_KEY,
+            compaction_retention_revisions = config.compaction_retention_revisions,
+            "Configured the etcd client for shard lease state persistence"
+        );
+
+        Ok(Self::with_client(
+            client,
+            number_of_shards,
+            fence,
+            config.compaction_retention_revisions,
+            ReadRetry::from_config(config),
+        ))
+    }
+
+    /// Builds a persistence over `client`, the connection `run()` opened before campaigning and
+    /// already used for the pre-election shard-count read, so one connection serves both.
+    pub fn with_client(
+        client: Client,
+        number_of_shards: usize,
+        fence: LeaderFence,
+        compaction_retention_revisions: u64,
+        read_retry: ReadRetry,
+    ) -> Self {
+        Self {
+            client,
+            number_of_shards,
+            fence,
+            compaction_retention_revisions,
+            read_retry,
+            last_compacted_to: AtomicI64::new(NO_REVISION),
+        }
+    }
+
+    /// The shard count the stored state was written with, or `None` if nothing is stored.
+    ///
+    /// Takes a bare client rather than `&self` because it runs before the campaign, where there
+    /// is no fence to build a persistence with; reads are not fenced anyway.
+    pub async fn stored_number_of_shards(
+        client: &Client,
+    ) -> Result<Option<usize>, ShardManagerError> {
+        let mut kv = client.kv_client();
+        let response = kv.get(STATE_KEY, None).await?;
+
+        let Some(kv_pair) = response.kvs().first() else {
+            return Ok(None);
+        };
+
+        Ok(Some(decode_shard_state(kv_pair.value())?.number_of_shards))
+    }
+}
+
+#[async_trait]
+impl RoutingTablePersistence for EtcdRoutingTablePersistence {
+    async fn read(&self) -> Result<(ShardLeaseState, ExternalRevision), ShardManagerError> {
+        let deadline = self.read_retry.deadline()?;
+        let response = retry_retriable_until(
+            "reading the shard lease state",
+            || {
+                let mut kv = self.client.kv_client();
+                async move { Ok(kv.get(STATE_KEY, None).await?) }
+            },
+            deadline,
+            self.read_retry.min_delay,
+            self.read_retry.max_delay,
+        )
+        .await?;
+
+        let Some(kv_pair) = response.kvs().first() else {
+            return Ok((ShardLeaseState::new(self.number_of_shards), NO_REVISION));
+        };
+
+        // etcd's store starts at revision 1 and every mutation increments it, so a live key cannot
+        // have mod_revision 0. If it does, the "0 means absent" invariant is broken.
+        let revision = kv_pair.mod_revision();
+        if revision < 1 {
+            return Err(ShardManagerError::Internal(format!(
+                "etcd returned key {STATE_KEY} with mod_revision {revision}, which is reserved for \
+                 absent keys"
+            )));
+        }
+
+        Ok((decode_shard_state(kv_pair.value())?, revision))
+    }
+
+    async fn write(
+        &self,
+        shard_state: &ShardLeaseState,
+        prev_revision: ExternalRevision,
+    ) -> Result<ExternalRevision, ShardManagerError> {
+        // Sent again only when it never reached etcd, unlike `read`, which is repeated on any
+        // transient failure: a write that may have been received and is sent again re-sends the
+        // same expected revision, so an attempt that did land comes back as a conflict. A request
+        // that was never sent cannot have landed, so repeating that one is safe. Any other failed
+        // write stops the process instead. The caller's write timeout bounds the loop; the read
+        // budget bounds it too, for a caller without one.
+        check_prev_revision(prev_revision)?;
+        check_state_for_write(shard_state)?;
+        let encoded = serialize(shard_state).map_err(ShardManagerError::SerializationError)?;
+
+        // etcd reports mod_revision 0 for a key that does not exist, so comparing it equal to
+        // `prev_revision == NO_REVISION` already means "the key must not exist yet" - create-only
+        // semantics, without the separate INSERT statement the SQL backend needs for the same
+        // guarantee.
+        let txn = Txn::new()
+            // The revision compare alone is not a leadership fence - two replicas that both
+            // read revision R both pass it. Only the fence makes leadership a precondition.
+            .when([
+                self.fence.compare(),
+                Compare::mod_revision(STATE_KEY, CompareOp::Equal, prev_revision),
+            ])
+            .and_then([TxnOp::put(STATE_KEY, encoded, None)])
+            // So a rejected write can say which precondition failed.
+            .or_else([self.fence.read_back()]);
+
+        let deadline = self.read_retry.deadline()?;
+        let response = send_again_while_unsent(
+            "writing the shard lease state",
+            || {
+                let mut kv = self.client.kv_client();
+                let txn = txn.clone();
+                async move { kv.txn(txn).await }
+            },
+            deadline,
+            self.read_retry.min_delay,
+        )
+        .await?;
+
+        if !response.succeeded() {
+            return Err(self.classify_failure(&response));
+        }
+
+        let revision = response
+            .header()
+            .ok_or_else(|| {
+                ShardManagerError::Internal(
+                    "etcd transaction response carried no header".to_string(),
+                )
+            })?
+            .revision();
+
+        check_stored_revision(revision, prev_revision)
+    }
+
+    async fn compact(&self, latest: ExternalRevision) -> Result<(), ShardManagerError> {
+        if self.compaction_retention_revisions == 0 {
+            return Ok(());
+        }
+
+        let target = latest.saturating_sub(self.compaction_retention_revisions as i64);
+        if target <= self.last_compacted_to.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        // Idempotent, but sent again under the same rule as the write, so that there is one rule
+        // for which etcd failures are repeated.
+        let deadline = self.read_retry.deadline()?;
+        let compacted = send_again_while_unsent(
+            "compacting the shard lease state history",
+            || {
+                let mut kv = self.client.kv_client();
+                async move { kv.compact(target, None).await }
+            },
+            deadline,
+            self.read_retry.min_delay,
+        )
+        .await;
+        match compacted {
+            Ok(_) => {}
+            // Another replica, or an operator, already compacted past `target`. The history
+            // behind it is gone either way, which is what was asked for.
+            Err(etcd_client::Error::GRpcStatus(status)) if status.code() == Code::OutOfRange => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        self.last_compacted_to.store(target, Ordering::Release);
+        debug!(
+            target,
+            latest, "Compacted etcd history behind the shard lease state"
+        );
+        Ok(())
+    }
+}
+
+impl EtcdRoutingTablePersistence {
+    /// Tells the two rejection causes apart using the transaction's else-branch read.
+    fn classify_failure(&self, response: &TxnResponse) -> ShardManagerError {
+        if self.fence.held_after_refusal(response) {
+            ShardManagerError::ConcurrentModification
+        } else {
+            ShardManagerError::LeadershipLost {
+                leader_key: self.fence.key_str(),
+                create_revision: self.fence.create_revision(),
+            }
+        }
+    }
+}

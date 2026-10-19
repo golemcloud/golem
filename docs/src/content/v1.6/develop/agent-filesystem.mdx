@@ -1,0 +1,182 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+import { Tabs } from "nextra/components"
+
+# Agent Filesystem
+
+Each agent runs in a sandboxed filesystem. Both the `/` path and the current working directory of an agent point to the root of this sandboxed filesystem.
+There is no way for an agent to access files outside its own filesystem.
+
+## Accessing the filesystem
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    For TypeScript agents, use [`node:fs`](https://nodejs.org/api/fs.html) or [`node:fs/promises`](https://nodejs.org/api/fs.html#promises-api) to work with files.
+
+    In Golem 1.5, the QuickJS runtime provides a comprehensive filesystem API, so standard operations such as reading, writing, checking existence, creating directories, and listing directories are available.
+
+    ```typescript
+    import { readFile, writeFile } from 'node:fs/promises';
+
+    export async function writeAndRead(): Promise<string> {
+      await writeFile('/message.txt', 'Hello, Golem!', 'utf8');
+      return readFile('/message.txt', 'utf8');
+    }
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    Effect TypeScript agents use [`node:fs`](https://nodejs.org/api/fs.html) or [`node:fs/promises`](https://nodejs.org/api/fs.html#promises-api), just like other TypeScript agents. The Effect template's QuickJS runtime provides these filesystem implementations.
+
+    ```typescript
+    import { readFile, writeFile } from 'node:fs/promises';
+    import { Effect } from 'effect';
+
+    export const writeAndRead = Effect.gen(function* () {
+      yield* Effect.tryPromise(() =>
+        writeFile('/message.txt', 'Hello, Golem!', 'utf8'));
+      return yield* Effect.tryPromise(() => readFile('/message.txt', 'utf8'));
+    });
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For Rust agents, use the standard [`std::fs`](https://doc.rust-lang.org/std/fs/index.html) module to work with files.
+
+    Golem Rust agents compile to WASI, so standard filesystem operations such as `read_to_string`, `read`, `write`, and `read_dir` work out of the box.
+
+    ```rust
+    pub fn write_and_read() -> std::io::Result<String> {
+        std::fs::write("/message.txt", "Hello, Golem!")?;
+        std::fs::read_to_string("/message.txt")
+    }
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For Scala agents, use [`node:fs`](https://nodejs.org/api/fs.html) via Scala.js JavaScript interop.
+
+    ```scala
+    import scala.scalajs.js
+    import scala.scalajs.js.annotation.JSImport
+
+    @js.native
+    @JSImport("node:fs", JSImport.Namespace)
+    object NodeFs extends js.Object {
+      def writeFileSync(path: String, text: String, encoding: String): Unit = js.native
+      def readFileSync(path: String, encoding: String): String = js.native
+    }
+
+    object Files {
+      private lazy val fs = NodeFs
+
+      def writeAndRead(): String = {
+        fs.writeFileSync("/message.txt", "Hello, Golem!", "utf8")
+        fs.readFileSync("/message.txt", "utf8")
+      }
+    }
+    ```
+
+    Standard JVM file I/O APIs such as `java.io.File` and `java.nio.file.*` are not available in Scala.js. Define a small `@JSImport("node:fs", JSImport.Namespace)` facade and access it lazily at runtime.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For MoonBit agents, add `"golemcloud/golem_sdk/filesystem" @fs` to the `import` block in your component's `moon.pkg`.
+
+    Its async helpers include `read_bytes`, `write_bytes`, and `list_directory`. Obtain the root directory descriptor with `@fs.get_root_dir()` and handle its optional result before passing the descriptor to these helpers.
+
+    ```moonbit
+    pub async fn write_and_read() -> Result[FixedArray[Byte], String] {
+      let root = match @fs.get_root_dir() {
+        Some(root) => root
+        None => return Err("No root directory")
+      }
+      defer root.drop()
+      match @fs.write_bytes(root, "message.txt", [72, 105]) {
+        Err(error) => return Err(repr(error))
+        Ok(_) => ()
+      }
+      @fs.read_bytes(root, "message.txt").map_err(error => repr(error))
+    }
+    ```
+
+    Paths are relative to the root descriptor. The helpers release the file descriptors they open; the caller releases the root descriptor with `defer`, including on a write or read failure.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For Go agents, use the standard [`os`](https://pkg.go.dev/os) and [`io`](https://pkg.go.dev/io) packages to work with files.
+
+    Golem Go agents compile to WASI, so standard filesystem operations such as `os.ReadFile`, `os.WriteFile`, `os.Open`, `os.MkdirAll`, and `os.ReadDir` work out of the box.
+
+    ```go
+    package example
+
+    import "os"
+
+    func WriteAndRead() (string, error) {
+        if err := os.WriteFile("/message.txt", []byte("Hello, Golem!"), 0o600); err != nil {
+            return "", err
+        }
+        data, err := os.ReadFile("/message.txt")
+        return string(data), err
+    }
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+## Initial File System
+
+The Initial File System (IFS) refers to all files that are present in the agent filesystem _before_ the agent is started.
+These can include configuration files, static assets and other things that you want to include with your agent.
+
+The IFS is configured on the level of a component, meaning that all agents created from a given component + version will always start with the
+same filesystem. To configure the IFS, include a `files` section in your golem.yaml
+
+<Callout type="warning">
+    If you are using profiles in your golem.yaml, you currently have to include the files section in each of your profiles when overriding.
+</Callout>
+
+```yaml
+components:
+  example:filesystem:
+    template: ts
+    files:
+    - sourcePath: ./files/foo.txt
+      targetPath: /foobar.txt
+      permissions: read-write
+    - sourcePath: ./files/bar.txt
+      targetPath: /bar.txt
+      permissions: read-only
+```
+
+After deploying the component, any new agents created will have the file `/foobar.txt` (and `./foobar.txt` as the agent's initial current directory is the root) available to them.
+The file `/bar.txt` on the other hand is only available for reading. Trying to open the file for writing will fail with a language-dependent error.
+
+### Updating an agent
+
+Updating an agent that uses IFS requires some special consideration depending on the update mode you choose:
+
+* **Automatic updates**: The new code replays the old agent invocations on the files of the old revision. The replay starts from the files of
+its baseline, for example the initial files of the old revision, or the files that a snapshot-assisted update restores from the selected snapshot. The replay must produce _exactly_ the same results and side effects as before. After the
+replay, at the update point, Golem applies the initial files of the new revision. The update fails when the new revision changes the declaration of an
+initial file at a path where the agent wrote, changed or deleted a file. See [Automatic update](/v1.6/develop/updating#how-the-update-restores-the-agents-files).
+* **Manual updates**: On an executor with [filesystem snapshots](/v1.6/develop/snapshotting#agent-files-and-snapshots), Golem saves the agent's files
+with the update snapshot and restores them in the target revision before `golem:api/load-snapshot` runs. The update fails when the target revision
+changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file. See [Manual updates](/v1.6/develop/updating#how-the-update-restores-the-agents-files). On other executors, a snapshot-based
+update works only while the agent's files are its initial files. Otherwise the update fails, and the agent stays on its current revision.
+See [Snapshot availability](/v1.6/operate/filesystem_snapshots/recovery#without-filesystem-snapshots).
+
+## Files after a restart
+
+Golem rebuilds the agent filesystem at each start. A full replay of the oplog runs the agent's code again, and the code writes its files again.
+A start from a snapshot record replays only the entries after the record. On an executor with
+[filesystem snapshots](/v1.6/develop/snapshotting#agent-files-and-snapshots), Golem restores the files of the record before the replay. On other
+executors, Golem writes a snapshot record only while the agent's files are its initial files, and a start from the record puts the initial files
+in place. An agent whose files changed takes no snapshot, so its start uses an older snapshot record or replays the full oplog, and the code writes
+its files again.
+
+## Externally accessing agent files
+
+To serve files without writing a download method, use [live filesystem mappings](/v1.6/invoke/making-custom-apis/http-routers#serving-live-agent-files)
+on a durable agent's mount. They support streaming, HEAD, and single byte-range requests,
+including files created during initialization or overwritten by later invocations.
+For deployment-provisioned read-only assets, use [immutable router files](/v1.6/invoke/making-custom-apis/http-routers#serving-static-files).
+
+If a download needs application logic rather than direct file serving, define a
+[code-first HTTP endpoint](/v1.6/invoke/making-custom-apis) or a
+[streaming router handler](/v1.6/invoke/making-custom-apis/http-routers#handling-streaming-requests).

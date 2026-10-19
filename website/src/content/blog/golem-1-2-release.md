@@ -114,8 +114,7 @@ Together, these changes simplify and extend current development capabilities, an
 
 A big chunk of what a developer does comes after pushing the big deployment button, and this release contains a number of improvements targeting simplified operations:
 
-- **Core debugging service.** The core debugging service will be used to introduce a time traveling debugger. This debugger will allow you to step through the historical action of a worker, and interact with it at that point in time, helping to diagnose, troubleshoot, and eventually repair issues that led to failure.
-- **Core worker recovery.** Though not yet exposed in a high-level way, it is now possible to revert a worker to any point in time (including before failure), whereupon it will resume execution from that point in time. This will soon be exposed in the upcoming debugger GUI.
+- **Core worker recovery.** Though not yet exposed in a high-level way, it is now possible to revert a worker to any point in time (including before failure), whereupon it will resume execution from that point in time.
 - **Cancel pending invocations.** A minor addition, this allows canceling any invocations on a worker which are pending.
 
 Most of these improvements are at the level of core APIs, and not yet visible.

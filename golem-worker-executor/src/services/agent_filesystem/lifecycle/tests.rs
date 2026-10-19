@@ -1,10 +1,12 @@
 use super::*;
 use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
 use crate::sandbox_filesystem::{
-    FilesystemAllocation, ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning,
-    ScriptedSandboxPath, ScriptedSandboxPathBase, ScriptedSandboxPathCall,
+    FilesystemAllocation, HostDirectories, HostDirectory, ScriptedSandboxFilesystemControl,
+    ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath, ScriptedSandboxPathBase,
+    ScriptedSandboxPathCall,
 };
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::golem_config::FilesystemStorageMode;
 use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
@@ -102,6 +104,48 @@ fn agent_id() -> OwnedAgentId {
     )
 }
 
+pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathBuf) {
+    let id = agent_id();
+    let root = parent
+        .join(id.environment_id.to_string())
+        .join(id.agent_id.component_id.to_string())
+        .join(agent_path_segment(&id.agent_id));
+    let created = create_fresh(
+        sandbox_provisioning(&FilesystemStorageConfig {
+            mode: FilesystemStorageMode::Directory {
+                root: parent.into(),
+            },
+            ..FilesystemStorageConfig::default()
+        })
+        .unwrap(),
+        scratch_directory().await,
+        id,
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let (account, _) = account();
+    let reconstructing = bind_configured_resource_usage_metering(
+        created,
+        account,
+        ResourceUsageMeteringConfig {
+            compute: false,
+            memory: false,
+            filesystem: false,
+        },
+    )
+    .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
+    let reconstructing = finish_replay(reconstructing).await.unwrap();
+    (finish_reconstruction(reconstructing).await.unwrap(), root)
+}
+
 fn limits(bytes: u64, objects: u64) -> FilesystemLimits {
     FilesystemLimits {
         allocated_bytes: bytes,
@@ -116,11 +160,14 @@ fn allocation(bytes: u64, objects: u64) -> FilesystemAllocation {
     }
 }
 
-fn unsupported_allocation() -> FilesystemStorageError {
+pub(super) fn unsupported_allocation() -> FilesystemStorageError {
     FilesystemStorageError::allocation_unsupported(Path::new("<scripted>"))
 }
 
-fn sandbox_error(operation: &'static str, kind: std::io::ErrorKind) -> FilesystemStorageError {
+pub(super) fn sandbox_error(
+    operation: &'static str,
+    kind: std::io::ErrorKind,
+) -> FilesystemStorageError {
     FilesystemStorageError::io(
         operation,
         Path::new("<scripted>"),
@@ -131,11 +178,39 @@ fn sandbox_error(operation: &'static str, kind: std::io::ErrorKind) -> Filesyste
 fn sandbox_provisioning(
     settings: &FilesystemStorageConfig,
 ) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
-    SandboxFilesystemProvisioning::new(
-        settings.deterministic_root_dir.clone(),
-        settings.managed_xfs_root_dir.clone(),
-        settings.cleanup_retry.clone(),
+    SandboxFilesystemProvisioning::new(&settings.mode, settings.cleanup_retry.clone())
+}
+
+/// Makes the host directories on unmanaged storage with a temporary root.
+async fn host_directories() -> HostDirectories {
+    SandboxFilesystemProvisioning::provision(
+        &FilesystemStorageMode::Temporary,
+        golem_common::model::RetryConfig::default(),
     )
+    .await
+    .unwrap()
+    .1
+}
+
+/// Makes the cache directory of a file loader on unmanaged storage with a temporary root.
+async fn initial_files_directory() -> HostDirectory {
+    host_directories().await.initial_files
+}
+
+/// Makes a scratch directory on unmanaged storage with a temporary root.
+pub(crate) async fn scratch_directory() -> Arc<HostDirectory> {
+    Arc::new(host_directories().await.scratch)
+}
+
+/// Prepares no initial files, with a file loader on in-memory storage.
+pub(crate) async fn no_initial_files() -> PreparedInitialFiles {
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    prepare_initial_files(loader, EnvironmentId::new(), &[])
+        .await
+        .unwrap()
 }
 
 async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
@@ -154,9 +229,9 @@ async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
-        &loader,
+        Arc::clone(&loader),
         id.environment_id,
         &[InitialAgentFile {
             content_hash,
@@ -170,13 +245,15 @@ async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
     (prepared, loader)
 }
 
-fn sandbox_attributes(kind: SandboxObjectKind) -> SandboxAttributes {
+pub(super) fn sandbox_attributes(kind: SandboxObjectKind) -> SandboxAttributes {
     SandboxAttributes {
         kind,
         link_count: 1,
         size: 0,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }
 }
 
@@ -232,9 +309,13 @@ async fn reconstructing_with_recovery(
 ) {
     let (filesystem, control, entry) =
         bound_reconstructing_with_recovery(limits, pressure_recovery).await;
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let filesystem = finish_replay(filesystem).await.unwrap();
     (filesystem, control, entry)
 }
@@ -247,12 +328,27 @@ async fn bound_reconstructing_with_recovery(
     ScriptedSandboxFilesystemControl,
     Arc<AtomicResourceEntry>,
 ) {
+    bound_reconstructing_with_accounting(limits, pressure_recovery, AgentAccounting::Development)
+        .await
+}
+
+async fn bound_reconstructing_with_accounting(
+    limits: ResolvedStorageLimits,
+    pressure_recovery: Option<FilesystemWriteRecovery>,
+    accounting: AgentAccounting,
+) -> (
+    TestAgentFilesystem<Reconstructing>,
+    ScriptedSandboxFilesystemControl,
+    Arc<AtomicResourceEntry>,
+) {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         limits,
         pressure_recovery,
+        accounting,
     )
     .await
     .unwrap();
@@ -281,9 +377,11 @@ async fn unmetered_reconstructing_with_recovery(
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         limits,
         pressure_recovery,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -302,9 +400,11 @@ async fn created_product_supports_observed_verified_cleanup() {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -315,7 +415,7 @@ async fn created_product_supports_observed_verified_cleanup() {
     assert!(has_call(&control, "delete_and_verify("));
 }
 
-async fn resident(
+pub(super) async fn resident(
     usage: Result<FilesystemAllocation, FilesystemStorageError>,
 ) -> (
     TestAgentFilesystem<Resident>,
@@ -373,17 +473,23 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     control.push_observe_allocation(Err(unsupported_allocation()));
     let filesystem = finish_reconstruction(reconstructing).await.unwrap();
@@ -586,14 +692,26 @@ fn call_count(control: &ScriptedSandboxFilesystemControl, operation: &str) -> us
         .count()
 }
 
-async fn wait_for_call(control: &ScriptedSandboxFilesystemControl, operation: &str) {
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while !has_call(control, operation) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+fn assert_hard_link_source_probe(calls: &[String]) {
+    let link = calls
+        .iter()
+        .position(|call| call.starts_with("hard_link("))
+        .unwrap();
+    let probe = calls
+        .iter()
+        .rposition(|call| call.starts_with("get_path_attributes("))
+        .unwrap();
+    assert!(probe > link);
+    let source = calls[link]
+        .strip_prefix("hard_link(source=")
+        .unwrap()
+        .split_once(", destination=")
+        .unwrap()
+        .0;
+    assert_eq!(
+        calls[probe],
+        format!("get_path_attributes(target={source}, follow=No)")
+    );
 }
 
 async fn assert_insert_coordination(
@@ -718,9 +836,13 @@ async fn reconstruction_requires_initial_materialization_and_replay_drain() {
 
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         reconstruction_generation_handle(&filesystem),
         Ok(FilesystemGenerationHandle {
@@ -752,9 +874,9 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
-        &loader,
+        Arc::clone(&loader),
         id.environment_id,
         &[InitialAgentFile {
             content_hash,
@@ -767,12 +889,238 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
     .unwrap();
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    control.push_seed_file(Ok(()));
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
 
-    let filesystem = materialize_initial_files(filesystem, prepared)
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap();
-    assert!(has_call(&control, "seed_file("));
+    assert!(has_call(&control, "seed("));
+    control.push_delete_and_verify(Ok(()));
+    delete(abort_reconstruction(filesystem)).await.unwrap();
+    drop(loader);
+}
+
+/// Gives the answer of the check of the stat fast path for a stat of the root-relative `path`
+/// that does not follow a final symlink: `None` when no read-only declaration has the path.
+async fn stat_reads_golems_file<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    path: &str,
+) -> Option<bool> {
+    let target = PathTarget::at_root(generation_handle, path).unwrap();
+    match is_immutable_initial_file(
+        generation_handle,
+        Path::new(path),
+        Target::Path(&target, Follow::No),
+    )
+    .unwrap()
+    {
+        Some(check) => Some(check.await.unwrap()),
+        None => None,
+    }
+}
+
+/// A read-only initial file has the semantics of 1.5.x: the agent can delete it and write its
+/// own file at its path. The check of the stat fast path gives `true` for the file that the
+/// install put at the path, `false` for the path after the delete, and `false` for the file of
+/// the agent, so a stat of that file takes the durable path and reports its timestamps.
+#[test]
+#[timeout("5s")]
+async fn a_file_that_the_agent_writes_at_the_path_of_a_deleted_read_only_initial_file_is_not_golems_file()
+ {
+    let id = agent_id();
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let content = b"initial file".to_vec();
+    let content_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            content
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    let files = [InitialAgentFile {
+        content_hash,
+        path: AgentFilePath::from_abs_str("/read-only").unwrap(),
+        permissions: AgentFilePermissions::ReadOnly,
+        size: content.len() as u64,
+    }];
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
+        .await
+        .unwrap();
+    let (filesystem, control, entry) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    let installed = SandboxAttributes {
+        size: content.len() as u64,
+        read_only: true,
+        object: SandboxObjectId::scripted(1),
+        ..sandbox_attributes(SandboxObjectKind::File)
+    };
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(installed.clone()));
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
+        .await
+        .unwrap();
+    let filesystem = finish_replay(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let filesystem = finish_reconstruction(filesystem).await.unwrap();
+    let window = open_resource_usage_window(&filesystem, permit(&entry).await)
+        .await
+        .unwrap();
+    let generation_handle = resident_generation_handle(&filesystem);
+    let at_path = || PathTarget::at_root(&generation_handle, "read-only").unwrap();
+
+    control.push_get_attributes(Ok(installed.clone()));
+    let before_delete = stat_reads_golems_file(&generation_handle, "read-only").await;
+
+    control.push_get_attributes(Ok(installed));
+    control.push_unlink_file(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Remove {
+            target: at_path(),
+            expected: ObjectKind::File,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    control.push_get_attributes(Err(missing("stat of the deleted initial file")));
+    let after_delete = stat_reads_golems_file(&generation_handle, "read-only").await;
+
+    control.push_open(Ok(SandboxOpened::scripted_file(2)));
+    let opened = open(
+        &generation_handle,
+        at_path(),
+        OpenOptions::File {
+            access: AccessMode::ReadWrite,
+            disposition: FileDisposition::CreateExclusive,
+            follow: Follow::No,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    let OpenNode::File(file) = &opened.node else {
+        panic!("scripted open returned a directory")
+    };
+    control.push_write(Ok(SandboxWriteAttempt::completed(5)));
+    write(
+        &generation_handle,
+        file,
+        WritePlacement::At(0),
+        Bytes::from_static(b"agent"),
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    let written_at = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let agents_file = SandboxAttributes {
+        size: 5,
+        accessed: Some(written_at),
+        modified: Some(written_at),
+        read_only: false,
+        object: SandboxObjectId::scripted(2),
+        ..sandbox_attributes(SandboxObjectKind::File)
+    };
+    control.push_get_attributes(Ok(agents_file.clone()));
+    let agents_file_check = stat_reads_golems_file(&generation_handle, "read-only").await;
+    control.push_get_attributes(Ok(agents_file));
+    let stat = attributes(&generation_handle, Target::Path(&at_path(), Follow::No))
+        .unwrap()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            before_delete,
+            after_delete,
+            agents_file_check,
+            stat.accessed,
+            stat.modified
+        ),
+        (
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(written_at),
+            Some(written_at)
+        )
+    );
+    // The check of the file of the agent decides from its attributes and reads nothing more.
+    assert_eq!(call_count(&control, "get_path_attributes("), 6);
+
+    control.push_close(Ok(()));
+    close(opened.node).await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+    drop(loader);
+}
+
+#[test]
+async fn initial_files_are_seeded_as_one_file_entry_each_that_creates_a_new_path() {
+    let id = agent_id();
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let content = b"initial file".to_vec();
+    let content_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            content
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    let files = [
+        ("/read-only", AgentFilePermissions::ReadOnly),
+        ("/read-write", AgentFilePermissions::ReadWrite),
+    ]
+    .map(|(path, permissions)| InitialAgentFile {
+        content_hash,
+        path: AgentFilePath::from_abs_str(path).unwrap(),
+        permissions,
+        size: content.len() as u64,
+    });
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
+        .await
+        .unwrap();
+    let source = prepared.files[0].source.path().as_path().to_path_buf();
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Ok(()));
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
+        .await
+        .unwrap();
+
+    let seeds = control
+        .calls()
+        .into_iter()
+        .filter(|call| call.starts_with("seed("))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        seeds,
+        [("read-only", "ReadOnly"), ("read-write", "ReadWrite")].map(|(target, access)| {
+            format!(
+                "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"{target}\" }}, access={access}, placement=CreateNew}}])",
+                source.display()
+            )
+        })
+    );
     control.push_delete_and_verify(Ok(()));
     delete(abort_reconstruction(filesystem)).await.unwrap();
     drop(loader);
@@ -782,19 +1130,24 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
 #[timeout("5s")]
 async fn external_seed_source_retains_its_cache_lease_through_seeding() {
     let (prepared, loader) = prepared_initial_file().await;
-    let source_path = prepared.files[0].source.path().to_path_buf();
+    let source_path = prepared.files[0].source.path().as_path().to_path_buf();
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    control.push_seed_file(Ok(()));
-    let gate = control.block("seed_file");
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    let gate = control.block("seed");
 
-    let materializing = tokio::spawn(materialize_initial_files(filesystem, prepared));
+    let materializing = tokio::spawn(materialize_baseline(
+        filesystem,
+        prepared,
+        None::<std::convert::Infallible>,
+    ));
     gate.wait_started().await;
     assert!(source_path.exists());
     let seed_call = control
         .calls()
         .into_iter()
-        .find(|call| call.starts_with("seed_file("))
+        .find(|call| call.starts_with("seed("))
         .unwrap();
     assert!(seed_call.contains(&format!("source={}", source_path.display())));
 
@@ -807,6 +1160,56 @@ async fn external_seed_source_retains_its_cache_lease_through_seeding() {
 }
 
 #[test]
+async fn initial_file_seed_retries_a_failure_with_no_effect_twice_then_returns_it() {
+    let seed_calls = |control: &ScriptedSandboxFilesystemControl| {
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("seed("))
+            .count()
+    };
+    let no_effect = || sandbox_error("seed initial file", std::io::ErrorKind::Interrupted);
+
+    let (prepared, loader) = prepared_initial_file().await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    let materialized =
+        materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>).await;
+    assert_eq!(
+        seed_calls(&control),
+        3,
+        "two failures with no effect are retried"
+    );
+    let filesystem = materialized.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(abort_reconstruction(filesystem)).await.unwrap();
+    drop(loader);
+
+    let (prepared, loader) = prepared_initial_file().await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Err(no_effect()));
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
+        .await
+        .unwrap_err();
+    assert_eq!(seed_calls(&control), 3, "the budget allows two retries");
+    assert!(
+        matches!(failure.source, Error::Sandbox(_)),
+        "{}",
+        failure.source
+    );
+    control.push_delete_and_verify(Ok(()));
+    delete(failure.filesystem).await.unwrap();
+    drop(loader);
+}
+
+#[test]
 async fn reconstruction_seed_storage_full_at_limit_is_agent_quota() {
     let storage_limits = limits(4096, 8);
     let (filesystem, control, entry) =
@@ -815,14 +1218,14 @@ async fn reconstruction_seed_storage_full_at_limit_is_agent_quota() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
     control.push_observe_allocation(Ok(allocation(storage_limits.allocated_bytes, 1)));
 
     let (prepared, loader) = prepared_initial_file().await;
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -844,14 +1247,14 @@ async fn managed_quota_behavior_remains_active_with_storage_metering_disabled() 
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
     control.push_observe_allocation(Ok(allocation(storage_limits.allocated_bytes, 1)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -879,14 +1282,14 @@ async fn managed_pressure_behavior_remains_active_with_storage_metering_disabled
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
     control.push_observe_allocation(Ok(allocation(512, 1)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -915,14 +1318,14 @@ async fn reconstruction_seed_storage_full_below_limit_is_physical_capacity() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
     control.push_observe_allocation(Ok(allocation(512, 1)));
 
     let (prepared, loader) = prepared_initial_file().await;
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -947,21 +1350,22 @@ async fn reconstruction_seed_retries_after_physical_capacity_recovery() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
     control.push_observe_allocation(Ok(allocation(512, 1)));
-    control.push_seed_file(Ok(()));
+    control.push_seed(Ok(()));
     control.push_observe_allocation(Ok(allocation(1024, 1)));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let filesystem = materialize_initial_files(filesystem, prepared)
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap();
 
     assert_eq!(recovery.calls(), 1);
-    assert_eq!(call_count(&control, "seed_file("), 2);
+    assert_eq!(call_count(&control, "seed("), 2);
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -978,13 +1382,13 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
     control.push_observe_allocation(Ok(allocation(low_limits.allocated_bytes, 1)));
     let (prepared, loader) = prepared_initial_file().await;
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
     assert!(matches!(failure.source, Error::AgentQuota(_)));
@@ -1001,15 +1405,16 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Ok(()));
+    control.push_seed(Ok(()));
     control.push_observe_allocation(Ok(allocation(4096, 1)));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let filesystem = materialize_initial_files(filesystem, prepared)
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap();
 
-    assert_eq!(call_count(&control, "seed_file("), 1);
+    assert_eq!(call_count(&control, "seed("), 1);
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -1022,9 +1427,13 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
 async fn reconstruction_mutations_without_storage_metering_need_no_billing_window() {
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstruction_generation_handle = reconstruction_generation_handle(&filesystem).unwrap();
     let target =
         PathTarget::at_root(&reconstruction_generation_handle, "replayed-directory").unwrap();
@@ -1068,9 +1477,13 @@ async fn reconstruction_opened_unlinked_node_close_does_not_observe_allocation()
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstruction_generation_handle = reconstruction_generation_handle(&filesystem).unwrap();
     let target = PathTarget::at_root(&reconstruction_generation_handle, "open-unlinked").unwrap();
     control.push_open(Ok(SandboxOpened::scripted_file(90)));
@@ -1217,10 +1630,11 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
     control.push_observe_allocation(Err(unsupported_allocation()));
     control.push_delete_and_verify(Ok(()));
     let gate = control.block("observe_allocation");
+    let deletion = control.block("delete_and_verify");
 
     let transition = finish_reconstruction(filesystem);
     assert!(matches!(
-        generation.registry.lease_call(),
+        generation.registry.lease_call(CallEffect::Read),
         Err(AccessError::Transitioning)
     ));
     drop(transition);
@@ -1228,8 +1642,17 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
     gate.wait_started().await;
     gate.release();
 
-    wait_for_call(&control, "delete_and_verify(").await;
-    assert!(weak.upgrade().is_none());
+    deletion.wait_started().await;
+    assert!(weak.upgrade().is_some());
+    deletion.release();
+    // Starting deletion does not mean its owning task has released the generation yet.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed cleanup must release the reconstruction generation");
 }
 
 #[test]
@@ -1258,7 +1681,7 @@ async fn dropping_an_unstarted_call_cancels_it_without_sandbox_work() {
 #[test]
 async fn first_call_poll_runs_the_exact_operation_in_the_caller_task() {
     let registry = Arc::new(GenerationRegistry::new());
-    let lease = registry.lease_call().unwrap();
+    let lease = registry.lease_call(CallEffect::Read).unwrap();
     let caller_thread = std::thread::current().id();
     let operation_thread = Arc::new(Mutex::new(None));
     let observed_thread = Arc::clone(&operation_thread);
@@ -1276,7 +1699,7 @@ async fn first_call_poll_runs_the_exact_operation_in_the_caller_task() {
 #[timeout("5s")]
 async fn dropping_a_started_call_transfers_the_same_operation_once() {
     let registry = Arc::new(GenerationRegistry::new());
-    let lease = registry.lease_call().unwrap();
+    let lease = registry.lease_call(CallEffect::Read).unwrap();
     let starts = Arc::new(AtomicUsize::new(0));
     let completions = Arc::new(AtomicUsize::new(0));
     let started = Arc::new(Notify::new());
@@ -1478,6 +1901,8 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
         size: 4,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_read_link(Ok(SandboxSymlinkTarget(PathBuf::from("target"))));
     let directory_gate = control.block("read_directory");
@@ -1532,7 +1957,7 @@ async fn terminal_file_read_failure_invalidates_generation_handle() {
     let file = open_file(&generation_handle, &control, 30).await;
     control.push_read(Err(sandbox_error(
         "read",
-        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ReadOnlyFilesystem,
     )));
 
     assert!(matches!(
@@ -1691,6 +2116,7 @@ async fn dropping_limit_observer_never_reopens_admission_and_deletes() {
     }));
     control.push_delete_and_verify(Ok(()));
     let gate = control.block("install_limits");
+    let deletion = control.block("delete_and_verify");
 
     let transition = set_limits(filesystem, ResolvedStorageLimits::Finite(finite));
     assert!(matches!(
@@ -1709,8 +2135,16 @@ async fn dropping_limit_observer_never_reopens_admission_and_deletes() {
     gate.wait_started().await;
     gate.release();
 
-    wait_for_call(&control, "delete_and_verify(").await;
-    assert!(generation_handle.generation.upgrade().is_none());
+    deletion.wait_started().await;
+    assert!(generation_handle.generation.upgrade().is_some());
+    deletion.release();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while generation_handle.generation.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed cleanup must release the limit-update generation");
 }
 
 #[test]
@@ -2092,6 +2526,7 @@ async fn decisive_namespace_guest_errors_skip_observation_and_pressure_recovery(
         "hard link existing destination",
         std::io::ErrorKind::AlreadyExists,
     )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     assert!(matches!(
         edit_namespace(
             &generation_handle,
@@ -2214,6 +2649,7 @@ async fn hard_link_preexisting_destination_is_no_effect_without_identity_inferen
         "hard link existing destination",
         std::io::ErrorKind::AlreadyExists,
     )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
 
     assert!(matches!(
         edit_namespace(
@@ -2301,6 +2737,8 @@ async fn unknown_hard_link_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
 
     assert!(matches!(
@@ -2331,7 +2769,501 @@ async fn unknown_hard_link_effect_invalidates_without_retry() {
     delete(seal(filesystem)).await.unwrap();
 }
 
-#[cfg(target_os = "linux")]
+#[test]
+async fn a_cleanup_permission_failure_of_a_writable_open_invalidates_a_read_only_target() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_open(Err(FilesystemStorageError::cleanup_io(
+        "open cleanup",
+        Path::new("alias"),
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
+    )));
+    control.push_get_attributes(Ok(SandboxAttributes {
+        read_only: true,
+        ..sandbox_attributes(SandboxObjectKind::File)
+    }));
+
+    let opened = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "alias").unwrap(),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Write,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(
+        matches!(opened, Err(Error::RuntimeInvalidated)),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "later").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_directory_hard_link_over_an_existing_destination_gives_not_permitted() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_hard_link(Err(sandbox_error(
+        "hard link",
+        std::io::ErrorKind::AlreadyExists,
+    )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
+
+    let linked = edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: PathTarget::at_root(&generation_handle, "directory").unwrap(),
+            destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+        "{linked:?}"
+    );
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    assert_eq!(call_count(&control, "hard_link("), 1);
+    assert_hard_link_source_probe(&control.calls().into_boxed_slice());
+    control.push_get_attributes(Err(missing("directory before the insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "after-refused-link").unwrap(),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_results() {
+    use futures::StreamExt as _;
+
+    let proofs: Box<[_]> = Box::new([
+        (Some(900), Ok(sandbox_attributes(SandboxObjectKind::File))),
+        (
+            Some(900),
+            Ok(sandbox_attributes(SandboxObjectKind::Symlink)),
+        ),
+        (None, Err(missing("source proof"))),
+        (
+            None,
+            Err(FilesystemStorageError::verification(
+                "source proof",
+                Path::new("source"),
+            )),
+        ),
+        (
+            None,
+            Err(sandbox_error(
+                "source proof",
+                std::io::ErrorKind::Interrupted,
+            )),
+        ),
+    ]);
+    futures::stream::iter(proofs)
+        .for_each(|(hint, proof)| async move {
+            let (filesystem, control, window) = metered_resident().await;
+            let generation_handle = resident_generation_handle(&filesystem);
+            control.push_namespace_resolution(1, "source", hint);
+            control.push_namespace_resolution(1, "existing", None);
+            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+            control.push_hard_link(Err(sandbox_error(
+                "hard link",
+                std::io::ErrorKind::AlreadyExists,
+            )));
+            control.push_get_attributes(proof);
+            let linked = edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                    destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+                },
+            )
+            .unwrap()
+            .await;
+            let expected = Some(std::io::ErrorKind::AlreadyExists);
+            assert!(
+                matches!(linked, Err(Error::Sandbox(ref error)) if error.io_kind() == expected),
+                "{linked:?}"
+            );
+            assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+            assert_eq!(call_count(&control, "hard_link("), 1);
+            assert_eq!(call_count(&control, "get_path_attributes("), 2);
+            assert_hard_link_source_probe(&control.calls().into_boxed_slice());
+            control.push_get_attributes(Err(missing("directory before the insert")));
+            control.push_create_directory(Ok(()));
+            edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Insert {
+                    destination: PathTarget::at_root(&generation_handle, "after-refused-link")
+                        .unwrap(),
+                    object: NewObject::Directory,
+                },
+            )
+            .unwrap()
+            .await
+            .unwrap();
+            close_window(window, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            delete(seal(filesystem)).await.unwrap();
+        })
+        .await;
+}
+
+#[test]
+async fn a_terminal_source_probe_after_hard_link_collision_invalidates_the_generation() {
+    use futures::StreamExt as _;
+
+    let errors: Box<[_]> = Box::new([
+        sandbox_error("source proof", std::io::ErrorKind::PermissionDenied),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        FilesystemStorageError::io(
+            "source proof",
+            Path::new("source"),
+            std::io::Error::from_raw_os_error(libc::EIO),
+        ),
+    ]);
+    futures::stream::iter(errors)
+        .for_each(|probe_error| async move {
+            let (filesystem, control, window) = metered_resident().await;
+            let generation_handle = resident_generation_handle(&filesystem);
+            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+            control.push_hard_link(Err(sandbox_error(
+                "hard link",
+                std::io::ErrorKind::AlreadyExists,
+            )));
+            control.push_get_attributes(Err(probe_error));
+            let linked = edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                    destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+                },
+            )
+            .unwrap()
+            .await;
+            assert!(
+                matches!(linked, Err(Error::RuntimeInvalidated)),
+                "{linked:?}"
+            );
+            assert!(filesystem_activity(&filesystem).has_terminal_failure());
+            assert_eq!(call_count(&control, "hard_link("), 1);
+            assert_hard_link_source_probe(&control.calls().into_boxed_slice());
+            assert!(matches!(
+                edit_namespace(
+                    &generation_handle,
+                    NamespaceEdit::Insert {
+                        destination: PathTarget::at_root(&generation_handle, "after-refused-link")
+                            .unwrap(),
+                        object: NewObject::Directory,
+                    }
+                ),
+                Err(AccessError::Revoked)
+            ));
+            close_window(window, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            delete(seal(filesystem)).await.unwrap();
+        })
+        .await;
+}
+
+#[test]
+async fn hard_link_policy_proof_does_not_replace_escape_or_cleanup_errors() {
+    use futures::StreamExt as _;
+
+    let errors: Box<[_]> = Box::new([
+        FilesystemStorageError::io(
+            "hard link",
+            Path::new("source"),
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "a path led outside of the filesystem",
+            ),
+        ),
+        FilesystemStorageError::cleanup_io(
+            "hard link",
+            Path::new("source"),
+            std::io::Error::new(std::io::ErrorKind::AlreadyExists, "cleanup"),
+        ),
+    ]);
+    futures::stream::iter(errors)
+        .for_each(|link_error| async move {
+            let (filesystem, control, window) = metered_resident().await;
+            let generation_handle = resident_generation_handle(&filesystem);
+            let expected_kind = link_error.io_kind();
+            let expected_escape = link_error.is_sandbox_escape();
+            let expected_cleanup = link_error.cleanup_failed();
+            control.push_namespace_resolution(1, "source", Some(900));
+            control.push_namespace_resolution(1, "existing", None);
+            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+            control.push_hard_link(Err(link_error));
+            let linked = edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                    destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+                },
+            )
+            .unwrap()
+            .await;
+            assert!(
+                matches!(linked, Err(Error::Sandbox(ref error))
+            if error.io_kind() == expected_kind
+            && error.is_sandbox_escape() == expected_escape
+            && error.cleanup_failed() == expected_cleanup),
+                "{linked:?}"
+            );
+            assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+            assert_eq!(call_count(&control, "hard_link("), 1);
+            assert_eq!(call_count(&control, "get_path_attributes("), 1);
+            close_window(window, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            delete(seal(filesystem)).await.unwrap();
+        })
+        .await;
+}
+
+#[test]
+#[timeout("10s")]
+async fn directory_hard_link_classification_holds_coordination_through_the_source_probe() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_hard_link(Err(sandbox_error(
+        "hard link",
+        std::io::ErrorKind::AlreadyExists,
+    )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
+    let link_gate = control.block("hard_link");
+    let linking = tokio::spawn(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Link {
+                source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+            },
+        )
+        .unwrap(),
+    );
+    link_gate.wait_started().await;
+    let probe_gate = control.block("get_path_attributes");
+    link_gate.release();
+    probe_gate.wait_started().await;
+    control.push_get_attributes(Err(missing("destination before rename")));
+    control.push_rename(Ok(()));
+    let mut replacing = Box::pin(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Move {
+                source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                destination: PathTarget::at_root(&generation_handle, "moved-source").unwrap(),
+            },
+        )
+        .unwrap(),
+    );
+    assert!(futures::poll!(replacing.as_mut()).is_pending());
+    assert_eq!(call_count(&control, "rename("), 0);
+    probe_gate.release();
+    let linked = linking.await.unwrap();
+    assert!(
+        matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+        "{linked:?}"
+    );
+    replacing.await.unwrap();
+    assert_eq!(call_count(&control, "rename("), 1);
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_cleanup_permission_failure_of_a_directory_hard_link_invalidates_the_generation() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Err(missing("destination before the link")));
+    control.push_hard_link(Err(FilesystemStorageError::cleanup_io(
+        "hard link cleanup",
+        Path::new("directory"),
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
+    )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
+
+    let linked = edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: PathTarget::at_root(&generation_handle, "directory").unwrap(),
+            destination: PathTarget::at_root(&generation_handle, "alias").unwrap(),
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert_eq!(call_count(&control, "hard_link("), 1);
+    assert!(
+        matches!(linked, Err(Error::RuntimeInvalidated)),
+        "{linked:?}"
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "later").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_hard_link_permission_refusal_is_guest_policy_only_for_a_known_directory() {
+    // Linking a directory is a guest-policy refusal. A file, symlink, or failed source probe
+    // cannot establish that policy and leaves the native permission error terminal.
+    for source in ["file", "directory", "symlink", "missing", "refused-probe"] {
+        let (filesystem, control, window) = metered_resident().await;
+        let generation_handle = resident_generation_handle(&filesystem);
+        let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
+        let later_target = at("after-refused-link");
+        control.push_get_attributes(Err(missing("destination before the link")));
+        control.push_hard_link(Err(sandbox_error(
+            "hard link",
+            std::io::ErrorKind::PermissionDenied,
+        )));
+        control.push_get_attributes(match source {
+            "directory" => Ok(sandbox_attributes(SandboxObjectKind::Directory)),
+            "file" => Ok(sandbox_attributes(SandboxObjectKind::File)),
+            "symlink" => Ok(sandbox_attributes(SandboxObjectKind::Symlink)),
+            "missing" => Err(missing("source policy probe")),
+            "refused-probe" => Err(sandbox_error(
+                "source policy probe",
+                std::io::ErrorKind::PermissionDenied,
+            )),
+            _ => unreachable!(),
+        });
+        let reads_before = call_count(&control, "get_path_attributes(");
+
+        let linked = edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Link {
+                source: at(source),
+                destination: at("alias"),
+            },
+        )
+        .unwrap()
+        .await;
+
+        assert_eq!(call_count(&control, "hard_link("), 1, "{source}");
+        assert_eq!(
+            call_count(&control, "get_path_attributes("),
+            reads_before + 2,
+            "{source}"
+        );
+        let source_probe = control
+            .calls()
+            .into_iter()
+            .rev()
+            .find(|call| call.starts_with("get_path_attributes("))
+            .unwrap();
+        assert!(source_probe.contains(&format!("path: \"{source}\"")));
+        assert!(source_probe.contains("follow=No"));
+        if source == "directory" {
+            assert!(
+                matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+                "{source}: {linked:?}"
+            );
+            assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+            control.push_get_attributes(Err(missing("directory before the insert")));
+            control.push_create_directory(Ok(()));
+            edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Insert {
+                    destination: later_target,
+                    object: NewObject::Directory,
+                },
+            )
+            .unwrap()
+            .await
+            .unwrap();
+        } else {
+            assert!(
+                matches!(linked, Err(Error::RuntimeInvalidated)),
+                "{source}: {linked:?}"
+            );
+            assert!(filesystem_activity(&filesystem).has_terminal_failure());
+            assert!(matches!(
+                edit_namespace(
+                    &generation_handle,
+                    NamespaceEdit::Insert {
+                        destination: later_target,
+                        object: NewObject::Directory,
+                    },
+                ),
+                Err(AccessError::Revoked)
+            ));
+        }
+
+        close_window(window, Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        control.push_delete_and_verify(Ok(()));
+        delete(seal(filesystem)).await.unwrap();
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postcondition() {
     let (filesystem, control, window) = metered_resident().await;
@@ -2425,6 +3357,8 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
         size: 0,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_times(Err(sandbox_error("set times", std::io::ErrorKind::Other)));
     control.push_get_attributes(Ok(SandboxAttributes {
@@ -2433,6 +3367,8 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
         size: 0,
         accessed: Some(accessed),
         modified: Some(modified),
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     set_attributes(
         &generation_handle,
@@ -2459,6 +3395,43 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
 
     control.push_close(Ok(()));
     close(node).await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_creating_open_whose_postcondition_read_fails_terminally_invalidates_the_generation() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    // The error of the open proves that it changed nothing, but the read of the postcondition
+    // finds broken storage, so the lifecycle cannot trust the filesystem any more.
+    control.push_open(Err(sandbox_error("open", std::io::ErrorKind::NotFound)));
+    control.push_get_attributes(Err(sandbox_error(
+        "open postcondition",
+        std::io::ErrorKind::ReadOnlyFilesystem,
+    )));
+
+    assert!(matches!(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "created").unwrap(),
+            OpenOptions::File {
+                access: AccessMode::ReadWrite,
+                disposition: FileDisposition::CreateIfMissing,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap()
+        .await,
+        Err(Error::RuntimeInvalidated)
+    ));
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -2507,6 +3480,63 @@ async fn unknown_mutating_open_effect_invalidates_without_retry() {
 }
 
 #[test]
+async fn a_refused_creating_open_whose_policy_probe_is_refused_invalidates_the_generation() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_open(Err(sandbox_error(
+        "open",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    // Neither the policy probe nor the postcondition can establish a read-only file refusal.
+    control.push_get_attributes(Err(sandbox_error(
+        "open policy probe",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    control.push_get_attributes(Err(sandbox_error(
+        "open postcondition",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    let later_target = PathTarget::at_root(&generation_handle, "after-refused-create").unwrap();
+
+    let opened = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "refused-create").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::ReadWrite,
+            disposition: FileDisposition::CreateIfMissing,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(opened, Err(Error::RuntimeInvalidated)),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    assert_eq!(call_count(&control, "open("), 1);
+    assert_eq!(call_count(&control, "get_path_attributes("), 2);
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Insert {
+                destination: later_target,
+                object: NewObject::Directory,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn unknown_attribute_effect_invalidates_without_retry() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -2517,6 +3547,8 @@ async fn unknown_attribute_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Err(sandbox_error("set size", std::io::ErrorKind::Other)));
     control.push_get_attributes(Err(sandbox_error(
@@ -2559,6 +3591,159 @@ async fn unknown_attribute_effect_invalidates_without_retry() {
 }
 
 #[test]
+async fn a_native_permission_refusal_of_a_size_change_invalidates_the_generation() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let node = OpenNode::File(open_file(&generation_handle, &control, 26).await);
+    control.push_get_attributes(Ok(SandboxAttributes {
+        kind: SandboxObjectKind::File,
+        link_count: 1,
+        size: 0,
+        accessed: None,
+        modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
+    }));
+    // The native permission error is terminal even though it proves that no size changed.
+    control.push_set_size(Err(sandbox_error(
+        "set size",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+
+    let later_target =
+        PathTarget::at_root(&generation_handle, "after-refused-size-change").unwrap();
+    let reads_before = call_count(&control, "get_node_attributes(");
+    let refused = set_attributes(
+        &generation_handle,
+        Target::Open(&node),
+        AttributeChanges::File {
+            size: 64,
+            times: TimeChanges {
+                accessed: TimeChange::Keep,
+                modified: TimeChange::Keep,
+            },
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(refused, Err(Error::RuntimeInvalidated)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("set_size("))
+            .count(),
+        1,
+        "a proven refusal must not retry"
+    );
+    assert_eq!(
+        call_count(&control, "get_node_attributes("),
+        reads_before + 1
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            later_target,
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_native_permission_refusal_of_a_time_change_invalidates_the_generation() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let node = OpenNode::File(open_file(&generation_handle, &control, 27).await);
+    let accessed = std::time::UNIX_EPOCH + Duration::from_secs(10);
+    let modified = std::time::UNIX_EPOCH + Duration::from_secs(20);
+    control.push_get_attributes(Ok(SandboxAttributes {
+        kind: SandboxObjectKind::File,
+        link_count: 1,
+        size: 0,
+        accessed: None,
+        modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
+    }));
+    // The native permission error is terminal even though it proves that no times changed.
+    control.push_set_times(Err(sandbox_error(
+        "set times",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+
+    let later_target =
+        PathTarget::at_root(&generation_handle, "after-refused-time-change").unwrap();
+    let reads_before = call_count(&control, "get_node_attributes(");
+    let refused = set_attributes(
+        &generation_handle,
+        Target::Open(&node),
+        AttributeChanges::Times(TimeChanges {
+            accessed: TimeChange::Set(accessed),
+            modified: TimeChange::Set(modified),
+        }),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(refused, Err(Error::RuntimeInvalidated)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("set_node_times("))
+            .count(),
+        1,
+        "a proven refusal must not retry"
+    );
+    assert_eq!(
+        call_count(&control, "get_node_attributes("),
+        reads_before + 1
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            later_target,
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn unknown_namespace_effect_invalidates_without_retry() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -2568,6 +3753,8 @@ async fn unknown_namespace_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_get_attributes(Err(sandbox_error(
         "rename source after",
@@ -2867,7 +4054,7 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
             },
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert_eq!(
         edit_namespace(
@@ -2878,7 +4065,7 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
             },
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert!(!has_call(&control, "create_directory("));
     assert!(!has_call(&control, "hard_link("));
@@ -2910,116 +4097,514 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
 }
 
 #[test]
-async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets() {
+#[timeout("10s")]
+async fn a_time_change_authorizes_from_a_resolution_made_under_its_namespace_coordination() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
-    let generation = generation_handle.generation.upgrade().unwrap();
-    generation.initial_files.lock().unwrap().insert(
-        PathBuf::from("logical/read-only"),
-        InitialAgentFile {
-            content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
-            path: AgentFilePath::from_abs_str("/logical/read-only").unwrap(),
-            permissions: AgentFilePermissions::ReadOnly,
-            size: 0,
-        },
+    let target = PathTarget::at_root(&generation_handle, "f").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    control.push_read_only_resolution(1, "f", false, false);
+    let resolution = control.block("resolve_namespace_target");
+    let changing = tokio::spawn(
+        set_attributes(
+            &generation_handle,
+            Target::Path(&target, Follow::No),
+            AttributeChanges::Times(times),
+        )
+        .unwrap(),
     );
+    resolution.wait_started().await;
+    // A rename puts a read-only file at f while the change waits for its first resolution.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "f").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    // The resolution under the coordination finds the read-only file. A change that runs from
+    // the first resolution would succeed with these outcomes.
+    control.push_read_only_resolution(1, "f", true, true);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_set_times(Ok(()));
+    resolution.release();
+
+    let changed = changing.await.unwrap();
+
+    assert!(
+        matches!(changed, Err(Error::Access(AccessError::NotPermitted))),
+        "{changed:?}"
+    );
+    assert!(!has_call(&control, "set_path_times("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_time_change_through_a_symlink_changes_the_object_that_its_permission_check_read() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // Both resolutions of alias find a symlink to a writable file, and the read of the kind of
+    // that file finds a regular file. The open, released after the rename below, follows alias
+    // to the read-only file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Ok(SandboxOpened::scripted_read_only_file(710)));
+    let opening = control.block("open");
+    let changing = tokio::spawn(
+        set_attributes(
+            &generation_handle,
+            Target::Path(&alias, Follow::Yes),
+            AttributeChanges::Times(times),
+        )
+        .unwrap(),
+    );
+    opening.wait_started().await;
+    // A rename puts a read-only file at the target of the symlink while the change opens it. The
+    // coordination on the entry alias does not stop the rename: it edits other entries.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "target").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    opening.release();
+
+    let changed = changing.await.unwrap();
+
+    assert!(
+        matches!(changed, Err(Error::Access(AccessError::NotPermitted))),
+        "{changed:?}"
+    );
+    assert!(!has_call(&control, "set_node_times("));
+    assert!(!has_call(&control, "set_path_times("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_followed_time_change_opens_with_the_right_that_the_change_needs() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Ok(SandboxOpened::scripted_read_only_file(711)));
+
+    let changed = set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(TimeChanges {
+            accessed: TimeChange::Keep,
+            modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+        }),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(changed, Err(Error::Access(AccessError::NotPermitted))),
+        "{changed:?}"
+    );
+    // The change runs on the descriptor that this open pins, so the open must already carry the
+    // right that the change needs. A plain read open maps to GENERIC_READ on Windows, which
+    // SetFileTime refuses, and no later step can widen a handle that is already open.
+    let opened = control
+        .calls()
+        .iter()
+        .filter(|call| call.starts_with("open("))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert!(
+        opened[0].contains("ReadAndSetTimes"),
+        "a followed time change must open for a time change: {}",
+        opened[0]
+    );
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_time_change_through_a_symlink_starts_again_when_the_open_finds_another_kind() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // The first open refuses the kind that the read gave, because the object behind alias changed
+    // between the read and the open. The change starts again and finds a regular file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Err(sandbox_error("open", std::io::ErrorKind::InvalidInput)));
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Ok(SandboxOpened::scripted_file(730)));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_set_times(Ok(()));
+
+    set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(times),
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    assert_eq!(call_count(&control, "open("), 2);
+    assert!(has_call(&control, "set_node_times("));
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_time_change_through_a_symlink_stops_after_two_restarts() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // Every open refuses the kind of the read. The change starts again twice, and then the caller
+    // gets the error of the open.
+    (0..3).for_each(|_| {
+        control.push_read_only_resolution(1, "alias", false, false);
+        control.push_read_only_resolution(1, "alias", false, false);
+        control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+        control.push_open(Err(sandbox_error("open", std::io::ErrorKind::InvalidInput)));
+    });
+
+    let changed = set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(times),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(&changed, Err(Error::Sandbox(error))
+            if error.io_kind() == Some(std::io::ErrorKind::InvalidInput)),
+        "{changed:?}"
+    );
+    assert_eq!(call_count(&control, "open("), 3);
+    assert!(!has_call(&control, "set_node_times("));
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_time_change_through_a_symlink_returns_an_open_error_that_is_not_a_kind_mismatch() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    let times = TimeChanges {
+        accessed: TimeChange::Keep,
+        modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+    };
+    // Only a kind mismatch starts the change again. Another error of the open goes to the caller.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Err(sandbox_error("open", std::io::ErrorKind::NotFound)));
+
+    let changed = set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(times),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(&changed, Err(Error::Sandbox(error))
+            if error.io_kind() == Some(std::io::ErrorKind::NotFound)),
+        "{changed:?}"
+    );
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_writable_open_authorizes_from_a_resolution_made_under_its_namespace_coordination() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_read_only_resolution(1, "f", false, false);
+    let resolution = control.block("resolve_namespace_target");
+    let opening = tokio::spawn(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "f").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Write,
+                follow: Follow::No,
+            },
+        )
+        .unwrap(),
+    );
+    resolution.wait_started().await;
+    // A rename puts a read-only file at f while the open waits for its first resolution.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "f").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    // The resolution under the coordination finds the read-only file. An open that runs from
+    // the first resolution would succeed with this outcome.
+    control.push_read_only_resolution(1, "f", true, true);
+    control.push_open(Ok(SandboxOpened::scripted_file(700)));
+    resolution.release();
+
+    let opened = opening.await.unwrap();
+
+    assert!(matches!(
+        opened,
+        Err(Error::Access(AccessError::NotPermitted))
+    ));
+    assert!(!has_call(&control, "open("));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_writable_open_through_a_symlink_refuses_the_read_only_file_that_it_opened() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    // Both resolutions of alias find a symlink to a writable file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_open(Ok(SandboxOpened::scripted_read_only_file(720)));
+    control.push_close(Ok(()));
+    let opening_gate = control.block("open");
+    let opening = tokio::spawn(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "alias").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Write,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap(),
+    );
+    opening_gate.wait_started().await;
+    // A rename puts a read-only file at the target of the symlink while the open runs. The
+    // coordination on the entry alias does not stop the rename: it edits other entries. The open
+    // follows alias to that file, and the scripted open reports it as read-only.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "target").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    opening_gate.release();
+
+    let opened = opening.await.unwrap();
+
+    assert!(
+        matches!(opened, Err(Error::Access(AccessError::NotPermitted))),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    assert_eq!(call_count(&control, "close("), 1);
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_writable_open_through_a_symlink_that_the_sandbox_refuses_with_a_permission_error_gives_not_permitted_and_keeps_the_generation()
+ {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    // Both resolutions of alias find a symlink to a writable file.
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_open(Err(sandbox_error(
+        "open",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    let opening_gate = control.block("open");
+    let opening = tokio::spawn(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "alias").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Write,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap(),
+    );
+    opening_gate.wait_started().await;
+    // A rename puts a read-only file at the target of the symlink while the open runs. The open
+    // follows alias to that file. An executor that is not root gets EACCES from the kernel.
+    move_namespace_entry(
+        &generation_handle,
+        &control,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "target").unwrap(),
+        SandboxObjectKind::File,
+    )
+    .await;
+    // The policy recheck follows alias and confirms that the replacement is a read-only file.
+    control.push_get_attributes(Ok(SandboxAttributes {
+        read_only: true,
+        ..sandbox_attributes(SandboxObjectKind::File)
+    }));
+    opening_gate.release();
+
+    let opened = opening.await.unwrap();
+
+    assert!(
+        matches!(opened, Err(Error::Access(AccessError::NotPermitted))),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    let policy_probe = control
+        .calls()
+        .into_iter()
+        .rev()
+        .find(|call| call.starts_with("get_path_attributes("))
+        .unwrap();
+    assert!(policy_probe.contains("path: \"alias\""));
+    assert!(policy_probe.contains("follow=Yes"));
+    assert!(!has_call(&control, "close("));
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    control.push_get_attributes(Err(missing("directory before the insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "after-refused-open").unwrap(),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_namespace_edits() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
     let parent = open_directory_at(
         &generation_handle,
         &control,
         120,
         AccessMode::ReadWrite,
-        "backend/physical/parent",
+        "parent",
     )
     .await;
+    let not_permitted = |result: &Result<Opened, Error>| {
+        matches!(result, Err(Error::Access(AccessError::NotPermitted)))
+    };
 
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
+    // Each open or time change of the target resolves it twice: once before its namespace
+    // coordination, and once under it.
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "read-only", true, true);
     let root_write = open(
         &generation_handle,
-        PathTarget::at_root(&generation_handle, "backend/physical/read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "parent/read-only").unwrap(),
         OpenOptions::Existing {
             expected: ObjectKind::File,
             access: AccessMode::Write,
-            follow: Follow::Yes,
+            follow: Follow::No,
         },
     )
     .unwrap()
     .await;
-    assert!(matches!(
-        root_write,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
+    assert!(not_permitted(&root_write));
 
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_write = open(
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "read-only", true, true);
+    let parent_truncate = open(
         &generation_handle,
         PathTarget::at(&parent, "read-only"),
-        OpenOptions::Existing {
-            expected: ObjectKind::File,
+        OpenOptions::File {
             access: AccessMode::Write,
+            disposition: FileDisposition::TruncateExisting,
             follow: Follow::Yes,
         },
     )
     .unwrap()
     .await;
-    assert!(matches!(
-        parent_write,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
+    assert!(not_permitted(&parent_truncate));
 
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_unlink = edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Remove {
-            target: PathTarget::at(&parent, "read-only"),
-            expected: ObjectKind::File,
-        },
-    )
-    .unwrap()
-    .await;
-    assert!(matches!(
-        parent_unlink,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
-
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "renamed", None, None);
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_rename = edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Move {
-            source: PathTarget::at(&parent, "read-only"),
-            destination: PathTarget::at(&parent, "renamed"),
-        },
-    )
-    .unwrap()
-    .await;
-    assert!(matches!(
-        parent_rename,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
-
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "hard-link", None, None);
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_link = edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Link {
-            source: PathTarget::at(&parent, "read-only"),
-            destination: PathTarget::at(&parent, "hard-link"),
-        },
-    )
-    .unwrap()
-    .await;
-    assert!(matches!(
-        parent_link,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
-
-    control.push_policy_resolution(700, "alias", Some(901), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
+    control.push_read_only_resolution(700, "alias", false, true);
+    control.push_read_only_resolution(700, "alias", false, true);
     let alias_write = open(
         &generation_handle,
         PathTarget::at(&parent, "alias"),
@@ -3031,21 +4616,70 @@ async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets()
     )
     .unwrap()
     .await;
+    assert!(not_permitted(&alias_write));
+
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "read-only", true, true);
+    let path_times = set_attributes(
+        &generation_handle,
+        Target::Path(&PathTarget::at(&parent, "read-only"), Follow::Yes),
+        AttributeChanges::Times(TimeChanges {
+            accessed: TimeChange::Now,
+            modified: TimeChange::Keep,
+        }),
+    )
+    .unwrap()
+    .await;
     assert!(matches!(
-        alias_write,
+        path_times,
         Err(Error::Access(AccessError::NotPermitted))
     ));
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(!has_call(&control, "set_times("));
 
-    control.push_policy_resolution(700, "alias", Some(901), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_namespace_resolution(700, "alias", None);
-    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Symlink)));
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "hard-link", false, false);
+    control.push_get_attributes(Err(missing("inspect hard link destination")));
+    control.push_hard_link(Ok(()));
+    control.push_observe_allocation(Ok(allocation(0, 0)));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: PathTarget::at(&parent, "read-only"),
+            destination: PathTarget::at(&parent, "hard-link"),
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "renamed", false, false);
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "renamed", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_rename(Ok(()));
+    control.push_observe_allocation(Ok(allocation(0, 0)));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Move {
+            source: PathTarget::at(&parent, "read-only"),
+            destination: PathTarget::at(&parent, "renamed"),
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    control.push_read_only_resolution(700, "renamed", true, true);
+    control.push_read_only_resolution(700, "renamed", true, true);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     control.push_unlink_file(Ok(()));
     control.push_observe_allocation(Ok(allocation(0, 0)));
     edit_namespace(
         &generation_handle,
         NamespaceEdit::Remove {
-            target: PathTarget::at(&parent, "alias"),
+            target: PathTarget::at(&parent, "renamed"),
             expected: ObjectKind::File,
         },
     )
@@ -3053,9 +4687,9 @@ async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets()
     .await
     .unwrap();
 
+    assert_eq!(call_count(&control, "hard_link("), 1);
+    assert_eq!(call_count(&control, "rename("), 1);
     assert_eq!(call_count(&control, "unlink_file("), 1);
-    assert!(!has_call(&control, "rename("));
-    assert!(!has_call(&control, "hard_link("));
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -3919,6 +5553,50 @@ async fn conservative_sandbox_names_serialize_only_within_their_parent() {
 
 #[test]
 #[timeout("10s")]
+async fn apfs_conservative_coordination_covers_both_edit_observation_orders() {
+    let coordinator = Arc::new(NamespaceCoordinator::new());
+    let composed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "caf\u{00e9}.txt");
+    let decomposed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "cafe\u{0301}.txt");
+    let first_observe = coordinator
+        .coordinate(NamespaceCoordinationKind::Observe, vec![composed.clone()])
+        .await;
+    let mut alias_observe = Box::pin(
+        coordinator.coordinate(NamespaceCoordinationKind::Observe, vec![decomposed.clone()]),
+    );
+    let second_observe = match futures::poll!(alias_observe.as_mut()) {
+        std::task::Poll::Ready(lease) => lease,
+        std::task::Poll::Pending => panic!("equivalent observations must remain concurrent"),
+    };
+    let mut blocked_edit =
+        Box::pin(coordinator.coordinate(NamespaceCoordinationKind::Edit, vec![decomposed]));
+    assert!(futures::poll!(blocked_edit.as_mut()).is_pending());
+    drop(first_observe);
+    assert!(futures::poll!(blocked_edit.as_mut()).is_pending());
+    drop(second_observe);
+    let held_edit = blocked_edit.await;
+
+    let mut blocked_observe =
+        Box::pin(coordinator.coordinate(NamespaceCoordinationKind::Observe, vec![composed]));
+    assert!(futures::poll!(blocked_observe.as_mut()).is_pending());
+    let mut other_parent_edit = Box::pin(coordinator.coordinate(
+        NamespaceCoordinationKind::Edit,
+        vec![SandboxNamespaceCoordinationKey::scripted_conservative(
+            2,
+            "cafe\u{0301}.txt",
+        )],
+    ));
+    let other_parent = match futures::poll!(other_parent_edit.as_mut()) {
+        std::task::Poll::Ready(lease) => lease,
+        std::task::Poll::Pending => panic!("different parent identities must remain independent"),
+    };
+    drop(held_edit);
+    let resumed_observe = blocked_observe.await;
+    drop(resumed_observe);
+    drop(other_parent);
+}
+
+#[test]
+#[timeout("10s")]
 async fn symlink_alias_descriptors_preserve_object_identity_across_entry_move() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -4662,7 +6340,9 @@ async fn idle_downgrade_over_usage_requires_unload_without_resource_window() {
 async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -4670,12 +6350,13 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
         .path()
         .join(id.environment_id.to_string())
         .join(id.agent_id.component_id.to_string())
-        .join(id.agent_id.agent_name_encoded());
+        .join(agent_path_segment(&id.agent_id));
 
     let provisioning = sandbox_provisioning(&profile).unwrap();
     assert!(
         create_fresh(
             provisioning,
+            scratch_directory().await,
             id,
             ResolvedStorageLimits::Finite(limits(1024, 16))
         )
@@ -4686,10 +6367,54 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
 }
 
 #[test]
+async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
+    // A file name can have 255 bytes. The agent name has 500 bytes and holds `/` and `..`
+    // segments, so the name of the sandbox directory is the path segment of the agent.
+    let parent = tempfile::tempdir().unwrap();
+    let profile = FilesystemStorageConfig {
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
+        ..FilesystemStorageConfig::default()
+    };
+    let id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: format!("counter(\"{}\")", "../".repeat(163)),
+        },
+    );
+    let root = parent
+        .path()
+        .join(id.environment_id.to_string())
+        .join(id.agent_id.component_id.to_string())
+        .join(agent_path_segment(&id.agent_id));
+    let name_bytes = id.agent_id.agent_id.len();
+
+    let created = create_fresh(
+        sandbox_provisioning(&profile).unwrap(),
+        scratch_directory().await,
+        id,
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let created_root = root.is_dir();
+    delete_created(created).await.unwrap();
+
+    assert_eq!(
+        (name_bytes, created_root, root.exists()),
+        (500, true, false)
+    );
+}
+
+#[test]
 async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent_deletion() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -4699,23 +6424,29 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
         .path()
         .join(first_id.environment_id.to_string())
         .join(first_id.agent_id.component_id.to_string())
-        .join(first_id.agent_id.agent_name_encoded());
+        .join(agent_path_segment(&first_id.agent_id));
     let second_root = parent
         .path()
         .join(second_id.environment_id.to_string())
         .join(second_id.agent_id.component_id.to_string())
-        .join(second_id.agent_id.agent_name_encoded());
+        .join(agent_path_segment(&second_id.agent_id));
 
     let first = create_fresh(
         provisioning.clone(),
+        scratch_directory().await,
         first_id,
         ResolvedStorageLimits::Unlimited,
     )
     .await
     .unwrap();
-    let second = create_fresh(provisioning, second_id, ResolvedStorageLimits::Unlimited)
-        .await
-        .unwrap();
+    let second = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        second_id,
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
 
     assert!(first_root.is_dir());
     assert!(second_root.is_dir());
@@ -4730,7 +6461,9 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
 async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permissions() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -4738,7 +6471,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         .path()
         .join(id.environment_id.to_string())
         .join(id.agent_id.component_id.to_string())
-        .join(id.agent_id.agent_name_encoded());
+        .join(agent_path_segment(&id.agent_id));
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
         InMemoryBlobStorage::new(),
     )));
@@ -4764,7 +6497,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let files = vec![
         InitialAgentFile {
             content_hash: read_only_hash,
@@ -4779,13 +6512,18 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
             size: read_write.len() as u64,
         },
     ];
-    let prepared = prepare_initial_files(&loader, id.environment_id, &files)
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
         .await
         .unwrap();
     let provisioning = sandbox_provisioning(&profile).unwrap();
-    let created = create_fresh(provisioning, id.clone(), ResolvedStorageLimits::Unlimited)
-        .await
-        .unwrap();
+    let created = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        id.clone(),
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_configured_resource_usage_metering(
         created,
@@ -4801,9 +6539,10 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         .await
         .unwrap();
 
-    let reconstructing = materialize_initial_files(reconstructing, prepared)
-        .await
-        .unwrap();
+    let reconstructing =
+        materialize_baseline(reconstructing, prepared, None::<std::convert::Infallible>)
+            .await
+            .unwrap();
     assert_eq!(std::fs::read(root.join("read-only")).unwrap(), read_only);
     assert_eq!(std::fs::read(root.join("read-write")).unwrap(), read_write);
     #[cfg(unix)]
@@ -4902,17 +6641,25 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         std::fs::read(root.join("entity-provisioned")).unwrap(),
         read_only
     );
-    assert_eq!(
-        path_permissions(
-            &generation_handle,
-            std::path::Path::new("replacement-read-only")
-        )
-        .unwrap(),
-        AgentFilePermissions::ReadOnly
+    assert!(
+        std::fs::metadata(root.join("replacement-read-only"))
+            .unwrap()
+            .permissions()
+            .readonly()
+    );
+    assert!(
+        !std::fs::metadata(root.join("read-write"))
+            .unwrap()
+            .permissions()
+            .readonly()
     );
     assert_eq!(
-        path_permissions(&generation_handle, std::path::Path::new("read-write")).unwrap(),
-        AgentFilePermissions::ReadWrite
+        (
+            stat_reads_golems_file(&generation_handle, "replacement-read-only").await,
+            stat_reads_golems_file(&generation_handle, "read-write").await,
+            stat_reads_golems_file(&generation_handle, "entity-provisioned").await,
+        ),
+        (Some(true), None, Some(true))
     );
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
@@ -4923,13 +6670,140 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
 }
 
 #[test]
-fn initial_file_sandbox_task_failure_invalidates_the_generation() {
-    let registry = GenerationRegistry::new();
-    let failure = FilesystemStorageError::scripted_task_failure("update initial files");
+#[timeout("30s")]
+async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read_only_one() {
+    let parent = tempfile::tempdir().unwrap();
+    let profile = FilesystemStorageConfig {
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
+        ..FilesystemStorageConfig::default()
+    };
+    let id = agent_id();
+    let root = parent
+        .path()
+        .join(id.environment_id.to_string())
+        .join(id.agent_id.component_id.to_string())
+        .join(agent_path_segment(&id.agent_id));
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let read_only = b"immutable initial file".to_vec();
+    let read_write = b"mutable initial file".to_vec();
+    let read_only_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            read_only
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let read_write_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            read_write
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    let files = vec![
+        InitialAgentFile {
+            content_hash: read_only_hash,
+            path: AgentFilePath::from_abs_str("/read-only").unwrap(),
+            permissions: AgentFilePermissions::ReadOnly,
+            size: read_only.len() as u64,
+        },
+        InitialAgentFile {
+            content_hash: read_write_hash,
+            path: AgentFilePath::from_abs_str("/read-write").unwrap(),
+            permissions: AgentFilePermissions::ReadWrite,
+            size: read_write.len() as u64,
+        },
+    ];
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
+        .await
+        .unwrap();
+    let provisioning = sandbox_provisioning(&profile).unwrap();
+    let created = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        id.clone(),
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let (account, entry) = account();
+    let reconstructing = bind_configured_resource_usage_metering(
+        created,
+        account,
+        ResourceUsageMeteringConfig {
+            compute: false,
+            memory: true,
+            filesystem: false,
+        },
+    )
+    .unwrap();
+    let window = open_resource_usage_window(&reconstructing, permit(&entry).await)
+        .await
+        .unwrap();
+    let reconstructing =
+        materialize_baseline(reconstructing, prepared, None::<std::convert::Infallible>)
+            .await
+            .unwrap();
+    let reconstructing = finish_replay(reconstructing).await.unwrap();
+    let resident = finish_reconstruction(reconstructing).await.unwrap();
+    let generation_handle = resident_generation_handle(&resident);
 
-    record_initial_file_update_failure(&registry, &failure);
+    // A guest can ask to truncate without asking to write, because WASI takes the truncation from
+    // the open flags and the access from the descriptor flags. Such an open still empties the file.
+    let emptied = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "read-write").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::Read,
+            disposition: FileDisposition::TruncateExisting,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close(emptied.node).await.unwrap();
+    assert!(std::fs::read(root.join("read-write")).unwrap().is_empty());
 
-    assert!(registry.is_invalidated());
+    // The same open of a read-only initial file is refused, and the file keeps its bytes. A file
+    // that the lifecycle installed read-only carries no write permission, so the kernel refuses the
+    // open of a test runner that is not root, and the permission error of an agent's call becomes
+    // not-permitted.
+    let refused = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "read-only").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::Write,
+            disposition: FileDisposition::CreateOrTruncate,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await;
+    assert!(
+        matches!(refused, Err(Error::Access(AccessError::NotPermitted))),
+        "{:?}",
+        refused.as_ref().err()
+    );
+    assert_eq!(std::fs::read(root.join("read-only")).unwrap(), read_only);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    drop(loader);
+    delete(seal(resident)).await.unwrap();
+    assert!(!root.exists());
 }
 
 #[cfg(target_os = "linux")]
@@ -4941,13 +6815,17 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
+        mode: FilesystemStorageMode::ManagedXfs {
+            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            root: root.into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let initial_limits = limits(128 * 1024 * 1024, 8192);
     let provisioning = sandbox_provisioning(&profile).unwrap();
     let created = create_fresh(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Finite(initial_limits),
     )
@@ -4955,9 +6833,13 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
     .unwrap();
     let (account, _) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
     let lowered_limits = limits(64 * 1024 * 1024, 4096);
@@ -4983,12 +6865,16 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
+        mode: FilesystemStorageMode::ManagedXfs {
+            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            root: root.into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
     let created = create_fresh(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Finite(limits(16 * 1024 * 1024, 1024)),
     )
@@ -4996,9 +6882,13 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
     .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
     let window = open_resource_usage_window(&resident, permit(&entry).await)
@@ -5074,17 +6964,23 @@ async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     control.push_observe_allocation(Err(unsupported_allocation()));
     let filesystem = finish_reconstruction(reconstructing).await.unwrap();
@@ -5298,7 +7194,7 @@ async fn terminal_zero_progress_failure_invalidates_without_observing_usage() {
         .count();
     control.push_write(Ok(SandboxWriteAttempt::failed(
         0,
-        sandbox_error("write", std::io::ErrorKind::PermissionDenied),
+        sandbox_error("write", std::io::ErrorKind::ReadOnlyFilesystem),
     )));
 
     assert!(matches!(
@@ -5312,6 +7208,8 @@ async fn terminal_zero_progress_failure_invalidates_without_observing_usage() {
         .await,
         Err(Error::RuntimeInvalidated)
     ));
+    // The first failure invalidates the generation. The lifecycle does not retry the write.
+    assert_eq!(call_count(&control, "write("), 1);
     assert_eq!(
         control
             .calls()
@@ -5352,7 +7250,7 @@ async fn dropped_terminal_write_observer_notifies_the_resident_generation() {
         0,
         sandbox_error(
             "detached terminal write",
-            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::ReadOnlyFilesystem,
         ),
     )));
     let write_gate = control.block("write");
@@ -5371,6 +7269,8 @@ async fn dropped_terminal_write_observer_notifies_the_resident_generation() {
     write_gate.release();
     activity.wait_for_terminal_failure().await;
     assert!(activity.has_terminal_failure());
+    // The first failure invalidates the generation. The lifecycle does not retry the write.
+    assert_eq!(call_count(&control, "write("), 1);
 
     control.push_observe_allocation(Ok(allocation(30, 3)));
     close_window(window, Instant::now() + Duration::from_secs(1))
@@ -6095,6 +7995,48 @@ async fn unknown_write_effect_invalidates_instead_of_retrying() {
 }
 
 #[test]
+async fn a_permission_error_of_the_usage_read_after_storage_exhaustion_invalidates_the_generation()
+{
+    let (filesystem, control, window) =
+        authoritative_metered_resident(ResolvedStorageLimits::Unlimited, allocation(30, 3)).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 19).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    // The lifecycle reads the usage of the storage for itself. A permission error there is a
+    // failure of the host, not the error of the agent's write.
+    control.push_observe_allocation(Err(sandbox_error(
+        "observe allocation",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+
+    assert!(matches!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await,
+        Err(Error::RuntimeInvalidated)
+    ));
+    assert_eq!(call_count(&control, "write("), 1);
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+
+    control.push_observe_allocation(Ok(allocation(30, 3)));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn unmanaged_storage_exhaustion_returns_without_retry_or_invalidation() {
     let (filesystem, control, entry) = reconstructing(ResolvedStorageLimits::Unlimited).await;
     control.push_observe_allocation(Err(unsupported_allocation()));
@@ -6594,6 +8536,247 @@ async fn delete_observer_waits_for_sandbox_verification() {
 }
 
 #[test]
+#[timeout("5s")]
+async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let generation = filesystem.generation.as_ref().unwrap().clone();
+    control.push_delete_and_verify(Err(sandbox_error(
+        "first deletion",
+        std::io::ErrorKind::Other,
+    )));
+    let first = delete(seal(filesystem)).await.unwrap_err();
+    assert!(first.source.to_string().contains("first deletion"));
+    assert!(generation.sandbox.read().await.is_some());
+
+    control.push_delete_and_verify(Err(sandbox_error(
+        "persistent deletion",
+        std::io::ErrorKind::Other,
+    )));
+    let second = first.retry().await.unwrap_err();
+    assert!(second.source.to_string().contains("persistent deletion"));
+    assert!(generation.sandbox.read().await.is_some());
+
+    control.push_delete_and_verify(Ok(()));
+    let gate = control.block("delete_and_verify");
+    let retry = tokio::spawn(second.retry());
+    gate.wait_started().await;
+    retry.abort();
+    assert!(retry.await.unwrap_err().is_cancelled());
+    gate.release();
+    gate.wait_completed().await;
+
+    // A stale failure still refers to the old cleanup owner, not a newly provisioned path.
+    first.retry().await.unwrap();
+    assert!(generation.sandbox.read().await.is_none());
+    assert!(first.source.to_string().contains("first deletion"));
+    assert_eq!(
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("delete_and_verify("))
+            .count(),
+        3
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[timeout("10s")]
+async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
+    let parent = tempfile::tempdir().unwrap();
+    let provisioning = SandboxFilesystemProvisioning::new(
+        &FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
+        golem_common::model::RetryConfig {
+            max_attempts: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let agent = agent_id();
+    let filesystem = create_fresh(
+        provisioning.clone(),
+        scratch_directory().await,
+        agent.clone(),
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let root = filesystem
+        .generation
+        .as_ref()
+        .unwrap()
+        .sandbox
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .root()
+        .to_path_buf();
+    let component = root.parent().unwrap();
+    let moved = component.with_extension("moved");
+    std::fs::rename(component, &moved).unwrap();
+    std::fs::write(component, b"block directory traversal").unwrap();
+
+    let failure = delete_created(filesystem).await.unwrap_err();
+    assert_eq!(
+        failure.source.io_kind(),
+        Some(std::io::ErrorKind::NotADirectory)
+    );
+    assert_eq!(
+        failure.retry().await.unwrap_err().source.io_kind(),
+        Some(std::io::ErrorKind::NotADirectory)
+    );
+
+    std::fs::remove_file(component).unwrap();
+    std::fs::rename(&moved, component).unwrap();
+    failure.retry().await.unwrap();
+    assert!(!root.exists());
+
+    let replacement = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        agent,
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    std::fs::write(root.join("replacement"), b"new generation").unwrap();
+    failure.retry().await.unwrap();
+    drop(failure);
+    assert_eq!(
+        std::fs::read(root.join("replacement")).unwrap(),
+        b"new generation"
+    );
+    delete_created(replacement).await.unwrap();
+}
+
+#[test]
+async fn directory_capabilities_bound_child_opens_and_deny_ungranted_io() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    for (id, mode) in [
+        AccessMode::None,
+        AccessMode::Read,
+        AccessMode::Write,
+        AccessMode::ReadWrite,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let directory =
+            open_directory_with_access(&generation_handle, &control, 900 + id as u64, mode).await;
+        let file = open_file_with_access(&generation_handle, &control, 910 + id as u64, mode).await;
+        let calls_before = control.calls().len();
+        if !mode.can_read() {
+            assert_eq!(
+                list_directory(&generation_handle, &directory).unwrap_err(),
+                AccessError::NotPermitted
+            );
+            assert_eq!(
+                read_file(
+                    &generation_handle,
+                    &file,
+                    ReadRange {
+                        offset: 0,
+                        length: 1
+                    }
+                )
+                .unwrap_err(),
+                AccessError::NotPermitted
+            );
+        } else {
+            drop(list_directory(&generation_handle, &directory).unwrap());
+            drop(
+                read_file(
+                    &generation_handle,
+                    &file,
+                    ReadRange {
+                        offset: 0,
+                        length: 1,
+                    },
+                )
+                .unwrap(),
+            );
+        }
+        if !mode.can_write() {
+            assert_eq!(
+                write(
+                    &generation_handle,
+                    &file,
+                    WritePlacement::At(0),
+                    Bytes::from_static(b"x")
+                )
+                .unwrap_err(),
+                AccessError::NotPermitted
+            );
+        }
+        for path in ["child", "."] {
+            for options in [
+                OpenOptions::Existing {
+                    expected: ObjectKind::File,
+                    access: AccessMode::Write,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::Existing {
+                    expected: ObjectKind::Directory,
+                    access: AccessMode::Write,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::File {
+                    access: AccessMode::None,
+                    disposition: FileDisposition::CreateIfMissing,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::File {
+                    access: AccessMode::Read,
+                    disposition: FileDisposition::TruncateExisting,
+                    follow: Follow::Yes,
+                },
+            ] {
+                let result = open(
+                    &generation_handle,
+                    PathTarget::at(&directory, path),
+                    options,
+                );
+                if mode.can_write() {
+                    drop(result.unwrap());
+                } else {
+                    assert_eq!(result.unwrap_err(), AccessError::ReadOnly);
+                }
+            }
+        }
+        let edit = edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Insert {
+                destination: PathTarget::at(&directory, "child"),
+                object: NewObject::Directory,
+            },
+        );
+        if mode.can_write() {
+            drop(edit.unwrap());
+        } else {
+            assert_eq!(edit.unwrap_err(), AccessError::ReadOnly);
+        }
+        assert_eq!(
+            control.calls().len(),
+            calls_before,
+            "capability checks must precede storage IO"
+        );
+        control.push_close(Ok(()));
+        close(OpenNode::File(file)).await.unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
+    }
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -6630,7 +8813,7 @@ async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
             }),
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert!(!has_call(&control, "set_times("));
     close_window(window, Instant::now() + Duration::from_secs(1))
@@ -6656,6 +8839,8 @@ async fn successful_set_size_does_not_observe_allocation() {
         size: 4,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Ok(()));
     let observations_before = call_count(&control, "observe_allocation(");
@@ -6700,6 +8885,8 @@ async fn resize_postconditions_accept_desired_retry_no_effect_and_invalidate_unk
         size,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     control.push_get_attributes(Ok(attributes(4)));
     control.push_set_size(Err(sandbox_error("set size", std::io::ErrorKind::Other)));
@@ -6792,6 +8979,8 @@ async fn replay_time_restoration_accepts_a_read_only_descriptor() {
         size: 0,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_times(Ok(()));
 
@@ -6830,13 +9019,16 @@ async fn timestamp_postconditions_preserve_keep_and_retry_only_proven_no_effect(
         size: 0,
         accessed,
         modified,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     control.push_get_attributes(Ok(attributes(Some(old_accessed), Some(old_modified))));
+    // A would-block error proves that the times did not change, so the retry follows it without
+    // a postcondition read. Only an error of unknown effect, as in the second half, reads one.
     control.push_set_times(Err(sandbox_error(
         "set times",
         std::io::ErrorKind::WouldBlock,
     )));
-    control.push_get_attributes(Ok(attributes(Some(old_accessed), Some(old_modified))));
     control.push_set_times(Ok(()));
     set_attributes(
         &generation_handle,
@@ -6893,6 +9085,8 @@ async fn successful_set_times_never_observes_allocation() {
         size: 0,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     let (filesystem, control, window) =
         authoritative_metered_resident(ResolvedStorageLimits::Unlimited, allocation(40, 1)).await;
@@ -6974,6 +9168,8 @@ async fn successful_resize_ignores_unrelated_observer_failure() {
         size: 4,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Ok(()));
     let observations_before = call_count(&control, "observe_allocation(");
@@ -7022,6 +9218,8 @@ async fn resize_quota_precedes_pressure_and_growth_can_use_proven_recovery() {
         size,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     control.push_get_attributes(Ok(attributes(10)));
     control.push_set_size(Err(sandbox_error(
@@ -7182,6 +9380,8 @@ async fn dropped_attribute_and_flush_observers_need_no_billing_close_coupling() 
         size: 1,
         accessed: None,
         modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Ok(()));
     let resize_gate = control.block("set_size");
@@ -7240,6 +9440,42 @@ async fn dropped_attribute_and_flush_observers_need_no_billing_close_coupling() 
     close(node2).await.unwrap();
     control2.push_delete_and_verify(Ok(()));
     delete(seal(filesystem2)).await.unwrap();
+}
+
+#[test]
+fn a_host_storage_permission_failure_invalidates_the_generation() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ReadOnlyFilesystem,
+    ] {
+        let error = sandbox_error("open host storage", kind);
+        assert!(error.is_terminal_failure());
+        let cause = classify_failure(&error, FailureFacts::default());
+        assert_eq!(cause, FailureCause::TerminalInfrastructure);
+        assert_eq!(
+            decide_effect(cause, EffectEvidence::NoEffect, RetryBudget::new(2)),
+            EffectDecision::Invalidate
+        );
+    }
+}
+
+#[test]
+fn a_capability_escape_refusal_is_a_guest_error_without_effect() {
+    let root = tempfile::tempdir().unwrap();
+    let directory =
+        cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+    let refusal = directory.open("../outside").unwrap_err();
+    assert_eq!(refusal.kind(), std::io::ErrorKind::PermissionDenied);
+    let error = FilesystemStorageError::io("open sandbox path", root.path(), refusal);
+    assert!(!error.is_terminal_failure());
+    let cause = classify_failure(&error, FailureFacts::default());
+    assert_eq!(cause, FailureCause::Guest);
+    assert!(error_proves_no_effect(&error));
+    assert_eq!(
+        decide_effect(cause, EffectEvidence::NoEffect, RetryBudget::new(2)),
+        EffectDecision::ReturnFailure(FailureCause::Guest)
+    );
+    assert!(matches!(classified_error(cause, error), Error::Sandbox(_)));
 }
 
 #[test]
@@ -7305,6 +9541,74 @@ fn cause_effect_decision_keeps_quota_pressure_and_postconditions_distinct() {
         ),
         EffectDecision::Invalidate
     );
+}
+
+#[test]
+fn native_permission_errors_and_broken_storage_are_terminal() {
+    assert!(invalidates_generation(&sandbox_error(
+        "refused",
+        std::io::ErrorKind::PermissionDenied
+    )));
+    #[cfg(unix)]
+    {
+        [libc::EACCES, libc::EPERM].into_iter().for_each(|errno| {
+            let refused = || {
+                FilesystemStorageError::io(
+                    "refused",
+                    Path::new("<scripted>"),
+                    std::io::Error::from_raw_os_error(errno),
+                )
+            };
+            assert!(refused().is_terminal_failure(), "errno {errno}");
+            assert!(invalidates_generation(&refused()), "errno {errno}");
+            assert_eq!(refused().io_error().unwrap().raw_os_error(), Some(errno));
+            assert_eq!(
+                classify_failure(&refused(), FailureFacts::default()),
+                FailureCause::TerminalInfrastructure,
+                "errno {errno}"
+            );
+            assert!(error_proves_no_effect(&refused()), "errno {errno}");
+            assert!(
+                matches!(
+                    classified_error(FailureCause::TerminalInfrastructure, refused()),
+                    Error::RuntimeInvalidated
+                ),
+                "errno {errno}"
+            );
+        });
+    }
+    assert_eq!(
+        decide_effect(
+            FailureCause::TerminalInfrastructure,
+            EffectEvidence::NoEffect,
+            RetryBudget::new(2),
+        ),
+        EffectDecision::Invalidate
+    );
+    assert!(matches!(
+        classified_error(FailureCause::Guest, missing("guest error")),
+        Error::Sandbox(_)
+    ));
+    // Broken storage invalidates the generation.
+    #[cfg(target_os = "linux")]
+    {
+        [libc::EIO, libc::ESTALE, libc::ENODEV]
+            .into_iter()
+            .for_each(|errno| {
+                assert!(
+                    invalidates_generation(&FilesystemStorageError::io(
+                        "broken",
+                        Path::new("<scripted>"),
+                        std::io::Error::from_raw_os_error(errno),
+                    )),
+                    "errno {errno}"
+                );
+            });
+    }
+    assert!(invalidates_generation(&sandbox_error(
+        "remount",
+        std::io::ErrorKind::ReadOnlyFilesystem
+    )));
 }
 
 #[test]
@@ -7441,6 +9745,8 @@ proptest! {
             size: 0,
             accessed: time(before_accessed),
             modified: time(before_modified),
+            read_only: false,
+            object: SandboxObjectId::scripted(0),
         };
         let observed = SandboxAttributes {
             accessed: time(observed_accessed),
@@ -7527,4 +9833,179 @@ proptest! {
         prop_assert_eq!(second_suffix.as_ref(), &bytes[second..]);
         prop_assert!(second_suffix.len() <= first_suffix.len());
     }
+}
+
+// The module reads the permission bits, the inode identity and the hard-link counts of a
+// captured tree, and its model of a tree carries them, so all of it is Unix-only.
+#[cfg(unix)]
+mod capture_and_baseline;
+
+#[test]
+fn a_change_of_a_read_only_file_is_refused_and_a_change_of_another_object_is_not() {
+    assert!(matches!(
+        refuse_read_only_change(true),
+        Err(Error::Access(AccessError::NotPermitted))
+    ));
+    assert!(refuse_read_only_change(false).is_ok());
+}
+
+/// Gives a resident filesystem on storage with `accounting` that reports no usage, with
+/// `pressure_recovery`, and the window of its resource usage.
+async fn resident_with_accounting(
+    accounting: AgentAccounting,
+    pressure_recovery: Option<FilesystemWriteRecovery>,
+) -> (
+    TestAgentFilesystem<Resident>,
+    ScriptedSandboxFilesystemControl,
+    ResourceUsageMeteringWindow,
+) {
+    let (filesystem, control, entry) = bound_reconstructing_with_accounting(
+        ResolvedStorageLimits::Unlimited,
+        pressure_recovery,
+        accounting,
+    )
+    .await;
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
+    let filesystem = finish_replay(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let filesystem = finish_reconstruction(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let window = open_resource_usage_window(&filesystem, permit(&entry).await)
+        .await
+        .unwrap();
+    (filesystem, control, window)
+}
+
+#[test]
+async fn a_full_volume_without_quotas_runs_pressure_recovery_and_retries_the_write() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::Recovered]);
+    let (filesystem, control, window) =
+        resident_with_accounting(AgentAccounting::Unaccounted, Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 48).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    control.push_write(Ok(SandboxWriteAttempt::completed(4)));
+
+    assert_eq!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await
+        .unwrap(),
+        WriteResult { written: 4 }
+    );
+    assert_eq!(recovery.calls(), 1);
+    assert_eq!(call_count(&control, "write("), 2);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_full_volume_without_quotas_and_without_pressure_keeps_the_write_failure() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::NotUnderPressure]);
+    let (filesystem, control, window) =
+        resident_with_accounting(AgentAccounting::Unaccounted, Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 49).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+
+    assert!(matches!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await,
+        Err(Error::Sandbox(_))
+    ));
+    assert_eq!(recovery.calls(), 1);
+    assert_eq!(call_count(&control, "write("), 1);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_full_development_volume_with_an_unknown_effect_keeps_an_unclassified_failure() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::Recovered]);
+    let (filesystem, control, window) =
+        resident_with_accounting(AgentAccounting::Development, Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_get_attributes(Err(sandbox_error(
+        "rename source after",
+        std::io::ErrorKind::Other,
+    )));
+    control.push_get_attributes(Err(sandbox_error(
+        "rename destination after",
+        std::io::ErrorKind::NotFound,
+    )));
+    control.push_rename(Err(sandbox_error(
+        "rename",
+        std::io::ErrorKind::StorageFull,
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+
+    assert!(matches!(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Move {
+                source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                destination: PathTarget::at_root(&generation_handle, "destination").unwrap(),
+            },
+        )
+        .unwrap()
+        .await,
+        Err(Error::Sandbox(_))
+    ));
+    assert_eq!(recovery.calls(), 0);
+    assert_eq!(call_count(&control, "rename("), 1);
+    let admitted = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "still-valid").unwrap(),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Read,
+            follow: Follow::Yes,
+        },
+    )
+    .expect("a full development volume invalidated the generation");
+    drop(admitted);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
 }

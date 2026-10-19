@@ -14,11 +14,13 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
+use crate::services::component::ComponentWriteService;
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::{
+    AgentTypeName, DeployedRegisteredAgentType, InitialAgentFileUpload,
+};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
@@ -27,13 +29,15 @@ use golem_common::model::deployment::{
 use golem_common::model::environment::*;
 use golem_common::model::poem::NoContentResponse;
 use golem_common::model::tool::{DeployedRegisteredTool, ToolName};
+use golem_common::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareName};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use poem_openapi::OpenApi;
+use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
+use poem_openapi::{Multipart, OpenApi};
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -41,6 +45,7 @@ pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     deployment_service: Arc<DeploymentService>,
     deployment_write_service: Arc<DeploymentWriteService>,
+    component_write_service: Arc<ComponentWriteService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -54,14 +59,46 @@ impl EnvironmentsApi {
         environment_service: Arc<EnvironmentService>,
         deployment_service: Arc<DeploymentService>,
         deployment_write_service: Arc<DeploymentWriteService>,
+        component_write_service: Arc<ComponentWriteService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             deployment_service,
             deployment_write_service,
+            component_write_service,
             auth_service,
         }
+    }
+
+    /// Upload a content-addressed initial agent file for deployment in this environment
+    #[oai(
+        path = "/envs/:environment_id/initial-agent-files",
+        method = "post",
+        operation_id = "upload_environment_initial_agent_file"
+    )]
+    async fn upload_environment_initial_agent_file(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        payload: UploadInitialAgentFileRequest,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<InitialAgentFileUpload>> {
+        let record = recorded_http_api_request!(
+            "upload_environment_initial_agent_file",
+            environment_id = environment_id.0.to_string(),
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            let file = Arc::new(payload.file.into_file());
+            Ok(Json(
+                self.component_write_service
+                    .upload_initial_agent_file(environment_id.0, file, &auth)
+                    .await?,
+            ))
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
     }
 
     /// Create an application environment
@@ -689,4 +726,87 @@ impl EnvironmentsApi {
             .await?;
         Ok(Json(tool))
     }
+
+    /// List all registered tool middleware in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/tool-middlewares",
+        method = "get",
+        operation_id = "list_deployment_registered_tool_middlewares"
+    )]
+    async fn list_deployment_registered_tool_middlewares(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<RegisteredToolMiddleware>>> {
+        let record = recorded_http_api_request!(
+            "list_deployment_registered_tool_middlewares",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            let values = self
+                .deployment_service
+                .list_deployment_registered_tool_middlewares(
+                    environment_id.0,
+                    deployment_id.0,
+                    &auth,
+                )
+                .await?;
+            Ok(Json(Page { values }))
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
+    }
+
+    /// Get registered tool middleware in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/tool-middlewares/:middleware_name",
+        method = "get",
+        operation_id = "get_deployment_registered_tool_middleware"
+    )]
+    async fn get_deployment_registered_tool_middleware(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        middleware_name: Path<ToolMiddlewareName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<RegisteredToolMiddleware>> {
+        let record = recorded_http_api_request!(
+            "get_deployment_registered_tool_middleware",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+            middleware_name = middleware_name.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            self.deployment_service
+                .list_deployment_registered_tool_middlewares(
+                    environment_id.0,
+                    deployment_id.0,
+                    &auth,
+                )
+                .await?
+                .into_iter()
+                .find(|value| value.definition.name == middleware_name.0.as_str())
+                .map(Json)
+                .ok_or_else(|| {
+                    crate::services::deployment::DeploymentError::ToolNotFound(
+                        ToolName::try_from(middleware_name.0.as_str())
+                            .expect("middleware names are valid tool names"),
+                    )
+                })
+                .map_err(Into::into)
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
+    }
+}
+
+#[derive(Multipart)]
+struct UploadInitialAgentFileRequest {
+    file: TempFileUpload,
 }

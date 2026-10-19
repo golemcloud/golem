@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::replayable_stream::{ContentHash, ReplayableStream};
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
+use crate::storage::blob::{
+    BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace,
+};
 use anyhow::{Context, Error};
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -42,9 +44,8 @@ impl InitialAgentFilesService {
     ) -> Result<bool, Error> {
         let metadata = self
             .blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "exists")
             .get_metadata(
-                INITIAL_AGENT_FILES_LABEL,
-                "exists",
                 BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
@@ -60,9 +61,8 @@ impl InitialAgentFilesService {
         key: AgentFileContentHash,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get")
             .get_stream(
-                INITIAL_AGENT_FILES_LABEL,
-                "get",
                 BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
@@ -70,19 +70,65 @@ impl InitialAgentFilesService {
             .context("Failed getting data stream")
     }
 
+    pub async fn get_metadata(
+        &self,
+        environment_id: EnvironmentId,
+        key: AgentFileContentHash,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        self.blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get_metadata")
+            .get_metadata(
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
+                &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
+            )
+            .await
+            .context("Failed getting initial file metadata")
+    }
+
+    pub async fn get_range(
+        &self,
+        environment_id: EnvironmentId,
+        key: AgentFileContentHash,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        self.blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get_range")
+            .get_range_stream(
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
+                &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
+                offset,
+                length,
+            )
+            .await
+            .context("Failed opening initial file range")
+    }
+
     pub async fn put_if_not_exists(
         &self,
         environment_id: EnvironmentId,
         data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<AgentFileContentHash, Error> {
-        let hash = data.content_hash().await?;
-        let key = PathBuf::from(hash.into_blake3().to_hex().to_string());
+        let hash = AgentFileContentHash(data.content_hash().await?);
+        self.put_if_not_exists_with_hash(environment_id, hash, data)
+            .await
+    }
+
+    /// Stores initial agent file data using a content hash already computed while reading it.
+    ///
+    /// Callers must calculate `hash` from the exact bytes produced by `data`.
+    pub async fn put_if_not_exists_with_hash(
+        &self,
+        environment_id: EnvironmentId,
+        hash: AgentFileContentHash,
+        data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<AgentFileContentHash, Error> {
+        let key = PathBuf::from(hash.0.into_blake3().to_hex().to_string());
 
         let metadata = self
             .blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get_metadata")
             .get_metadata(
-                INITIAL_AGENT_FILES_LABEL,
-                "get_metadata",
                 BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &key,
             )
@@ -90,12 +136,11 @@ impl InitialAgentFilesService {
             .context("Failed getting metadata")?;
 
         if metadata.is_none() {
-            debug!("Storing initial agent file with hash: {}", hash);
+            debug!("Storing initial agent file with hash: {}", hash.0);
 
             self.blob_storage
+                .with(INITIAL_AGENT_FILES_LABEL, "put")
                 .put_stream(
-                    INITIAL_AGENT_FILES_LABEL,
-                    "put",
                     BlobStorageNamespace::InitialAgentFiles { environment_id },
                     &key,
                     &data.erased(),
@@ -103,6 +148,6 @@ impl InitialAgentFilesService {
                 .await
                 .context("Failed storing blob storage data")?;
         };
-        Ok(AgentFileContentHash(hash))
+        Ok(hash)
     }
 }

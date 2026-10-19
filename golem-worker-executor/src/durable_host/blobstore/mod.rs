@@ -26,7 +26,9 @@ use wasmtime_wasi::IoView;
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::authorization::targets::{blob_container_target, blob_target};
 use crate::durable_host::blobstore::types::ContainerEntry;
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::{DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{STORAGE_TYPE_BLOB_STORE, record_storage_objects_deleted};
@@ -43,10 +45,11 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 pub(crate) fn environment_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
 ) -> EnvironmentOwnerPattern {
+    let component = ctx.owner_component_metadata();
     EnvironmentOwnerPattern::Environment {
-        account: ctx.state.component_metadata.account_email.clone(),
-        application: ctx.state.component_metadata.application_name.clone(),
-        environment: ctx.state.component_metadata.environment_name.clone(),
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
     }
 }
 
@@ -81,7 +84,8 @@ pub(crate) fn classify_blob_store_error(err: &BlobStoreError) -> HostFailureKind
         BlobStoreError::NotFound(_)
         | BlobStoreError::AlreadyExists(_)
         | BlobStoreError::PermissionDenied(_)
-        | BlobStoreError::InvalidInput(_) => HostFailureKind::Permanent,
+        | BlobStoreError::InvalidInput(_)
+        | BlobStoreError::LimitExceeded(_) => HostFailureKind::Permanent,
         BlobStoreError::TransientBackend(_) | BlobStoreError::Other(_) => {
             HostFailureKind::Transient
         }
@@ -94,52 +98,54 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
-        let authorization = if self.state.is_live() {
-            let target = container_target(self, BlobVerb::Write, &name);
-            Some(match target {
-                Ok(target) => authorize_targets(self, &[target]).await?,
-                Err(err) => Err(err),
-            })
-        } else {
-            None
-        };
-        let mut handle = DurableCallSession::<
+        let begun = DurableCallSession::<
             host_functions::BlobstoreBlobstoreCreateContainer,
             NotCancellable,
-        >::start(
-            self,
-            HostRequestBlobStoreContainer {
-                container: name.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
+        >::begin(self, DurableFunctionType::WriteRemote)
         .await?;
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = match container_target(self, BlobVerb::Write, &name) {
+                        Ok(target) => authorize_targets(self, &[target]).await?.err(),
+                        Err(err) => Some(err),
+                    };
+                    let request = HostRequestBlobStoreContainer {
+                        container: name.clone(),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
                 }
-            }
-
-            if let Some(Err(err)) = authorization {
-                break 'resp handle
-                    .complete(self, HostResponseBlobStoreTimestamp { result: Err(err) })
-                    .await?;
-            }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    handle
+                }
+            };
 
             let svc = self.state.blob_store_service.clone();
             let result = loop {
-                let result = svc
-                    .create_container(environment_id, name.clone())
-                    .await
-                    .map(|_| name.clone());
-                let result = match result {
-                    Ok(name) => svc
-                        .get_container(environment_id, name)
+                // The guest gets the time of the container, so the creation reads the container
+                // back. A read that finds no container after a creation that gave no error is a
+                // `BlobStoreError::NotFound`, which is permanent: the creation has already run,
+                // so no retry of the read can find a container that the storage does not hold.
+                // `Host::get_container` tells the guest the same thing about such a container.
+                let result = match svc.create_container(environment_id, name.clone()).await {
+                    Ok(_) => svc
+                        .get_container(environment_id, name.clone())
                         .await
-                        .map(|r| r.unwrap()),
-                    Err(e) => Err(e),
+                        .and_then(|created_at| {
+                            created_at.ok_or_else(|| {
+                                BlobStoreError::NotFound(format!(
+                                    "the container {name:?} was created, and the storage holds no container at that name"
+                                ))
+                            })
+                        }),
+                    Err(err) => Err(err),
                 };
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -176,42 +182,34 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
-        let authorization = if self.state.is_live() {
-            let target = container_target(self, BlobVerb::Read, &name);
-            Some(match target {
-                Ok(target) => authorize_targets(self, &[target]).await?,
-                Err(err) => Err(err),
-            })
-        } else {
-            None
-        };
-        let mut handle = DurableCallSession::<
+        let begun = DurableCallSession::<
             host_functions::BlobstoreBlobstoreGetContainer,
             NotCancellable,
-        >::start(
-            self,
-            HostRequestBlobStoreContainer {
-                container: name.clone(),
-            },
-            DurableFunctionType::ReadRemote,
-        )
+        >::begin(self, DurableFunctionType::ReadRemote)
         .await?;
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = match container_target(self, BlobVerb::Read, &name) {
+                        Ok(target) => authorize_targets(self, &[target]).await?.err(),
+                        Err(err) => Some(err),
+                    };
+                    let request = HostRequestBlobStoreContainer {
+                        container: name.clone(),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
                 }
-            }
-
-            if let Some(Err(err)) = authorization {
-                break 'resp handle
-                    .complete(
-                        self,
-                        HostResponseBlobStoreOptionalTimestamp { result: Err(err) },
-                    )
-                    .await?;
-            }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    handle
+                }
+            };
 
             let result = loop {
                 let result = self
@@ -252,45 +250,40 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
-        let authorization = if self.state.is_live() {
-            let target = container_target(self, BlobVerb::Delete, &name);
-            Some(match target {
-                Ok(target) => authorize_targets(self, &[target]).await?,
-                Err(err) => Err(err),
-            })
-        } else {
-            None
-        };
-        let mut handle = DurableCallSession::<
+        let begun = DurableCallSession::<
             host_functions::BlobstoreBlobstoreDeleteContainer,
             NotCancellable,
-        >::start(
-            self,
-            HostRequestBlobStoreContainer {
-                container: name.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
+        >::begin(self, DurableFunctionType::WriteRemote)
         .await?;
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = match container_target(self, BlobVerb::Delete, &name) {
+                        Ok(target) => authorize_targets(self, &[target]).await?.err(),
+                        Err(err) => Some(err),
+                    };
+                    let request = HostRequestBlobStoreContainer {
+                        container: name.clone(),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
                 }
-            }
-
-            if let Some(Err(err)) = authorization {
-                break 'resp handle
-                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
-                    .await?;
-            }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    handle
+                }
+            };
 
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_container(environment_id, name.clone())
+                    .delete_container(self.account_resource_limits(), environment_id, name.clone())
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -307,14 +300,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    1,
+                    result
+                        .as_ref()
+                        .map_or(0, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -328,39 +323,34 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
-        let authorization = if self.state.is_live() {
-            let target = container_target(self, BlobVerb::Read, &name);
-            Some(match target {
-                Ok(target) => authorize_targets(self, &[target]).await?,
-                Err(err) => Err(err),
-            })
-        } else {
-            None
-        };
-        let mut handle = DurableCallSession::<
+        let begun = DurableCallSession::<
             host_functions::BlobstoreBlobstoreContainerExists,
             NotCancellable,
-        >::start(
-            self,
-            HostRequestBlobStoreContainer {
-                container: name.clone(),
-            },
-            DurableFunctionType::ReadRemote,
-        )
+        >::begin(self, DurableFunctionType::ReadRemote)
         .await?;
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = match container_target(self, BlobVerb::Read, &name) {
+                        Ok(target) => authorize_targets(self, &[target]).await?.err(),
+                        Err(err) => Some(err),
+                    };
+                    let request = HostRequestBlobStoreContainer {
+                        container: name.clone(),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
+                    begun.start_live(self, request).await?
                 }
-            }
-
-            if let Some(Err(err)) = authorization {
-                break 'resp handle
-                    .complete(self, HostResponseBlobStoreContains { result: Err(err) })
-                    .await?;
-            }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    handle
+                }
+            };
 
             let result = loop {
                 let result = self
@@ -395,48 +385,58 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
-        let authorization = if self.state.is_live() {
-            let targets = [
-                object_target(self, BlobVerb::Read, &src.container, &src.object),
-                object_target(self, BlobVerb::Write, &dest.container, &dest.object),
-            ];
-            Some(match targets.into_iter().collect::<Result<Vec<_>, _>>() {
-                Ok(targets) => authorize_targets(self, &targets).await?,
-                Err(err) => Err(err),
-            })
-        } else {
-            None
-        };
         let input = HostRequestBlobStoreCopyOrMove {
             source_container: src.container,
             source_object: src.object,
             target_container: dest.container,
             target_object: dest.object,
         };
-        let mut handle = DurableCallSession::<
+        let begun = DurableCallSession::<
             host_functions::BlobstoreBlobstoreCopyObject,
             NotCancellable,
-        >::start(self, input.clone(), DurableFunctionType::WriteRemote)
+        >::begin(self, DurableFunctionType::WriteRemote)
         .await?;
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let targets = [
+                        object_target(
+                            self,
+                            BlobVerb::Read,
+                            &input.source_container,
+                            &input.source_object,
+                        ),
+                        object_target(
+                            self,
+                            BlobVerb::Write,
+                            &input.target_container,
+                            &input.target_object,
+                        ),
+                    ];
+                    let denied = match targets.into_iter().collect::<Result<Vec<_>, _>>() {
+                        Ok(targets) => authorize_targets(self, &targets).await?.err(),
+                        Err(err) => Some(err),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, input, denial).await?;
+                    }
+                    begun.start_live(self, input.clone()).await?
                 }
-            }
-
-            if let Some(Err(err)) = authorization {
-                break 'resp handle
-                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
-                    .await?;
-            }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    handle
+                }
+            };
 
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .copy_object(
+                        self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
@@ -456,7 +456,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -471,49 +471,64 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
-        let authorization = if self.state.is_live() {
-            let targets = [
-                object_target(self, BlobVerb::Read, &src.container, &src.object),
-                object_target(self, BlobVerb::Delete, &src.container, &src.object),
-                object_target(self, BlobVerb::Write, &dest.container, &dest.object),
-            ];
-            Some(match targets.into_iter().collect::<Result<Vec<_>, _>>() {
-                Ok(targets) => authorize_targets(self, &targets).await?,
-                Err(err) => Err(err),
-            })
-        } else {
-            None
-        };
         let input = HostRequestBlobStoreCopyOrMove {
             source_container: src.container,
             source_object: src.object,
             target_container: dest.container,
             target_object: dest.object,
         };
-        let mut handle = DurableCallSession::<
+        let begun = DurableCallSession::<
             host_functions::BlobstoreBlobstoreMoveObject,
             NotCancellable,
-        >::start(self, input.clone(), DurableFunctionType::WriteRemote)
+        >::begin(self, DurableFunctionType::WriteRemote)
         .await?;
         let result = 'resp: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'resp response,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let targets = [
+                        object_target(
+                            self,
+                            BlobVerb::Read,
+                            &input.source_container,
+                            &input.source_object,
+                        ),
+                        object_target(
+                            self,
+                            BlobVerb::Delete,
+                            &input.source_container,
+                            &input.source_object,
+                        ),
+                        object_target(
+                            self,
+                            BlobVerb::Write,
+                            &input.target_container,
+                            &input.target_object,
+                        ),
+                    ];
+                    let denied = match targets.into_iter().collect::<Result<Vec<_>, _>>() {
+                        Ok(targets) => authorize_targets(self, &targets).await?.err(),
+                        Err(err) => Some(err),
+                    };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, input, denial).await?;
+                    }
+                    begun.start_live(self, input.clone()).await?
                 }
-            }
-
-            if let Some(Err(err)) = authorization {
-                break 'resp handle
-                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
-                    .await?;
-            }
+                ResolvedCall::Replay(mut handle) => {
+                    match handle.replay(self).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                    handle
+                }
+            };
 
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .move_object(
+                        self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
@@ -533,12 +548,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
         };
 
         Ok(result.result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlobStoreError, HostFailureKind, classify_blob_store_error};
+    use test_r::test;
+
+    #[test]
+    fn quota_rejections_are_guest_visible_without_internal_retry() {
+        assert_eq!(
+            classify_blob_store_error(&BlobStoreError::LimitExceeded("quota".to_string())),
+            HostFailureKind::Permanent
+        );
     }
 }

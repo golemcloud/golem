@@ -18,11 +18,27 @@ use heck::ToUpperCamelCase;
 use itertools::Itertools;
 use std::fmt::{Display, Formatter};
 
+/// Canonical id of the cross-SDK UUID builtin record (two `u64` halves), shared
+/// by all language SDKs. The Rust bridge remaps it onto the native uuid type
+/// instead of generating a structural record.
+pub const UUID_TYPE_ID: &str = "uuid.Uuid";
+
+/// A Rust type a generated name maps onto directly, instead of a generated
+/// definition.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RustRemappedType {
+    /// The `uuid.Uuid` builtin record → `uuid::Uuid` (`golem_rust::Uuid` in guest bridges).
+    Uuid,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RustTypeName {
+    /// A name derived from the schema. The generator emits a definition and
+    /// codecs for it.
     Derived(String),
-    #[allow(dead_code)]
-    Remapped(/* TODO */),
+    /// A name that maps onto an existing Rust type. No definition is emitted
+    /// and the schema body is not walked.
+    Remapped(RustRemappedType),
 }
 
 impl From<String> for RustTypeName {
@@ -43,17 +59,19 @@ impl Display for RustTypeName {
             RustTypeName::Derived(string) => {
                 write!(f, "{}", string)
             }
-            RustTypeName::Remapped() => {
-                todo!()
-            }
+            RustTypeName::Remapped(RustRemappedType::Uuid) => write!(f, "uuid::Uuid"),
         }
     }
 }
 
 impl TypeName for RustTypeName {
-    fn from_schema_type(_typ: &SchemaType) -> Option<Self> {
-        // NOTE: custom remapping can be added here later
-        None
+    fn from_schema_type(typ: &SchemaType) -> Option<Self> {
+        match typ {
+            SchemaType::Ref { id, .. } if id.0 == UUID_TYPE_ID => {
+                Some(RustTypeName::Remapped(RustRemappedType::Uuid))
+            }
+            _ => None,
+        }
     }
 
     fn from_owner_and_name(
@@ -121,6 +139,7 @@ impl TypeName for RustTypeName {
             | SchemaType::Binary { .. }
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
+            | SchemaType::Uuid { .. }
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
             | SchemaType::Quantity { .. }

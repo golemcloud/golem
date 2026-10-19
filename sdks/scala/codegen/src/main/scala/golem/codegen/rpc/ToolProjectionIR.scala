@@ -39,7 +39,8 @@ object ToolProjectionIR {
     kind: Option[String],
     isPrincipal: Boolean,
     isStdin: Boolean,
-    isStdout: Boolean
+    isStdout: Boolean,
+    isStderr: Boolean
   )
 
   final case class ProjectedParam(
@@ -55,7 +56,8 @@ object ToolProjectionIR {
     errType: Option[String],
     projectedOkType: Option[String],
     projectedErrType: Option[String],
-    hasStdout: Boolean
+    hasStdout: Boolean,
+    hasStderr: Boolean
   ) extends ReturnShape
 
   final case class Method(
@@ -165,8 +167,10 @@ object ToolProjectionIR {
     val toolName = tool.toolName.getOrElse(kebabCase(tool.name))
     val methods  = tool.methods.map { method =>
       val params = method.params.map { param =>
-        val kebab = kebabCase(param.name)
-        val arg   = method.args.find(_.name == kebab)
+        val kebab    = kebabCase(param.name)
+        val arg      = method.args.find(_.name == kebab)
+        val isOutput = resolvesTo(tool, param.typeExpr, "golem.tool.ToolOutputStream")
+        val channel  = arg.flatMap(_.channel).getOrElse("stdout")
         Param(
           ident = param.name,
           typeExpr = param.typeExpr,
@@ -177,7 +181,8 @@ object ToolProjectionIR {
           kind = arg.flatMap(_.kind),
           isPrincipal = resolvesTo(tool, param.typeExpr, "golem.Principal"),
           isStdin = resolvesTo(tool, param.typeExpr, "golem.tool.ToolInputStream"),
-          isStdout = resolvesTo(tool, param.typeExpr, "golem.tool.ToolOutputStream")
+          isStdout = isOutput && channel == "stdout",
+          isStderr = isOutput && channel == "stderr"
         )
       }
       UnresolvedMethod(
@@ -227,7 +232,8 @@ object ToolProjectionIR {
           None,
           Some(projectedTypeExpr(owner, method.returnTypeExpr)),
           None,
-          method.params.exists(_.isStdout)
+          method.params.exists(_.isStdout),
+          method.params.exists(_.isStderr)
         )
       case Some(tpe) =>
         resolveToolTrait(owner, tpe, allTools) match {
@@ -242,7 +248,8 @@ object ToolProjectionIR {
                   errType = Some(err.syntax),
                   projectedOkType = if (isUnitType(ok)) None else Some(projectedType(owner, ok).syntax),
                   projectedErrType = Some(projectedType(owner, err).syntax),
-                  hasStdout = method.params.exists(_.isStdout)
+                  hasStdout = method.params.exists(_.isStdout),
+                  hasStderr = method.params.exists(_.isStderr)
                 )
               case other =>
                 LeafReturn(
@@ -250,7 +257,8 @@ object ToolProjectionIR {
                   errType = None,
                   projectedOkType = if (isUnitType(other)) None else Some(projectedType(owner, other).syntax),
                   projectedErrType = None,
-                  hasStdout = method.params.exists(_.isStdout)
+                  hasStdout = method.params.exists(_.isStdout),
+                  hasStderr = method.params.exists(_.isStderr)
                 )
             }
         }
@@ -689,7 +697,7 @@ object ToolProjectionIR {
     param.kind.contains("count-flag")
 
   private[codegen] def isStreamParam(param: Param): Boolean =
-    param.isStdin || param.isStdout
+    param.isStdin || param.isStdout || param.isStderr
 
   private[codegen] def inheritedRootParams(tool: Tool, method: Method): List[Param] =
     if (method.isRoot) Nil
@@ -761,12 +769,12 @@ object ToolProjectionIR {
 
   private[codegen] def keptLeafParams(tool: Tool, method: Method, omitted: List[String]): List[Param] =
     (inheritedRootParams(tool, method) ++ method.params).filter { param =>
-      !param.isPrincipal && !param.isStdout && !omittedMatches(tool, method, param, omitted)
+      !param.isPrincipal && !param.isStdout && !param.isStderr && !omittedMatches(tool, method, param, omitted)
     }
 
   private def keptMiddlewareLeafParams(tool: Tool, method: Method, omitted: List[String]): List[Param] =
     (inheritedRootParams(tool, method) ++ method.params).filter { param =>
-      !param.isStdout && !omittedMatches(tool, method, param, omitted)
+      !param.isStdout && !param.isStderr && !omittedMatches(tool, method, param, omitted)
     }
 
   private[codegen] def keptSubtreeParams(tool: Tool, method: Method, omitted: List[String]): List[Param] =

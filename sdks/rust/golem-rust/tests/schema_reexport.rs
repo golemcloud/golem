@@ -7,12 +7,87 @@ use golem_rust::{
 };
 use test_r::test;
 
-// Every public golem:permissions interface must remain available through the SDK bindings.
+// Every golem:permissions function is available through the typed permissions API.
 #[test]
-fn all_permission_wit_bindings_are_publicly_exposed() {
-    use golem_rust::bindings::golem::permissions::kernel_introspection;
+fn every_permission_operation_is_exposed_through_the_typed_api() {
+    use golem_rust::permissions::{
+        self, Bounds, CardId, CardView, Holder, KernelModule, Lifespan, PatternGrant,
+        PermissionCard, PermissionError, PersistentCard, PolymorphicPermissionCard, ScopeCard,
+        ScopeParent, Timestamp, WalletCard, WalletVersionToken,
+    };
 
-    let _ = kernel_introspection::list_modules;
+    let _: fn(&PermissionCard) -> CardId = PermissionCard::id;
+    let _: fn(&PermissionCard) -> Vec<CardId> = PermissionCard::parents;
+    let _: fn(&PermissionCard) -> Option<Timestamp> = PermissionCard::expires_at;
+    let _: fn(&PermissionCard) -> Result<CardView, PermissionError> = PermissionCard::inspect;
+    let _: fn(
+        &PermissionCard,
+        &Bounds,
+        Option<&Lifespan>,
+    ) -> Result<PersistentCard, PermissionError> = PermissionCard::derive;
+    let _: fn(PermissionCard) -> Result<u32, PermissionError> = PermissionCard::revoke;
+    let _: fn(PermissionCard, &Holder) -> Result<(), PermissionError> = PermissionCard::install;
+    let _: fn(&PolymorphicPermissionCard) -> CardId = PolymorphicPermissionCard::id;
+    let _: fn(&PolymorphicPermissionCard) -> Vec<CardId> = PolymorphicPermissionCard::parents;
+    let _: fn(&PolymorphicPermissionCard) -> Option<Timestamp> =
+        PolymorphicPermissionCard::expires_at;
+    let _: fn(&PolymorphicPermissionCard) -> Result<CardView, PermissionError> =
+        PolymorphicPermissionCard::inspect;
+    let _: fn(
+        &PolymorphicPermissionCard,
+        &Bounds,
+        Option<&Lifespan>,
+    ) -> Result<PersistentCard, PermissionError> = PolymorphicPermissionCard::derive;
+    let _: fn(PolymorphicPermissionCard) -> Result<u32, PermissionError> =
+        PolymorphicPermissionCard::revoke;
+    let _: fn(PolymorphicPermissionCard, &Holder) -> Result<(), PermissionError> =
+        PolymorphicPermissionCard::install;
+    let _: fn() -> Vec<WalletCard> = permissions::wallet;
+    let _: fn(&WalletCard) -> CardId = WalletCard::id;
+    fn scope_parent(card: &WalletCard) -> ScopeParent<'_> {
+        match card {
+            WalletCard::Concrete(card) => ScopeParent::from(card),
+            WalletCard::Template(card) => ScopeParent::from(card),
+            WalletCard::Scope(card) => ScopeParent::from(card),
+        }
+    }
+    let _: for<'a> fn(&'a WalletCard) -> ScopeParent<'a> = scope_parent;
+    let _ = |card: &WalletCard| {
+        let _: ScopeParent<'_> = card.into();
+    };
+    let _: fn() -> WalletVersionToken = permissions::wallet_version;
+    let _: fn(&Bounds, Option<&Lifespan>) -> Result<PersistentCard, PermissionError> =
+        permissions::derive_from_wallet;
+    let _: fn(&PersistentCard) -> CardId = PersistentCard::id;
+    let _: fn(&PersistentCard) -> Vec<CardId> = PersistentCard::parents;
+    let _: fn(&PersistentCard) -> Option<Timestamp> = PersistentCard::expires_at;
+    let _: fn(&PersistentCard) -> Result<CardView, PermissionError> = PersistentCard::inspect;
+    let _: fn(
+        &PersistentCard,
+        &Bounds,
+        Option<&Lifespan>,
+    ) -> Result<PersistentCard, PermissionError> = PersistentCard::derive;
+    let _: fn(PersistentCard) -> Result<u32, PermissionError> = PersistentCard::revoke;
+    let _: fn(PersistentCard, &Holder) -> Result<(), PermissionError> = PersistentCard::install;
+    let _ = |card: &PersistentCard| {
+        let _: ScopeParent<'_> = card.into();
+        match card {
+            PersistentCard::Concrete(card) => {
+                let _: &PermissionCard = card;
+            }
+            PersistentCard::Template(card) => {
+                let _: &PolymorphicPermissionCard = card;
+            }
+        }
+    };
+    let _: fn(&[ScopeParent<'_>], &Bounds) -> Result<ScopeCard, PermissionError> =
+        permissions::derive_scope;
+    let _: fn(&ScopeCard) -> CardId = ScopeCard::id;
+    let _: fn(&ScopeCard) -> Vec<CardId> = ScopeCard::parents;
+    let _: fn(&ScopeCard) -> Option<Timestamp> = ScopeCard::expires_at;
+    let _: fn(&ScopeCard) -> Result<CardView, PermissionError> = ScopeCard::inspect;
+    let _: fn() -> Vec<KernelModule> = permissions::list_modules;
+    let _: fn(&PatternGrant) -> Result<(), PermissionError> = permissions::validate_grant;
 }
 
 #[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
@@ -25,6 +100,15 @@ struct ReexportedSchemaType {
 struct ConvenienceSchemaType {
     name: String,
     count: u32,
+    choice: ConvenienceChoice<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Schema)]
+#[schema(named = "test.ConvenienceChoice")]
+enum ConvenienceChoice<T> {
+    Empty,
+    Value(T),
+    Retry { delay: u32, reason: Option<T> },
 }
 
 #[test]
@@ -53,15 +137,44 @@ fn derive_schema_through_golem_rust_reexports() {
 #[test]
 fn derive_schema_convenience_through_golem_rust_reexport() {
     let graph = try_into_schema_graph::<ConvenienceSchemaType>().expect("schema graph is valid");
-    assert_eq!(graph.defs.len(), 1);
+    let mut wire_graph =
+        golem_rust::decode_schema_graph(&golem_rust::schema::wit::direct::schema::<
+            ConvenienceSchemaType,
+        >())
+        .unwrap();
+    let mut graph = graph;
+    graph.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    wire_graph.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(wire_graph, graph);
 
-    let value = ConvenienceSchemaType {
-        name: "test".to_string(),
-        count: 42,
-    };
-    let encoded = value.to_value();
-    let decoded = ConvenienceSchemaType::from_value(&encoded).expect("value decodes");
-    assert_eq!(decoded, value);
+    for choice in [
+        ConvenienceChoice::Empty,
+        ConvenienceChoice::Value("selected".into()),
+        ConvenienceChoice::Retry {
+            delay: 19,
+            reason: None,
+        },
+        ConvenienceChoice::Retry {
+            delay: 7,
+            reason: Some("busy".into()),
+        },
+    ] {
+        let value = ConvenienceSchemaType {
+            name: "test".to_string(),
+            count: 42,
+            choice,
+        };
+        let encoded = value.to_value();
+        let decoded = ConvenienceSchemaType::from_value(&encoded).expect("value decodes");
+        assert_eq!(decoded, value);
+        let wire = golem_rust::schema::wit::direct::encode(&value).unwrap();
+        assert_eq!(golem_rust::decode_schema_value(wire).unwrap(), encoded);
+        let wire = golem_rust::schema::wit::direct::encode(&value).unwrap();
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<ConvenienceSchemaType>(wire).unwrap(),
+            value
+        );
+    }
 }
 
 #[test]

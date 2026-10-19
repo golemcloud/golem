@@ -31,7 +31,7 @@ use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::AgentMode;
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::oplog::{AgentError, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, RetryConfig,
 };
@@ -62,17 +62,20 @@ struct Fixture {
 
 impl Fixture {
     async fn reopen(&self) -> Arc<dyn Oplog> {
-        build_service(self.indexed_storage.clone(), self.blob_storage.clone())
-            .await
+        let service = build_service(self.indexed_storage.clone(), self.blob_storage.clone()).await;
+        service
             .open(
+                &mut service.lock_lifecycle(&self.owned_agent_id.agent_id).await,
                 &self.owned_agent_id,
                 AgentMode::Durable,
                 None,
                 self.initial_metadata.clone(),
                 last_known_status(),
                 execution_status(),
+                None,
             )
             .await
+            .unwrap()
     }
 }
 
@@ -82,6 +85,7 @@ fn metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_id,
         env: Vec::new(),
         environment_id,
@@ -113,9 +117,10 @@ fn execution_status() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
 fn entry(value: u64) -> OplogEntry {
     OplogEntry::Error {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        kind: OplogErrorKind::Invocation,
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
-        inside_atomic_region: false,
         retry_policy_state: None,
     }
 }
@@ -136,12 +141,16 @@ async fn build_service(
         .await,
     );
     let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
-        indexed_storage,
+        indexed_storage.clone(),
         1,
         RetryConfig::default(),
     ));
-    let blob: Arc<dyn OplogArchiveService> =
-        Arc::new(BlobOplogArchiveService::new(blob_storage, 2));
+    let blob: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+        blob_storage,
+        indexed_storage,
+        2,
+        RetryConfig::default(),
+    ));
 
     Arc::new(MultiLayerOplogService::new(
         primary,
@@ -165,19 +174,22 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
     let initial_metadata = metadata(agent_id, account_id, environment_id);
     let oplog = service
         .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             entry(0),
             initial_metadata.clone(),
             last_known_status(),
             execution_status(),
+            None,
         )
-        .await;
+        .await
+        .unwrap();
 
     for value in 1..initial_entries {
-        oplog.add(entry(value)).await;
+        oplog.add(entry(value)).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     Fixture {
         oplog,
@@ -195,7 +207,7 @@ async fn primary_fixture() -> Fixture {
 async fn buffered_fixture() -> Fixture {
     let fixture = open_fixture(ENTRY_COUNT - 8).await;
     for value in ENTRY_COUNT - 8..ENTRY_COUNT {
-        fixture.oplog.add(entry(value)).await;
+        fixture.oplog.add(entry(value)).await.unwrap();
     }
     fixture
 }
@@ -204,7 +216,7 @@ async fn compressed_fixture() -> Fixture {
     let fixture = open_fixture(ENTRY_COUNT).await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     fixture
 }
@@ -213,7 +225,7 @@ async fn blob_fixture() -> Fixture {
     let fixture = compressed_fixture().await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(false)
+        Ok(Some(false))
     );
     fixture
 }
@@ -222,12 +234,12 @@ async fn cross_tier_fixture() -> Fixture {
     let fixture = open_fixture(ARCHIVE_BOUNDARY).await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     for value in ARCHIVE_BOUNDARY..ENTRY_COUNT {
-        fixture.oplog.add(entry(value)).await;
+        fixture.oplog.add(entry(value)).await.unwrap();
     }
-    fixture.oplog.commit(CommitLevel::Always).await;
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
     fixture
 }
 
@@ -248,7 +260,8 @@ fn benchmark_fixture(
             |bencher, &count| {
                 bencher.iter(|| {
                     let entries: BTreeMap<OplogIndex, OplogEntry> = runtime
-                        .block_on(fixture.oplog.read_exact(black_box(start), black_box(count)));
+                        .block_on(fixture.oplog.read_exact(black_box(start), black_box(count)))
+                        .unwrap();
                     black_box(entries);
                 });
             },
@@ -275,8 +288,9 @@ fn benchmark_cold_fixture(
                 bencher.iter_batched(
                     || runtime.block_on(fixture.reopen()),
                     |oplog| {
-                        let entries: BTreeMap<OplogIndex, OplogEntry> =
-                            runtime.block_on(oplog.read_exact(black_box(start), black_box(count)));
+                        let entries: BTreeMap<OplogIndex, OplogEntry> = runtime
+                            .block_on(oplog.read_exact(black_box(start), black_box(count)))
+                            .unwrap();
                         black_box(entries);
                     },
                     BatchSize::SmallInput,

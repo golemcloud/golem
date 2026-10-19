@@ -14,7 +14,8 @@
 
 use crate::bridge_gen::fixtures::{
     agent, code_first_snippets_agent_type, def, field, local_config, method,
-    multi_agent_wrapper_2_types, ref_to, single_agent_wrapper_types,
+    multi_agent_wrapper_2_types, multimodal, named_field, ref_to, single_agent_wrapper_types,
+    variant_case,
 };
 use crate::bridge_gen::scala::grep_tool;
 use crate::bridge_gen::type_naming::test_type_naming;
@@ -27,13 +28,13 @@ use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
 use golem_cli::model::language::GuestLanguage;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, ResultSpec,
-    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, PermissionCardSpec,
+    QuantitySpec, ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
 };
 use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
-use golem_common::schema::tool::StreamSpec;
+use golem_common::schema::tool::{StreamSpec, Tool};
 use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
@@ -175,6 +176,235 @@ fn guest_durable_agent_compiles() {
 }
 
 #[test]
+fn guest_native_streams_compile() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("guest-streaming-agent-guest-client");
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        crate::bridge_gen::fixtures::guest_streaming_agent_type("typescript"),
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("guest-streaming-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("base.agentStreamToHandle"));
+    assert!(source.contains("base.agentStreamFromHandle"));
+    assert!(source.contains("satisfies base.SchemaCodec"));
+    assert!(source.contains("get graph()"));
+    assert!(source.contains("toValue: (item: any): base.SchemaValue => base.withCapabilityAdoptionTransaction((): base.SchemaValue =>"));
+    assert!(!source.contains("createStreamingRemoteMethod"));
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { guest as base } from '@golemcloud/golem-ts-sdk';
+import { GuestStreamingAgent } from './guest-streaming-agent-guest-client';
+async function exercise() {
+  const client = GuestStreamingAgent.get('native');
+  const items = base.AgentStream.from([{ label: 'root', children: [] }]);
+  const nested = await client.nested(base.AgentStream.from([items]));
+  await client.nested(nested); // unread direct forwarding
+  const bundle = await client.exchange('label', await client.produce());
+  await client.forward(bundle);
+  await client.recursive({ tag: 'branch', val: [{ tag: 'leaf', val: await client.produce() }] });
+  for await (const item of await client.produce()) { const label: string = item.label; void label; }
+  await client.consume.abortable(new AbortController().signal, base.AgentStream.from(['x']));
+  client.status.trigger();
+  // @ts-expect-error native streams only support awaited RPC
+  client.consume.trigger(base.AgentStream.from(['x']));
+  // @ts-expect-error native stream outputs cannot be scheduled
+  client.produce.schedule({ seconds: 0n, nanoseconds: 0 });
+  // @ts-expect-error recursive stream methods cannot be scheduled
+  client.recursive.scheduleCancelable({ seconds: 0n, nanoseconds: 0 }, { tag: 'branch', val: [] });
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn guest_trailing_optional_parameters_and_sdk_results_compile() {
+    let result = |ok: SchemaType, err: SchemaType| {
+        SchemaType::result(ResultSpec {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(err)),
+        })
+    };
+    let agent_type = agent(
+        "OptionalAgent",
+        "typescript",
+        vec![
+            field("name", SchemaType::string()),
+            field("nickname", SchemaType::option(SchemaType::string())),
+            field("tag", SchemaType::option(SchemaType::u32())),
+        ],
+        vec![
+            method(
+                "lookup",
+                vec![
+                    field("first", SchemaType::option(SchemaType::string())),
+                    field("count", SchemaType::u32()),
+                    field("last", SchemaType::option(SchemaType::string())),
+                ],
+                Some(result(SchemaType::u64(), SchemaType::string())),
+            ),
+            method(
+                "accept",
+                vec![field(
+                    "outcome",
+                    result(SchemaType::string(), SchemaType::u32()),
+                )],
+                Some(SchemaType::option(SchemaType::string())),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("optional-agent-guest-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("optional-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("nickname?: string"), "{source}");
+    assert!(
+        source.contains("[first: string | undefined, count: number, last?: string]"),
+        "{source}"
+    );
+    assert!(source.contains("base.Result<bigint, string>"), "{source}");
+    assert!(source.contains("base.Result.ok("), "{source}");
+    assert!(!source.contains("'ok' in v"), "{source}");
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { bridge as base } from '@golemcloud/golem-ts-sdk';
+import { OptionalAgent } from './optional-agent-guest-client';
+async function exercise() {
+  const client = OptionalAgent.get('name');
+  OptionalAgent.get('name', 'nick');
+  OptionalAgent.get('name', undefined, 3);
+  const found: base.Result<bigint, string> = await client.lookup(undefined, 1);
+  if (found.tag === 'ok') { const value: bigint = found.val; void value; }
+  const isOk: boolean = found.isOk();
+  void isOk;
+  await client.lookup('first', 1, 'last');
+  client.lookup.trigger(undefined, 1);
+  client.lookup.schedule({ seconds: 0n, nanoseconds: 0 }, undefined, 1);
+  // @ts-expect-error an optional parameter before a required one cannot be omitted
+  await client.lookup(1);
+  const accepted: string | undefined = await client.accept(base.Result.ok('yes'));
+  await client.accept(base.Result.err(1));
+  void accepted;
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn guest_named_nested_and_unit_results_compile() {
+    let agent_type = agent(
+        "OutcomeAgent",
+        "typescript",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "named",
+                vec![field("outcome", ref_to("outcome"))],
+                Some(ref_to("outcome")),
+            ),
+            method(
+                "nested",
+                vec![],
+                Some(SchemaType::option(ref_to("wrapped"))),
+            ),
+            method(
+                "unit-ok",
+                vec![field("note", ref_to("maybe-note"))],
+                Some(SchemaType::result(ResultSpec {
+                    ok: None,
+                    err: Some(Box::new(SchemaType::string())),
+                })),
+            ),
+        ],
+        vec![
+            def(
+                "outcome",
+                SchemaType::result(ResultSpec {
+                    ok: Some(Box::new(SchemaType::u32())),
+                    err: Some(Box::new(SchemaType::string())),
+                }),
+            ),
+            def(
+                "wrapped",
+                SchemaType::variant(vec![
+                    variant_case("done", Some(ref_to("outcome"))),
+                    variant_case("pending", None),
+                ]),
+            ),
+            def("maybe-note", SchemaType::option(SchemaType::string())),
+        ],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("outcome-agent-guest-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("outcome-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("base.Result<number, string>"), "{source}");
+    assert!(source.contains("base.Result<void, string>"), "{source}");
+    assert!(source.contains("note?: MaybeNote"), "{source}");
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { bridge as base } from '@golemcloud/golem-ts-sdk';
+import { OutcomeAgent } from './outcome-agent-guest-client';
+async function exercise() {
+  const client = OutcomeAgent.get('name');
+  const named: base.Result<number, string> = await client.named(base.Result.ok(1));
+  const nested = await client.nested();
+  if (nested !== undefined && nested.tag === 'done') {
+    const inner: base.Result<number, string> = nested.val;
+    void inner;
+  }
+  const unit: base.Result<void, string> = await client.unitOk();
+  await client.unitOk('note');
+  void named; void unit;
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
 fn guest_agent_generated_names_do_not_collide_with_schema_names() {
     let dir = TempDir::new().unwrap();
     generate_and_compile_with_mode(
@@ -249,6 +479,85 @@ fn static_and_instance_agent_methods_can_share_names() {
         }
         install_and_build(&package_dir);
     }
+}
+
+#[test]
+fn external_rest_config_uses_application_json_for_named_non_streaming_values() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "typescript",
+        vec![],
+        vec![],
+        vec![def(
+            "config-shape",
+            SchemaType::record(vec![
+                named_field("maybe-region", SchemaType::option(SchemaType::string())),
+                named_field(
+                    "outcome",
+                    SchemaType::result(ResultSpec {
+                        ok: Some(Box::new(SchemaType::string())),
+                        err: None,
+                    }),
+                ),
+                named_field(
+                    "mode",
+                    SchemaType::variant(vec![
+                        variant_case("off", None),
+                        variant_case("on", Some(SchemaType::string())),
+                    ]),
+                ),
+                named_field(
+                    "target",
+                    SchemaType::union(UnionSpec {
+                        branches: vec![UnionBranch {
+                            tag: "command".to_string(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Prefix {
+                                prefix: "cmd:".to_string(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        }],
+                    }),
+                ),
+                named_field(
+                    "document",
+                    unstructured_text_schema_type(TextRestrictions::default()),
+                ),
+                named_field(
+                    "attachment",
+                    unstructured_binary_schema_type(BinaryRestrictions::default()),
+                ),
+            ]),
+        )],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        ref_to("config-shape"),
+    )];
+    let package_dir = target.join("config-agent-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::ExternalRest,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("config-agent-client.ts")).unwrap();
+    assert!(source.contains("function encodeConfigShape(value: ConfigShape): base.SchemaValue"));
+    assert!(source.contains(".application(encodeConfigShape(configLimitsMaximum))"));
+    assert!(source.contains("value: configValue"));
+    assert!(source.contains("kind: 'result'"));
+    assert!(source.contains("Unknown variant case"));
+    assert!(source.contains("Unknown union branch"));
+    assert!(source.contains("base.UnstructuredText.toSchemaValue"));
+    assert!(source.contains("base.UnstructuredBinary.toSchemaValue"));
+    install_and_build(&package_dir);
 }
 
 #[test]
@@ -744,6 +1053,10 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(!source.contains("map((entry: any) => [ {"));
     assert!(source.contains("{ tag: 'option', value:"));
     assert!(source.contains("{ tag: 'result', result:"));
+    assert!(source.contains("result: base.Result<bigint, string>"));
+    assert!(source.contains("base.Result.ok("));
+    assert!(source.contains("v.tag === 'ok'"));
+    assert!(!source.contains("'ok' in v"));
     assert!(source.contains("{ tag: 'union', unionTag:"));
     assert!(source.contains("n.unionTag"));
     assert!(source.contains("{ tag: 'path', value:"));
@@ -754,7 +1067,12 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(source.contains("base.UnstructuredTextType<['en', 'de']>"));
     assert!(source.contains("base.UnstructuredBinaryType<['image/png']>"));
     assert!(source.contains("payload: { tag: 'text', text: v.val, language: v.languageCode }"));
-    assert!(source.contains("payload: { tag: 'binary', bytes: v.val, mimeType: v.mimeType }"));
+    assert!(
+        source.contains(
+            "payload: { tag: 'binary', bytes: v.val as Uint8Array, mimeType: v.mimeType }"
+        )
+    );
+    assert!(source.contains("{ tag: 'url', value: v.val as string }"));
     assert!(
         source.contains("base.UnstructuredText.fromInline(n.payload.text, n.payload.language)")
     );
@@ -766,6 +1084,245 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(!source.contains("LegacySchemaValue"));
     assert!(!source.contains("toGuestSchemaValue"));
     assert!(!source.contains("fromGuestSchemaValue"));
+}
+
+#[test]
+fn guest_generation_compiles_host_managed_capability_methods() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+        SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+        variant_case(
+            "template",
+            Some(SchemaType::permission_card(PermissionCardSpec {
+                polymorphic: true,
+            })),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("capability-envelope"))],
+                Some(ref_to("capability-envelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("capability-envelope", envelope)],
+        AgentMode::Durable,
+    );
+    generate_and_compile_with_mode(agent_type, target, TypeScriptBridgeMode::GuestWasmRpc);
+
+    let source = std::fs::read_to_string(
+        target.join("capability-agent-guest-client/capability-agent-guest-client.ts"),
+    )
+    .unwrap();
+    for capability_type in [
+        "base.SecretHandle",
+        "base.QuotaToken",
+        "base.PermissionCard",
+        "base.PolymorphicPermissionCard",
+    ] {
+        assert!(
+            source.contains(capability_type),
+            "missing generated capability type {capability_type}:\n{source}"
+        );
+    }
+    for codec in [
+        "base.secretHandleToSchemaValue(",
+        "base.secretHandleFromSchemaValue(",
+        "base.quotaTokenToSchemaValue(",
+        "base.quotaTokenFromSchemaValue(",
+        "base.permissionCardToSchemaValue(",
+        "base.permissionCardFromSchemaValue(",
+        "base.polymorphicPermissionCardToSchemaValue(",
+        "base.polymorphicPermissionCardFromSchemaValue(",
+    ] {
+        assert!(
+            source.contains(codec),
+            "missing generated capability codec {codec}:\n{source}"
+        );
+    }
+}
+
+#[test]
+fn guest_polymorphic_permission_cards_map_to_their_own_card_type_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let concrete = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let template = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let agent_type = agent(
+        "CardAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "delegate",
+                vec![field("concrete", concrete()), field("template", template())],
+                Some(template()),
+            ),
+            method("concreteBack", vec![], Some(concrete())),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("card-agent-guest-client.ts")).unwrap();
+    for expected in [
+        "base.PolymorphicPermissionCard",
+        "base.PermissionCard",
+        "base.polymorphicPermissionCardToSchemaValue(",
+        "base.polymorphicPermissionCardFromSchemaValue(",
+        "base.permissionCardToSchemaValue(",
+        "base.permissionCardFromSchemaValue(",
+    ] {
+        assert!(
+            source.contains(expected),
+            "missing generated card mapping {expected}:\n{source}"
+        );
+    }
+
+    let test_path = package_dir.join("test.ts");
+    let mut test = std::fs::read_to_string(&test_path).unwrap_or_default();
+    test.push_str(
+        r#"
+import { CardAgent as CardAgentClient } from './card-agent-guest-client';
+import type { bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+
+export async function cardKindUsage(
+  concrete: sdkBridge.PermissionCard,
+  template: sdkBridge.PolymorphicPermissionCard,
+): Promise<void> {
+  const client = CardAgentClient.get();
+  const returned: sdkBridge.PolymorphicPermissionCard = await client.delegate(concrete, template);
+  const back: sdkBridge.PermissionCard = await client.concreteBack();
+  // @ts-expect-error a concrete card is not a template card
+  await client.delegate(concrete, concrete);
+  // @ts-expect-error a template card is not a concrete card
+  await client.delegate(template, template);
+  // @ts-expect-error a polymorphic result is not a concrete card
+  const wrong: sdkBridge.PermissionCard = await client.delegate(concrete, template);
+  void [returned, back, wrong];
+}
+"#,
+    );
+    std::fs::write(&test_path, test).unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn guest_scope_card_options_are_generated_reserved_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "ScopedAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "run",
+                vec![field("value", SchemaType::string())],
+                Some(SchemaType::string()),
+            ),
+            method("withScopeCard", vec![], None),
+            method("scopeCard", vec![], Some(SchemaType::u32())),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("scoped-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("readonly scopeCard: base.ScopeCard | undefined;"));
+    assert!(source.contains("withScopeCard(scopeCard: base.ScopeCard | undefined): ScopedAgent"));
+    assert!(source.contains("return new ScopedAgent(this.resolved, scopeCard);"));
+    // The plain and abortable calls use the client default; the per-call option maps `null` to
+    // no scope card instead of falling back to the default.
+    assert!(source.contains("__await(undefined, this.scopeCard, ...__args)"));
+    assert!(source.contains("__await(signal, this.scopeCard, ...__args)"));
+    assert!(
+        source.contains("=> __await(undefined, scopeCard ?? undefined, ...__args)")
+            && source.contains("withScopeCard: (scopeCard: base.ScopeCard | null, ...__args: ["),
+        "missing per-call scope-card option:\n{source}"
+    );
+    assert!(source.contains("__encode(__args), signal, scopeCard)"));
+    // Agent methods named like the new members are renamed instead of shadowing them.
+    assert!(source.contains("readonly withScopeCard1: {"));
+    assert!(source.contains("readonly scopeCard1: {"));
+
+    let test_path = package_dir.join("test.ts");
+    let mut test = std::fs::read_to_string(&test_path).unwrap_or_default();
+    test.push_str(
+        r#"
+import { ScopedAgent as ScopedAgentClient } from './scoped-agent-guest-client';
+import type { bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+
+export async function scopeCardUsage(
+  scope: sdkBridge.ScopeCard,
+  card: sdkBridge.PermissionCard,
+): Promise<void> {
+  const client = ScopedAgentClient.get().withScopeCard(scope);
+  const viaDefault: string = await client.run('x');
+  const withoutScope: string = await client.run.withScopeCard(null, 'x');
+  const withScope: string = await client.run.withScopeCard(scope, 'x');
+  const cleared: ScopedAgentClient = client.withScopeCard(undefined);
+  await cleared.withScopeCard1();
+  const count: number = await cleared.scopeCard1();
+  // @ts-expect-error a persistent permission card is not a scope card
+  await client.run.withScopeCard(card, 'x');
+  // @ts-expect-error the client default must be a scope card
+  client.withScopeCard(card);
+  void [viaDefault, withoutScope, withScope, count];
+}
+"#,
+    );
+    std::fs::write(&test_path, test).unwrap();
+    install_and_build(&package_dir);
 }
 
 #[test]
@@ -841,13 +1398,429 @@ fn external_generation_keeps_rest_runtime_and_name() {
     let source = std::fs::read_to_string(target.join("external-client.ts")).unwrap();
     assert!(source.contains("@golemcloud/golem-ts-bridge"));
     assert!(source.contains("export function configure("));
-    assert!(source.contains("signed: number"));
-    assert!(source.contains("unsigned: number"));
+    assert!(source.contains("signed: bigint"));
+    assert!(source.contains("unsigned: bigint"));
     assert!(source.contains("{ kind: 's64', value:"));
     assert!(source.contains("{ kind: 'u64', value:"));
-    assert!(source.contains("n.value as number"));
-    assert!(!source.contains(": bigint"));
+    assert!(source.contains("BigInt("), "{source}");
+    assert!(!source.contains("signed: number"));
+    assert!(!source.contains("unsigned: number"));
     assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
+}
+
+#[test]
+fn external_rest_generation_uses_native_null_float_and_local_result_validation() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let unit_result = SchemaType::result(ResultSpec {
+        ok: None,
+        err: None,
+    });
+    generate_and_compile(
+        agent(
+            "NativeValueAgent",
+            "typescript",
+            vec![],
+            vec![
+                method(
+                    "encode",
+                    vec![
+                        field("optional", SchemaType::option(SchemaType::string())),
+                        field("float", SchemaType::f64()),
+                        field("result", unit_result.clone()),
+                    ],
+                    Some(unit_result),
+                ),
+                method("float", vec![], Some(SchemaType::f64())),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let source = std::fs::read_to_string(
+        generated_package_dir(target, "native-value-agent").join("native-value-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(source.contains("base.encodeOption("));
+    assert!(source.contains("{ tag: 'ok', value: null }"));
+    assert!(source.contains("{ tag: 'err', value: null }"));
+    for tag in ["nan", "positive-infinity", "negative-infinity"] {
+        assert!(source.contains(&format!("$float: '{tag}'")), "{source}");
+    }
+    assert!(source.contains("Number.NaN"));
+    assert!(source.contains("Number.POSITIVE_INFINITY"));
+    assert!(source.contains("Number.NEGATIVE_INFINITY"));
+    assert!(source.contains(".validate(__out.value, 'none')"));
+}
+
+#[test]
+fn external_streaming_multimodal_constructor_and_method_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let constructor_parts = multimodal(vec![variant_case("text", Some(SchemaType::string()))]);
+    let method_parts = multimodal(vec![
+        variant_case("text", Some(SchemaType::string())),
+        variant_case("bytes", Some(SchemaType::stream(Some(SchemaType::u8())))),
+    ]);
+    generate_and_compile(
+        agent(
+            "MultimodalStreamAgent",
+            "typescript",
+            vec![field("parts", constructor_parts)],
+            vec![
+                method(
+                    "exchange",
+                    vec![field("parts", method_parts.clone())],
+                    Some(method_parts),
+                ),
+                method(
+                    "empty-check",
+                    vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                    Some(SchemaType::tuple(vec![])),
+                ),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let source = std::fs::read_to_string(
+        generated_package_dir(target, "multimodal-stream-agent")
+            .join("multimodal-stream-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("(multimodalInput).map((v: any)"),
+        "{source}"
+    );
+    assert!(
+        source.contains("(__multimodalInput).map((v: any)"),
+        "{source}"
+    );
+    assert!(source.contains("v.type === \"text\""), "{source}");
+    assert!(source.contains("v.value"), "{source}");
+    assert!(
+        source.contains("return { type: \"text\" as const, value:"),
+        "{source}"
+    );
+    assert!(
+        source.contains("const __validatedResult =") && source.contains("return [];"),
+        "empty tuple streaming results must validate before decoding: {source}"
+    );
+    assert_eq!(
+        source.matches(".validate((value as any).value").count(),
+        2,
+        "each streaming result must perform one local validation: {source}"
+    );
+    assert!(
+        source.contains("const __validatedItem =")
+            && source.matches(".validate(item,").count() == 1,
+        "stream-item validation must be evaluated once before decoding: {source}"
+    );
+
+    let package = generated_package_dir(target, "multimodal-stream-agent");
+    std::fs::write(
+        package.join("runtime-test.mjs"),
+        r#"import assert from 'node:assert/strict';
+import { WebSocketServer } from 'ws';
+import { agentStream } from '@golemcloud/golem-ts-bridge';
+import { MultimodalStreamAgent, configure } from './multimodal-stream-agent-client.js';
+
+const wss = new WebSocketServer({ port: 0 });
+await new Promise((resolve) => wss.once('listening', resolve));
+const port = wss.address().port;
+let connection = 0;
+const accepted = (start, mappings = []) => ({
+  version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
+  idempotencyKey: start.idempotencyKey, sessionToken: 'session', mappings,
+});
+const finish = (socket) => socket.send(JSON.stringify({
+  version: 1, type: 'invocationFinished', outcome: { kind: 'success' },
+}));
+const provisionalRef = (value) => {
+  if (value && typeof value === 'object') {
+    if (typeof value.provisionalRef === 'string') return value.provisionalRef;
+    for (const nested of Object.values(value)) {
+      const found = provisionalRef(nested);
+      if (found) return found;
+    }
+  }
+};
+wss.on('connection', (socket) => socket.once('message', (raw) => {
+  const start = JSON.parse(raw);
+  connection += 1;
+  if (connection === 1) {
+    socket.send(JSON.stringify(accepted(start, [
+      { channel: 2, direction: 'output', streamToken: 'output' },
+    ])));
+    socket.send(JSON.stringify({
+      version: 1, type: 'invocationResult', mappings: [],
+      result: {
+        kind: 'value',
+        graph: { root: { kind: 'list', value: { element: { kind: 'variant', value: { cases: [
+          { name: 'text', payload: { kind: 'string', value: {} } },
+          { name: 'bytes', payload: { kind: 'stream', value: { inner: { kind: 'u8', value: {} } } } },
+        ] } } } } },
+        value: { kind: 'list', value: { elements: [
+          { kind: 'variant', value: { case: 1, payload: { kind: 'stream', value: { streamToken: 'output' } } } },
+        ] } },
+      },
+    }));
+    socket.send(JSON.stringify({
+      version: 1, type: 'outputStreamEnd', channel: 2, sequence: '0',
+      cursorToken: 'cursor-end', outcome: { kind: 'ok' },
+    }));
+    finish(socket);
+  } else {
+    const provisional = provisionalRef(start.methodParameters);
+    socket.send(JSON.stringify(accepted(start, [{
+      channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisional,
+      inputHighWater: { sequence: '0', terminal: false },
+    }])));
+    socket.send(JSON.stringify({
+      version: 1, type: 'invocationResult', mappings: [],
+      result: { kind: 'value', graph: { root: { kind: 'u32', value: {} } }, value: { kind: 'u32', value: 7 } },
+    }));
+    finish(socket);
+  }
+}));
+
+configure({
+  server: { type: 'custom', url: `http://127.0.0.1:${port}`, token: 'test' },
+  application: 'app', environment: 'env',
+});
+const constructorValue = { kind: 'record', value: { fields: [
+  { kind: 'list', value: { elements: [
+    { kind: 'variant', value: { case: 0, payload: { kind: 'string', value: 'constructor' } } },
+  ] } },
+] } };
+const remote = new MultimodalStreamAgent(
+  constructorValue, undefined, { componentId: 'component', agentId: 'agent' },
+  constructorValue, [],
+);
+const output = await remote.exchange([{ type: 'text', value: 'request' }]);
+assert.equal(output[0].type, 'bytes');
+assert.equal(typeof output[0].value[Symbol.asyncIterator], 'function');
+await assert.rejects(
+  remote.empty_check(agentStream((async function* () {})())),
+  /tuple/i,
+);
+for (const client of wss.clients) client.terminate();
+await new Promise((resolve) => wss.close(resolve));
+"#,
+    )
+    .unwrap();
+    assert!(
+        std::process::Command::new("npm")
+            .args(["install", "--no-save", "ws"])
+            .current_dir(&package)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = std::process::Command::new("node")
+        .arg("runtime-test.mjs")
+        .current_dir(&package)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated multimodal runtime test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn external_streaming_generation_compiles_recursive_streams() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "StreamingAgent",
+        "typescript",
+        vec![field(
+            "tenant",
+            SchemaType::U32 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::Unsigned(7)),
+                    max: Some(NumericBound::Unsigned(4_294_967_295)),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+        )],
+        vec![
+            method(
+                "exchange",
+                vec![field(
+                    "input",
+                    SchemaType::record(vec![
+                        named_field(
+                            "chunks",
+                            SchemaType::list(SchemaType::stream(Some(SchemaType::binary(
+                                BinaryRestrictions::default(),
+                            )))),
+                        ),
+                        named_field("exact-count", SchemaType::u64()),
+                        named_field(
+                            "amount",
+                            SchemaType::Quantity {
+                                spec: QuantitySpec {
+                                    base_unit: "kg".to_string(),
+                                    allowed_suffixes: Vec::new(),
+                                    min: None,
+                                    max: None,
+                                },
+                                metadata: MetadataEnvelope::default(),
+                            },
+                        ),
+                    ]),
+                )],
+                Some(SchemaType::option(SchemaType::stream(Some(
+                    SchemaType::u8(),
+                )))),
+            ),
+            method("status", vec![], Some(SchemaType::string())),
+            method(
+                "document",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Document")),
+            ),
+            method(
+                "attachment",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Attachment")),
+            ),
+        ],
+        vec![
+            def(
+                "Document",
+                unstructured_text_schema_type(TextRestrictions::default()),
+            ),
+            def(
+                "Attachment",
+                unstructured_binary_schema_type(BinaryRestrictions::default()),
+            ),
+        ],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        SchemaType::U64 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(9_007_199_254_740_993)),
+                max: Some(NumericBound::Unsigned(u64::MAX)),
+                unit: None,
+            }),
+            metadata: MetadataEnvelope::default(),
+        },
+    )];
+    generate_and_compile(agent_type, target_dir);
+    let source = std::fs::read_to_string(
+        generated_package_dir(target_dir, "streaming-agent").join("streaming-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(source.contains("createStreamingRemoteMethod"));
+    assert!(source.contains("AgentStream<base.AgentBinary>"));
+    assert!(source.contains("base.UnstructuredBinary.toSchemaValue"));
+    assert!(source.contains("base.UnstructuredBinary.fromSchemaValue"));
+    assert!(source.contains("AgentStream<number>"));
+    assert!(source.contains(": bigint;"));
+    assert!(source.contains("amount: base.QuantityValue"));
+    assert!(source.contains("configLimitsMaximum?: bigint"));
+    assert!(source.contains("base.publicValueCodec"));
+    for method_name in [
+        "getWithConfig",
+        "getPhantomWithConfig",
+        "newPhantomWithConfig",
+    ] {
+        let method_source = source
+            .split_once(&format!("static async {method_name}("))
+            .unwrap()
+            .1
+            .split("\n  static async ")
+            .next()
+            .unwrap();
+        assert_eq!(
+            method_source
+                .matches("const configValue = base.publicValueCodec(")
+                .count(),
+            1,
+            "{method_name} must project each supplied config value exactly once"
+        );
+    }
+    assert!(source.contains(".validate(") && source.contains("'none'"));
+    assert!(source.contains("'provisional'"));
+    assert!(source.contains("\"stable\""));
+    assert!(source.contains("config: this.publicConfig"));
+    assert!(source.contains("path: [\"limits\",\"maximum\"]"));
+    assert!(source.contains("base.UnstructuredText.toSchemaValue"));
+    assert!(source.contains("base.UnstructuredText.fromSchemaValue"));
+    for line in source
+        .lines()
+        .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))
+    {
+        assert!(
+            line.contains("value: configValue"),
+            "config is not application JSON: {line}"
+        );
+        assert!(
+            !line.contains("kind:"),
+            "config is tagged schema JSON: {line}"
+        );
+    }
+    assert!(source.contains("val: 9007199254740993n"));
+    assert!(source.contains("val: 18446744073709551615n"));
+    assert!(!source.contains("triggerExchange"));
+    assert!(!source.contains("scheduleExchange"));
+    for line in source.lines().filter(|line| {
+        line.starts_with("function encodePublic") || line.starts_with("function decodePublic")
+    }) {
+        let name = line
+            .split_once('(')
+            .map(|(signature, _)| signature.trim_start_matches("function "))
+            .unwrap();
+        assert!(
+            !line.contains(&format!("return {name}(value, stream)")),
+            "generated public codec helper calls itself recursively: {line}"
+        );
+    }
+}
+
+#[test]
+fn external_streaming_generation_uses_binary_lane_for_referenced_u8() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "ReferencedByteStreamAgent",
+        "typescript",
+        vec![],
+        vec![method(
+            "copy",
+            vec![field(
+                "input",
+                SchemaType::stream(Some(ref_to("ByteAlias"))),
+            )],
+            Some(SchemaType::stream(Some(ref_to("ByteAlias")))),
+        )],
+        vec![
+            def("ByteAlias", ref_to("Byte")),
+            def("Byte", SchemaType::u8()),
+        ],
+        AgentMode::Durable,
+    );
+
+    generate_and_compile(agent_type, target_dir);
+    let source = std::fs::read_to_string(
+        generated_package_dir(target_dir, "referenced-byte-stream-agent")
+            .join("referenced-byte-stream-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(
+        source.contains(", \"u8\")") && source.contains(", \"u8\");"),
+        "stream<ref ByteAlias -> ref Byte -> u8> must use the direct packed-u8 lane:\n{source}"
+    );
 }
 
 #[test]
@@ -864,6 +1837,12 @@ fn test_type_naming_rust_foo_agent_for_ts_bridge() {
 fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     let mut tool = grep_tool();
     let root_body = tool.commands.nodes[0].body.as_mut().unwrap();
+    let mut same_payload_error = root_body.errors[0].clone();
+    same_payload_error.name = "bad-query".to_string();
+    root_body.errors.push(same_payload_error);
+    let mut second_unit_error = root_body.errors[1].clone();
+    second_unit_error.name = "unavailable".to_string();
+    root_body.errors.push(second_unit_error);
     root_body.stdin = Some(StreamSpec {
         doc: Default::default(),
         mime: vec![],
@@ -882,27 +1861,63 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
 
     let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
     assert!(source.contains("base.createToolClientRuntime(\"grep\")"));
-    assert!(source.contains("invokeAndAwait([], typedInput, stdin)"));
-    assert!(source.contains("invokeAndAwait([\"replace\"], typedInput, undefined)"));
+    assert!(source.contains("type ToolInputStream = base.ToolInputStream;"));
+    assert!(source.contains("grep(") && source.contains("base.StartedToolInvocation<string[]>"));
+    assert!(source.contains("replace(") && source.contains("base.StartedToolInvocation<void>"));
+    assert!(source.contains("this.runtime.start([], typedInput, stdin, true, false)"));
+    assert!(
+        source.contains("this.runtime.start([\"replace\"], typedInput, undefined, true, false)")
+    );
     assert!(source.contains("[...this.inherited"));
     assert!(source.contains("{ tag: 'record', fields }"));
     assert!(source.contains("const __golemSchemaGraphs = {"));
     assert!(source.contains("typedInput = { graph: __golemSchemaGraphs.graph"));
     assert!(!source.contains("typedSchemaValueFromJson"));
     assert!(!source.contains("schemaGraphFromJson"));
-    assert!(source.contains("base.splitToolRpcError(error, decodeGrepError)"));
+    assert!(source.contains("base.splitToolRpcError(error, (name, payload) =>"));
+    assert!(source.contains(
+        "function decodeGrepError(name: string, typed: base.TypedSchemaValue): GrepError | undefined"
+    ));
+    for shape in [
+        "name === \"bad-pattern\"",
+        "return { tag: \"BadPattern\", value:",
+        "name === \"bad-query\"",
+        "return { tag: \"BadQuery\", value:",
+        "name === \"io\"",
+        "return { tag: \"Io\" }",
+        "name === \"unavailable\"",
+        "return { tag: \"Unavailable\" }",
+        "if (declared === undefined) throw { tag: 'rpc', error: error }",
+        "return undefined",
+    ] {
+        assert!(source.contains(shape), "missing {shape}:\n{source}");
+    }
     assert!(
-        source.contains("base.typedSchemaValueConforms(expectedResultGraph, invocation.result)")
+        source.contains(
+            "base.typedSchemaValueConforms(expectedResultGraph, invocationResult.result)"
+        )
     );
     assert!(source.contains("base.typedSchemaValueConforms(expectedGraph, typed)"));
-    assert!(source.contains("base.disposeToolStdout(invocation.stdout)"));
+    assert!(source.contains(
+        "base.startedToolInvocation(invocation.stdout, invocation.stderr, settledResult, () => invocation.cancel())"
+    ));
+    assert!(source.contains("invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream')"));
     assert!(source.contains("tool result did not contain a value"));
     assert!(source.contains("tool result unexpectedly contained a value"));
-    assert!(source.contains("stdout?: ToolOutputStream"));
+    assert!(source.contains(
+        "const settledResult = base.mapSettledToolResult(invocation.settledResult, (invocationResult)"
+    ));
     assert!(source.contains("export type ColorMode"));
     assert!(!source.contains("golem-ts-bridge"));
     assert!(!source.contains("kind: 'record'"));
     assert!(!source.contains("legacy"));
+    std::fs::write(
+        package_dir.join(format!("{package_name}.ts")),
+        format!(
+            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> | undefined = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<base.CollectedToolInvocation<string[]>> = started.collect();\nvoid stdout; void result; void collected;\n"
+        ),
+    )
+    .unwrap();
     install_and_build(&package_dir);
 }
 
@@ -927,6 +1942,8 @@ fn guest_tool_with_unstructured_result_compiles() {
         .unwrap()
         .generate()
         .unwrap();
+    let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
+    assert!(source.contains("const invocationOutcome = await invocation.settledResult"));
     install_and_build(&package_dir);
 }
 
@@ -1011,4 +2028,146 @@ fn install_and_build(package_dir: &Utf8Path) {
 
 fn generated_package_dir(target_dir: &Utf8Path, package_name: &str) -> Utf8PathBuf {
     target_dir.join(format!("{package_name}-client"))
+}
+
+#[test]
+fn http_router_bridge_rejection_uses_kind_not_name() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
+    let dir = TempDir::new().unwrap();
+    let path = Utf8Path::from_path(dir.path()).unwrap();
+    for mode in [
+        TypeScriptBridgeMode::ExternalRest,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    ] {
+        let mut metadata = agent(
+            "HttpRouterLookingName",
+            "typescript",
+            vec![],
+            vec![],
+            vec![],
+            AgentMode::Durable,
+        );
+        let regular_files_id = "tooling-regular-files-still-callable";
+        let regular_files_case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == regular_files_id)
+            .unwrap();
+        metadata.http_mount = Some(HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            phantom_id_binding: None,
+            cors_options: CorsOptions {
+                allowed_patterns: vec![],
+            },
+            webhook_suffix: vec![],
+            static_bindings: vec![],
+            filesystem_bindings: FileMapping::compile_list(
+                regular_files_case["input"]["filesystem_bindings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|mapping| (mapping[0].as_str().unwrap(), mapping[1].as_str().unwrap())),
+            )
+            .unwrap(),
+            file_response_headers: vec![],
+            openapi_provider_method: None,
+        });
+        assert_eq!(
+            TypeScriptBridgeGenerator::new_with_mode(metadata.clone(), path, false, mode).is_ok(),
+            regular_files_case["expect"]["included"].as_bool().unwrap(),
+            "{regular_files_id}"
+        );
+        metadata.type_name =
+            golem_common::model::agent::AgentTypeName("OrdinaryLookingName".into());
+        metadata.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        let result = TypeScriptBridgeGenerator::new_with_mode(metadata, path, false, mode);
+        let router_id = "tooling-router-clients";
+        let router_case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == router_id)
+            .unwrap();
+        assert_eq!(
+            result.is_ok(),
+            router_case["expect"]["included"].as_bool().unwrap(),
+            "{router_id}"
+        );
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("HTTP routers do not have ordinary agent clients")
+        );
+    }
+}
+
+pub(super) fn grep_tool_with_result_and_trailing_option(stdin_required: Option<bool>) -> Tool {
+    let mut tool = grep_tool();
+    let body = tool.commands.nodes[0].body.as_mut().unwrap();
+    body.flags.clear();
+    body.result.as_mut().unwrap().type_ = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::list(SchemaType::string()))),
+        err: Some(Box::new(SchemaType::u32())),
+    });
+    body.stdin = stdin_required.map(|required| StreamSpec {
+        doc: Default::default(),
+        mime: vec![],
+        required,
+    });
+    tool
+}
+
+#[test]
+fn guest_tool_trailing_optional_fields_and_sdk_results_compile() {
+    let package_name = tool_bridge_client_directory_name("grep");
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path()).unwrap().join(&package_name);
+    TypeScriptToolBridgeGenerator::new(
+        grep_tool_with_result_and_trailing_option(None),
+        &package_dir,
+        true,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source_path = package_dir.join(format!("{package_name}.ts"));
+    let source = std::fs::read_to_string(&source_path).unwrap();
+    assert!(source.contains("max_count?: number)"), "{source}");
+    assert!(
+        source.contains("Promise<base.Result<string[], number>>"),
+        "{source}"
+    );
+    assert!(source.contains("base.Result.ok("), "{source}");
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\n\ndeclare const consumer: GrepClient;\nasync function exercise() {{\n  const found: base.Result<string[], number> = await consumer.grep(undefined, false, 'needle', []);\n  if (found.tag === 'ok') {{ const matches: string[] = found.val; void matches; }}\n}}\nvoid exercise;\n"
+        ),
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path()).unwrap().join(&package_name);
+    TypeScriptToolBridgeGenerator::new(
+        grep_tool_with_result_and_trailing_option(Some(true)),
+        &package_dir,
+        true,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
+    assert!(
+        source.contains("max_count: number | undefined, stdin: ToolInputStream)"),
+        "{source}"
+    );
 }

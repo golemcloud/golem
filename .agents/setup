@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export CARGO_INCREMENTAL=0
+touch "$HOME/.bash_profile"
+if ! grep -Fqx '# Golem Amp orb Rust builds' "$HOME/.bash_profile"; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# Golem Amp orb Rust builds
+export CARGO_INCREMENTAL=0
+EOF
+fi
+
 setup_started=$SECONDS
 step_started=$SECONDS
 step_name=""
@@ -16,14 +26,21 @@ start_step() {
 
 start_step "Install system packages"
 
+# APT rejects duplicate Docker sources with different Signed-By paths.
+if [[ -f /etc/apt/sources.list.d/docker.sources ]]; then
+    sudo rm -f /etc/apt/sources.list.d/docker.list
+fi
+
 packages=(
     build-essential
+    ca-certificates
     clang
     cmake
     curl
     jq
     libssl-dev
     lld
+    openjdk-17-jdk-headless
     pkg-config
     protobuf-compiler
     redis-server
@@ -36,14 +53,51 @@ for package in "${packages[@]}"; do
         missing_packages+=("$package")
     fi
 done
-if ! command -v dockerd >/dev/null 2>&1; then
-    missing_packages+=(docker.io)
-fi
 
 if ((${#missing_packages[@]})); then
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
 fi
+
+start_step "Install Docker Engine and Buildx"
+
+docker_packages=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin)
+docker_installed=false
+missing_docker_packages=()
+for package in "${docker_packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'ok installed'; then
+        missing_docker_packages+=("$package")
+    fi
+done
+
+if ((${#missing_docker_packages[@]})); then
+    conflicting_packages=()
+    for package in docker.io docker-compose docker-doc docker-buildx podman-docker containerd runc; do
+        if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'ok installed'; then
+            conflicting_packages+=("$package")
+        fi
+    done
+    if ((${#conflicting_packages[@]})); then
+        sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y "${conflicting_packages[@]}"
+    fi
+
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+    sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+    sudo rm -f /etc/apt/sources.list.d/docker.list
+    sudo apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${docker_packages[@]}"
+    docker_installed=true
+fi
+docker buildx version
 
 start_step "Install Rust toolchain"
 
@@ -122,6 +176,31 @@ if ! cargo component --version 2>/dev/null | grep -q '0.21.1'; then
     cargo binstall --force --no-confirm --disable-telemetry cargo-component@0.21.1
 fi
 
+start_step "Install guest bridge toolchains"
+
+sbt_version="$(sed -n 's/^sbt.version=//p' sdks/scala/project/build.properties)"
+if [[ "$(sbt --script-version 2>/dev/null || true)" != "$sbt_version" ]]; then
+    sbt_archive="$(mktemp)"
+    curl -fsSL "https://github.com/sbt/sbt/releases/download/v$sbt_version/sbt-$sbt_version.tgz" \
+        -o "$sbt_archive"
+    sudo tar xzf "$sbt_archive" -C /opt
+    sudo ln -sf /opt/sbt/bin/sbt /usr/local/bin/sbt
+    rm -f "$sbt_archive"
+fi
+
+export PATH="$HOME/.moon/bin:$PATH"
+moonbit_version="$(awk -F'"' '/^[[:space:]]*MOONBIT_INSTALL_VERSION: / { print $2; exit }' .github/workflows/ci.yaml)"
+if [[ -z "$moonbit_version" ]]; then
+    echo "Failed to read MOONBIT_INSTALL_VERSION from .github/workflows/ci.yaml" >&2
+    exit 1
+fi
+if [[ "$(moonc -v 2>/dev/null || true)" != "v$moonbit_version "* ]]; then
+    moon_installer="$(mktemp)"
+    curl -fsSL https://cli.moonbitlang.com/install/unix.sh -o "$moon_installer"
+    bash "$moon_installer" "$moonbit_version"
+    rm -f "$moon_installer"
+fi
+
 profile_marker="# Golem Amp orb toolchain"
 touch "$HOME/.bash_profile"
 if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
@@ -134,9 +213,20 @@ export WASI_SDK_PATH=/opt/wasi-sdk
 EOF
 fi
 
+if ! grep -Fqx '# Golem guest bridge toolchains' "$HOME/.bash_profile"; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# Golem guest bridge toolchains
+export PATH="$HOME/.moon/bin:$PATH"
+EOF
+fi
+
 start_step "Start orb services"
 
 amp orb services ensure
+if [[ "$docker_installed" == true ]]; then
+    amp orb service restart docker-daemon
+fi
 
 printf '<== %s (%ss)\n' "$step_name" "$((SECONDS - step_started))"
 printf 'Setup completed in %ss\n' "$((SECONDS - setup_started))"

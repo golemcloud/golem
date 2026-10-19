@@ -16,6 +16,7 @@ use crate::schema::canonical;
 use crate::schema::graph::SchemaGraph;
 use crate::schema::render::cli_text::{
     type_to_cli_text, value_to_cli_text, value_to_cli_text_unredacted,
+    value_to_cli_text_with_secret_metadata,
 };
 use crate::schema::schema_type::{
     NamedFieldType, PermissionCardSpec, QuotaTokenSpec, SchemaType, SecretSpec, TextRestrictions,
@@ -120,6 +121,76 @@ fn secret_value_is_redacted_by_default() {
     let unredacted =
         value_to_cli_text_unredacted(&graph, &ty, &value).expect("value_to_cli_text_unredacted");
     assert!(unredacted.starts_with("secret:"));
+}
+
+#[test]
+fn secret_metadata_rendering_keeps_other_capabilities_redacted() {
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "credential".to_string(),
+            body: SchemaType::secret(SecretSpec::default()),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "quota".to_string(),
+            body: SchemaType::quota_token(QuotaTokenSpec::default()),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "permission".to_string(),
+            body: SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let secret_id = uuid::Uuid::from_u128(1);
+    let permission_card_id = uuid::Uuid::from_u128(2);
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id,
+                config_key: Some(vec!["database".to_string(), "password".to_string()]),
+                version: 7,
+                resolved_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                category: Some("api-key".to_string()),
+            }),
+            SchemaValue::QuotaToken(QuotaTokenValuePayload {
+                environment_id: uuid::Uuid::nil().into(),
+                resource_name: "private-quota-resource".to_string(),
+                expected_use: 1,
+                last_credit: 0,
+                last_credit_at: Utc.timestamp_opt(1_700_000_001, 0).unwrap(),
+            }),
+            SchemaValue::PermissionCard(PermissionCardValuePayload {
+                card_id: permission_card_id,
+                parent_ids: vec![],
+                expires_at: None,
+                polymorphic: true,
+            }),
+        ],
+    };
+
+    let rendered = value_to_cli_text_with_secret_metadata(&graph, &ty, &value)
+        .expect("observability rendering must succeed");
+
+    for expected in [
+        "<secret metadata:",
+        &secret_id.to_string(),
+        "database",
+        "password",
+        "\"version\":7",
+        "\"resolvedAt\":\"2023-11-14T22:13:20+00:00\"",
+        "\"category\":\"api-key\"",
+        "<redacted: quota-token>",
+        "<redacted: permission-card>",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "expected {expected:?} in {rendered:?}"
+        );
+    }
+    assert!(!rendered.contains("private-quota-resource"));
+    assert!(!rendered.contains(&permission_card_id.to_string()));
 }
 
 #[test]

@@ -17,10 +17,12 @@ use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::routing::post;
 use chrono::Utc;
+use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::registry::v1::{
     CreateRuntimeCardResponse, CreateRuntimeCardSuccessResponse, RuntimeCardData,
-    create_runtime_card_response,
+    create_runtime_card_response, registry_service_error,
 };
+use golem_common::base_model::api::error_code;
 use golem_common::model::card::{Card, CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -34,6 +36,43 @@ use test_r::test;
 async fn call_create_runtime_card_with_success_payload(
     malformed: bool,
 ) -> (StoredCard, Result<StoredCard, RegistryServiceError>) {
+    call_create_runtime_card(|card| {
+        let response_card_json = if malformed {
+            b"not valid JSON".to_vec()
+        } else {
+            serde_json::to_vec(card).unwrap()
+        };
+        create_runtime_card_response::Result::Success(CreateRuntimeCardSuccessResponse {
+            card: Some(RuntimeCardData {
+                card_id: Some(uuid::Uuid::nil().into()),
+                card_json: response_card_json,
+            }),
+        })
+    })
+    .await
+}
+
+async fn call_create_runtime_card_with_already_exists_code(
+    code: &str,
+) -> Result<StoredCard, RegistryServiceError> {
+    let code = code.to_string();
+    let (_, result) = call_create_runtime_card(move |_| {
+        create_runtime_card_response::Result::Error(
+            golem_api_grpc::proto::golem::registry::v1::RegistryServiceError {
+                error: Some(registry_service_error::Error::AlreadyExists(ErrorBody {
+                    error: "runtime card exists".to_string(),
+                    code,
+                })),
+            },
+        )
+    })
+    .await;
+    result
+}
+
+async fn call_create_runtime_card(
+    response: impl FnOnce(&StoredCard) -> create_runtime_card_response::Result,
+) -> (StoredCard, Result<StoredCard, RegistryServiceError>) {
     let card = StoredCard::Concrete(Card {
         card_id: CardId(uuid::Uuid::nil()),
         parent_ids: Vec::new(),
@@ -46,20 +85,8 @@ async fn call_create_runtime_card_with_success_payload(
         system_card: false,
         managed_by: None,
     });
-    let response_card_json = if malformed {
-        b"not valid JSON".to_vec()
-    } else {
-        serde_json::to_vec(&card).unwrap()
-    };
     let response = CreateRuntimeCardResponse {
-        result: Some(create_runtime_card_response::Result::Success(
-            CreateRuntimeCardSuccessResponse {
-                card: Some(RuntimeCardData {
-                    card_id: Some(uuid::Uuid::nil().into()),
-                    card_json: response_card_json,
-                }),
-            },
-        )),
+        result: Some(response(&card)),
     };
     let mut framed_response = Vec::with_capacity(response.encoded_len() + 5);
     framed_response.push(0);
@@ -120,4 +147,16 @@ async fn create_runtime_card_rejects_malformed_success_payload_without_panicking
 async fn create_runtime_card_decodes_success_payload() {
     let (expected, result) = call_create_runtime_card_with_success_payload(false).await;
     assert_eq!(result.unwrap(), expected);
+}
+
+#[test]
+async fn create_runtime_card_reports_a_revoked_runtime_card() {
+    assert!(matches!(
+        call_create_runtime_card_with_already_exists_code(error_code::RUNTIME_CARD_REVOKED).await,
+        Err(RegistryServiceError::RuntimeCardRevoked(_))
+    ));
+    assert!(matches!(
+        call_create_runtime_card_with_already_exists_code(error_code::CONCURRENT_UPDATE).await,
+        Err(RegistryServiceError::AlreadyExists(_))
+    ));
 }

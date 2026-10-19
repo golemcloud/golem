@@ -1,36 +1,75 @@
 # Deploy using Docker
 
-To get started we recommend using the Docker Compose file from the [Golem Docker examples](https://github.com/golemcloud/golem/tree/main/docker-examples). You will need to have [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed on your system.
+This recipe runs the **unreleased 1.6 source** with PostgreSQL and Redis for local development. It builds all six Golem images, including the router, from one checkout. It does not assume that a complete set of 1.6 images exists in a registry. Do not combine the router from this checkout with v1.5.0 service images.
 
-Once you have Docker Compose installed, you can make use of docker-compose file in Golem repository to spin up Golem.
+## Prerequisites
+
+Use a Linux x86-64 machine with an x86-64-v3 CPU, Docker Engine with BuildKit, and Docker Compose v2. Install Git, the stable Rust toolchain, `cargo-make`, `protoc`, a C/C++ toolchain, `pkg-config`, and the OpenSSL development headers. The built-in artifact build also needs the tools described in [BUILTIN_ARTIFACTS.md](https://github.com/golemcloud/golem/blob/main/BUILTIN_ARTIFACTS.md). This is a native Linux build, not a macOS or Windows host build: the service Dockerfiles package Linux binaries; they do not compile Rust.
+
+Allow sufficient disk space and memory for a release build. See the repository's [development guide](https://github.com/golemcloud/golem/blob/main/CONTRIBUTING.md) for build setup. Internet access is required for dependencies and container base images.
+
+## Build from one revision
+
+Select and retain a full commit ID from the unreleased source you want to run. Use the same revision for the Compose file, `.env`, Dockerfiles, built-in artifacts, and service binaries. Do not download two files from the moving `main` branch into an unrelated directory.
 
 ```bash filename="Terminal" copy
-# Download an example docker-compose file along with .env file that has a few common configurations
-curl -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/published-postgres/compose.yaml -O  https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/published-postgres/.env
+# Replace this value with the full commit ID you selected.
+GOLEM_REVISION=YOUR_FULL_COMMIT_ID
+git clone https://github.com/golemcloud/golem.git
+cd golem
+git checkout --detach "$GOLEM_REVISION"
+git rev-parse HEAD
 
-# Start Golem with backend storage as PostgreSQL and Redis
-docker compose -f compose.yaml up
+# Build the checkout's built-in artifacts and embed them in the registry binary.
+rustup target add x86_64-unknown-linux-gnu wasm32-wasip2
+cargo make ensure-builtin-artifacts
+CARGO_TARGET_DIR="$PWD/target" \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C target-cpu=x86-64-v3" \
+cargo build --locked --release --target x86_64-unknown-linux-gnu \
+  -p golem-registry-service -p golem-shard-manager \
+  -p golem-worker-service -p golem-worker-executor \
+  -p golem-component-compilation-service \
+  --features golem-registry-service/embed-builtin-artifacts
+
+cd docker-examples/published-postgres
+docker compose config --quiet
+docker compose build
+docker compose up -d --no-build
+docker compose ps
 ```
 
-You may need to modify it to suit your needs.
+Run these commands in a clean development environment without release-only `GOLEM_BUILTIN_RELEASE` settings. `CARGO_TARGET_DIR` above matches the paths copied by the Dockerfiles. The example's `local-next` image tag is a local build label, not a published image version. Golem services use `pull_policy: never`; PostgreSQL, Redis, and build base images still come from their upstream registries.
 
-### Troubleshooting
+Retain the commit ID and your build configuration to repeat the source build. This is not a bit-for-bit reproducible release: the example uses mutable upstream base-image tags and local build tools. For a controlled deployment, record the toolchain and pin those dependencies and images to verified versions or digests.
 
-- If you are running into any port conflicts you can modify the [.env](https://github.com/golemcloud/golem/blob/main/docker-examples/.env) file that was downloaded as part of the above curl command.
-- It has come to our note that, in some cases, the docker compose result in the following error:
+## Local access and security
 
-```bash
-error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH, out: `
+**This is a development example, not a production deployment.** It has known example account tokens and database credentials, disables login, and serves plain HTTP. The Compose file binds every published port to `127.0.0.1`. PostgreSQL, Redis, internal HTTP ports, and gRPC ports are not published. Other containers on the Compose network can still reach the services; do not attach untrusted containers to it.
+
+- The management [REST API](/next/rest-api) uses port `9881` with the host `localhost`. The router selects the management API by `GOLEM_ROUTER_MANAGEMENT_HOST`; other hosts go to deployed HTTP/MCP endpoints. Host routing is not an access-control boundary.
+- The direct HTTP gateway uses port `9006`; the direct MCP listener uses port `9007`. They are also loopback-only.
+- Use the checkout's [`.env`](https://github.com/golemcloud/golem/blob/main/docker-examples/published-postgres/.env) to inspect port settings. Change host-side ports in `compose.yaml` if local ports conflict; keep container ports and their service configuration consistent.
+
+Before **any remote exposure**, replace both account tokens in `.env` with distinct securely generated tokens and replace the database password in **every** matching Compose environment setting. Do not commit real credentials or print resolved `docker compose config` output: it includes credentials. Protect `.env` and restrict access to the Docker daemon and data volumes. Changing bootstrap tokens or PostgreSQL initialization variables does not rotate credentials already stored in existing volumes; use a fresh development stack or explicitly rotate stored credentials.
+
+Terminate TLS at a trusted reverse proxy before sending credentials or application traffic over a network. Preserve the intended host when proxying to the router. Restrict management access to a private network, VPN, or authenticated administrative proxy, with firewall rules that deny public access. Do not publish the database, Redis, internal service ports, or the direct gateway/MCP listeners to bypass these controls. Configure deployment authentication and appropriate CORS origins; CORS does not restrict non-browser clients. Replacing credentials alone does not make this example production-ready.
+
+## Storage and lifecycle
+
+Golem images run as uid and gid `65534`. The example mounts a shared named blob volume at `/data/blob_storage`, which belongs to that user in the images. If you use a bind mount, give the host directory to uid `65534` first. See [User and Permissions](/next/deploy#user-and-permissions).
+
+```bash filename="Terminal" copy
+# Inspect startup failures locally; logs can contain sensitive application data.
+docker compose logs --tail=100
+
+# Stop the stack but keep its data.
+docker compose down
 ```
 
-In this situation, the best possible solution is to rename `credsStore` to `credStore` in the `.docker/config.json` file.
+`docker compose down --volumes` permanently deletes this development stack's data. Back up data before removing volumes. After changing the source revision, rebuild the binaries and images together before starting the stack again.
 
-- If you still face issues, try the sqlite version of the docker-compose file:
+## Troubleshooting
 
-```bash
-docker compose -f docker-compose-sqlite.yaml up
-```
-
-### Accessing Golem APIs
-
-[Golem APIs](/next/rest-api) are exposed on port 9881 by default. [API Gateway](/next/concepts/worker-gateway) endpoint is exposed under port 9006.
+- If an image build reports a missing `target/.../release` file, complete the native release build above first. All Docker builds must use the repository root as their context; the example sets this for you.
+- If Docker reports a missing `docker-credential-desktop`, repair or install the credential helper configured in your Docker client configuration. Do not work around it by disabling credential storage or renaming configuration keys.
+- Use `docker compose ps` and service logs to diagnose database health checks or startup failures. This recipe provides no SQLite fallback Compose file.

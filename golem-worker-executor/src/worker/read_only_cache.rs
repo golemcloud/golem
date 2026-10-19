@@ -49,6 +49,67 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use tokio::time::Instant;
 
+#[derive(Debug, Clone)]
+pub(crate) enum AdmissionSignal {
+    Waiting,
+    Immediate,
+    Queued,
+    Failure(golem_service_base::error::worker_executor::WorkerExecutorError),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PendingReadOnlyCacheEntry {
+    Immediate,
+    Invocation(PendingReadOnlyInvocation),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingReadOnlyInvocation {
+    inner: std::sync::Arc<PendingReadOnlyInvocationInner>,
+}
+
+#[derive(Debug)]
+struct PendingReadOnlyInvocationInner {
+    admission: tokio::sync::watch::Sender<AdmissionSignal>,
+}
+
+impl PendingReadOnlyInvocation {
+    pub fn new() -> Self {
+        let (admission, _) = tokio::sync::watch::channel(AdmissionSignal::Waiting);
+        Self {
+            inner: std::sync::Arc::new(PendingReadOnlyInvocationInner { admission }),
+        }
+    }
+
+    pub fn publish(&self, signal: AdmissionSignal) {
+        self.inner.admission.send_if_modified(|current| {
+            if matches!(current, AdmissionSignal::Waiting) {
+                *current = signal;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub async fn admission(&self) -> AdmissionSignal {
+        let mut receiver = self.inner.admission.subscribe();
+        loop {
+            let signal = receiver.borrow_and_update().clone();
+            if !matches!(signal, AdmissionSignal::Waiting) {
+                return signal;
+            }
+            if receiver.changed().await.is_err() {
+                return AdmissionSignal::Failure(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "read-only admission owner disappeared",
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// Identifies an entry in the per-worker read-only result cache.
 ///
 /// `epoch` and `component_revision` are part of the key so mutations and
@@ -151,6 +212,7 @@ pub fn classify_invocation(
             _ => InvocationEffect::UnknownAssumeMutating,
         },
         AgentInvocation::AgentInitialization { .. }
+        | AgentInvocation::ExternalTool { .. }
         | AgentInvocation::ManualUpdate { .. }
         | AgentInvocation::LoadSnapshot { .. }
         | AgentInvocation::SaveSnapshot { .. }
@@ -195,15 +257,26 @@ pub fn build_read_only_cache_key(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    async fn pending_admission_preserves_queued_signal() {
+        let pending = PendingReadOnlyInvocation::new();
+        pending.publish(AdmissionSignal::Queued);
+        pending.publish(AdmissionSignal::Failure(
+            golem_service_base::error::worker_executor::WorkerExecutorError::runtime("later"),
+        ));
+        assert!(matches!(pending.admission().await, AdmissionSignal::Queued));
+    }
+
     use super::*;
     use golem_common::base_model::Empty;
     use golem_common::base_model::component_metadata::KnownExports;
-    use golem_common::model::AgentId;
     use golem_common::model::agent::{
         AgentMode, AgentPrincipal, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
     };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::oplog::RawSnapshotData;
+    use golem_common::model::{AgentId, IdempotencyKey};
     use golem_common::schema::UnionValuePayload;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
@@ -234,6 +307,7 @@ mod tests {
         methods: Vec<AgentMethodSchema>,
     ) -> ComponentMetadata {
         let at = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type,
             description: String::new(),
             source_language: String::new(),
@@ -284,6 +358,160 @@ mod tests {
                     })
                 })
                 .collect(),
+        }
+    }
+
+    struct HashOutput(blake3::Hasher);
+
+    impl desert_rust::BinaryOutput for HashOutput {
+        fn write_u8(&mut self, value: u8) {
+            self.0.update(&[value]);
+        }
+
+        fn write_bytes(&mut self, bytes: &[u8]) {
+            self.0.update(bytes);
+        }
+    }
+
+    fn streamed_digest<T: desert_rust::BinarySerializer>(value: &T) -> [u8; 32] {
+        let output = desert_rust::serialize(value, HashOutput(blake3::Hasher::new())).unwrap();
+        *output.0.finalize().as_bytes()
+    }
+
+    #[test]
+    fn streamed_cache_digest_matches_materialized_bytes() {
+        for value in [
+            SchemaValue::U64(u64::MAX),
+            SchemaValue::String("quotes: \"; nul: \0; unicode: árvíz".to_string()),
+            multimodal(vec![
+                ("a", SchemaValue::F64(-0.0)),
+                ("b", SchemaValue::S64(i64::MIN)),
+            ]),
+            tuple(vec![SchemaValue::List {
+                elements: (0..10_000)
+                    .map(|i| SchemaValue::U8((i % 251) as u8))
+                    .collect(),
+            }]),
+        ] {
+            assert_eq!(
+                streamed_digest(&value),
+                digest_bytes(&canonicalize_schema_value(&value))
+            );
+        }
+        for p in [Principal::anonymous(), principal(17), principal(23)] {
+            assert_eq!(streamed_digest(&p), digest_bytes(&principal_bytes(&p)));
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn profile_invocation_payload_passes() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        fn sample(mut f: impl FnMut(), iterations: u32) -> Vec<u128> {
+            for _ in 0..10 {
+                f();
+            }
+            let mut samples = Vec::new();
+            for _ in 0..7 {
+                let start = Instant::now();
+                for _ in 0..iterations {
+                    f();
+                }
+                samples.push(start.elapsed().as_nanos() / u128::from(iterations));
+            }
+            samples.sort_unstable();
+            samples
+        }
+
+        for size in [100, 10_000] {
+            let value = tuple(vec![SchemaValue::List {
+                elements: (0..size)
+                    .map(|i| SchemaValue::U8((i % 251) as u8))
+                    .collect(),
+            }]);
+            let shared = std::sync::Arc::new(value.clone());
+            let proto: golem_schema::proto::golem::schema::SchemaValue =
+                value.clone().try_into().unwrap();
+            let bytes = canonicalize_schema_value(&value);
+            println!(
+                "size={size} serialized_bytes={} protobuf_bytes={}",
+                bytes.len(),
+                prost::Message::encoded_len(&proto)
+            );
+            for (label, samples) in [
+                (
+                    "cache_vec_hash",
+                    sample(
+                        || {
+                            black_box(digest_bytes(&canonicalize_schema_value(black_box(&value))));
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "cache_stream_hash",
+                    sample(
+                        || {
+                            black_box(streamed_digest(black_box(&value)));
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "native_clone",
+                    sample(
+                        || {
+                            black_box(black_box(&value).clone());
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "shared_clone",
+                    sample(
+                        || {
+                            black_box(black_box(&shared).clone());
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "protobuf_clone_decode",
+                    sample(
+                        || {
+                            black_box(SchemaValue::try_from(black_box(&proto).clone()).unwrap());
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "protobuf_encoded_len",
+                    sample(
+                        || {
+                            black_box(prost::Message::encoded_len(black_box(&proto)));
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "output_clone_convert",
+                    sample(
+                        || {
+                            black_box(
+                                golem_schema::proto::golem::schema::SchemaValue::try_from(
+                                    black_box(&value).clone(),
+                                )
+                                .unwrap(),
+                            );
+                        },
+                        100,
+                    ),
+                ),
+            ] {
+                println!("{label} ns median={} samples={samples:?}", samples[3]);
+            }
         }
     }
 
@@ -372,6 +600,22 @@ mod tests {
         };
         assert_eq!(
             classify_invocation(None, None, &m),
+            InvocationEffect::Mutating
+        );
+    }
+
+    #[test]
+    fn classify_load_snapshot_is_mutating() {
+        let invocation = AgentInvocation::LoadSnapshot {
+            idempotency_key: IdempotencyKey::new("load-snapshot".to_string()),
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            },
+        };
+
+        assert_eq!(
+            classify_invocation(None, None, &invocation),
             InvocationEffect::Mutating
         );
     }

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError } from 'golem:core/types@2.0.0';
 import { createToolClientTransport, isRpcError } from './bridge/tool';
 import {
   createToolClient,
   decodeDeclaredToolError,
   getExtendedToolDefinition,
+  registerToolClientFactory,
   type AnyToolDefinition,
   type ToolClient,
   type ToolClientFailureContext,
@@ -26,11 +27,45 @@ import {
 
 export interface ToolClientOptions {
   readonly transport?: ToolClientTransport;
+  /** Stable leaf registration name when the definition describes an adapted presented surface. */
+  readonly lookupName?: string;
+}
+
+/** A caller-owned typed command definition; its commands may be a subset of the deployed tool. */
+export interface ToolClientDefinition<Definition extends AnyToolDefinition> {
+  readonly name?: string;
+  readonly definition: Definition;
+  client(
+    targetName?: string,
+    options?: Omit<ToolClientOptions, 'lookupName'>,
+  ): ToolClient<Definition>;
+}
+
+/** Bind a partial typed tool definition without discovery or compatibility preflight. */
+export function toolClientDefinition<Definition extends AnyToolDefinition>(
+  definition: Definition,
+  name?: string,
+): ToolClientDefinition<Definition> {
+  return Object.freeze({
+    name,
+    definition,
+    client(targetName?: string, options: Omit<ToolClientOptions, 'lookupName'> = {}) {
+      const lookupName = name ?? targetName;
+      if (!lookupName)
+        throw new TypeError('A nameless tool client definition requires a target name');
+      return client(definition, { ...options, lookupName });
+    },
+  });
 }
 
 export type ToolCallErrorCause<Errors> =
-  | { readonly tag: 'rpc'; readonly error: RpcError }
-  | { readonly tag: 'tool'; readonly error: Errors };
+  | { readonly tag: 'rpc'; readonly error: ToolRpcError }
+  | { readonly tag: 'tool'; readonly error: Errors }
+  | {
+      readonly tag: 'unknown-error';
+      readonly name: string;
+      readonly payload: Parameters<typeof decodeDeclaredToolError>[1]['payload'];
+    };
 
 /** A stable rejected-promise error for remote tool calls. */
 export class ToolCallError<Errors = never> extends Error {
@@ -49,34 +84,50 @@ export function client<Definition extends AnyToolDefinition>(
   options: ToolClientOptions = {},
 ): ToolClient<Definition> {
   const tool = getExtendedToolDefinition(definition);
-  const transport = options.transport ?? createToolClientTransport(tool.toolName);
+  const transport =
+    options.transport ?? createToolClientTransport(options.lookupName ?? tool.toolName);
   return createToolClient(definition, transport, mapToolClientFailure);
 }
+
+registerToolClientFactory(client);
 
 function mapToolClientFailure(
   error: unknown,
   { body, callName }: ToolClientFailureContext,
-): ToolCallError<unknown> {
+): ToolCallError<unknown> | Promise<ToolCallError<unknown>> {
   if (error instanceof ToolCallError) return error;
+  const rpc = error as ToolRpcError | null | undefined;
+  // Custom payload validation must run inside the terminal ownership boundary.
+  if (rpc?.tag === 'remote-tool-error' && rpc.val?.tag === 'custom-error')
+    return mapToolRpcError(body, rpc, callName);
   if (isRpcError(error)) return mapToolRpcError(body, error, callName);
   return protocolToolCallError(`${callName}: ${errorMessage(error)}`);
 }
 
 function mapToolRpcError(
   body: ToolClientFailureContext['body'],
-  error: RpcError,
+  error: ToolRpcError,
   callName: string,
-): ToolCallError<unknown> {
+): ToolCallError<unknown> | Promise<ToolCallError<unknown>> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {
     return new ToolCallError({ tag: 'rpc', error });
   }
 
+  const decodedError = (declaredError: Awaited<ReturnType<typeof decodeDeclaredToolError>>) =>
+    declaredError.tag === 'unknown-error'
+      ? new ToolCallError(declaredError)
+      : new ToolCallError({ tag: 'tool', error: declaredError });
+  const invalidPayload = (decodeError: unknown) =>
+    decodeError instanceof ToolCallError
+      ? decodeError
+      : protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
   try {
     const declaredError = decodeDeclaredToolError(body, error.val.val, callName);
-    return new ToolCallError({ tag: 'tool', error: declaredError });
+    return declaredError instanceof Promise
+      ? declaredError.then(decodedError, invalidPayload)
+      : decodedError(declaredError);
   } catch (decodeError) {
-    if (decodeError instanceof ToolCallError) return decodeError;
-    return protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
+    return invalidPayload(decodeError);
   }
 }
 
@@ -94,9 +145,14 @@ function formatToolCallError(cause: ToolCallErrorCause<unknown>): string {
       ? `Remote tool returned declared error "${name}"`
       : 'Remote tool returned a declared error';
   }
+  if (cause.tag === 'unknown-error') {
+    return `Remote tool returned unknown declared error "${cause.name}"`;
+  }
   return cause.error.tag === 'remote-tool-error'
     ? `Remote tool call failed: ${cause.error.val.tag}`
-    : `Remote tool call failed: ${cause.error.tag}: ${cause.error.val}`;
+    : cause.error.tag === 'cancelled'
+      ? 'Remote tool call failed: cancelled'
+      : `Remote tool call failed: ${cause.error.tag}: ${cause.error.val}`;
 }
 
 function isRecord(value: unknown): value is Record<PropertyKey, unknown> {

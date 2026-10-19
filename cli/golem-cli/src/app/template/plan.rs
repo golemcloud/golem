@@ -136,11 +136,21 @@ impl UnsafeTemplatePlan {
 #[derive(Debug, Default)]
 pub struct TemplatePlanBuilder {
     file_steps: BTreeMap<PathBuf, Vec<FallibleNamedTemplatePlanStep>>,
+    layout_upgrade: MultiComponentLayoutUpgradePlan,
 }
 
 impl TemplatePlanBuilder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Plans against the files as they will be after the layout upgrade is applied,
+    /// so the upgrade and the template plan can be validated before either changes a file.
+    pub fn with_layout_upgrade(layout_upgrade: MultiComponentLayoutUpgradePlan) -> Self {
+        Self {
+            file_steps: BTreeMap::new(),
+            layout_upgrade,
+        }
     }
 
     pub fn entries(&self) -> &BTreeMap<PathBuf, Vec<FallibleNamedTemplatePlanStep>> {
@@ -180,9 +190,7 @@ impl TemplatePlanBuilder {
         let current = if let Some(existing) = last_step {
             Some(existing.planned_contents().to_string())
         } else {
-            path.exists()
-                .then(|| fs::read_to_string(path))
-                .transpose()?
+            self.layout_upgrade.current_contents(path)?
         };
 
         Ok(match current {
@@ -348,6 +356,18 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 validate_yaml,
                 edit::golem_yaml::merge_documents,
             )?),
+            // A Go component's module files come only from the component
+            // template, and `go mod tidy` rewrites them after the first build.
+            // An existing pair is the component's own and is kept; the build
+            // reconciles the SDK requirements and replaces in it, and tidy
+            // resolves the rest from the sources.
+            "go.mod" | "go.sum" => Some(current.to_string()),
+            "main.go" => Some(merge_with_validation(
+                current,
+                new,
+                edit::main_go::validate,
+                edit::main_go::merge_imports,
+            )?),
             "main.ts" => Some(merge_with_validation(
                 current,
                 new,
@@ -378,6 +398,15 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 validate_json,
                 edit::json::merge_object,
             )?),
+            "build.sbt" => Some(edit::build_sbt::merge_build_sbt(current, new)?),
+            "plugins.sbt" => Some(edit::build_sbt::merge_plugins_sbt(current, new)?),
+            "build.properties" => Some(edit::build_sbt::merge_properties(current, new)?),
+            // Any other sbt file a template generates is a component's own build definition.
+            // Its project directory is set by the multi-component layout upgrade; the template
+            // only contributes its SDK versions.
+            name if name.ends_with(".sbt") => {
+                Some(edit::build_sbt::merge_component_sbt(current, new)?)
+            }
             _ => None,
         })
     }
@@ -430,8 +459,41 @@ fn validate_yaml(source: &str) -> anyhow::Result<()> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiComponentLayoutUpgradePlanStep {
-    Move { source: PathBuf, target: PathBuf },
-    Rewrite { path: PathBuf, edit: TextEdit },
+    Move {
+        source: PathBuf,
+        target: PathBuf,
+        kind: MovedPathKind,
+    },
+    Rewrite {
+        path: PathBuf,
+        edit: TextEdit,
+    },
+}
+
+impl MultiComponentLayoutUpgradePlanStep {
+    pub fn move_file(source: PathBuf, target: PathBuf) -> Self {
+        Self::Move {
+            source,
+            target,
+            kind: MovedPathKind::File,
+        }
+    }
+
+    pub fn move_dir(source: PathBuf, target: PathBuf) -> Self {
+        Self::Move {
+            source,
+            target,
+            kind: MovedPathKind::Dir,
+        }
+    }
+}
+
+/// What the source of a move must be, so that the validation of a plan can reject a
+/// missing or different source before any move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovedPathKind {
+    File,
+    Dir,
 }
 
 /// A targeted in-place edit applied to an existing source file as part of a
@@ -486,5 +548,209 @@ impl MultiComponentLayoutUpgradePlan {
 
     pub fn steps(&self) -> &[MultiComponentLayoutUpgradePlanStep] {
         &self.steps
+    }
+
+    pub fn extend(&mut self, other: MultiComponentLayoutUpgradePlan) {
+        self.steps.extend(other.steps);
+    }
+
+    /// Pairs of move sources, and pairs of distinct move targets, where one path is the same as
+    /// or inside the other. Such moves cannot all be applied in order.
+    pub fn overlapping_moves(&self) -> Vec<(&Path, &Path)> {
+        let moves = self
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
+                    Some((source.as_path(), target.as_path()))
+                }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        let overlaps = |a: &Path, b: &Path| a.starts_with(b) || b.starts_with(a);
+
+        let mut result = Vec::new();
+        for (idx, (source_a, target_a)) in moves.iter().enumerate() {
+            for (source_b, target_b) in &moves[idx + 1..] {
+                if overlaps(source_a, source_b) {
+                    result.push((*source_a, *source_b));
+                }
+                if target_a != target_b && overlaps(target_a, target_b) {
+                    result.push((*target_a, *target_b));
+                }
+            }
+        }
+        result
+    }
+
+    /// Contents of `path` as they will be after the plan is applied, read from the
+    /// files as they are now. `None` when the path will not exist.
+    pub fn current_contents(&self, path: &Path) -> anyhow::Result<Option<String>> {
+        let mut source_path = path.to_path_buf();
+        let mut edits = Vec::new();
+
+        for step in self.steps.iter().rev() {
+            match step {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
+                    if let Ok(rest) = source_path.strip_prefix(target) {
+                        source_path = if rest.as_os_str().is_empty() {
+                            source.clone()
+                        } else {
+                            source.join(rest)
+                        };
+                    } else if source_path.starts_with(source) {
+                        return Ok(None);
+                    }
+                }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { path, edit } => {
+                    if *path == source_path {
+                        edits.push(edit);
+                    }
+                }
+            }
+        }
+
+        if !source_path.exists() {
+            return Ok(None);
+        }
+
+        let mut contents = fs::read_to_string(&source_path)?;
+        for edit in edits.into_iter().rev() {
+            contents = edit.apply(&contents)?;
+        }
+        Ok(Some(contents))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, TemplatePlanBuilder,
+        TemplatePlanStep, TextEdit,
+    };
+    use crate::app::template::generator::InMemoryFs;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use test_r::test;
+
+    fn write(path: &Path, contents: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn layout_upgrade_current_contents_follow_moves_and_rewrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        write(&root.join("tsconfig.json"), "{}");
+        write(&root.join("module/go.mod"), "module app");
+        write(
+            &root.join("app.sbt"),
+            "lazy val app = project\n  .in(file(\".\"))\n",
+        );
+        write(&root.join("package.json"), "{\"name\":\"app\"}");
+
+        let mut upgrade = MultiComponentLayoutUpgradePlan::new();
+        upgrade.add(MultiComponentLayoutUpgradePlanStep::move_file(
+            root.join("tsconfig.json"),
+            root.join("ts-main/tsconfig.json"),
+        ));
+        upgrade.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+            root.join("module"),
+            root.join("go-main"),
+        ));
+        upgrade.add(MultiComponentLayoutUpgradePlanStep::Rewrite {
+            path: root.join("app.sbt"),
+            edit: TextEdit::ScalaSbtComponentDir {
+                lazy_val: "app".to_string(),
+                new_dir: "scala-main".to_string(),
+            },
+        });
+
+        let current = |path: &str| upgrade.current_contents(&root.join(path)).unwrap();
+
+        assert_eq!(current("ts-main/tsconfig.json").as_deref(), Some("{}"));
+        assert_eq!(current("tsconfig.json"), None);
+        assert_eq!(current("go-main/go.mod").as_deref(), Some("module app"));
+        assert_eq!(current("module/go.mod"), None);
+        assert_eq!(
+            current("app.sbt").as_deref(),
+            Some("lazy val app = project\n  .in(file(\"scala-main\"))\n")
+        );
+        assert_eq!(
+            current("package.json").as_deref(),
+            Some("{\"name\":\"app\"}")
+        );
+        assert_eq!(current("go-main/missing.go"), None);
+
+        assert!(root.join("tsconfig.json").exists());
+        assert!(!root.join("ts-main").exists());
+        assert!(!root.join("go-main").exists());
+    }
+
+    #[test]
+    fn layout_upgrade_reports_overlapping_moves() {
+        let root = Path::new("/app");
+        let move_step = |source: &str, target: &str| {
+            MultiComponentLayoutUpgradePlanStep::move_file(root.join(source), root.join(target))
+        };
+
+        let mut upgrade = MultiComponentLayoutUpgradePlan::new();
+        upgrade.add(move_step("src", "ts-a/src"));
+        upgrade.add(move_step("tsconfig.json", "ts-a/tsconfig.json"));
+        upgrade.add(move_step("src", "ts-b/src"));
+        upgrade.add(move_step("Cargo.toml", "ts-a/tsconfig.json/x"));
+
+        assert_eq!(
+            upgrade.overlapping_moves(),
+            vec![
+                (root.join("src").as_path(), root.join("src").as_path()),
+                (
+                    root.join("ts-a/tsconfig.json").as_path(),
+                    root.join("ts-a/tsconfig.json/x").as_path()
+                ),
+            ]
+        );
+
+        let mut disjoint = MultiComponentLayoutUpgradePlan::new();
+        disjoint.add(move_step("src", "ts-a/src"));
+        disjoint.add(move_step("tsconfig.json", "ts-a/tsconfig.json"));
+        disjoint.add(move_step("target", "rust-a/target"));
+        assert!(disjoint.overlapping_moves().is_empty());
+    }
+
+    #[test]
+    fn template_plan_reads_moved_files_at_their_upgraded_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        write(&root.join("tsconfig.json"), "{\"a\":1}");
+
+        let mut upgrade = MultiComponentLayoutUpgradePlan::new();
+        upgrade.add(MultiComponentLayoutUpgradePlanStep::move_file(
+            root.join("tsconfig.json"),
+            root.join("ts-main/tsconfig.json"),
+        ));
+
+        let mut builder = TemplatePlanBuilder::with_layout_upgrade(upgrade);
+        builder.add(
+            "component",
+            &InMemoryFs::from_files(BTreeMap::from([(
+                root.join("ts-main/tsconfig.json"),
+                "{\"a\":1}".to_string(),
+            )])),
+        );
+        let plan = builder.build();
+
+        assert!(matches!(
+            plan.file_steps()
+                .get(&root.join("ts-main/tsconfig.json"))
+                .unwrap()
+                .as_ref()
+                .unwrap(),
+            TemplatePlanStep::SkipSame { .. }
+        ));
     }
 }

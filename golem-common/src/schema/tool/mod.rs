@@ -37,20 +37,38 @@ pub use golem_schema::schema::tool::*;
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct DiscoveredTool {
+    pub lookup_name: String,
     pub definition: Tool,
     pub implemented_by: ComponentId,
 }
 
 impl From<RegisteredTool> for DiscoveredTool {
     fn from(value: RegisteredTool) -> Self {
-        let RegisteredTool {
-            definition, source, ..
-        } = value;
+        Self::new(value.definition, value.source)
+    }
+}
+
+impl DiscoveredTool {
+    pub fn new(definition: Tool, source: ToolSource) -> Self {
         let implemented_by = match source {
             ToolSource::Component { component_id, .. } => component_id,
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => {
+                const HOST_TOOL_COMPONENT_NAMESPACE: uuid::Uuid =
+                    uuid::uuid!("2e53c904-6751-5bc7-8264-0ecfbb58dbd5");
+                let identity = format!("{}@{implementation_version}", host_tool_id.as_str());
+                ComponentId(uuid::Uuid::new_v5(
+                    &HOST_TOOL_COMPONENT_NAMESPACE,
+                    identity.as_bytes(),
+                ))
+            }
         };
 
+        let lookup_name = definition.name().unwrap_or("<unnamed tool>").to_string();
         Self {
+            lookup_name,
             definition,
             implemented_by,
         }

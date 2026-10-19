@@ -1,0 +1,43 @@
+manifestVersion: 1.6.0
+
+app: tool-streaming-go
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:tool-streaming-go-provider:
+    dir: "provider"
+    templates: go, go-test-component
+  golem-it:tool-streaming-go-caller:
+    dir: "caller"
+    templates: go, go-test-component
+    dependencies:
+      tools:
+      - golem-it:tool-streaming-go-provider/matrix-core
+      - golem-it:tool-streaming-go-provider/stdin-probe
+
+tools:
+  matrix-core: {}
+  stdin-probe: {}
+
+agents:
+  GoToolStreamingCaller:
+    tools:
+      matrix-core: {}
+      stdin-probe: {}
+
+bridge:
+  go:
+    internal:
+      tools:
+      - matrix-core
+      - stdin-probe
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+  cloud:
+    server: cloud
+    componentPresets: release

@@ -927,8 +927,8 @@ async fn usable_ratio_caps_admission_below_full_limit() {
 /// scan.
 ///
 /// A memory grow acquires a permit while the growing worker holds its own
-/// instance lock, and the admission slow path scans the worker set, taking each
-/// other worker's instance lock to classify it for eviction. With many workers
+/// worker lifecycle lock, and the admission slow path scans the worker set, taking each
+/// other worker's lifecycle lock to classify it for eviction. With many workers
 /// growing at once under memory pressure these two must not form an AB-BA cycle.
 /// Workloads that never grow memory never exercise this path.
 mod grow_lock_ordering {
@@ -973,7 +973,7 @@ mod grow_lock_ordering {
     }
 
     /// Eviction source that, like `evict_at_most_memory`, scans every worker and
-    /// takes each worker's instance lock (via `eviction_class`) to classify it.
+    /// takes each worker's lifecycle lock (via `eviction_class`) to classify it.
     /// Frees nothing (all workers active). The lock on each worker is held only
     /// briefly, faithfully — the deadlock comes from the ordering, not hold time.
     struct ScanningEvictionSource {
@@ -999,8 +999,8 @@ mod grow_lock_ordering {
     }
 
     /// Models the grow path's lock interaction: run the admission scan, which
-    /// takes other workers' instance locks, without holding this worker's own
-    /// instance lock, then take it afterwards to merge the permit (as
+    /// takes other workers' lifecycle locks, without holding this worker's own
+    /// lifecycle lock, then take it afterwards to merge the permit (as
     /// `Worker::increase_memory` does).
     async fn grow_then_lock(
         controller: &AdmissionController,
@@ -1063,7 +1063,7 @@ mod grow_lock_ordering {
         let result = tokio::time::timeout(DEADLINE, all_done).await;
         assert!(
             result.is_ok(),
-            "concurrent grows deadlocked: the scan must not run while a worker holds its own instance lock"
+            "concurrent grows deadlocked: the scan must not run while a worker holds its own lifecycle lock"
         );
         assert_eq!(
             scans.load(Ordering::Relaxed),
@@ -1073,7 +1073,7 @@ mod grow_lock_ordering {
     }
 
     /// With comfortable headroom the gate admits on the fast path without
-    /// scanning, so no worker's instance lock is taken during admission and
+    /// scanning, so no worker's lifecycle lock is taken during admission and
     /// concurrent grows complete. Confirms the deadlock risk is specific to the
     /// scan-under-pressure path.
     #[test]

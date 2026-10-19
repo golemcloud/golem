@@ -37,11 +37,10 @@ use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
+    CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection, RequestBodySchema,
 };
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -61,18 +60,21 @@ impl CallAgentHandler {
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        // Phantom routes address a fresh agent instance on every call. For
-        // durable agents this requires generating a random phantom id here;
-        // for ephemeral agents the final per-invocation phantom identity is
-        // derived downstream from the invocation's idempotency key, so the
-        // target is addressed by its logical agent id.
-        let phantom_id = if behaviour.phantom {
-            (behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4)
-        } else {
-            None
-        };
+        let phantom_id = resolve_phantom_id(
+            request,
+            resolved_route,
+            &behaviour.phantom_selection,
+            |phantom| (phantom && behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4),
+        )?;
 
-        let agent_id = self.build_agent_id(resolved_route, behaviour, phantom_id)?;
+        let agent_id = Self::build_agent_id(
+            resolved_route,
+            behaviour.component_id,
+            &behaviour.agent_type,
+            &behaviour.constructor_input,
+            &behaviour.constructor_parameters,
+            phantom_id,
+        )?;
 
         let request_method = request.underlying.method().clone();
 
@@ -92,9 +94,7 @@ impl CallAgentHandler {
             return Ok(not_modified);
         }
 
-        let parsed_body = request
-            .parse_request_body(&resolved_route.route.body)
-            .await?;
+        let parsed_body = request.parse_request_body(&behaviour.body).await?;
 
         let method_params =
             self.resolve_method_arguments(resolved_route, request, behaviour, parsed_body)?;
@@ -105,7 +105,7 @@ impl CallAgentHandler {
             fields: method_params,
         };
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             method_params_value.try_into().map_err(|error| {
                 anyhow!("method parameters cannot cross the worker boundary: {error}")
             })?;
@@ -224,7 +224,7 @@ impl CallAgentHandler {
             return Ok(None);
         }
 
-        let mut headers: HashMap<http::HeaderName, String> = HashMap::new();
+        let mut headers = http::HeaderMap::new();
         add_read_only_cache_headers(
             &mut headers,
             agent_id,
@@ -268,20 +268,14 @@ impl CallAgentHandler {
         }
     }
 
-    fn build_agent_id(
-        &self,
+    pub(super) fn build_agent_id(
         resolved_route: &ResolvedRouteEntry,
-        behaviour: &CallAgentBehaviour,
+        component_id: golem_common::model::component::ComponentId,
+        agent_type: &golem_common::model::agent::AgentTypeName,
+        constructor_input: &golem_service_base::custom_api::CompiledInputSchema,
+        constructor_parameters: &[ConstructorParameter],
         phantom_id: Option<Uuid>,
     ) -> Result<AgentId, RequestHandlerError> {
-        let CallAgentBehaviour {
-            component_id,
-            agent_type,
-            constructor_input,
-            constructor_parameters,
-            ..
-        } = behaviour;
-
         let mut fields = Vec::with_capacity(constructor_parameters.len());
 
         for param in constructor_parameters {
@@ -311,12 +305,12 @@ impl CallAgentHandler {
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {
-            component_id: *component_id,
+            component_id,
             agent_id: agent_id.to_string(),
         })
     }
 
-    fn resolve_method_arguments(
+    pub(super) fn resolve_method_arguments(
         &self,
         resolved_route: &ResolvedRouteEntry,
         request: &RichRequest,
@@ -413,7 +407,7 @@ impl CallAgentHandler {
                         // wrapper (raw body -> `inline` case; DA: url-referenced
                         // request bodies are not accepted) or a bare `Binary`
                         // rich scalar (raw value as-is).
-                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
+                        wrap_unstructured_body_value(&behaviour.body, raw)?
                     }
 
                     _ => {
@@ -441,7 +435,7 @@ impl CallAgentHandler {
                         // wrapper (raw body -> `inline` case; DA: url-referenced
                         // request bodies are not accepted) or a bare `Text` rich
                         // scalar (raw value as-is).
-                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
+                        wrap_unstructured_body_value(&behaviour.body, raw)?
                     }
 
                     _ => {
@@ -500,7 +494,7 @@ fn is_cacheable_method(method: &Method) -> bool {
 /// the response (`Authorization` / session-header for principal-aware
 /// methods, plus any header-bound method parameters).
 fn add_read_only_cache_headers(
-    headers: &mut HashMap<http::HeaderName, String>,
+    headers: &mut http::HeaderMap,
     agent_id: &AgentId,
     oplog_index: Option<OplogIndex>,
     agent_fingerprint: Option<AgentFingerprint>,
@@ -510,7 +504,7 @@ fn add_read_only_cache_headers(
 ) {
     headers.insert(
         cache_header::CACHE_CONTROL,
-        build_cache_control_value(read_only),
+        http::HeaderValue::from_str(&build_cache_control_value(read_only)).unwrap(),
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -525,7 +519,10 @@ fn add_read_only_cache_headers(
     if supports_http_revalidation(read_only)
         && let (Some(idx), Some(fp)) = (oplog_index, agent_fingerprint)
     {
-        headers.insert(cache_header::ETAG, build_etag_value(agent_id, fp, idx));
+        headers.insert(
+            cache_header::ETAG,
+            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, idx)).unwrap(),
+        );
     }
 
     // Vary on every request header that may influence the response: the
@@ -551,11 +548,52 @@ fn add_read_only_cache_headers(
 fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
     match security {
         RichRouteSecurity::SessionFromHeader(s) => s.header_name.as_str(),
-        RichRouteSecurity::None | RichRouteSecurity::SecurityScheme(_) => "Authorization",
+        RichRouteSecurity::None
+        | RichRouteSecurity::SecurityScheme(_)
+        | RichRouteSecurity::Unavailable => "Authorization",
     }
 }
 
-fn principal_from_request(request: &RichRequest) -> Result<Principal, RequestHandlerError> {
+pub(super) fn resolve_phantom_id(
+    request: &RichRequest,
+    resolved_route: &ResolvedRouteEntry,
+    selection: &PhantomSelection,
+    policy: impl FnOnce(bool) -> Option<Uuid>,
+) -> Result<Option<Uuid>, RequestHandlerError> {
+    let value = match selection {
+        PhantomSelection::Policy { phantom } => return Ok(policy(*phantom)),
+        PhantomSelection::Original => return Ok(None),
+        PhantomSelection::Path { index } => {
+            resolved_route.captured_path_parameters[usize::from(*index)].as_str()
+        }
+        PhantomSelection::Query { name, optional } => {
+            match request.query_params().get(name).map(Vec::as_slice) {
+                Some([value]) => value.as_str(),
+                None if *optional => return Ok(None),
+                None | Some([]) => {
+                    return Err(RequestHandlerError::MissingValue {
+                        expected: "phantom UUID query selector",
+                    });
+                }
+                _ => {
+                    return Err(RequestHandlerError::TooManyValues {
+                        expected: "phantom UUID query selector",
+                    });
+                }
+            }
+        }
+    };
+    Uuid::parse_str(value)
+        .map(Some)
+        .map_err(|_| RequestHandlerError::ValueParsingFailed {
+            value: value.into(),
+            expected: "UUID",
+        })
+}
+
+pub(super) fn principal_from_request(
+    request: &RichRequest,
+) -> Result<Principal, RequestHandlerError> {
     match request.authenticated_session() {
         Some(session) => Ok(Principal::Oidc(OidcPrincipal {
             sub: session.subject.clone(),
@@ -571,5 +609,188 @@ fn principal_from_request(request: &RichRequest) -> Result<Principal, RequestHan
                 .map_err(|e| anyhow!("CoreIdTokenClaims serialization error: {e}"))?,
         })),
         None => Ok(Principal::anonymous()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
+    use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType};
+    use test_r::test;
+
+    #[test]
+    async fn explicit_phantom_selection_validates_decoded_queries_and_capture_ordinals() {
+        let p = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let q = "8badf00d-1234-4567-89ab-0123456789ab";
+        let resolver = test_resolver(vec![test_route(
+            1,
+            "/base/{decision}/{instance}/literal/{tenant}",
+            Some("GET"),
+            "typed",
+        )]);
+        let route_request = poem::Request::builder()
+            .uri(format!("/base/d7/{p}/literal/west").parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let mut resolved = resolver
+            .resolve_matching_route(&route_request)
+            .await
+            .unwrap();
+        let path = PhantomSelection::Path { index: 1.into() };
+        assert_eq!(
+            resolve_phantom_id(
+                &RichRequest::new(route_request),
+                &resolved,
+                &path,
+                |_| panic!("explicit selection must not use policy")
+            )
+            .unwrap(),
+            Some(p)
+        );
+        for optional in [false, true] {
+            let selection = PhantomSelection::Query {
+                name: "instance".into(),
+                optional,
+            };
+            for query in [
+                format!("instance={p}"),
+                format!("instance={}", p.to_string().to_uppercase()),
+                format!("%69nstance={}", p.to_string().replace('-', "%2D")),
+                format!("other=one&instance={p}&other=two"),
+            ] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/base?{query}").parse().unwrap())
+                        .finish(),
+                );
+                assert_eq!(
+                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                        "explicit selection must not use policy"
+                    ))
+                    .unwrap(),
+                    Some(p)
+                );
+            }
+            for query in [
+                "instance=".into(),
+                "instance=invalid".into(),
+                format!("instance={p}&instance={p}"),
+                format!("instance={p}&instance={q}"),
+                format!("instance={p}&%69nstance={p}"),
+            ] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/base?{query}").parse().unwrap())
+                        .finish(),
+                );
+                assert!(
+                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                        "invalid explicit selection must not use policy"
+                    ))
+                    .is_err()
+                );
+            }
+            let request = RichRequest::new(
+                poem::Request::builder()
+                    .uri("/base".parse().unwrap())
+                    .finish(),
+            );
+            let result = resolve_phantom_id(&request, &resolved, &selection, |_| {
+                panic!("optional omission must not use policy")
+            });
+            if optional {
+                assert_eq!(result.unwrap(), None);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        let request = RichRequest::new(poem::Request::builder().finish());
+        assert_eq!(
+            resolve_phantom_id(
+                &request,
+                &resolved,
+                &PhantomSelection::Original,
+                |_| panic!("original must not use policy")
+            )
+            .unwrap(),
+            None
+        );
+        for phantom in [false, true] {
+            assert_eq!(
+                resolve_phantom_id(
+                    &request,
+                    &resolved,
+                    &PhantomSelection::Policy { phantom },
+                    |flag| {
+                        assert_eq!(flag, phantom);
+                        Some(p)
+                    }
+                )
+                .unwrap(),
+                Some(p)
+            );
+        }
+        let constructor = CompiledInputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "decision".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+                golem_common::schema::NamedFieldType {
+                    name: "tenant".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+            ])),
+            input_schema: InputSchema::Parameters(vec![]),
+        };
+        let bindings = vec![
+            ConstructorParameter::Path {
+                path_segment_index: 0.into(),
+                parameter_type: PathSegmentType::Str,
+            },
+            ConstructorParameter::Path {
+                path_segment_index: 2.into(),
+                parameter_type: PathSegmentType::Str,
+            },
+        ];
+        let component_id = golem_common::model::component::ComponentId::new();
+        let agent_type = golem_common::model::agent::AgentTypeName("selected".into());
+        let id = CallAgentHandler::build_agent_id(
+            &resolved,
+            component_id,
+            &agent_type,
+            &constructor,
+            &bindings,
+            Some(p),
+        )
+        .unwrap();
+        assert_eq!(id.agent_id, format!("selected(\"d7\",\"west\")[{p}]"));
+        resolved.captured_path_parameters[0] = "d9".into();
+        let other = CallAgentHandler::build_agent_id(
+            &resolved,
+            component_id,
+            &agent_type,
+            &constructor,
+            &bindings,
+            Some(p),
+        )
+        .unwrap();
+        assert_eq!(other.agent_id, format!("selected(\"d9\",\"west\")[{p}]"));
+        assert_ne!(id, other);
+        let other_component = CallAgentHandler::build_agent_id(
+            &resolved,
+            golem_common::model::component::ComponentId::new(),
+            &agent_type,
+            &constructor,
+            &bindings,
+            Some(p),
+        )
+        .unwrap();
+        assert_eq!(other.agent_id, other_component.agent_id);
+        assert_ne!(other, other_component);
     }
 }

@@ -86,6 +86,7 @@ test "primitive types round-trip" {
     F64(None),
     Char,
     String,
+    Uuid,
     Datetime,
     Duration,
   ]
@@ -93,6 +94,18 @@ test "primitive types round-trip" {
     let st = schema_type(body)
     assert_eq(rt_type(st), st)
   }
+}
+
+///|
+test "uuid schema and value use first-class WIT cases" {
+  let uuid : @types.Uuid = {
+    high_bits: 0x0123456789ABCDEFUL,
+    low_bits: 0xFEDCBA9876543210UL,
+  }
+  assert_eq(encoded_body(schema_type(Uuid)), @types.UuidType)
+  let encoded = schema_value_to_wit(Uuid(uuid))
+  assert_eq(encoded.value_nodes, [@types.UuidValue(uuid)])
+  assert_eq(rt_value(Uuid(uuid)), Uuid(uuid))
 }
 
 ///|
@@ -976,8 +989,8 @@ test "decode rejects a handle node unreachable from the root" {
 ///|
 /// Build an opaque permission-card handle around a fake resource index. The
 /// handle is used only by the host-free schema codec tests.
-fn fake_permission_card_handle(index : Int) -> GuestPermissionCardHandle {
-  GuestPermissionCardHandle::new(@types.PermissionCard::PermissionCard(index))
+fn fake_permission_card_handle(index : Int) -> @card.GuestPermissionCardHandle {
+  @card.adopt(@types.PermissionCard::PermissionCard(index))
 }
 
 ///|
@@ -998,7 +1011,7 @@ test "permission-card value encodes to a handle node and decodes to a fresh hand
 ///|
 test "permission-card preflight rejects consumed and duplicate handles without moving them" {
   let consumed = fake_permission_card_handle(21)
-  let _ = consumed.take()
+  let _ = @card.take(consumed)
   let consumed_result = try
     schema_value_to_wit(PermissionCard(consumed)) |> Ok
   catch {
@@ -1026,10 +1039,12 @@ test "permission-card preflight rejects consumed and duplicate handles without m
 }
 
 ///|
-test "permission-card preflight rejects distinct holders for one raw handle" {
+test "a later host-supplied holder for a raw handle empties the stale holder" {
   let raw = @types.PermissionCard::PermissionCard(23)
-  let a = GuestPermissionCardHandle::new(raw)
-  let b = GuestPermissionCardHandle::new(raw)
+  let a = @card.adopt(raw)
+  let b = @card.adopt(raw)
+  assert_false(a.is_present())
+  assert_true(b.is_present())
   let result = try
     schema_value_to_wit(Tuple([PermissionCard(a), PermissionCard(b)])) |> Ok
   catch {
@@ -1038,8 +1053,9 @@ test "permission-card preflight rejects distinct holders for one raw handle" {
   guard result is Err(EncodeError(message)) else {
     fail("expected EncodeError, got \{repr(result)}")
   }
-  assert_true(message.contains("more than once"))
-  assert_true(a.is_present() && b.is_present())
+  assert_true(message.contains("already transferred"))
+  assert_true(b.is_present())
+  ignore(@card.take(b))
 }
 
 ///|
@@ -1124,4 +1140,27 @@ test "duplicate def id is rejected before a bad body is decoded" {
     fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("duplicate def id"))
+}
+
+///|
+test "a sync encode rejects a native stream before it moves any capability" {
+  let card = fake_permission_card_handle(24)
+  let (reader, _) : (
+    @async-core.Stream[@types.SchemaValueTree],
+    @async-core.Sink[@types.SchemaValueTree],
+  ) = @async-core.Stream::new()
+  let stream = GuestSchemaValueStreamHandle::from_native(reader)
+  let result = try
+    schema_value_to_wit(Record([PermissionCard(card), Stream(stream)])) |> Ok
+  catch {
+    e => Err(e)
+  }
+  guard result is Err(EncodeError(message)) else {
+    fail("expected EncodeError, got \{repr(result)}")
+  }
+  assert_true(message.contains("native schema value stream"))
+  assert_true(card.is_present())
+  assert_true(stream.is_present())
+  ignore(@card.take(card))
+  reader.drop_sync()
 }

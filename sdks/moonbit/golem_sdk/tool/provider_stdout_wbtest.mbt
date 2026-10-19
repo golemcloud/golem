@@ -1,0 +1,705 @@
+///|
+test "provider stdout maps every typed failure to the host terminal" {
+  assert_eq(
+    tool_stream_failure(@toolCore.ToolStreamError::Cancelled),
+    @toolStreams.ByteStreamFailure::Cancelled,
+  )
+  assert_eq(
+    tool_stream_failure(@toolCore.ToolStreamError::Abandoned),
+    @toolStreams.ByteStreamFailure::Abandoned,
+  )
+  assert_eq(
+    tool_stream_failure(@toolCore.ToolStreamError::ResourceExhausted),
+    @toolStreams.ByteStreamFailure::ResourceExhausted,
+  )
+  assert_eq(
+    tool_stream_failure(@toolCore.ToolStreamError::Failed("provider failed")),
+    @toolStreams.ByteStreamFailure::Failed("provider failed"),
+  )
+}
+
+///|
+fn run_provider_async(body : async () -> Unit) -> Unit raise {
+  let mut callback = @async-core.with_waitableset(async fn() {
+    body()
+    @async-core.task_returned()
+  })
+  let mut steps = 0
+  while callback != 0 {
+    steps = steps + 1
+    if steps > 1000 {
+      fail("provider stdout async test did not complete")
+    }
+    if (callback & 0xf) != 1 {
+      fail("provider stdout async test unexpectedly waited on a host event")
+    }
+    callback = @async-core.cb(0, 0, 0)
+  }
+}
+
+///|
+fn declared_tool_error() -> @types.ToolError {
+  let payload = try @schema.try_into_typed_schema_value(()) catch {
+    error => abort("failed to build declared error payload: \{repr(error)}")
+  } noraise {
+    value => value
+  }
+  let payload = try @model.typed_schema_value_to_wit(payload) catch {
+    error => abort("failed to encode declared error payload: \{repr(error)}")
+  } noraise {
+    value => value
+  }
+  @types.ToolError::CustomError({ name: "original", payload, })
+}
+
+///|
+#warnings("-unused_async")
+test "provider stdout writes, finishes, and drops exactly once" {
+  run_provider_async(async fn() {
+    let writes : Ref[Array[FixedArray[Byte]]] = Ref([])
+    let finishes = Ref(0)
+    let failures : Ref[Array[@toolStreams.ByteStreamFailure]] = Ref([])
+    let drops = Ref(0)
+    let stdout = provider_output_from_callbacks(
+      async fn(bytes) {
+        writes.val.push(bytes)
+        Ok(())
+      },
+      async fn() {
+        finishes.val += 1
+        Ok(())
+      },
+      async fn(reason) {
+        failures.val.push(reason)
+        Ok(())
+      },
+      fn() { drops.val += 1 },
+    )
+    assert_true(stdout.is_open())
+    assert_true(stdout.write_all([1, 2, 3]))
+    assert_true(stdout.write_all_bytes(b"ok"))
+    assert_eq(writes.val, [[1, 2, 3], [111, 107]])
+    stdout.finish()
+    stdout.finish()
+    stdout.fail(@toolCore.ToolStreamError::Cancelled)
+    assert_true(!stdout.is_open())
+    assert_eq(finishes.val, 1)
+    assert_eq(failures.val, [])
+    stdout.drop()
+    stdout.drop()
+    assert_eq(drops.val, 1)
+  })
+}
+
+///|
+test "provider stdout batches bytes in bounded 64 KiB writes" {
+  run_provider_async(() => {
+    for use_bytes in [false, true] {
+      let lengths : Array[Int] = []
+      let stdout = provider_output_from_callbacks(
+        bytes => {
+          lengths.push(bytes.length())
+          Ok(())
+        },
+        () => Ok(()),
+        _ => Ok(()),
+        () => (),
+      )
+      for size in [0, 1, 63, 64, 65, 4096, 65535, 65536, 65537] {
+        let data = Array::makei(size, i => (i % 251).to_byte())
+        if use_bytes {
+          assert_true(stdout.write_all_bytes(Bytes::from_array(data)))
+        } else {
+          assert_true(stdout.write_all(data))
+        }
+      }
+      assert_eq(lengths, [1, 63, 64, 65, 4096, 65535, 65536, 65536, 1])
+      stdout.finish()
+      stdout.drop()
+    }
+  })
+}
+
+///|
+#warnings("-unused_async")
+test "provider stdout skips empty writes before calling the host" {
+  run_provider_async(async fn() {
+    let writes : Ref[Array[FixedArray[Byte]]] = Ref([])
+    let stdout = provider_output_from_callbacks(
+      bytes => {
+        writes.val.push(bytes)
+        Ok(())
+      },
+      () => Ok(()),
+      _ => Ok(()),
+      () => (),
+    )
+    assert_eq(stdout.write([]), 0)
+    assert_eq(stdout.write_bytes(b""), 0)
+    assert_eq(writes.val, [])
+    assert_eq(stdout.write([42]), 1)
+    assert_eq(writes.val, [[42]])
+    stdout.finish()
+    stdout.drop()
+  })
+}
+
+///|
+#warnings("-unused_async")
+test "provider stdout dispatches one typed failure terminal" {
+  run_provider_async(async fn() {
+    let finishes = Ref(0)
+    let failures : Ref[Array[@toolStreams.ByteStreamFailure]] = Ref([])
+    let drops = Ref(0)
+    let stdout = provider_output_from_callbacks(
+      _ => Ok(()),
+      async fn() {
+        finishes.val += 1
+        Ok(())
+      },
+      async fn(reason) {
+        failures.val.push(reason)
+        Ok(())
+      },
+      fn() { drops.val += 1 },
+    )
+    stdout.fail(@toolCore.ToolStreamError::Failed("provider failed"))
+    stdout.fail(@toolCore.ToolStreamError::Cancelled)
+    stdout.finish()
+    assert_true(!stdout.is_open())
+    assert_eq(failures.val, [
+      @toolStreams.ByteStreamFailure::Failed("provider failed"),
+    ])
+    assert_eq(finishes.val, 0)
+    stdout.drop()
+    assert_eq(drops.val, 1)
+  })
+}
+
+///|
+#warnings("-unused_async")
+test "provider stdout closes when the host writer is already closed" {
+  run_provider_async(async fn() {
+    let drops = Ref(0)
+    let stdout = provider_output_from_callbacks(
+      _ => {
+        Err(
+          @toolStreams.StreamWriteError::Closed(
+            @toolStreams.ByteStreamCloseCause::ConsumerCancelled,
+          ),
+        )
+      },
+      () => Ok(()),
+      _ => Ok(()),
+      fn() { drops.val += 1 },
+    )
+    try stdout.write([1]) catch {
+      @toolStreams.StreamWriteError::Closed(
+        @toolStreams.ByteStreamCloseCause::ConsumerCancelled
+      ) => ()
+      _ => fail("unexpected provider stdout write error")
+    } noraise {
+      _ => fail("closed provider stdout write unexpectedly succeeded")
+    }
+    assert_true(!stdout.is_open())
+    assert_eq(stdout.write([2]), 0)
+    stdout.drop()
+
+    let finish_stdout = provider_output_from_callbacks(
+      _ => Ok(()),
+      () => {
+        Err(
+          @toolStreams.StreamWriteError::Closed(
+            @toolStreams.ByteStreamCloseCause::Finished,
+          ),
+        )
+      },
+      _ => Ok(()),
+      fn() { drops.val += 1 },
+    )
+    try finish_stdout.finish() catch {
+      @toolStreams.StreamWriteError::Closed(
+        @toolStreams.ByteStreamCloseCause::Finished
+      ) => ()
+      _ => fail("unexpected finish close cause")
+    } noraise {
+      _ => fail("finish lost the host close cause")
+    }
+    assert_true(!finish_stdout.is_open())
+    finish_stdout.drop()
+
+    let fail_stdout = provider_output_from_callbacks(
+      _ => Ok(()),
+      () => Ok(()),
+      _ => {
+        Err(
+          @toolStreams.StreamWriteError::Closed(
+            @toolStreams.ByteStreamCloseCause::ConsumerCancelled,
+          ),
+        )
+      },
+      fn() { drops.val += 1 },
+    )
+    try fail_stdout.fail(@toolCore.ToolStreamError::Abandoned) catch {
+      @toolStreams.StreamWriteError::Closed(
+        @toolStreams.ByteStreamCloseCause::ConsumerCancelled
+      ) => ()
+      _ => fail("unexpected fail close cause")
+    } noraise {
+      _ => fail("fail lost the host close cause")
+    }
+    assert_true(!fail_stdout.is_open())
+    fail_stdout.drop()
+    assert_eq(drops.val, 3)
+  })
+}
+
+///|
+#warnings("-unused_async")
+test "provider stdout rejects a concurrent terminal operation" {
+  run_provider_async(async fn() {
+    let (started, started_promise) = @async-core.Future::new()
+    let (blocked, blocked_promise) = @async-core.Future::new()
+    let finishes = Ref(0)
+    let stdout = provider_output_from_callbacks(
+      async fn(_) {
+        ignore(started_promise.complete(()))
+        blocked.get()
+        Ok(())
+      },
+      async fn() {
+        finishes.val += 1
+        Ok(())
+      },
+      _ => Ok(()),
+      () => (),
+    )
+    @async-core.with_task_group(async fn(group) {
+      let write = group.spawn(async fn() { stdout.write([1]) })
+      started.get()
+      try stdout.finish() catch {
+        @toolStreams.StreamWriteError::ConcurrentOperation => ()
+        _ => fail("unexpected concurrent provider stdout error")
+      } noraise {
+        _ => fail("concurrent provider stdout finish unexpectedly succeeded")
+      }
+      assert_eq(finishes.val, 0)
+      ignore(blocked_promise.complete(()))
+      assert_eq(write.wait(), 1)
+    })
+    assert_true(stdout.is_open())
+    stdout.finish()
+    assert_eq(finishes.val, 1)
+    stdout.drop()
+  })
+}
+
+///|
+test "invocation stdout terminals preserve structured results and original errors" {
+  run_provider_async(() => {
+    for
+      mode in [
+        "success", "declared-error", "validation-error", "explicit-failure", "exception",
+        "cancelled", "abandoned", "finish-error", "finish-error-declared",
+      ] {
+      let terminals : Array[String] = []
+      let drops = Ref(0)
+      let stdout = provider_output_from_callbacks(
+        _ => Ok(()),
+        () => {
+          if mode == "finish-error" || mode == "finish-error-declared" {
+            Err(@toolStreams.StreamWriteError::ConcurrentOperation)
+          } else {
+            terminals.push("finish")
+            Ok(())
+          }
+        },
+        reason => {
+          terminals.push(
+            match reason {
+              @toolStreams.ByteStreamFailure::Cancelled => "cancelled"
+              @toolStreams.ByteStreamFailure::ResourceExhausted =>
+                "resource-exhausted"
+              _ => "failed"
+            },
+          )
+          Ok(())
+        },
+        () => drops.val += 1,
+      )
+      let result = try
+        invoke_with_output(stdout, () => {
+          match mode {
+            "declared-error" | "finish-error-declared" =>
+              Err(declared_tool_error())
+            "validation-error" =>
+              Err(@types.ToolError::InvalidInput("original"))
+            "exception" => raise ToolStreamError::Failed("original")
+            "cancelled" => raise @async-core.Cancelled::Cancelled
+            _ => {
+              if mode == "explicit-failure" {
+                stdout.fail(ToolStreamError::ResourceExhausted)
+              }
+              if mode == "abandoned" {
+                stdout.drop()
+              }
+              Ok(invocation_result_empty())
+            }
+          }
+        })
+        |> Ok
+      catch {
+        error => Err(error)
+      }
+      match mode {
+        "declared-error" => {
+          assert_true(result is Ok(Err(@types.ToolError::CustomError(_))))
+          assert_eq(terminals, ["finish"])
+        }
+        "validation-error" => {
+          assert_true(
+            result is Ok(Err(@types.ToolError::InvalidInput("original"))),
+          )
+          assert_eq(terminals, ["failed"])
+        }
+        "exception" => {
+          assert_true(result is Err(ToolStreamError::Failed("original")))
+          assert_eq(terminals, ["failed"])
+        }
+        "cancelled" => {
+          assert_true(result is Err(@async-core.Cancelled::Cancelled))
+          assert_eq(terminals, ["cancelled"])
+        }
+        "finish-error" => {
+          assert_true(result is Ok(Ok(_)))
+          assert_eq(terminals, [])
+        }
+        "finish-error-declared" => {
+          assert_true(result is Ok(Err(@types.ToolError::CustomError(_))))
+          assert_eq(terminals, [])
+        }
+        _ => {
+          assert_true(result is Ok(Ok(_)))
+          assert_eq(
+            terminals,
+            if mode == "abandoned" {
+              []
+            } else if mode == "explicit-failure" {
+              ["resource-exhausted"]
+            } else {
+              ["finish"]
+            },
+          )
+        }
+      }
+      assert_eq(drops.val, 1)
+    }
+  })
+}
+
+///|
+test "invocation completion and drop wait for an outstanding writer operation" {
+  run_provider_async(() => {
+    for abandon in [false, true] {
+      let (started, start) = @async-core.Future::new()
+      let (release, unblock) = @async-core.Future::new()
+      let (completing, complete_started) = @async-core.Future::new()
+      let events : Array[String] = []
+      let stdout = provider_output_from_callbacks(
+        _ => {
+          ignore(start.complete(()))
+          release.get()
+          events.push("write")
+          Ok(())
+        },
+        () => {
+          events.push("finish")
+          Ok(())
+        },
+        _ => {
+          events.push("fail")
+          Ok(())
+        },
+        () => events.push("drop"),
+      )
+      @async-core.with_task_group(group => {
+        let write = group.spawn(() => stdout.write([7, 2]))
+        started.get()
+        if abandon {
+          stdout.drop()
+          stdout.drop()
+        }
+        assert_eq(events, [])
+        let completion = group.spawn(() => {
+          invoke_with_output(stdout, () => {
+            ignore(complete_started.complete(()))
+            Ok(invocation_result_empty())
+          })
+        })
+        completing.get()
+        assert_eq(events, [])
+        ignore(unblock.complete(()))
+        let result = completion.wait()
+        assert_true(result is Ok(_))
+        assert_eq(write.wait(), 2)
+      })
+      assert_eq(
+        events,
+        if abandon {
+          ["write", "drop"]
+        } else {
+          ["write", "finish", "drop"]
+        },
+      )
+    }
+  })
+}
+
+///|
+test "completion drains every chunk of an already started write all" {
+  run_provider_async(() => {
+    let payload = Array::makei(131073, i => (i % 251).to_byte())
+    let actual : Array[Byte] = []
+    let (started, start) = @async-core.Future::new()
+    let (release, unblock) = @async-core.Future::new()
+    let (completing, complete_started) = @async-core.Future::new()
+    let stdout = provider_output_from_callbacks(
+      bytes => {
+        if actual.is_empty() {
+          ignore(start.complete(()))
+          release.get()
+        }
+        for byte in bytes {
+          actual.push(byte)
+        }
+        Ok(())
+      },
+      () => {
+        assert_eq(actual, payload)
+        Ok(())
+      },
+      _ => Ok(()),
+      () => (),
+    )
+    @async-core.with_task_group(group => {
+      let write = group.spawn(() => stdout.write_all(payload))
+      started.get()
+      let completion = group.spawn(() => {
+        invoke_with_output(stdout, () => {
+          ignore(complete_started.complete(()))
+          Ok(invocation_result_empty())
+        })
+      })
+      completing.get()
+      ignore(unblock.complete(()))
+      assert_true(write.wait())
+      assert_true(completion.wait() is Ok(_))
+    })
+    assert_eq(actual, payload)
+  })
+}
+
+///|
+test "real task cancellation during invocation and completion releases stdout and discarded result" {
+  run_provider_async(() => {
+    for mode in [0, 1, 2] {
+      let during_finish = mode != 0
+      let finish_error = mode == 2
+      let (started, start) = @async-core.Future::new()
+      let (release, unblock) = @async-core.Future::new()
+      let (fail_started, start_failure) = @async-core.Future::new()
+      let (release_failure, unblock_failure) = @async-core.Future::new()
+      let drops = Ref(0)
+      let result_drops = Ref(0)
+      let terminals : Array[String] = []
+      let stdout = provider_output_from_callbacks(
+        _ => Ok(()),
+        () => {
+          ignore(start.complete(()))
+          release.get()
+          terminals.push("finish")
+          if finish_error {
+            Err(
+              @toolStreams.StreamWriteError::Closed(
+                @toolStreams.ByteStreamCloseCause::ConsumerCancelled,
+              ),
+            )
+          } else {
+            Ok(())
+          }
+        },
+        reason => {
+          assert_true(reason is @toolStreams.ByteStreamFailure::Cancelled)
+          ignore(start_failure.complete(()))
+          release_failure.get()
+          terminals.push("cancelled")
+          Ok(())
+        },
+        () => drops.val += 1,
+      )
+      let sibling_terminals : Array[String] = []
+      let stderr = provider_output_from_callbacks(
+        _ => Ok(()),
+        () => {
+          sibling_terminals.push("finish")
+          Ok(())
+        },
+        reason => {
+          assert_true(reason is @toolStreams.ByteStreamFailure::Cancelled)
+          sibling_terminals.push("cancelled")
+          Ok(())
+        },
+        () => sibling_terminals.push("drop"),
+      )
+      @async-core.with_task_group(group => {
+        let task = group.spawn(() => {
+          invoke_with_output(stderr, () => {
+            invoke_with_output(stdout, () => {
+              if !during_finish {
+                ignore(start.complete(()))
+                release.get()
+              }
+              let result_stream = @async-core.Stream::from_source(
+                _ => None,
+                () => (),
+                () => result_drops.val += 1,
+              )
+              let result_stderr = @async-core.Stream::from_source(
+                _ => None,
+                () => (),
+                () => result_drops.val += 1,
+              )
+              Ok({
+                result: None,
+                stdout: Some(result_stream),
+                stderr: Some(result_stderr),
+              })
+            })
+          })
+        })
+        started.get()
+        task.cancel()
+        if during_finish {
+          let (turn, next_turn) = @async-core.Future::new()
+          group.spawn_bg(() => ignore(next_turn.complete(())))
+          turn.get()
+          assert_true(task.try_wait() is None)
+          assert_eq(drops.val, 0)
+          assert_eq(terminals, [])
+          ignore(unblock.complete(()))
+        } else {
+          fail_started.get()
+          assert_true(task.try_wait() is None)
+          assert_eq(drops.val, 0)
+          assert_eq(terminals, [])
+          ignore(unblock_failure.complete(()))
+        }
+        try task.wait() catch {
+          @async-core.Cancelled::Cancelled => ()
+          _ => fail("expected task cancellation")
+        } noraise {
+          _ => fail("task cancellation was lost")
+        }
+      })
+      assert_eq(drops.val, 1)
+      assert_eq(sibling_terminals, ["cancelled", "drop"])
+      assert_eq(result_drops.val, if during_finish { 2 } else { 0 })
+      assert_eq(
+        terminals,
+        if during_finish {
+          ["finish"]
+        } else {
+          ["cancelled"]
+        },
+      )
+    }
+  })
+}
+
+///|
+test "both output terminals and bytes are independent of returned outcomes" {
+  run_provider_async(() => {
+    for
+      outcome in ["success", "declared", "invalid", "raised", "explicit-error"] {
+      for broken in [0, 1, 2, 3] {
+        let bytes : Array[Array[Byte]] = [[], []]
+        let finishes = [0, 0]
+        let failures : Array[Array[@toolStreams.ByteStreamFailure]] = [[], []]
+        let drops = [0, 0]
+        let outputs = Array::makei(2, channel => {
+          provider_output_from_callbacks(
+            chunk => {
+              for byte in chunk {
+                bytes[channel].push(byte)
+              }
+              Ok(())
+            },
+            () => {
+              finishes[channel] += 1
+              if (broken & (1 << channel)) != 0 {
+                Err(@toolStreams.StreamWriteError::ConcurrentOperation)
+              } else {
+                Ok(())
+              }
+            },
+            reason => {
+              failures[channel].push(reason)
+              Ok(())
+            },
+            () => drops[channel] += 1,
+          )
+        })
+        let result = Ok(
+          invoke_with_output(outputs[0], () => {
+            invoke_with_output(outputs[1], () => {
+              assert_true(outputs[0].write_all_bytes(b"out"))
+              assert_true(outputs[1].write_all_bytes(b"err!"))
+              match outcome {
+                "declared" => Err(declared_tool_error())
+                "invalid" => Err(@types.InvalidResult("malformed return"))
+                "raised" => raise ToolStreamError::Failed("handler raised")
+                "explicit-error" => {
+                  outputs[0].finish()
+                  Ok(invocation_result_empty())
+                }
+                _ => Ok(invocation_result_empty())
+              }
+            })
+          }),
+        ) catch {
+          error => Err(error)
+        }
+        assert_eq(bytes, [[111, 117, 116], [101, 114, 114, 33]])
+        assert_eq(drops, [1, 1])
+        if outcome == "raised" ||
+          (outcome == "explicit-error" && (broken & 1) != 0) {
+          if outcome == "raised" {
+            assert_true(
+              result is Err(ToolStreamError::Failed("handler raised")),
+            )
+            assert_eq(finishes[0], 0)
+          } else {
+            assert_true(
+              result is Err(@toolStreams.StreamWriteError::ConcurrentOperation),
+            )
+            assert_eq(finishes[0], 1)
+          }
+          assert_eq(failures[0].length(), 1)
+          assert_eq(failures[1], failures[0])
+          assert_eq(finishes[1], 0)
+        } else {
+          match outcome {
+            "declared" => assert_true(result is Ok(Err(@types.CustomError(_))))
+            "invalid" =>
+              assert_true(
+                result is Ok(Err(@types.InvalidResult("malformed return"))),
+              )
+            _ => assert_true(result is Ok(Ok(_)))
+          }
+          assert_eq(finishes, [1, 1])
+          assert_eq(failures, [[], []])
+        }
+      }
+    }
+  })
+}

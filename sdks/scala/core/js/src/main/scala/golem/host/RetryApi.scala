@@ -21,15 +21,42 @@ import golem.host.js._
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.annotation.JSImport
+import scala.scalajs.js.typedarray.Uint8Array
 
 /**
  * Scala.js facade for `golem:api/retry@1.5.0`.
  *
  * Provides typed access to the semantic retry policy API. The tree-based policy
- * and predicate types are kept opaque — the SDK just passes them through
- * to/from the host.
+ * and predicate types used by the raw methods are kept opaque and passed
+ * through without SDK validation. Typed methods decode or encode them through
+ * the validated Scala retry DSL.
  */
 object RetryApi {
+
+  final case class RetryDecision(state: Uint8Array, delay: Option[BigInt])
+
+  /** Evaluates in the host; state is opaque and durations are nanoseconds. */
+  def nextRetryDelay(
+    policy: Option[JsRetryPolicyTree],
+    state: Uint8Array,
+    elapsed: BigInt,
+    verb: String,
+    nounUri: String,
+    properties: List[(String, JsPredicateValue)]
+  ): Either[String, RetryDecision] =
+    try {
+      val result = RetryModule.nextRetryDelay(
+        policy.orUndefined,
+        state,
+        js.BigInt(elapsed.toString),
+        verb,
+        nounUri,
+        properties.map(t => js.Tuple2(t._1, t._2)).toJSArray
+      )
+      Right(RetryDecision(result.state, result.delay.toOption.map(n => BigInt(n.toString))))
+    } catch {
+      case scala.util.control.NonFatal(error) => Left(error.getMessage)
+    }
 
   def getRetryPolicies(): List[JsNamedRetryPolicy] =
     RetryModule.getRetryPolicies().toList
@@ -43,6 +70,7 @@ object RetryApi {
   def getNamedPolicyByName(name: String): Option[Retry.NamedPolicy] =
     getRetryPolicyByName(name).map(Retry.NamedPolicy.fromJs)
 
+  /** Invalid host predicates throw a catchable JavaScript exception. */
   def resolveRetryPolicy(
     verb: String,
     nounUri: String,
@@ -50,12 +78,14 @@ object RetryApi {
   ): Option[JsRetryPolicyTree] =
     RetryModule.resolveRetryPolicy(verb, nounUri, properties.map(t => js.Tuple2(t._1, t._2)).toJSArray).toOption
 
+  /** Invalid host predicates throw a catchable JavaScript exception. */
   def resolvePolicy(verb: String, nounUri: String, properties: Retry.Property*): Option[Retry.Policy] =
     RetryModule
       .resolveRetryPolicy(verb, nounUri, Retry.propertiesToJsOrThrow(properties))
       .toOption
       .map(Retry.Policy.fromJs)
 
+  /** Passes a raw policy to the host without local validation. */
   def setRetryPolicy(policy: JsNamedRetryPolicy): Unit =
     RetryModule.setRetryPolicy(policy)
 
@@ -70,8 +100,22 @@ object RetryApi {
   // ---------------------------------------------------------------------------
 
   @js.native
+  private trait JsRetryDecision extends js.Object {
+    def state: Uint8Array            = js.native
+    def delay: js.UndefOr[js.BigInt] = js.native
+  }
+
+  @js.native
   @JSImport("golem:api/retry@1.5.0", JSImport.Namespace)
   private object RetryModule extends js.Object {
+    def nextRetryDelay(
+      policy: js.UndefOr[JsRetryPolicyTree],
+      state: Uint8Array,
+      elapsed: js.BigInt,
+      verb: String,
+      nounUri: String,
+      properties: js.Array[js.Tuple2[String, JsPredicateValue]]
+    ): JsRetryDecision                                                     = js.native
     def getRetryPolicies(): js.Array[JsNamedRetryPolicy]                   = js.native
     def getRetryPolicyByName(name: String): js.UndefOr[JsNamedRetryPolicy] = js.native
     def resolveRetryPolicy(
@@ -83,5 +127,6 @@ object RetryApi {
     def removeRetryPolicy(name: String): Unit            = js.native
   }
 
+  /** Exposes the unvalidated native host facade. */
   def raw: Any = RetryModule
 }

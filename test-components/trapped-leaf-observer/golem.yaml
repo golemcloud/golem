@@ -1,0 +1,16 @@
+manifestVersion: 1.6.0
+
+app: trapped-leaf-observer
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:trapped-leaf-observer:
+    dir: "."
+    templates: rust, rust-test-component
+
+environments:
+  local:
+    server: local
+    componentPresets: release

@@ -15,6 +15,7 @@
 pub mod account;
 pub mod account_usage;
 pub mod agent;
+pub mod agent_config;
 pub mod agent_secret;
 pub mod api;
 pub mod application;
@@ -32,12 +33,16 @@ pub mod domain_registration;
 pub mod durable_stream;
 pub mod environment;
 pub mod environment_plugin_grant;
+pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod error;
+pub mod external_agent_secret;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod json;
 pub mod login;
 pub mod mcp_deployment;
+pub mod mcp_import;
 pub mod oplog;
 pub mod optional_field_update;
 pub mod path;
@@ -49,7 +54,11 @@ pub mod regions;
 pub mod reports;
 pub mod retry_policy;
 pub mod security_scheme;
+pub mod shard_lease;
 pub mod tool;
+pub mod tool_middleware;
+pub mod tool_middleware_release;
+pub mod tool_release;
 pub mod worker;
 pub mod worker_filter;
 
@@ -273,8 +282,10 @@ impl AgentId {
         format!("urn:worker:{}/{}", self.component_id, self.agent_id)
     }
 
-    /// Returns the agent name percent-encoded so it is safe to use as a
-    /// single filesystem path component.
+    /// Gives the agent name in percent-encoding. The function encodes each character that is not
+    /// an unreserved URL character, so the result is one segment of a URL path.
+    ///
+    /// The result can be longer than a file name can be, so it is not a directory name.
     pub fn agent_name_encoded(&self) -> String {
         urlencoding::encode(&self.agent_id).into_owned()
     }
@@ -283,16 +294,16 @@ impl AgentId {
 impl FromStr for AgentId {
     type Err = String;
 
+    /// Reads `<component_id>:<agent_name>`. The function splits the text at its first `:`,
+    /// because a component id holds no `:` and an agent name can hold one.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() == 2 {
-            let component_id_uuid = Uuid::from_str(parts[0])
+        if let Some((component_id, agent_name)) = s.split_once(':') {
+            let component_id_uuid = Uuid::from_str(component_id)
                 .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
             let component_id = ComponentId(component_id_uuid);
-            let agent_name = parts[1].to_string();
             Ok(Self {
                 component_id,
-                agent_id: agent_name,
+                agent_id: agent_name.to_string(),
             })
         } else {
             Err(format!(
@@ -529,7 +540,9 @@ pub fn validate_lower_kebab_case_identifier(
     Debug,
     Eq,
     Hash,
+    Ord,
     PartialEq,
+    PartialOrd,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]
@@ -755,26 +768,37 @@ impl From<AgentStatus> for i32 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Default,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[serde(rename_all = "camelCase")]
-pub struct ScanCursor {
-    pub cursor: u64,
-    pub layer: usize,
-}
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[serde(transparent)]
+pub struct ScanCursor(String);
 
 impl ScanCursor {
-    pub fn is_active_layer_finished(&self) -> bool {
-        self.cursor == 0
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
     }
 
     pub fn is_finished(&self) -> bool {
-        self.cursor == 0 && self.layer == 0
+        self.0.is_empty()
     }
 
     pub fn into_option(self) -> Option<Self> {
@@ -784,26 +808,97 @@ impl ScanCursor {
 
 impl Display for ScanCursor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.layer, self.cursor)
+        self.0.fmt(f)
     }
 }
 
 impl FromStr for ScanCursor {
-    type Err = String;
+    type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts = s.split('/').collect::<Vec<&str>>();
-        if parts.len() == 2 {
-            Ok(ScanCursor {
-                layer: parts[0]
-                    .parse()
-                    .map_err(|e| format!("Invalid layer part: {e}"))?,
-                cursor: parts[1]
-                    .parse()
-                    .map_err(|e| format!("Invalid cursor part: {e}"))?,
-            })
-        } else {
-            Err("Invalid cursor, must have 'layer/cursor' format".to_string())
+        Ok(Self::new(s.to_string()))
+    }
+}
+
+impl From<String> for ScanCursor {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ScanCursor> for String {
+    fn from(value: ScanCursor) -> Self {
+        value.into_inner()
+    }
+}
+
+#[cfg(all(test, feature = "full"))]
+mod scan_cursor_tests {
+    use super::ScanCursor;
+    use test_r::test;
+
+    #[test]
+    fn scan_cursor_preserves_opaque_value_through_json_and_binary_round_trips() {
+        for value in ["", "gsc1_opaque-token_雪"] {
+            let cursor = ScanCursor::new(value.to_string());
+
+            let json = serde_json::to_string(&cursor).unwrap();
+            let json_roundtrip: ScanCursor = serde_json::from_str(&json).unwrap();
+            assert_eq!(json_roundtrip, cursor);
+
+            let bytes = desert_rust::serialize_to_byte_vec(&cursor).unwrap();
+            let binary_roundtrip: ScanCursor = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(binary_roundtrip, cursor);
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Type for ScanCursor {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        "ScanCursor".into()
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Reference(Self::name().into_owned())
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        registry.create_schema::<Self, _>(Self::name().into_owned(), |_| {
+            poem_openapi::registry::MetaSchema::new("string")
+        });
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ToJSON for ScanCursor {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::String(self.0.clone()))
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for ScanCursor {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(serde_json::Value::String(value)) => Ok(Self::new(value)),
+            _ => Err(poem_openapi::types::ParseError::custom(
+                "ScanCursor must be a string",
+            )),
         }
     }
 }
@@ -847,4 +942,39 @@ mod sql {
 
 pub fn render_config_path(path: &[String]) -> String {
     path.join(".")
+}
+
+#[cfg(feature = "full")]
+fn canonicalize_agent_path(path: &[String]) -> Vec<String> {
+    use heck::ToLowerCamelCase;
+    path.iter()
+        .map(|segment| segment.to_lower_camel_case())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentId, ComponentId};
+    use std::str::FromStr;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn an_agent_id_text_splits_at_its_first_colon() {
+        let component_id = Uuid::from_u128(0x0d9f6c1e2b8a4f3d9e7c5a4b3c2d1e0f);
+
+        assert_eq!(
+            (
+                AgentId::from_str(&format!(r#"{component_id}:counter("a:b")"#)),
+                AgentId::from_str(r#"counter("a")"#).is_err(),
+            ),
+            (
+                Ok(AgentId {
+                    component_id: ComponentId(component_id),
+                    agent_id: r#"counter("a:b")"#.to_string(),
+                }),
+                true,
+            )
+        );
+    }
 }

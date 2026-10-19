@@ -309,6 +309,29 @@ impl AccountService {
         Ok(account)
     }
 
+    /// Resolves an account email to its id **without** enforcing `AccountVerb::View`.
+    ///
+    /// For feeding a subsequently-authorized resource lookup (e.g. the by-email plugin
+    /// endpoints) so that a caller holding only a resource grant is not additionally required
+    /// to have account-view. The full-account endpoint ([`Self::get_by_email`]) keeps its
+    /// `AccountVerb::View` gate. Only ever use the returned id to build a resource
+    /// authorization that is then checked; never expose it or other account data unchecked.
+    pub async fn resolve_account_id_by_email_unchecked(
+        &self,
+        account_email: &str,
+    ) -> Result<AccountId, AccountError> {
+        let account: Account = self
+            .account_repo
+            .get_by_email(account_email)
+            .await?
+            .ok_or(AccountError::AccountByEmailNotFound(
+                account_email.to_string(),
+            ))?
+            .try_into()?;
+
+        Ok(account.id)
+    }
+
     async fn create_internal(
         &self,
         id: AccountId,

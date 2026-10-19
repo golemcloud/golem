@@ -1,0 +1,334 @@
+import { Tabs } from "nextra/components"
+
+# WebSocket Client
+
+Golem agents use **WASI HTTP** for outgoing HTTP requests, but WASI HTTP does not support WebSocket upgrades.
+Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) that complements WASI HTTP and allows agents to open WebSocket connections, send and receive messages, and handle connection lifecycle events.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+    The Golem TypeScript SDK provides a WebSocket client API. `connectWebsocket` opens a
+    connection and returns a `WebSocketHandle` with `send`, `receive`, `receiveWithTimeout`, and
+    `close` methods. Received messages are `{ tag: "text", val }` / `{ tag: "binary", val }`, and
+    a graceful close surfaces as a `WebsocketError` with `tag === "closed"` and a `closeInfo`.
+
+    ```typescript
+    import { z } from "zod";
+    import { defineAgent, method, connectWebsocket, WebsocketError } from "@golemcloud/golem-ts-sdk";
+
+    export const ExampleAgent = defineAgent({
+      name: "ExampleAgent",
+      id: { name: z.string() },
+      methods: {
+        run: method({ input: {}, returns: z.void() }),
+      },
+    });
+
+    export const ExampleAgentImpl = ExampleAgent.implement({
+      init: () => ({}),
+      methods: {
+        async run() {
+          const ws = await connectWebsocket("wss://example.com/chat");
+          console.log("Connected");
+          ws.send("Hello, server!");
+          try {
+            for (;;) {
+              const message = await ws.receive();
+              if (message.tag === "text") {
+                console.log("Text:", message.val);
+              } else {
+                console.log("Binary:", message.val);
+              }
+            }
+          } catch (err) {
+            if (err instanceof WebsocketError && err.tag === "closed") {
+              const info = err.closeInfo;
+              if (info) {
+                console.log(`Closed [${info.code}] "${info.reason}"`);
+              }
+            } else {
+              throw err;
+            }
+          }
+        },
+      },
+    });
+    ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    The Effect SDK exposes a scoped Effect `Socket`. The surrounding scope closes the connection when the program finishes:
+
+    ```typescript
+    import { Effect, Fiber } from "effect"
+    import { Websocket } from "@golemcloud/effect-golem"
+
+    const run = Effect.scoped(
+      Effect.gen(function* () {
+        const socket = yield* Websocket.connect("wss://example.com/chat", {
+          closeCodeIsError: (code) => code !== 1000,
+        })
+        const reader = yield* Effect.forkChild(
+          socket.runString((message) => {
+            console.log("Received:", message)
+          }),
+        )
+
+        const write = yield* socket.writer
+        yield* write("Hello, server!")
+        yield* Fiber.join(reader)
+      }),
+    )
+    ```
+
+    This Effect runs inside an Effect Golem agent, whose runtime supplies the WebSocket host service. `Websocket.layer(...)` provides the same socket as an Effect `Layer` when layer composition is more convenient.
+</Tabs.Tab>
+
+<Tabs.Tab>
+    The Golem Rust SDK provides its own WebSocket API inspired by the `tungstenite` library.
+    The main types are `WebsocketConnection`, `WebSocketMessage`, and `WebSocketError`.
+
+    ```rust
+    use golem_rust::{WebSocketError, WebSocketMessage, WebsocketConnection};
+
+    async fn run_websocket() -> Result<(), WebSocketError> {
+        let ws = WebsocketConnection::connect("wss://example.com/chat", None, None)?;
+        println!("Connected");
+        ws.send(&WebSocketMessage::Text("Hello, server!".to_string()))?;
+        loop {
+            match ws.receive().await {
+                Ok(WebSocketMessage::Text(text)) => println!("Text: {text}"),
+                Ok(WebSocketMessage::Binary(data)) => println!("Binary: {data:?}"),
+                Err(WebSocketError::Closed(info)) => {
+                    if let Some(info) = info { println!("Closed [{}] \"{}\"", info.code, info.reason); }
+                    break;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+    ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    Golem's JavaScript runtime provides the standard `WebSocket` global. Add `scalajs-dom` to the Scala component and use its Scala.js facade:
+
+    ```scala
+    import org.scalajs.dom.{CloseEvent, Event, MessageEvent, WebSocket}
+    import scala.concurrent.{Future, Promise}
+
+    case class ExampleAgentImpl() extends ExampleAgent {
+      def run(): Future[Unit] = {
+        val done = Promise[Unit]()
+        val ws = new WebSocket("wss://example.com/chat")
+        ws.onopen = { (_: Event) => println("Connected"); ws.send("Hello, server!") }
+        ws.onmessage = { (event: MessageEvent) =>
+          event.data match {
+            case text: String => println(s"Text: $text")
+            case other        => println(s"Binary: $other")
+          }
+        }
+        ws.onerror = { (_: Event) => done.tryFailure(new Exception("WebSocket error")) }
+        ws.onclose = { (event: CloseEvent) => println(s"Closed [${event.code}] \"${event.reason}\""); done.trySuccess(()) }
+        done.future
+      }
+    }
+    ```
+
+</Tabs.Tab>
+
+<Tabs.Tab>
+    MoonBit uses the low-level WIT interface directly through generated bindings.
+    Assuming your generated `golem:websocket` bindings are imported as `@websocket_client`
+    and the common agent types are imported as `@common`:
+
+    ```moonbit
+    pub async fn ExampleAgent::run(self: Self) -> Unit raise @common.AgentError {
+      let conn = match @websocket_client.WebsocketConnection::connect("wss://example.com/chat", None, None) {
+        Ok(c) => c
+        Err(e) => raise @common.AgentError::InvalidInput("Connect failed: \{Repr(e)}")
+      }
+      println("Connected")
+      match conn.send(Text("Hello, server!")) {
+        Ok(_) => ()
+        Err(e) => raise @common.AgentError::InvalidInput("Send failed: \{Repr(e)}")
+      }
+      // receive loop...
+    }
+    ```
+
+</Tabs.Tab>
+
+<Tabs.Tab>
+    The Golem Go SDK provides a WebSocket client in the `github.com/golemcloud/golem/sdks/go/golem/websocket`
+    package. `websocket.Connect` opens a connection and returns a `*websocket.Conn` with `Send`, `SendText`,
+    `SendBinary`, `Receive`, `ReceiveWithTimeout`, and `Close` methods. A received `websocket.Message` is either a
+    text or a binary frame, and a graceful close surfaces as a `*websocket.Error` whose `IsClosed()` is true,
+    carrying `CloseCode` and `CloseReason`. `websocket.MustConnect`, `MustSend`, `MustSendText`, and `MustSendBinary`
+    panic on the error instead of returning it.
+
+    ```go
+    // Definition package (agents/example/example.go)
+    package example
+
+    import "github.com/golemcloud/golem/sdks/go/golem"
+
+    type ID struct{ Name string }
+
+    var Agent = golem.DefineAgent[ID](golem.Spec{Name: "ExampleAgent"})
+
+    var Run = Agent.Method[golem.Unit, golem.Unit]("run")
+    ```
+
+    ```go
+    // Implementation package (agents/example/impl/impl.go)
+    package impl
+
+    import (
+        "errors"
+        "log/slog"
+
+        "myapp/agents/example"
+
+        "github.com/golemcloud/golem/sdks/go/golem"
+        "github.com/golemcloud/golem/sdks/go/golem/websocket"
+    )
+
+    type state struct{}
+
+    var agent = example.Agent.Implement(func(example.ID) *state { return &state{} })
+
+    func init() {
+        agent.Handle(example.Run, func(_ *golem.Context[state], _ golem.Unit) golem.Unit {
+            conn := websocket.MustConnect("wss://example.com/chat")
+            defer conn.Close() // CloseWith(code, reason) sends a close code
+            slog.Info("Connected")
+            conn.MustSendText("Hello, server!")
+            for {
+                msg, err := conn.Receive()
+                var wsErr *websocket.Error
+                if errors.As(err, &wsErr) && wsErr.IsClosed() {
+                    slog.Info("Closed", "code", wsErr.CloseCode, "reason", wsErr.CloseReason)
+                    return golem.Unit{}
+                }
+                golem.Must0(err)
+                if msg.IsText() {
+                    slog.Info("Text", "text", msg.Text())
+                } else {
+                    slog.Info("Binary", "bytes", msg.Bytes())
+                }
+            }
+        })
+    }
+    ```
+</Tabs.Tab>
+</Tabs>
+
+## Runtime reconstruction and session loss
+
+A physical WebSocket session does not survive runtime reconstruction, whether caused by suspension, restart, or crash. Choose a reconstruction policy when you connect:
+
+- `reconnect-automatically` is the default when the option is absent. The first live access to a reconstructed successful handle opens a replacement connection. Your application must tolerate a new physical session.
+- `report-connection-loss` prevents replacement I/O on that handle. The first live `send`, `receive`, `receive-with-timeout`, or `close` returns the typed `session-lost` error and makes the handle terminal. Further accesses return that loss; they do not reconnect. Dropping the handle only releases it locally.
+
+Both policies replay recorded outcomes unchanged, including messages, timeouts, send results, and close results. Neither changes retry behavior for an ordinary live network disconnect. Session loss is **not proof that an earlier send never reached the peer**. Use application acknowledgments, deduplication, or reconciliation before resending effects.
+
+Recovery repairs eligible incomplete durable calls at their own recorded start and retains completed calls and their outcomes. It does not roll back an atomic region or repeat a completed connect as a new call. The reconstruction policy controls what happens when live code next accesses the reconstructed handle.
+
+### SDK policy and error forms
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+TypeScript accepts `ConnectOptions.reconstructionPolicy`:
+
+```typescript
+const ws = await connectWebsocket("wss://example.com/chat", {
+  reconstructionPolicy: "report-connection-loss",
+});
+// Catch WebsocketError from send, receive, receiveWithTimeout, or close:
+// err.tag === "session-lost"
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Effect accepts the `reconstructionPolicy` option. `Websocket.isSessionLost(error)` recognizes structural tags, not class identity: a `SocketError` contains a `SocketReadError` or `SocketWriteError` in `reason`, with the plain payloadless `{ _tag: "SessionLost" }` in `reason.cause`. Explicit close through the writer propagates loss to the writer and fails the reader's deferred with the same error. The scope finalizer closes best-effort and does not surface close failures.
+
+**Supervise one Effect session generation at a time**
+
+Use one scope for each connection generation. Start the reader before acquiring the initialization writer, and race reader failure against initialization and traffic writes. This example sends an application initialization message before ordinary traffic; a real protocol may also require an acknowledgment before traffic begins.
+
+```typescript
+import { Effect, Fiber } from "effect"
+import { Websocket } from "@golemcloud/effect-golem"
+
+const generation = Effect.scoped(
+  Effect.gen(function* () {
+    const socket = yield* Websocket.connect("wss://example.com/chat", {
+      reconstructionPolicy: "report-connection-loss",
+    })
+    const reader = yield* Effect.forkChild(
+      socket.runString((message) => {
+        console.log("Received:", message)
+      }),
+    )
+    const writes = Effect.gen(function* () {
+      const write = yield* socket.writer
+      yield* write(JSON.stringify({ type: "initialize" }))
+      yield* write(JSON.stringify({ type: "traffic", text: "Hello" }))
+      yield* Fiber.join(reader)
+    })
+    // Observe reader loss even while initialization or traffic is writing.
+    yield* Effect.raceFirst(Fiber.join(reader), writes).pipe(
+      Effect.ensuring(Fiber.interrupt(reader)),
+    )
+  }),
+)
+
+const supervise = Effect.gen(function* () {
+  for (;;) {
+    const lost = yield* generation.pipe(
+      Effect.as(false),
+      Effect.catchIf(Websocket.isSessionLost, () => Effect.succeed(true)),
+    )
+    if (!lost) return
+    // The old reader has been interrupted and joined and its scope closed.
+    // Reconcile application effects before starting the next generation.
+    // Re-running generation explicitly connects and initializes before traffic.
+  }
+})
+```
+
+`raceFirst` cancels and waits for the losing branch, and `Fiber.interrupt` waits for the old reader to finish. Do not retain the old writer or automatically forward its queued traffic to the next connection. Reconciliation and the decision to start another generation belong to the guest application, not to a production callback or host configuration.
+
+</Tabs.Tab>
+<Tabs.Tab>
+Rust takes a third `Option<websocket::WebSocketReconstructionPolicy>` argument. Import the policy from the `websocket` module:
+
+```rust
+use golem_rust::{websocket::WebSocketReconstructionPolicy, WebsocketConnection};
+
+let ws = WebsocketConnection::connect(
+    "wss://example.com/chat",
+    None,
+    Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
+)?;
+// Match WebSocketError::SessionLost from live access.
+```
+</Tabs.Tab>
+<Tabs.Tab>
+See [Runtime reconstruction and session loss](#runtime-reconstruction-and-session-loss) for the shared session-loss behavior.
+</Tabs.Tab>
+<Tabs.Tab>
+See [Runtime reconstruction and session loss](#runtime-reconstruction-and-session-loss) for the shared session-loss behavior.
+</Tabs.Tab>
+<Tabs.Tab>
+Go takes the policy as a `websocket.WithReconstructionPolicy` option:
+
+```go
+conn, err := websocket.Connect("wss://example.com/chat",
+    websocket.WithReconstructionPolicy(websocket.ReportConnectionLoss))
+// A live Send, Receive, ReceiveWithTimeout or Close returns a *websocket.Error
+// whose Kind is websocket.SessionLost.
+```
+</Tabs.Tab>
+</Tabs>

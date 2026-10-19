@@ -1,0 +1,1865 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "Golem bundled npm tool source",
+  "documentNamespace": "https://golem.cloud/spdx/toolchain/npm/c80bd097147cce32e31010b791bab8c71a26a5e10668210ec9d2e7f4c7cea2a1",
+  "creationInfo": {
+    "created": "2026-09-30T00:00:00Z",
+    "creators": [
+      "Tool: golem-builtin-js-ts-tools-compliance"
+    ]
+  },
+  "packages": [
+    {
+      "name": "@isaacs/cliui",
+      "SPDXID": "SPDXRef-Package-1",
+      "versionInfo": "8.0.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@isaacs/fs-minipass",
+      "SPDXID": "SPDXRef-Package-2",
+      "versionInfo": "4.0.1",
+      "downloadLocation": "https://github.com/npm/fs-minipass.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@isaacs/string-locale-compare",
+      "SPDXID": "SPDXRef-Package-3",
+      "versionInfo": "1.1.0",
+      "downloadLocation": "git+https://github.com/isaacs/string-locale-compare",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/agent",
+      "SPDXID": "SPDXRef-Package-4",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "git+https://github.com/npm/agent.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/arborist",
+      "SPDXID": "SPDXRef-Package-5",
+      "versionInfo": "8.0.5",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/config",
+      "SPDXID": "SPDXRef-Package-6",
+      "versionInfo": "9.0.0",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/fs",
+      "SPDXID": "SPDXRef-Package-7",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/fs.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/git",
+      "SPDXID": "SPDXRef-Package-8",
+      "versionInfo": "6.0.3",
+      "downloadLocation": "git+https://github.com/npm/git.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/installed-package-contents",
+      "SPDXID": "SPDXRef-Package-9",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "git+https://github.com/npm/installed-package-contents.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/map-workspaces",
+      "SPDXID": "SPDXRef-Package-10",
+      "versionInfo": "4.0.2",
+      "downloadLocation": "git+https://github.com/npm/map-workspaces.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/metavuln-calculator",
+      "SPDXID": "SPDXRef-Package-11",
+      "versionInfo": "8.0.1",
+      "downloadLocation": "git+https://github.com/npm/metavuln-calculator.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/name-from-folder",
+      "SPDXID": "SPDXRef-Package-12",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "git+https://github.com/npm/name-from-folder.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/node-gyp",
+      "SPDXID": "SPDXRef-Package-13",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/node-gyp.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/package-json",
+      "SPDXID": "SPDXRef-Package-14",
+      "versionInfo": "6.2.0",
+      "downloadLocation": "git+https://github.com/npm/package-json.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/promise-spawn",
+      "SPDXID": "SPDXRef-Package-15",
+      "versionInfo": "8.0.3",
+      "downloadLocation": "git+https://github.com/npm/promise-spawn.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/query",
+      "SPDXID": "SPDXRef-Package-16",
+      "versionInfo": "4.0.1",
+      "downloadLocation": "git+https://github.com/npm/query.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/redact",
+      "SPDXID": "SPDXRef-Package-17",
+      "versionInfo": "3.2.2",
+      "downloadLocation": "git+https://github.com/npm/redact.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@npmcli/run-script",
+      "SPDXID": "SPDXRef-Package-18",
+      "versionInfo": "9.1.0",
+      "downloadLocation": "git+https://github.com/npm/run-script.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@pkgjs/parseargs",
+      "SPDXID": "SPDXRef-Package-19",
+      "versionInfo": "0.11.0",
+      "downloadLocation": "git@github.com:pkgjs/parseargs.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@sigstore/bundle",
+      "SPDXID": "SPDXRef-Package-20",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "git+https://github.com/sigstore/sigstore-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@sigstore/core",
+      "SPDXID": "SPDXRef-Package-21",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "git+https://github.com/sigstore/sigstore-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@sigstore/protobuf-specs",
+      "SPDXID": "SPDXRef-Package-22",
+      "versionInfo": "0.4.3",
+      "downloadLocation": "git+https://github.com/sigstore/protobuf-specs.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@sigstore/sign",
+      "SPDXID": "SPDXRef-Package-23",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "git+https://github.com/sigstore/sigstore-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@sigstore/tuf",
+      "SPDXID": "SPDXRef-Package-24",
+      "versionInfo": "3.1.1",
+      "downloadLocation": "git+https://github.com/sigstore/sigstore-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@sigstore/verify",
+      "SPDXID": "SPDXRef-Package-25",
+      "versionInfo": "2.1.1",
+      "downloadLocation": "git+https://github.com/sigstore/sigstore-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@tufjs/canonical-json",
+      "SPDXID": "SPDXRef-Package-26",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "git+https://github.com/theupdateframework/tuf-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "@tufjs/models",
+      "SPDXID": "SPDXRef-Package-27",
+      "versionInfo": "3.0.1",
+      "downloadLocation": "git+https://github.com/theupdateframework/tuf-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "abbrev",
+      "SPDXID": "SPDXRef-Package-28",
+      "versionInfo": "3.0.1",
+      "downloadLocation": "git+https://github.com/npm/abbrev-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "agent-base",
+      "SPDXID": "SPDXRef-Package-29",
+      "versionInfo": "7.1.4",
+      "downloadLocation": "https://github.com/TooTallNate/proxy-agents.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ansi-regex",
+      "SPDXID": "SPDXRef-Package-30",
+      "versionInfo": "5.0.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ansi-regex",
+      "SPDXID": "SPDXRef-Package-31",
+      "versionInfo": "6.2.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ansi-styles",
+      "SPDXID": "SPDXRef-Package-32",
+      "versionInfo": "4.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ansi-styles",
+      "SPDXID": "SPDXRef-Package-33",
+      "versionInfo": "6.2.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "aproba",
+      "SPDXID": "SPDXRef-Package-34",
+      "versionInfo": "2.1.0",
+      "downloadLocation": "https://github.com/iarna/aproba",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "archy",
+      "SPDXID": "SPDXRef-Package-35",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "http://github.com/substack/node-archy.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "balanced-match",
+      "SPDXID": "SPDXRef-Package-36",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "git://github.com/juliangruber/balanced-match.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "bin-links",
+      "SPDXID": "SPDXRef-Package-37",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "git+https://github.com/npm/bin-links.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "binary-extensions",
+      "SPDXID": "SPDXRef-Package-38",
+      "versionInfo": "2.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "brace-expansion",
+      "SPDXID": "SPDXRef-Package-39",
+      "versionInfo": "2.0.2",
+      "downloadLocation": "git://github.com/juliangruber/brace-expansion.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "cacache",
+      "SPDXID": "SPDXRef-Package-40",
+      "versionInfo": "19.0.1",
+      "downloadLocation": "git+https://github.com/npm/cacache.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "chalk",
+      "SPDXID": "SPDXRef-Package-41",
+      "versionInfo": "5.6.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "chownr",
+      "SPDXID": "SPDXRef-Package-42",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "git://github.com/isaacs/chownr.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ci-info",
+      "SPDXID": "SPDXRef-Package-43",
+      "versionInfo": "4.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "cidr-regex",
+      "SPDXID": "SPDXRef-Package-44",
+      "versionInfo": "4.1.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "cli-columns",
+      "SPDXID": "SPDXRef-Package-45",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "cmd-shim",
+      "SPDXID": "SPDXRef-Package-46",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "git+https://github.com/npm/cmd-shim.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "color-convert",
+      "SPDXID": "SPDXRef-Package-47",
+      "versionInfo": "2.0.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "color-name",
+      "SPDXID": "SPDXRef-Package-48",
+      "versionInfo": "1.1.4",
+      "downloadLocation": "git@github.com:colorjs/color-name.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "common-ancestor-path",
+      "SPDXID": "SPDXRef-Package-49",
+      "versionInfo": "1.0.1",
+      "downloadLocation": "git+https://github.com/isaacs/common-ancestor-path",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "cross-spawn",
+      "SPDXID": "SPDXRef-Package-50",
+      "versionInfo": "7.0.6",
+      "downloadLocation": "git@github.com:moxystudio/node-cross-spawn.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "cssesc",
+      "SPDXID": "SPDXRef-Package-51",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "https://github.com/mathiasbynens/cssesc.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "debug",
+      "SPDXID": "SPDXRef-Package-52",
+      "versionInfo": "4.4.3",
+      "downloadLocation": "git://github.com/debug-js/debug.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "diff",
+      "SPDXID": "SPDXRef-Package-53",
+      "versionInfo": "5.2.2",
+      "downloadLocation": "git://github.com/kpdecker/jsdiff.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "eastasianwidth",
+      "SPDXID": "SPDXRef-Package-54",
+      "versionInfo": "0.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "emoji-regex",
+      "SPDXID": "SPDXRef-Package-55",
+      "versionInfo": "8.0.0",
+      "downloadLocation": "https://github.com/mathiasbynens/emoji-regex.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "emoji-regex",
+      "SPDXID": "SPDXRef-Package-56",
+      "versionInfo": "9.2.2",
+      "downloadLocation": "https://github.com/mathiasbynens/emoji-regex.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "encoding",
+      "SPDXID": "SPDXRef-Package-57",
+      "versionInfo": "0.1.13",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "env-paths",
+      "SPDXID": "SPDXRef-Package-58",
+      "versionInfo": "2.2.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "err-code",
+      "SPDXID": "SPDXRef-Package-59",
+      "versionInfo": "2.0.3",
+      "downloadLocation": "git://github.com/IndigoUnited/js-err-code.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "exponential-backoff",
+      "SPDXID": "SPDXRef-Package-60",
+      "versionInfo": "3.1.3",
+      "downloadLocation": "git+https://github.com/coveooss/exponential-backoff.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "fastest-levenshtein",
+      "SPDXID": "SPDXRef-Package-61",
+      "versionInfo": "1.0.16",
+      "downloadLocation": "git+https://github.com/ka-weihe/fastest-levenshtein.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "fdir",
+      "SPDXID": "SPDXRef-Package-62",
+      "versionInfo": "6.5.0",
+      "downloadLocation": "git+https://github.com/thecodrr/fdir.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "foreground-child",
+      "SPDXID": "SPDXRef-Package-63",
+      "versionInfo": "3.3.1",
+      "downloadLocation": "git+https://github.com/tapjs/foreground-child.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "fs-minipass",
+      "SPDXID": "SPDXRef-Package-64",
+      "versionInfo": "3.0.3",
+      "downloadLocation": "https://github.com/npm/fs-minipass.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "glob",
+      "SPDXID": "SPDXRef-Package-65",
+      "versionInfo": "10.5.0",
+      "downloadLocation": "git://github.com/isaacs/node-glob.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "graceful-fs",
+      "SPDXID": "SPDXRef-Package-66",
+      "versionInfo": "4.2.11",
+      "downloadLocation": "https://github.com/isaacs/node-graceful-fs",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "hosted-git-info",
+      "SPDXID": "SPDXRef-Package-67",
+      "versionInfo": "8.1.0",
+      "downloadLocation": "git+https://github.com/npm/hosted-git-info.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "http-cache-semantics",
+      "SPDXID": "SPDXRef-Package-68",
+      "versionInfo": "4.2.0",
+      "downloadLocation": "git+https://github.com/kornelski/http-cache-semantics.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "http-proxy-agent",
+      "SPDXID": "SPDXRef-Package-69",
+      "versionInfo": "7.0.2",
+      "downloadLocation": "https://github.com/TooTallNate/proxy-agents.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "https-proxy-agent",
+      "SPDXID": "SPDXRef-Package-70",
+      "versionInfo": "7.0.6",
+      "downloadLocation": "https://github.com/TooTallNate/proxy-agents.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "iconv-lite",
+      "SPDXID": "SPDXRef-Package-71",
+      "versionInfo": "0.6.3",
+      "downloadLocation": "git://github.com/ashtuchkin/iconv-lite.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ignore-walk",
+      "SPDXID": "SPDXRef-Package-72",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "git+https://github.com/npm/ignore-walk.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "imurmurhash",
+      "SPDXID": "SPDXRef-Package-73",
+      "versionInfo": "0.1.4",
+      "downloadLocation": "https://github.com/jensyt/imurmurhash-js",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ini",
+      "SPDXID": "SPDXRef-Package-74",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "git+https://github.com/npm/ini.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "init-package-json",
+      "SPDXID": "SPDXRef-Package-75",
+      "versionInfo": "7.0.2",
+      "downloadLocation": "git+https://github.com/npm/init-package-json.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ip-address",
+      "SPDXID": "SPDXRef-Package-76",
+      "versionInfo": "10.1.0",
+      "downloadLocation": "git://github.com/beaugunderson/ip-address.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ip-regex",
+      "SPDXID": "SPDXRef-Package-77",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "is-cidr",
+      "SPDXID": "SPDXRef-Package-78",
+      "versionInfo": "5.1.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "is-fullwidth-code-point",
+      "SPDXID": "SPDXRef-Package-79",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "isexe",
+      "SPDXID": "SPDXRef-Package-80",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "git+https://github.com/isaacs/isexe.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "isexe",
+      "SPDXID": "SPDXRef-Package-81",
+      "versionInfo": "3.1.5",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "jackspeak",
+      "SPDXID": "SPDXRef-Package-82",
+      "versionInfo": "3.4.3",
+      "downloadLocation": "git+https://github.com/isaacs/jackspeak.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "json-parse-even-better-errors",
+      "SPDXID": "SPDXRef-Package-83",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/json-parse-even-better-errors.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "json-stringify-nice",
+      "SPDXID": "SPDXRef-Package-84",
+      "versionInfo": "1.1.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "jsonparse",
+      "SPDXID": "SPDXRef-Package-85",
+      "versionInfo": "1.3.1",
+      "downloadLocation": "http://github.com/creationix/jsonparse.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "just-diff-apply",
+      "SPDXID": "SPDXRef-Package-86",
+      "versionInfo": "5.5.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "just-diff",
+      "SPDXID": "SPDXRef-Package-87",
+      "versionInfo": "6.0.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmaccess",
+      "SPDXID": "SPDXRef-Package-88",
+      "versionInfo": "9.0.0",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmdiff",
+      "SPDXID": "SPDXRef-Package-89",
+      "versionInfo": "7.0.5",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmexec",
+      "SPDXID": "SPDXRef-Package-90",
+      "versionInfo": "9.0.5",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmfund",
+      "SPDXID": "SPDXRef-Package-91",
+      "versionInfo": "6.0.5",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmhook",
+      "SPDXID": "SPDXRef-Package-92",
+      "versionInfo": "11.0.0",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmorg",
+      "SPDXID": "SPDXRef-Package-93",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmpack",
+      "SPDXID": "SPDXRef-Package-94",
+      "versionInfo": "8.0.5",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmpublish",
+      "SPDXID": "SPDXRef-Package-95",
+      "versionInfo": "10.0.2",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmsearch",
+      "SPDXID": "SPDXRef-Package-96",
+      "versionInfo": "8.0.0",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmteam",
+      "SPDXID": "SPDXRef-Package-97",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "libnpmversion",
+      "SPDXID": "SPDXRef-Package-98",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "lru-cache",
+      "SPDXID": "SPDXRef-Package-99",
+      "versionInfo": "10.4.3",
+      "downloadLocation": "git://github.com/isaacs/node-lru-cache.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "make-fetch-happen",
+      "SPDXID": "SPDXRef-Package-100",
+      "versionInfo": "14.0.3",
+      "downloadLocation": "git+https://github.com/npm/make-fetch-happen.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minimatch",
+      "SPDXID": "SPDXRef-Package-101",
+      "versionInfo": "9.0.9",
+      "downloadLocation": "git://github.com/isaacs/minimatch.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minipass-collect",
+      "SPDXID": "SPDXRef-Package-102",
+      "versionInfo": "2.0.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minipass-fetch",
+      "SPDXID": "SPDXRef-Package-103",
+      "versionInfo": "4.0.1",
+      "downloadLocation": "git+https://github.com/npm/minipass-fetch.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minipass-flush",
+      "SPDXID": "SPDXRef-Package-104",
+      "versionInfo": "1.0.5",
+      "downloadLocation": "git+https://github.com/isaacs/minipass-flush.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minipass-pipeline",
+      "SPDXID": "SPDXRef-Package-105",
+      "versionInfo": "1.2.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minipass-sized",
+      "SPDXID": "SPDXRef-Package-106",
+      "versionInfo": "1.0.3",
+      "downloadLocation": "git+https://github.com/isaacs/minipass-sized.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minipass",
+      "SPDXID": "SPDXRef-Package-107",
+      "versionInfo": "3.3.6",
+      "downloadLocation": "git+https://github.com/isaacs/minipass.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minipass",
+      "SPDXID": "SPDXRef-Package-108",
+      "versionInfo": "7.1.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minizlib",
+      "SPDXID": "SPDXRef-Package-109",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "git+https://github.com/isaacs/minizlib.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ms",
+      "SPDXID": "SPDXRef-Package-110",
+      "versionInfo": "2.1.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "mute-stream",
+      "SPDXID": "SPDXRef-Package-111",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "git+https://github.com/npm/mute-stream.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "negotiator",
+      "SPDXID": "SPDXRef-Package-112",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "node-gyp",
+      "SPDXID": "SPDXRef-Package-113",
+      "versionInfo": "11.5.0",
+      "downloadLocation": "git://github.com/nodejs/node-gyp.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "nopt",
+      "SPDXID": "SPDXRef-Package-114",
+      "versionInfo": "8.1.0",
+      "downloadLocation": "git+https://github.com/npm/nopt.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "normalize-package-data",
+      "SPDXID": "SPDXRef-Package-115",
+      "versionInfo": "7.0.1",
+      "downloadLocation": "git+https://github.com/npm/normalize-package-data.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-audit-report",
+      "SPDXID": "SPDXRef-Package-116",
+      "versionInfo": "6.0.0",
+      "downloadLocation": "git+https://github.com/npm/npm-audit-report.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-bundled",
+      "SPDXID": "SPDXRef-Package-117",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/npm-bundled.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-install-checks",
+      "SPDXID": "SPDXRef-Package-118",
+      "versionInfo": "7.1.2",
+      "downloadLocation": "git+https://github.com/npm/npm-install-checks.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-normalize-package-bin",
+      "SPDXID": "SPDXRef-Package-119",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/npm-normalize-package-bin.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-package-arg",
+      "SPDXID": "SPDXRef-Package-120",
+      "versionInfo": "12.0.2",
+      "downloadLocation": "git+https://github.com/npm/npm-package-arg.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-packlist",
+      "SPDXID": "SPDXRef-Package-121",
+      "versionInfo": "9.0.0",
+      "downloadLocation": "git+https://github.com/npm/npm-packlist.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-pick-manifest",
+      "SPDXID": "SPDXRef-Package-122",
+      "versionInfo": "10.0.0",
+      "downloadLocation": "git+https://github.com/npm/npm-pick-manifest.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-profile",
+      "SPDXID": "SPDXRef-Package-123",
+      "versionInfo": "11.0.1",
+      "downloadLocation": "git+https://github.com/npm/npm-profile.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-registry-fetch",
+      "SPDXID": "SPDXRef-Package-124",
+      "versionInfo": "18.0.2",
+      "downloadLocation": "git+https://github.com/npm/npm-registry-fetch.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm-user-validate",
+      "SPDXID": "SPDXRef-Package-125",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "git+https://github.com/npm/npm-user-validate.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "npm",
+      "SPDXID": "SPDXRef-Package-126",
+      "versionInfo": "10.9.9",
+      "downloadLocation": "git+https://github.com/npm/cli.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Artistic-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "p-map",
+      "SPDXID": "SPDXRef-Package-127",
+      "versionInfo": "7.0.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "package-json-from-dist",
+      "SPDXID": "SPDXRef-Package-128",
+      "versionInfo": "1.0.1",
+      "downloadLocation": "git+https://github.com/isaacs/package-json-from-dist.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "pacote",
+      "SPDXID": "SPDXRef-Package-129",
+      "versionInfo": "19.0.2",
+      "downloadLocation": "git+https://github.com/npm/pacote.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "pacote",
+      "SPDXID": "SPDXRef-Package-130",
+      "versionInfo": "20.0.1",
+      "downloadLocation": "git+https://github.com/npm/pacote.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "parse-conflict-json",
+      "SPDXID": "SPDXRef-Package-131",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/parse-conflict-json.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "path-key",
+      "SPDXID": "SPDXRef-Package-132",
+      "versionInfo": "3.1.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "path-scurry",
+      "SPDXID": "SPDXRef-Package-133",
+      "versionInfo": "1.11.1",
+      "downloadLocation": "git+https://github.com/isaacs/path-scurry",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "picomatch",
+      "SPDXID": "SPDXRef-Package-134",
+      "versionInfo": "4.0.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "postcss-selector-parser",
+      "SPDXID": "SPDXRef-Package-135",
+      "versionInfo": "7.1.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "proc-log",
+      "SPDXID": "SPDXRef-Package-136",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "git+https://github.com/npm/proc-log.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "proggy",
+      "SPDXID": "SPDXRef-Package-137",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "git+https://github.com/npm/proggy.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "promise-all-reject-late",
+      "SPDXID": "SPDXRef-Package-138",
+      "versionInfo": "1.0.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "promise-call-limit",
+      "SPDXID": "SPDXRef-Package-139",
+      "versionInfo": "3.0.2",
+      "downloadLocation": "git+https://github.com/isaacs/promise-call-limit",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "promise-retry",
+      "SPDXID": "SPDXRef-Package-140",
+      "versionInfo": "2.0.1",
+      "downloadLocation": "git://github.com/IndigoUnited/node-promise-retry.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "promzard",
+      "SPDXID": "SPDXRef-Package-141",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "git+https://github.com/npm/promzard.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "qrcode-terminal",
+      "SPDXID": "SPDXRef-Package-142",
+      "versionInfo": "0.12.0",
+      "downloadLocation": "https://github.com/gtanner/qrcode-terminal",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "read-cmd-shim",
+      "SPDXID": "SPDXRef-Package-143",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "git+https://github.com/npm/read-cmd-shim.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "read-package-json-fast",
+      "SPDXID": "SPDXRef-Package-144",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/read-package-json-fast.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "read",
+      "SPDXID": "SPDXRef-Package-145",
+      "versionInfo": "4.1.0",
+      "downloadLocation": "git+https://github.com/npm/read.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "retry",
+      "SPDXID": "SPDXRef-Package-146",
+      "versionInfo": "0.12.0",
+      "downloadLocation": "git://github.com/tim-kos/node-retry.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "safer-buffer",
+      "SPDXID": "SPDXRef-Package-147",
+      "versionInfo": "2.1.2",
+      "downloadLocation": "git+https://github.com/ChALkeR/safer-buffer.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "semver",
+      "SPDXID": "SPDXRef-Package-148",
+      "versionInfo": "7.7.4",
+      "downloadLocation": "git+https://github.com/npm/node-semver.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "shebang-command",
+      "SPDXID": "SPDXRef-Package-149",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "shebang-regex",
+      "SPDXID": "SPDXRef-Package-150",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "signal-exit",
+      "SPDXID": "SPDXRef-Package-151",
+      "versionInfo": "4.1.0",
+      "downloadLocation": "https://github.com/tapjs/signal-exit.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "sigstore",
+      "SPDXID": "SPDXRef-Package-152",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "git+https://github.com/sigstore/sigstore-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "smart-buffer",
+      "SPDXID": "SPDXRef-Package-153",
+      "versionInfo": "4.2.0",
+      "downloadLocation": "https://github.com/JoshGlazebrook/smart-buffer.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "socks-proxy-agent",
+      "SPDXID": "SPDXRef-Package-154",
+      "versionInfo": "8.0.5",
+      "downloadLocation": "https://github.com/TooTallNate/proxy-agents.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "socks",
+      "SPDXID": "SPDXRef-Package-155",
+      "versionInfo": "2.8.7",
+      "downloadLocation": "https://github.com/JoshGlazebrook/socks.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "spdx-correct",
+      "SPDXID": "SPDXRef-Package-156",
+      "versionInfo": "3.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "spdx-exceptions",
+      "SPDXID": "SPDXRef-Package-157",
+      "versionInfo": "2.5.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC-BY-3.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "spdx-expression-parse",
+      "SPDXID": "SPDXRef-Package-158",
+      "versionInfo": "3.0.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "spdx-expression-parse",
+      "SPDXID": "SPDXRef-Package-159",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "spdx-license-ids",
+      "SPDXID": "SPDXRef-Package-160",
+      "versionInfo": "3.0.23",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC0-1.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ssri",
+      "SPDXID": "SPDXRef-Package-161",
+      "versionInfo": "12.0.0",
+      "downloadLocation": "git+https://github.com/npm/ssri.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "string-width",
+      "SPDXID": "SPDXRef-Package-162",
+      "versionInfo": "4.2.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "string-width",
+      "SPDXID": "SPDXRef-Package-163",
+      "versionInfo": "5.1.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "strip-ansi",
+      "SPDXID": "SPDXRef-Package-164",
+      "versionInfo": "6.0.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "strip-ansi",
+      "SPDXID": "SPDXRef-Package-165",
+      "versionInfo": "7.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "supports-color",
+      "SPDXID": "SPDXRef-Package-166",
+      "versionInfo": "9.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "tar",
+      "SPDXID": "SPDXRef-Package-167",
+      "versionInfo": "7.5.22",
+      "downloadLocation": "https://github.com/isaacs/node-tar.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "text-table",
+      "SPDXID": "SPDXRef-Package-168",
+      "versionInfo": "0.2.0",
+      "downloadLocation": "git://github.com/substack/text-table.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "tiny-relative-date",
+      "SPDXID": "SPDXRef-Package-169",
+      "versionInfo": "1.3.0",
+      "downloadLocation": "https://github.com/wildlyinaccurate/relative-date.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "tinyglobby",
+      "SPDXID": "SPDXRef-Package-170",
+      "versionInfo": "0.2.15",
+      "downloadLocation": "git+https://github.com/SuperchupuDev/tinyglobby.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "treeverse",
+      "SPDXID": "SPDXRef-Package-171",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "https://github.com/npm/treeverse.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "tuf-js",
+      "SPDXID": "SPDXRef-Package-172",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "git+https://github.com/theupdateframework/tuf-js.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "unique-filename",
+      "SPDXID": "SPDXRef-Package-173",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/npm/unique-filename.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "unique-slug",
+      "SPDXID": "SPDXRef-Package-174",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "git+https://github.com/npm/unique-slug.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "util-deprecate",
+      "SPDXID": "SPDXRef-Package-175",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "git://github.com/TooTallNate/util-deprecate.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "validate-npm-package-license",
+      "SPDXID": "SPDXRef-Package-176",
+      "versionInfo": "3.0.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "validate-npm-package-name",
+      "SPDXID": "SPDXRef-Package-177",
+      "versionInfo": "6.0.2",
+      "downloadLocation": "git+https://github.com/npm/validate-npm-package-name.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "walk-up-path",
+      "SPDXID": "SPDXRef-Package-178",
+      "versionInfo": "3.0.1",
+      "downloadLocation": "git+https://github.com/isaacs/walk-up-path",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "which",
+      "SPDXID": "SPDXRef-Package-179",
+      "versionInfo": "2.0.2",
+      "downloadLocation": "git://github.com/isaacs/node-which.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "which",
+      "SPDXID": "SPDXRef-Package-180",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "git+https://github.com/npm/node-which.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "wrap-ansi",
+      "SPDXID": "SPDXRef-Package-181",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "wrap-ansi",
+      "SPDXID": "SPDXRef-Package-182",
+      "versionInfo": "8.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "write-file-atomic",
+      "SPDXID": "SPDXRef-Package-183",
+      "versionInfo": "6.0.0",
+      "downloadLocation": "git+https://github.com/npm/write-file-atomic.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "yallist",
+      "SPDXID": "SPDXRef-Package-184",
+      "versionInfo": "4.0.0",
+      "downloadLocation": "git+https://github.com/isaacs/yallist.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "yallist",
+      "SPDXID": "SPDXRef-Package-185",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "git+https://github.com/isaacs/yallist.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION"
+    }
+  ]
+}

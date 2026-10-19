@@ -1,0 +1,49 @@
+name: GOL-552 smoke
+benchmarks:
+  - name: streaming-tool
+    iterations: 1
+    clusterSize: [1]
+    size: [1]
+    length: [4]
+
+  - name: streaming-rpc
+    iterations: 1
+    clusterSize: [1]
+    size: [1]
+    length: [4]
+
+  - name: streaming-rpc-history
+    iterations: 1
+    clusterSize: [1]
+    size: [2]
+    length: [4]
+
+  - name: streaming-rpc-cold-indexed
+    iterations: 1
+    clusterSize: [1]
+    size: [2]
+    length: [4]
+
+  - name: streaming-rpc-reconnect
+    iterations: 1
+    clusterSize: [1]
+    size: [2]
+    length: [16]
+
+  - name: streaming-rpc-recovery
+    iterations: 1
+    clusterSize: [1]
+    size: [2]
+    length: [16]
+
+  - name: streaming-rpc-recovery-siblings
+    iterations: 1
+    clusterSize: [1]
+    size: [2]
+    length: [16]
+
+  - name: streaming-rpc-recovery-nested
+    iterations: 1
+    clusterSize: [1]
+    size: [2]
+    length: [8]

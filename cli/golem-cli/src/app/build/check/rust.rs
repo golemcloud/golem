@@ -42,7 +42,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
     let mut steps_by_path = BTreeMap::new();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        if component.guess_language() != Some(GuestLanguage::Rust) {
+        if component.guest_language() != Some(GuestLanguage::Rust) {
             continue;
         }
 
@@ -214,15 +214,6 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
             matcher: CargoDependencyMatcher::Exact,
             presence: Optional,
         },
-        CargoDependencyRequirement {
-            name: "wstd",
-            expected_spec: DependencySpec::Version {
-                version: versions::rust_dep::WSTD.to_string(),
-                features: vec!["default".to_string(), "json".to_string()],
-            },
-            matcher: CargoDependencyMatcher::Exact,
-            presence: Optional,
-        },
     ];
 
     let golem_rust_expected_spec = match &golem_rust_expected {
@@ -230,6 +221,9 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
             path: path.clone(),
             features: vec![],
         },
+        ExpectedDependencyKind::ExactValue(_) => {
+            unreachable!("Rust dependencies never use exact npm values")
+        }
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint: _,

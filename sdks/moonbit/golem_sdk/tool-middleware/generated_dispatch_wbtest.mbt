@@ -48,11 +48,12 @@ async fn invoke_generated(
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
   underlying : UnderlyingTool,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   invoke_registered_tool_middleware(
     middleware_name,
     "presented",
     generated_presented_tool(middleware_name),
+    empty_parameter_value(),
     command_path,
     input,
     stdin,
@@ -65,6 +66,14 @@ async fn invoke_generated(
 fn reset_generated_middlewares() -> Unit raise {
   clear_tool_middlewares_for_tests()
   @authoring.register_generated_middlewares_for_tests()
+}
+
+///|
+test "generated middleware keeps independently authored versions" {
+  reset_generated_middlewares()
+  assert_eq(get_registered_tool_middleware("policy").unwrap().version, "1.2.3")
+  assert_eq(get_registered_tool_middleware("adapter").unwrap().version, "2.0.0")
+  assert_eq(get_registered_tool_middleware("audit").unwrap().version, "3.1.4")
 }
 
 ///|
@@ -109,7 +118,7 @@ fn directly_counted_source_stream(
 fn projected_stdout_producer(
   source : @async-core.Stream[Byte],
 ) -> async (@async-core.Sink[Byte]) -> Unit {
-  match transfer_aware_stdout(source).take_producer() {
+  match transfer_aware_output(source).take_producer() {
     Some(producer) => producer
     None => abort("transfer-aware stdout did not expose its producer")
   }
@@ -130,7 +139,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           forward_calls.val = forward_calls.val + 1
           assert_eq(path, ["value"])
           assert_true(stdin is None)
-          Ok({ result: Some(generated_result(5)), stdout: None, })
+          Ok({ result: Some(generated_result(5)), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -159,7 +168,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           short_circuit_calls.val = short_circuit_calls.val + 1
-          Ok({ result: Some(generated_result(())), stdout: None, })
+          Ok({ result: Some(generated_result(())), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -171,7 +180,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
         None,
         underlying,
       )
-      assert_true(result is Ok({ result: None, stdout: None, }))
+      assert_true(result is Ok({ result: None, stdout: None, stderr: None, }))
     })
     assert_eq(short_circuit_calls.val, 0)
 
@@ -182,7 +191,11 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           adapter_calls.val = adapter_calls.val + 1
           assert_eq(path, ["fetch"])
           assert_true(stdin is None)
-          Ok({ result: Some(generated_result("stored")), stdout: None, })
+          Ok({
+            result: Some(generated_result("stored")),
+            stdout: None,
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -212,7 +225,11 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
         async fn(path, _, _) {
           retry_calls.val = retry_calls.val + 1
           assert_eq(path, ["retry"])
-          Ok({ result: Some(generated_result(retry_calls.val)), stdout: None, })
+          Ok({
+            result: Some(generated_result(retry_calls.val)),
+            stdout: None,
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -248,7 +265,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           malformed_input_calls.val = malformed_input_calls.val + 1
-          Ok({ result: Some(generated_result(1)), stdout: None, })
+          Ok({ result: Some(generated_result(1)), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -260,7 +277,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
         None,
         underlying,
       )
-      assert_true(result is Err(@toolCommon.ToolError::InvalidInput(_)))
+      assert_true(result is Err(@types.ToolError::InvalidInput(_)))
     })
     assert_eq(malformed_input_calls.val, 0)
 
@@ -269,7 +286,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           malformed_result_calls.val = malformed_result_calls.val + 1
-          Ok({ result: Some(generated_result(())), stdout: None, })
+          Ok({ result: Some(generated_result(())), stdout: None, stderr: None, })
         },
         no_raw_drop,
         group,
@@ -283,7 +300,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
         None,
         underlying,
       )
-      assert_true(result is Err(@toolCommon.ToolError::InvalidResult(_)))
+      assert_true(result is Err(@types.ToolError::InvalidResult(_)))
     })
     assert_eq(malformed_result_calls.val, 1)
   })
@@ -304,9 +321,10 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
             None => fail("generated custom-error dispatch lost stdin")
           }
           Err(
-            @toolCommon.ToolError::CustomError(
-              @authoring.run_error_payload_for_tests("boom"),
-            ),
+            @types.ToolError::CustomError({
+              name: "broken",
+              payload: @authoring.run_error_payload_for_tests("boom"),
+            }),
           )
         },
         no_raw_drop,
@@ -320,8 +338,10 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
         underlying,
       )
       match result {
-        Err(@toolCommon.ToolError::CustomError(payload)) => {
-          let decoded = @authoring.decode_run_error_payload_for_tests(payload)
+        Err(@types.ToolError::CustomError(payload)) => {
+          let decoded = @authoring.decode_run_error_payload_for_tests(
+            payload.payload,
+          )
           assert_true(decoded is @authoring.RunError::Broken("boom"))
         }
         _ => fail("generated custom error did not round-trip")
@@ -336,7 +356,12 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
             Some(stdin) => stdin.drop_sync()
             None => fail("generated malformed-error dispatch lost stdin")
           }
-          Err(@toolCommon.ToolError::CustomError(generated_result(())))
+          Err(
+            @types.ToolError::CustomError({
+              name: "broken",
+              payload: generated_result(()),
+            }),
+          )
         },
         no_raw_drop,
         group,
@@ -348,7 +373,7 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
         Some(counted_stream(stdin_drops)),
         underlying,
       )
-      assert_true(result is Err(@toolCommon.ToolError::InvalidResult(_)))
+      assert_true(result is Err(@types.ToolError::InvalidResult(_)))
     })
   })
   assert_eq(stdin_drops.val, 2)
@@ -364,7 +389,11 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       let underlying = new_scoped_underlying_tool(
         async fn(path, _, _) {
           assert_eq(path, ["abandon-stdout"])
-          Ok({ result: None, stdout: Some(counted_stream(abandoned_drops)), })
+          Ok({
+            result: None,
+            stdout: Some(counted_stream(abandoned_drops)),
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -377,11 +406,11 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
         underlying,
       )
       assert_true(
-        result is Err(@toolCommon.ToolError::InvalidResult("abandoned stdout")),
+        result is Err(@types.ToolError::InvalidResult("abandoned stdout")),
       )
       assert_eq(abandoned_drops.val, 0)
     })
-    assert_eq(abandoned_drops.val, 1)
+    assert_eq(abandoned_drops.val, 0)
 
     let returned_drops = Ref(0)
     let transferred_producer : Ref[(async (@async-core.Sink[Byte]) -> Unit)?] = Ref(
@@ -391,7 +420,11 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       let underlying = new_scoped_underlying_tool(
         async fn(path, _, _) {
           assert_eq(path, ["stdout"])
-          Ok({ result: None, stdout: Some(counted_stream(returned_drops)), })
+          Ok({
+            result: None,
+            stdout: Some(counted_stream(returned_drops)),
+            stderr: None,
+          })
         },
         no_raw_drop,
         group,
@@ -444,6 +477,7 @@ test "generated monomorphic dispatch relays lifted stdout after group teardown" 
           Ok({
             result: None,
             stdout: Some(counted_source_stream(source_drops)),
+            stderr: None,
           })
         },
         no_raw_drop,
@@ -464,9 +498,9 @@ test "generated monomorphic dispatch relays lifted stdout after group teardown" 
           }
         Err(error) => fail("generated stdout dispatch failed: \{Repr(error)}")
       }
-      assert_eq(source_drops.val, 0)
+      assert_eq(source_drops.val, 1)
     })
-    assert_eq(source_drops.val, 0)
+    assert_eq(source_drops.val, 1)
     match transferred_producer.val {
       Some(producer) => {
         let (stream, sink) = @async-core.Stream::new(capacity=64)
@@ -562,7 +596,7 @@ test "transfer-aware stdout closes its source when its producer is cancelled" {
 test "transfer-aware stdout closes an unstarted source exactly once" {
   let close_attempts = Ref(0)
   run_component_async(async fn() {
-    let stdout = transfer_aware_stdout(
+    let stdout = transfer_aware_output(
       directly_counted_source_stream(
         async fn(_) { Some(([1, 2, 3] : FixedArray[Byte])) },
         close_attempts,

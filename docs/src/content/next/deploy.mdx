@@ -12,57 +12,182 @@ The services are using the following storage backends:
 - Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (for running locally)
 - [Redis](https://redis.io/)
 - Blob storage - Shared File System or S3
+- [etcd](https://etcd.io/) - optional, only for the shard manager's distributed mode
+
+## User and Permissions
+
+Every image runs its service as the user `golem`, uid and gid 65534, with the home directory `/home/golem`. The default configuration keeps local data below `/data`, which belongs to that user: SQLite databases in `/data` and file system blob storage in `/data/blob_storage`. The `golemservices/golem` image keeps its data in `/var/lib/golem`, which also belongs to that user. The services need no Linux capability.
+
+A path that a service writes must belong to uid 65534, or be writable by it:
+
+- A new Docker named volume mounted at `/data`, `/data/blob_storage` or `/var/lib/golem` takes the owner of that directory in the image, so it needs no change.
+- A bind mount takes the owner of the host directory. Give the directory to the user before the first start, for example with `chown -R 65534:65534 <host directory>`.
+- In Kubernetes, set `runAsUser`, `runAsGroup` and `fsGroup` to 65534 in the pod `securityContext`. The kubelet then makes a volume that supports ownership management, such as an `emptyDir` or a persistent volume, writable by group 65534. A `hostPath` volume keeps the owner of the host directory.
+
+Run the services with no capabilities and without privilege escalation: `--cap-drop ALL --security-opt no-new-privileges` with Docker, `capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false` in Kubernetes. Only `xfs-quotad`, a separate process that `ManagedXfs` agent filesystem storage needs, holds a capability, `CAP_SYS_ADMIN`. Its image, `golemservices/golem-xfs-quotad`, also runs as uid 65534; see [Run xfs-quotad](/next/operate/filesystem_snapshots/xfs#run-xfs-quotad).
 
 ## Golem Services
 
 The following sections provide a description of each service.
 
-### Cloud Service
+### Golem
 
-[cloud-service](https://github.com/golemcloud/golem/tree/main/cloud-service) is responsible for storing entities like projects and accounts in RDB.
+The [golem](https://github.com/golemcloud/golem/tree/main/cli/golem) executable runs every service in one process with `golem server run`. The `golemservices/golem` image runs it, and serves the management API, the HTTP APIs and MCP on one port, `9881`. Configure it with a TOML file passed as `--config`, or with `GOLEM__<SECTION>__<FIELD>` environment variables; see the [configuration](https://github.com/golemcloud/golem/blob/main/cli/golem/config/golem-server.toml) and the [environment variables](https://github.com/golemcloud/golem/blob/main/cli/golem/config/golem-server.sample.env). The image sets these variables:
 
-See also: [configuration](https://github.com/golemcloud/golem/blob/main/cloud-service/config/cloud-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/cloud-service/config/cloud-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/cloud-service)
+| Variable | Value in the image |
+|----------|--------------------|
+| `GOLEM__DATA_DIR` | `/var/lib/golem`, a volume |
+| `GOLEM__ROUTER__ADDRESS` | `::`, which accepts IPv6 and IPv4 |
+| `GOLEM__ROUTER__PORT` | `9881` |
 
-### Component Service
+Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. Requests for that host reach the management API, requests for every other host reach the HTTP API and MCP deployments, and no environment can register the host as a domain. Behind a reverse proxy, add the proxy's address to `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`, so the router takes the host from `X-Forwarded-Host`.
 
-[golem-component-service](https://github.com/golemcloud/golem/tree/main/golem-component-service) is a component registry/management service. The service is using RDB and Blob storage as data storage.
+The router listens on all interfaces, so the server refuses to start until the admin token (`GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`), the webhook keys (`GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` and `GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY`, the same value) and the invocation session token key (`GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY`) have secret values. The error lists the settings that still have their public default values.
 
-See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-service)
+At every start, the registry service provisions the built-in plugins and tools. It reads each of them from its cache, `builtin-artifacts` in the data directory, and downloads from the [golem-builtins](https://github.com/golemcloud/golem-builtins/releases) releases on GitHub each one that the cache does not have or that does not match its checksum. The downloads take about a minute. Without outgoing HTTPS connections to GitHub, a start that must download fails. Keep `/var/lib/golem` on a persistent volume, so that only the first start downloads. Without a persistent volume, for example in a container without a volume or in a task without storage, every start downloads again.
 
-### Debugging Service
+The image arguments are the arguments of `golem`; the default is `server run`. With `GOLEM_LITESTREAM=true`, [Litestream](https://litestream.io/) replicates the SQLite databases of the data directory. Use it where the volume itself can be lost, for example an ephemeral disk or a disk of one host. In this mode the worker executor keeps its key-value storage and its indexed storage in one SQLite database each, `key-value-storage.db` and `indexed-storage.db`, instead of one database per agent. The server then has a fixed set of databases: these two, `registry.db`, `shard_manager.db`, `scheduler.db` and `gateway-sessions.db`. No database file is ever deleted: deleting an agent deletes rows, and Litestream replicates that like any other write. Before the server starts, the image restores each of these databases that the data directory does not have from the replica. Turn Litestream on only for a new data directory: in this mode the server does not read the databases per agent in `kv-store`, which it writes without Litestream.
 
-[golem-debugging-service](https://github.com/golemcloud/golem/tree/main/golem-debugging-service) is a special executor for running debugging sessions, controlling the execution of agents step by step.
+| Variable | Description |
+|----------|-------------|
+| `GOLEM_LITESTREAM` | `true` to replicate the databases with Litestream; `false` by default |
+| `GOLEM_LITESTREAM_REPLICA_URL` | Replica of the data directory: `s3://<bucket>/<path>` or `file:///<path>`. The replica of `<name>.db` is `<path>/<name>.db`. The query, such as `?endpoint=http%3A%2F%2Fminio%3A9000&region=us-east-1`, applies to every database, and Litestream reads it |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Credentials of the S3 replica; `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY` work too |
 
-See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-debugging-service/config/debug-worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-debugging-service/config/debug-worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-debugging-service)
+Litestream takes the data directory from `GOLEM__DATA_DIR`, so do not set `data_dir` in the `--config` file, and it sets the key-value storage and the indexed storage of the worker executor, so do not set them either. Litestream replicates only the SQLite databases: keep the blobs in S3, for example in one bucket with `namespace_prefixes = true`. Litestream does not replicate the cache of the built-in plugins and tools, so a restore to a new volume downloads them again. Exactly one server may write to a replica.
+
+See also: [docker image](https://hub.docker.com/r/golemservices/golem)
+
+### Registry Service
+
+[golem-registry-service](https://github.com/golemcloud/golem/tree/main/golem-registry-service) manages accounts, applications, environments, components, plugins, tools, policies, and related registry data in the relational database and blob storage.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-registry-service/config/registry-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-registry-service/config/registry-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/registry-service)
 
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [API Gateway](/next/concepts/worker-gateway) functionality for agents and acts as a routing service for worker executors. The service uses an RDB as data storage.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/next/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis, SQLite, or PostgreSQL.
+
+To use PostgreSQL for gateway sessions, set `gateway_session_storage.type = "Postgres"` in the worker service configuration. Under `gateway_session_storage.config`, set `host`, `port`, `database`, `username`, `password`, `max_connections`, `pending_login_expiration`, and `cleanup_interval`. The optional `schema` defaults to `golem_worker_service_session_store`, separate from other services' migration tables. For the single executable, nest these settings under `worker_service`; supply the password through `GOLEM__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__PASSWORD` rather than checking it into a configuration file.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 
+#### Long-lived connections
+
+See [HTTP Gateway](/next/operate/http-gateway#long-lived-connections) for proxy idle
+timeouts, WebSocket Pings and Pong deadlines, MCP keep-alives, and Durable Streams
+SSE behavior. The same page covers [trusted ingress](/next/operate/http-gateway#configuring-ingress)
+and [shared HTTP API and MCP ports](/next/operate/http-gateway#serving-http-apis-and-mcp-on-one-port).
+
 ### Worker Executor
 
-[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](/next/concepts/agents) that belong to assigned shards. The service uses Redis and Blob storage as data storage.
+[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](/next/concepts/agents) that belong to assigned shards. The service keeps each agent's oplog in **indexed storage** - PostgreSQL, SQLite or Redis - and uses key-value and blob storage alongside it.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-executor)
 
 ### Shard Manager
 
-[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) is a single node in charge of maintaining the worker executors' shard assignments; only one instance can be alive at any given time. The service uses Redis as data storage.
+[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) assigns shards to worker executors and rebalances them when executors join or leave. Run exactly one instance with PostgreSQL or SQLite persistence. Use etcd persistence to run multiple replicas with one elected leader.
+
+See [Shard Manager](/next/operate/shard-manager) for configuration, failover, health probes, and storage recovery precautions.
+
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-shard-manager)
 
 ### Component Compilation Service
 
-[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is a sidecar service responsible for compiling components. The service uses Blob storage as data storage.
+[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) warms the compiled-component cache in Blob storage. It is an optional optimisation: if precompilation is skipped or fails, the executor compiles and caches the component on first use. Pending requests are held in memory and are lost on restart. The service compiles one component at a time because Wasmtime already parallelises compilation internally.
+
+The service rejects an enqueue immediately when its request queue is full. The registry still completes the component upload. The registry's `component_compilation.config.enqueue_timeout` bounds the entire enqueue attempt, including connection establishment and retries; its default is `1s`. A timeout skips cache warming, not the component upload. A timed-out request might already have reached the compilation service and can still be compiled. Saturation is not retried inside the upload request.
+
+| Compilation service setting | Default | Meaning |
+| --- | --- | --- |
+| `compile_worker.queue_capacity` | `100` | Maximum pending compilation requests, excluding the component being processed |
+| `compile_worker.upload_queue_capacity` | `100` | Maximum compiled components waiting for upload, excluding the component being uploaded |
+
+Both capacities must be positive. Their environment variables are `GOLEM__COMPILE_WORKER__QUEUE_CAPACITY` and `GOLEM__COMPILE_WORKER__UPLOAD_QUEUE_CAPACITY`. The registry timeout is `GOLEM__COMPONENT_COMPILATION__CONFIG__ENQUEUE_TIMEOUT`.
+
+#### Choose queue capacities
+
+The defaults are starting values, not measured recommendations for golem-dev or golem-prod. Measure each environment with its actual CPU and memory limits and Blob storage backend before selecting values:
+
+1. Use representative small and large components and realistic deployment bursts. For cold-compilation measurements, confirm compiled-blob cache misses and disable or start with a cold Wasmtime filesystem cache (`engine.enable_fs_cache`). Fresh component revisions alone do not bypass the filesystem cache. Measure warm-cache workloads separately.
+2. Observe `component_compilation_time_seconds` and the pending-request queue. Measure sustained successful compilations and artifact uploads per second over wall-clock time. Download time and upload backpressure affect throughput but are outside the histogram. Choose how much cache-warming delay is useful: validate the time from admission until the artifact is available against the expected first invocation. Use measured throughput and that delay to choose the request capacity. A larger queue does not increase compilation throughput.
+3. Exercise slow Blob storage uploads. Observe `component_compilation_upload_queue_length` and process/pod peak memory with the proposed capacity. The upload queue retains compiled components, which can be much larger than request metadata. In addition to the queue, allow for one component being uploaded, one being processed or waiting for upload-queue space, compilation working memory, download buffers, artifact serialization buffers, Blob storage upload buffers, and runtime overhead. Leave headroom below the pod memory limit.
+4. Run a burst that exceeds the request capacity. Confirm that `component_compilation_enqueue_total{outcome="rejected"}` increases in the registry and that uploads remain responsive. Exercise an unavailable or unresponsive compilation service and confirm the configured enqueue budget bounds the extra upload delay.
+5. Record the component mix, resource limits, compilation durations, sustained throughput, time until artifacts are available, queue peaks, peak memory, enqueue outcomes, and upload latency with the chosen golem-dev and golem-prod settings in the deployment configuration review.
+
+Use process or container memory measurements, such as the platform's working-set/RSS metrics. Do not interpret RSS differences between compilations as precise per-component allocation measurements: allocators, shared compiler threads, and retained artifacts affect them. The compilation-duration histogram measures successful Wasmtime component-build calls. It excludes request-queue wait, component download, compiled-blob cache hits, and artifact upload, but includes Wasmtime filesystem-cache loads when that cache is enabled. The queue gauges exclude in-flight work; a flat queue does not prove progress. Check compilation logs and duration samples as well.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-compilation-service)
 
 ### Golem Router
 
-[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Nginx](https://nginx.org/) proxy for Golem APIs.
+[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Envoy](https://www.envoyproxy.io/) proxy that serves the services on one port, routed by host. Requests for the management host reach the registry service and the management API of the worker service. Requests for every other host reach the custom request port of the worker service, which serves the HTTP API and MCP deployments by domain. Point every name at the router in DNS. The image runs Envoy as uid and gid 65534.
 
-See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-services.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GOLEM_ROUTER_MANAGEMENT_HOST` | Host name of the management API | required |
+| `GOLEM_ROUTER_REGISTRY_SERVICE_HOST`, `GOLEM_ROUTER_REGISTRY_SERVICE_PORT` | Registry service HTTP API | required, `8081` |
+| `GOLEM_ROUTER_WORKER_SERVICE_HOST` | Host of the worker service | required |
+| `GOLEM_ROUTER_WORKER_SERVICE_PORT` | Worker service HTTP API (`port`) | `9005` |
+| `GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT` | Worker service `custom_request_port` | `9006` |
+| `GOLEM_ROUTER_PORT` | Port the router listens on, IPv4 and IPv6 | `8080` |
+| `GOLEM_ROUTER_TRUSTED_HOPS` | Number of proxies in front of the router whose `X-Forwarded-For` and `X-Forwarded-Proto` it trusts | `0` |
+| `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` | Longest time without data on a request or a connection, in seconds | `3600s` |
+| `GOLEM_ROUTER_DNS_REFRESH_RATE` | How often the router resolves the service host names again, in seconds | `10s` |
+| `GOLEM_ROUTER_MAX_CONNECTIONS` | Largest number of open client connections | `50000` |
+| `GOLEM_ROUTER_CONCURRENCY` | Number of Envoy worker threads (`--concurrency`) | `2` |
+| `GOLEM_ROUTER_STATS_PORT` | Port that serves the Prometheus metrics of Envoy at `/stats/prometheus`, IPv4 and IPv6 | none |
+
+The container arguments are added to the arguments of Envoy, for example `--log-level debug`. A `--concurrency` argument replaces `GOLEM_ROUTER_CONCURRENCY`.
+
+Envoy starts one worker thread for each CPU of the host, not for each CPU of the container limit, and each worker thread opens its own connections to the services. Set `GOLEM_ROUTER_CONCURRENCY` to the CPU limit of the container.
+
+With `GOLEM_ROUTER_STATS_PORT`, the router serves `/stats/prometheus` on that port and answers every other path with 404. The Envoy admin interface listens on `127.0.0.1:19000` in the container and is not reachable from outside it. Do not publish the metrics port to the internet; scrape it from inside the deployment.
+
+The router sends HTTP/2 without TLS to the services, so a request that the client cancels is also cancelled in the service. It sends the WebSockets of the management API, `/connect` and the invocation session (`/v1/agents/invoke-agent-session`), to the worker service over HTTP/1.1. HTTP API deployments do not serve WebSockets, so the router answers a WebSocket upgrade for any other host with 403. When a host name resolves to several replicas, the router sends a request to the replica with the fewest open requests. A request has no time limit, so invocations that wait for a result, server-sent events, MCP sessions and websockets stay open for as long as they send data; `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` ends a silent one. The router does not limit the size of a request body; the services apply their own limits. It accepts header names with an underscore and keeps an encoded slash in the path. It resolves the service host names again every `GOLEM_ROUTER_DNS_REFRESH_RATE`, so it follows a service that restarts with a new address, and it starts before the services are resolvable. The router answers `/metrics` on the management host with 404, so the metrics of the services do not reach the clients; scrape the services directly.
+
+The router keeps the original `Host` header, with its port, and sets `X-Forwarded-Host` to the same value. It appends the address of the client to `X-Forwarded-For`, and sets `X-Forwarded-Proto` to its own scheme, `http`. Where TLS ends at a proxy in front of the router, set `GOLEM_ROUTER_TRUSTED_HOPS` to `1`, so that the router keeps the `X-Forwarded-Proto` of that proxy.
+
+Configure worker-service to trust the router's address and reserve the management
+host in the registry. See [HTTP Gateway](/next/operate/http-gateway#configuring-ingress)
+for the forwarding-header contract and
+[domain reservation](/next/operate/http-gateway#serving-http-apis-and-mcp-on-one-port).
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/docker/golem-router-entrypoint.sh), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+
+## Request Limits
+
+Every path into an agent has the same payload limit of 32 MiB: the gRPC message from the worker service to the worker executor, the invocation session WebSocket message, and the REST and MCP request body.
+
+| Setting | Service | Default | Description |
+|---------|---------|---------|-------------|
+| `body_limits.api` | worker service, registry service | `33554432` (32 MiB) | Largest REST request body. A larger body gets `413 Payload Too Large` |
+| `body_limits.mcp` | worker service | `33554432` (32 MiB) | Largest MCP request body |
+| `body_limits.upload` | registry service | `2147483648` (2 GiB) | Largest `multipart/form-data` request body: component and plugin uploads with their initial file archives, and initial agent file uploads |
+| `http_server.http2_max_header_list_size` | worker service, registry service | `65536` (64 KiB) | Largest HTTP/2 header list. A larger header list gets `431 Request Header Fields Too Large` |
+| `http_server.http2_initial_stream_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each request stream |
+| `http_server.http2_initial_connection_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each connection |
+| `http_server.http2_adaptive_window` | worker service, registry service | `false` | Sizes the HTTP/2 windows from the measured bandwidth-delay product, instead of the initial window sizes |
+| `http_server.http2_max_pending_accept_reset_streams` | worker service, registry service | `20` | Streams that the client may reset before the server accepts them, before the server closes the connection (rapid reset protection). Behind a proxy that resets the streams of many clients on a few connections, such as Envoy, a low value closes connections with good requests on them when requests time out. Set it higher there |
+| `http_server.http2_max_local_error_reset_streams` | worker service, registry service | `1024` | Streams that the server may reset because of errors, before it closes the connection |
+| `invocation_session.websocket.max_message_size`, `max_frame_size` | worker service | `33554432` (32 MiB) | Largest WebSocket message and frame of the invocation session. A larger message or frame closes the session with close code 1009 |
+| `invocation_session.websocket.max_write_buffer_size` | worker service | `67108864` (64 MiB) | Outbound bytes that may wait for the client |
+| `connect_websocket.*` | worker service | same as `invocation_session.websocket` | The same limits for the agent event stream (`connect`) |
+
+A request that declares a larger `Content-Length` gets 413 before the service reads its body. A request without `Content-Length` gets 413 when its body passes the limit.
+
+The invocation session and the agent event stream (`connect`) answer a message or frame above their limit with close code 1009. They do not read the payload of a frame whose header declares a larger size.
+
+The HTTP/2 header list limit is above the 60 KiB that Envoy accepts by default, so a gateway in front of Golem decides first. The HTTP/2 settings apply to every HTTP port of the service: for the worker service, `port`, `custom_request_port` and `mcp_port`.
+
+For environment variables, add the path to `GOLEM__`, for example `GOLEM__BODY_LIMITS__API`. For `golem server run`, nest the settings under `worker_service` or `registry_service`, for example `GOLEM__WORKER_SERVICE__BODY_LIMITS__MCP`. The HTTP/2 settings of the `golem server run` listener are `router.http_server`, for example `GOLEM__ROUTER__HTTP_SERVER__HTTP2_MAX_HEADER_LIST_SIZE`.
+
+## Network Addresses
+
+Every service binds all of its listeners to `bind_address` (`GOLEM__BIND_ADDRESS`). The default `0.0.0.0` accepts IPv4 connections only. Set it to `::` on a network that needs IPv6, such as a Fly.io private network or an IPv6-only Railway environment: the service then accepts both IPv6 and IPv4 connections, whatever the operating system's default for IPv6 sockets is. On a host whose kernel has no IPv6 support, binding `::` fails, and the service stops at startup with the address in the error.
+
+The shard manager identifies a worker executor by the address it reaches it at, and by default takes that address from the source IP of the executor's registration. Where the network translates source addresses, that IP is not one the shard manager and the worker services can dial. Set `grpc.advertised_ip` (`GOLEM__GRPC__ADVERTISED_IP`) on each executor to the IP address it is reachable at - on Fly.io, the machine's `FLY_PRIVATE_IP` - and the shard manager uses it for the shard lease and for the quota leases of that executor. Every executor needs an address of its own: two executors that advertise the same address replace each other's registration. An advertised IP address must be of a family the executor's `bind_address` accepts - an advertised IPv6 address needs an IPv6 `bind_address`, usually `::` - and an address that names no single host - unspecified, multicast, broadcast or IPv6 link-local - is refused at startup.
 
 ## Deployment Variants
 

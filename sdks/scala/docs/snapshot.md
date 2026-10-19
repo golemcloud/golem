@@ -1,7 +1,7 @@
 # Snapshotting
 
-Golem supports snapshotting to persist agent state across restarts. The ZIO Golem SDK provides several ways to
-configure snapshotting, from fully automatic JSON-based persistence to custom binary serialization.
+Golem supports snapshotting to persist agent state across restarts. The Golem Scala SDK provides several ways to
+configure snapshotting, from schema-driven JSON persistence to custom binary serialization.
 
 ## Table of Contents
 
@@ -9,6 +9,7 @@ configure snapshotting, from fully automatic JSON-based persistence to custom bi
 - [Snapshotting Modes](#snapshotting-modes)
 - [Automatic JSON Snapshotting with Snapshotted\[S\]](#automatic-json-snapshotting-with-snapshotteds)
 - [Custom Snapshot Hooks](#custom-snapshot-hooks)
+- [Restoration Semantics](#restoration-semantics)
 - [Examples in the Codebase](#examples-in-the-codebase)
 - [Best Practices](#best-practices)
 
@@ -37,7 +38,7 @@ The `snapshotting` parameter accepts the following values:
 | Mode              | Description                                              |
 |-------------------|----------------------------------------------------------|
 | `"disabled"`      | No snapshotting (default when omitted)                   |
-| `"enabled"`       | Snapshot on every successful function call                |
+| `"enabled"`       | Use the server's default policy, which may be disabled      |
 | `"periodic(10s)"` | Snapshot at most once every 10 seconds (duration format)  |
 | `"every(5)"`      | Snapshot every 5 successful function calls               |
 
@@ -90,7 +91,6 @@ final class AutoSnapshotCounterImpl(private val name: String)
     with Snapshotted[CounterState] {
 
   var state: CounterState = CounterState(0)
-  val stateSchema: Schema[CounterState] = Schema.derived
 
   override def increment(): Future[Int] =
     Future.successful {
@@ -98,18 +98,29 @@ final class AutoSnapshotCounterImpl(private val name: String)
       state.value
     }
 }
+
+object AutoSnapshotCounterImpl {
+  def loadSnapshot(
+    state: CounterState,
+    context: SnapshotRestoreContext
+  ): Future[AutoSnapshotCounterImpl] = Future.successful {
+    val instance = new AutoSnapshotCounterImpl(context.identity[String](0))
+    instance.state = state
+    instance
+  }
+}
 ```
 
 The macro detects `Snapshotted[S]` on the implementation class, summons `Schema[S]` at compile time, and generates
-snapshot handlers that serialize/deserialize `state` as JSON using zio-schema's `jsonCodec`. No manual serialization
-code is needed.
+snapshot handlers that serialize/deserialize `state` as JSON. The companion `loadSnapshot` factory receives the
+decoded state and constructs the complete implementation instance. The normal constructor path is not run first.
 
 ---
 
 ## Custom Snapshot Hooks
 
 For agents that need custom binary serialization (e.g., for performance or compatibility), define
-`saveSnapshot()` and `loadSnapshot()` convention methods directly on the implementation class:
+`saveSnapshot()` on the implementation class and `loadSnapshot()` on its companion object:
 
 ```scala
 @agentDefinition(snapshotting = "enabled")
@@ -125,11 +136,6 @@ final class SnapshotCounterImpl(private val name: String) extends SnapshotCounte
   def saveSnapshot(): Future[Array[Byte]] =
     Future.successful(encodeU32(value))
 
-  def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
-    Future.successful {
-      value = decodeU32(bytes)
-    }
-
   override def increment(): Future[Int] =
     Future.successful {
       value += 1
@@ -143,12 +149,21 @@ final class SnapshotCounterImpl(private val name: String) extends SnapshotCounte
       ((i >>> 8) & 0xff).toByte,
       (i & 0xff).toByte
     )
+}
 
-  private def decodeU32(bytes: Array[Byte]): Int =
-    ((bytes(0) & 0xff) << 24) |
-      ((bytes(1) & 0xff) << 16) |
-      ((bytes(2) & 0xff) << 8) |
-      (bytes(3) & 0xff)
+object SnapshotCounterImpl {
+  def loadSnapshot(
+    bytes: Array[Byte],
+    context: SnapshotRestoreContext
+  ): Future[SnapshotCounterImpl] = Future.successful {
+    val instance = new SnapshotCounterImpl(context.identity[String](0))
+    instance.value =
+      ((bytes(0) & 0xff) << 24) |
+        ((bytes(1) & 0xff) << 16) |
+        ((bytes(2) & 0xff) << 8) |
+        (bytes(3) & 0xff)
+    instance
+  }
 }
 ```
 
@@ -157,7 +172,52 @@ The macro detects these convention methods and wires them into the snapshot expo
 **Method signatures:**
 
 - `def saveSnapshot(): Future[Array[Byte]]` — serialize current state to bytes
-- `def loadSnapshot(bytes: Array[Byte]): Future[Unit]` — restore state from bytes
+- Companion `def loadSnapshot(bytes: Array[Byte], context: SnapshotRestoreContext): Future[Impl]` — construct a
+  complete fresh implementation instance
+
+---
+
+## Multipart Snapshots
+
+To project JSON-backed state separately from arbitrary named bytes, use these paired convention methods:
+
+- Instance `def saveSnapshotParts(): Future[MultipartSnapshot]`
+- Companion `def loadSnapshotParts(snapshot: MultipartSnapshot, context: SnapshotRestoreContext): Future[Impl]`
+
+`MultipartSnapshot` holds a JSON AST and `Map[String, SnapshotPart]`, where each part has `bytes: Array[Byte]`
+and `contentType: String`. `MultipartSnapshot.fromState[S: Schema](state, parts)` and `snapshot.decodeState[S]`
+use the existing schema codecs and return `Either[SnapshotError, ...]`.
+`snapshot.requirePart("index", "application/octet-stream")` returns checked bytes in the same error style.
+Use `Future.fromTry(result.toTry)` to lift a complete decode/check/construct operation into the loader.
+The live instance does not need a schema, and no new mixin is required.
+
+Keep normal policy annotations and registration. Incomplete or conflicting hook pairs, including multipart
+combined with explicit byte hooks or `Snapshotted[S]`, fail compilation. Existing simpler modes remain unchanged.
+Binary-only applications use JSON null state; zero-part bundles still emit multipart. Part names are case-sensitive
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`, and content types are bare ASCII MIME types without parameters, normalized lowercase.
+Parts are application-owned bytes, not automatically managed resources. The SDK owns principal-envelope encoding.
+
+Hooks run unpersisted and may be retried. Whole-buffer copies amplify peak memory usage; the host's 64 KiB
+inline/blob-spill threshold is not a snapshot size cap. See the
+[cross-SDK multipart examples](https://learn.golem.cloud/next/develop/snapshotting).
+
+---
+
+## Restoration Semantics
+
+`loadSnapshot` is a specially supported SDK lifecycle operation, not an agent method. It is an alternative to normal
+initialization: the implementation's companion factory receives the snapshot and a `SnapshotRestoreContext`, and it
+must return the complete fresh instance. The SDK installs that instance only after the returned `Future` succeeds.
+
+`SnapshotRestoreContext` provides typed identity fields, the full agent ID, phantom ID, restored principal, and fresh
+configuration. Snapshot loading runs in read-only mode and writes nothing to the oplog. It may decode data, perform
+local computation, read configuration, and use other permitted reads. Mutating host operations and outgoing HTTP or
+agent RPC calls are rejected before they take effect.
+
+If loading fails, the partial instance is discarded. A manual update remains on the previous component version.
+During automatic recovery, Golem rejects the automatic snapshot that failed and starts the agent again. It then tries
+the previous usable automatic snapshot. After that, it uses the snapshot of the last successful manual update or
+snapshot-assisted automatic update. Without one, it replays the full history.
 
 ---
 
@@ -165,7 +225,7 @@ The macro detects these convention methods and wires them into the snapshot expo
 
 | Example                    | Approach              | Description                                     |
 |----------------------------|-----------------------|-------------------------------------------------|
-| `SnapshotCounterImpl`      | Custom hooks          | Manual binary serialization with save/load hooks |
+| `SnapshotCounterImpl`      | Custom hooks          | Instance save plus companion restoration factory |
 | `AutoSnapshotCounterImpl`  | `Snapshotted[S]`      | Automatic JSON serialization via Schema          |
 
 ---
@@ -176,4 +236,4 @@ The macro detects these convention methods and wires them into the snapshot expo
 2. **Keep state in one case class** — bundle all mutable state into a single `var state: S` for clean persistence
 3. **Keep snapshots small** — large snapshots impact component startup time
 4. **Use custom hooks for binary formats** — when you need compact encoding or compatibility with non-Scala components
-5. **Test round-trips** — verify that save → load produces equivalent state
+5. **Test round-trips** — verify that save → load produces equivalent state without normal initialization

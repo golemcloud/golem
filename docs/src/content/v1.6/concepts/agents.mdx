@@ -1,0 +1,286 @@
+import { Callout, Tabs } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
+
+# Agents
+
+An **agent** is the unit of code and state that Golem runs. You define an **agent type**, a class with constructor parameters, state, and methods. Golem runs any number of **agents** of that type, each with its own memory, filesystem, and history. A user, an order, a chat session, a document, or an AI assistant can each be an agent.
+
+## Defining an agent type
+
+An agent type declares its constructor parameters, its methods, and the state its methods work on. This counter keeps a count and exposes two methods:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+import { z } from "zod";
+import { defineAgent, method } from "@golemcloud/golem-ts-sdk";
+
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  id: { name: z.string() },
+  methods: {
+    increment: method({ input: {}, returns: z.number() }),
+    getCount: method({ input: {}, returns: z.number(), readOnly: true }),
+  },
+});
+
+export const CounterAgentImpl = CounterAgent.implement({
+  init: () => ({ count: 0 }),
+  methods: {
+    increment() {
+      this.count += 1;
+      return this.count;
+    },
+    getCount() {
+      return this.count;
+    },
+  },
+});
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+import { Effect, Ref, Schema } from "effect";
+import { defineAgent, method } from "@golemcloud/effect-golem";
+
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  methods: {
+    increment: method({ input: {}, success: Schema.Number }),
+    getCount: method({ input: {}, success: Schema.Number, readOnly: true }),
+  },
+}).implement({
+  init: () => Ref.make({ count: 0 }),
+  methods: (state) => ({
+    increment: () =>
+      Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
+        Effect.map(({ count }) => count),
+      ),
+    getCount: () => Ref.get(state).pipe(Effect.map(({ count }) => count)),
+  }),
+});
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+use golem_rust::{agent_definition, agent_implementation, read_only};
+
+#[agent_definition]
+pub trait CounterAgent {
+    fn new(name: String) -> Self;
+
+    fn increment(&mut self) -> u32;
+
+    #[read_only]
+    fn get_count(&self) -> u32;
+}
+
+struct CounterAgentImpl {
+    _name: String,
+    count: u32,
+}
+
+#[agent_implementation]
+impl CounterAgent for CounterAgentImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name, count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn get_count(&self) -> u32 {
+        self.count
+    }
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+import golem.BaseAgent
+import golem.runtime.annotations.{agentDefinition, agentImplementation, readOnly}
+
+import scala.concurrent.Future
+
+@agentDefinition()
+trait CounterAgent extends BaseAgent {
+  class Id(val name: String)
+
+  def increment(): Future[Int]
+
+  @readOnly
+  def getCount(): Future[Int]
+}
+
+@agentImplementation()
+final class CounterAgentImpl(private val name: String) extends CounterAgent {
+  private var count: Int = 0
+
+  override def increment(): Future[Int] =
+    Future.successful {
+      count += 1
+      count
+    }
+
+  override def getCount(): Future[Int] =
+    Future.successful(count)
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+#derive.agent
+struct CounterAgent {
+  name : String
+  mut count : UInt64
+}
+
+fn CounterAgent::new(name : String) -> CounterAgent {
+  { name, count: 0 }
+}
+
+pub fn CounterAgent::increment(self : Self) -> UInt64 {
+  self.count += 1
+  self.count
+}
+
+#derive.read_only
+pub fn CounterAgent::get_count(self : Self) -> UInt64 {
+  self.count
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+// agents/counter/counter.go
+package counter
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
+
+var (
+	Increment = Agent.Method[golem.Unit, int64]("increment")
+	GetCount  = Agent.Method[golem.Unit, int64]("getCount", golem.ReadOnly())
+)
+
+// agents/counter/impl/impl.go
+package impl
+
+import (
+	"myapp/agents/counter"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type state struct{ count int64 }
+
+var agent = counter.Agent.Implement(func(counter.ID) *state { return &state{} })
+
+func init() {
+	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		ctx.State.count++
+		return ctx.State.count
+	})
+	agent.Handle(counter.GetCount, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		return ctx.State.count
+	})
+}
+```
+  </Tabs.Tab>
+</Tabs>
+
+The state is an ordinary field. There is no database call and no save step: Golem keeps the state durable, as described in [Durable execution](/v1.6/concepts/durable-execution).
+
+You build one or more agent types into a **component**, the WebAssembly binary that you deploy. An **application** is a set of components plus a `golem.yaml` manifest, deployed to an **environment** such as `local` or `prod`.
+
+## Agent identity
+
+An agent is identified by its agent type and its constructor arguments. These are two different agents, each with its own count:
+
+```text
+CounterAgent("alice")
+CounterAgent("bob")
+```
+
+Every call to `CounterAgent("alice")` reaches the same agent, whether it comes from the CLI, an HTTP endpoint, or another agent. Golem creates an agent the first time it is called; there is no separate "create" step, and deploying an application does not start any agents.
+
+From the command line:
+
+```shell
+golem agent invoke 'CounterAgent("alice")' increment
+```
+
+Choose constructor parameters to match the thing the agent represents. One agent per user keeps a user's state in one place; one agent per conversation gives each conversation its own state. In a multi-tenant application, include the tenant in the constructor parameters, as in `ReportAgent("acme", "q3")`, so each tenant's agents have separate memory and files.
+
+## What each agent owns
+
+Each agent has its own:
+
+- **Memory.** No other agent can read or change it.
+- **Filesystem.** Files are private to the agent. The manifest can seed new agents with initial files.
+- **Oplog.** A durable log of everything the agent has done, used for recovery and inspection.
+- **Permissions.** A wallet of permission cards that decides which effects the agent may perform. See [Permissions](/v1.6/concepts/permissions).
+- **Configuration and secrets**, as declared in the manifest.
+
+Agents share data only deliberately: by calling each other's methods, or through PostgreSQL or MySQL databases, key-value stores, and blob storage that their permissions allow. Agents written in TypeScript, Effect, and Rust can also use an embedded SQLite database that belongs to the agent.
+
+## One invocation at a time
+
+An agent handles one method call at a time, in order, so its code needs no locks. Other calls wait in the agent's queue. For parallel work, use more agents, such as one per user or per task.
+
+For long-running work, such as an agent loop that runs for minutes, a common design is to run the work in its own agent, started with a trigger call, and report progress through a stream or a read-only method, so the agent that users talk to stays responsive. `golem agent interrupt` pauses a running agent; the interrupted call continues when the agent is next used.
+
+A method marked **read-only**, such as `getCount` above, can be answered from a cache: when a cached result exists, the call returns it without waiting in the queue; otherwise the method runs in the queue like any other call. Golem rejects outgoing HTTP, calls to other agents, and storage writes inside a read-only method. It does not stop the method from changing fields or files, so keep read-only methods free of side effects.
+
+## Durable and ephemeral agents
+
+| Mode | Behavior | Typical use |
+|---|---|---|
+| **Durable** (default) | State, files, and in-progress work survive failures and persist between calls. | Users, orders, conversations, long-running tasks |
+| **Ephemeral** | Every call gets a fresh instance; nothing persists after the call. | Stateless request handlers |
+
+The mode is set on the agent type. A durable counter called three times returns 1, 2, 3; the same counter as an ephemeral agent returns 1, 1, 1.
+
+Only durable agents can take [snapshots](/v1.6/develop/snapshotting). An ephemeral agent has no state to save, so the SDKs refuse an ephemeral agent definition that enables snapshotting.
+
+A caller can also create a **phantom** agent: a separate agent with the same constructor arguments, distinguished by a generated ID. Phantoms are useful for running several independent copies of the same job.
+
+## How agents are isolated
+
+Each agent runs as its own WebAssembly instance. Many agents share one Golem server process, with no container or virtual machine per agent, so each agent is lightweight.
+
+<ThemedImage
+  lightSrc="/images/getting-started/agent-isolation-light.webp"
+  darkSrc="/images/getting-started/agent-isolation-dark.webp"
+  alt={`Three agents, CounterAgent("alice"), CounterAgent("bob"), and CounterAgent("carol"), each with its own memory, files, oplog, and wallet, run in one shared Golem host process that loads each component's compiled code once. Each agent reaches files, network, other agents, and tools only through host imports, and the host checks every gated import against that agent's cards.`}
+  caption="Each agent has private memory and reaches the outside world only through the Golem host."
+  width={1536}
+  height={1024}
+/>
+
+WebAssembly gives each agent its own memory, and an agent can reach files, the network, other agents, or tools only through calls to the Golem host. The host checks each of those calls against the agent's permissions. Per-agent memory limits apply. Per-agent disk quota enforcement requires the `ManagedXfs` filesystem backend. The `ReflinkXfs` and APFS backends do not account for or enforce per-agent disk quotas. See [Filesystem snapshots](/v1.6/operate/filesystem_snapshots) for backend requirements and operational limits.
+
+TypeScript and Effect agents, and Scala agents compiled with Scala.js, run on a JavaScript runtime built on QuickJS and compiled to WebAssembly, not on Node.js. It provides `fetch`, web streams, and Node-compatible core modules, so most plain-JavaScript npm packages work; packages with native addons do not. Rust, MoonBit, and Go agents compile directly to WebAssembly.
+
+<Callout type="info">
+  No agent can start a host process or load a native library. To run a shell, Node.js, npm, or
+  the TypeScript compiler, an agent calls the corresponding [tool](/v1.6/concepts/tools).
+</Callout>
+
+## Next
+
+[Durable execution](/v1.6/concepts/durable-execution): how Golem keeps an agent's state and in-progress work through failures.
+
+Related guides:
+
+- [Defining agents and components](/v1.6/develop/defining-components)
+- [Agent filesystem](/v1.6/develop/agent-filesystem)
+- [Embedded databases](/v1.6/develop/embedded-databases)
+- [JavaScript APIs](/v1.6/js-apis)

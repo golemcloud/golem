@@ -1,20 +1,40 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-import { WasmRpc } from 'golem:agent/host@2.0.0';
-import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import { WasmRpc, type RpcError as AgentRpcError } from 'golem:agent/host@2.0.0';
+import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
+import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
+import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
-import { bridge } from '../src';
+import { bridge, s, type PermissionCard, PolymorphicPermissionCard } from '../src';
+import { compileSchema } from '../src/schema/adapter';
+import {
+  fakeRawCard,
+  permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
+  rawOfPermissionCard,
+  scopeCardFromRaw,
+} from './permissionCardTestSupport';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
 
 const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
+const streamFailures = [
+  { tag: 'cancelled' },
+  { tag: 'abandoned' },
+  { tag: 'resource-exhausted' },
+  { tag: 'failed', val: 'source failed' },
+] satisfies ByteStreamFailure[];
 
 describe('public bridge runtime', () => {
-  it('validates both the graph and value of typed schema values', () => {
+  it('validates equivalent cross-graph schemas and their values', () => {
     const stringGraph = graph(bridge.t.string());
     const otherStringGraph = graph(
       bridge.schemaType({ tag: 'string' }, { ...bridge.emptyMetadata(), doc: 'different schema' }),
     );
+    const referencedStringGraph = {
+      defs: new Map([['example.String', { name: 'DisplayString', body: bridge.t.string() }]]),
+      root: bridge.schemaType({ tag: 'ref', id: 'example.String' }),
+    };
 
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
@@ -27,7 +47,13 @@ describe('public bridge runtime', () => {
         graph: otherStringGraph,
         value: bridge.v.string('structurally compatible with the expected value'),
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      bridge.typedSchemaValueConforms(stringGraph, {
+        graph: referencedStringGraph,
+        value: bridge.v.string('referenced schema'),
+      }),
+    ).toBe(true);
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
         graph: stringGraph,
@@ -124,46 +150,281 @@ describe('public bridge runtime', () => {
       value: bridge.v.string('ok'),
     });
     vi.mocked(ToolRpc).mockImplementationOnce(
-      () => ({ invokeAndAwait: vi.fn(() => ({ result: wire })) }) as never,
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => Promise.resolve({ result: wire }),
+            cancel: vi.fn(),
+          })),
+        }) as never,
     );
-    const result = await runtime.invokeAndAwait(['status'], {
-      graph: { defs: new Map(), root: bridge.t.tuple([]) },
-      value: bridge.v.tuple([]),
-    });
+    const invocation = runtime.start(
+      ['status'],
+      {
+        graph: { defs: new Map(), root: bridge.t.tuple([]) },
+        value: bridge.v.tuple([]),
+      },
+      undefined,
+      false,
+    );
+    const result = await bridge.resultFromSettledToolResult(invocation.settledResult);
     expect(result.result?.value).toEqual(bridge.v.string('ok'));
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
 
-  it('closes stdout exactly once when structured tool result decoding fails', async () => {
+  it('keeps tool RPC construction failures recoverable before opening stream attachments', () => {
+    const error = { tag: 'protocol-error', val: 'invalid tool name' } as const;
+    vi.mocked(ToolRpc).mockImplementationOnce(() => {
+      throw error;
+    });
+    const transport = bridge.createToolClientTransport('invalid name');
+
+    let failure: unknown;
+    try {
+      transport.start([], {} as never, undefined, false);
+    } catch (caught) {
+      failure = caught;
+    }
+
+    expect(failure).toBe(error);
+    expect(createStdin).not.toHaveBeenCalled();
+  });
+
+  it('stops a blocked stdin source when the host closes consumption', async () => {
+    let closeConsumption!: () => void;
+    const consumptionClosed = new Promise<void>((resolve) => {
+      closeConsumption = resolve;
+    });
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => consumptionClosed) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const cancelSource = vi.fn();
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const source = new ReadableStream<Uint8Array>({
+      pull() {
+        markReadStarted();
+        return new Promise(() => undefined);
+      },
+      cancel: cancelSource,
+    });
+
+    bridge.createToolClientTransport('blocked-stdin').start([], {} as never, source, false);
+    await readStarted;
+    closeConsumption();
+
+    await vi.waitFor(() => expect(cancelSource).toHaveBeenCalledOnce(), { timeout: 100 });
+  });
+
+  it('starts the stdin pump before result completion and skips empty source chunks', async () => {
+    const callOrder: string[] = [];
+    const getResult = vi.fn(() => {
+      callOrder.push('result');
+      return new Promise<never>(() => {});
+    });
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: getResult,
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array());
+        controller.enqueue(Uint8Array.of(1, 2));
+        controller.close();
+      },
+    });
+    const getReader = source.getReader.bind(source);
+    vi.spyOn(source, 'getReader').mockImplementationOnce(() => {
+      callOrder.push('stdin');
+      return getReader();
+    });
+
+    bridge.createToolClientTransport('empty-stdin-chunk').start([], {} as never, source, false);
+
+    expect(callOrder).toEqual(['stdin', 'result']);
+    await vi.waitFor(() => expect(writer.finish).toHaveBeenCalledOnce());
+    expect(writer.write).toHaveBeenCalledOnce();
+    expect(writer.write).toHaveBeenCalledWith(Uint8Array.of(1, 2));
+    expect(writer.fail).not.toHaveBeenCalled();
+  });
+
+  it.each(streamFailures)('preserves a typed $tag stdin source failure', async (failure) => {
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new bridge.ToolStreamError(failure));
+      },
+    });
+
+    bridge.createToolClientTransport('failed-stdin').start([], {} as never, source, false);
+
+    await vi.waitFor(() => expect(writer.fail).toHaveBeenCalledWith(failure));
+  });
+
+  it('maps an unknown stdin source exception to generic failure', async () => {
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error('unknown source failure'));
+      },
+    });
+
+    bridge.createToolClientTransport('failed-stdin').start([], {} as never, source, false);
+
+    await vi.waitFor(() =>
+      expect(writer.fail).toHaveBeenCalledWith({
+        tag: 'failed',
+        val: 'unknown source failure',
+      }),
+    );
+  });
+
+  it('forwards cancellation to a transport invocation whose cancel method uses its receiver', () => {
+    const rawInvocation = {
+      cancelled: false,
+      settledResult: new Promise<never>(() => {}),
+      cancel() {
+        this.cancelled = true;
+      },
+    };
+    const runtime = bridge.createToolClientRuntime('receiver-bound-cancel', {
+      start: () => rawInvocation,
+    });
+
+    runtime
+      .start(
+        [],
+        {
+          graph: { defs: new Map(), root: bridge.t.tuple([]) },
+          value: bridge.v.tuple([]),
+        },
+        undefined,
+        false,
+      )
+      .cancel();
+
+    expect(rawInvocation.cancelled).toBe(true);
+  });
+
+  it('keeps stdout independently consumable when structured result decoding fails', async () => {
     const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
-    const stdout: AsyncIterable<number> = {
+    const next = vi
+      .fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: { tag: 'ok', val: Uint8Array.of(1, 2) },
+      })
+      .mockResolvedValue({ done: true, value: undefined });
+    const stdout = {
       [Symbol.asyncIterator]: () => ({
-        next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        next,
         return: close,
       }),
     };
     const runtime = bridge.createToolClientRuntime('broken-result', {
-      invokeAndAwait: () => ({
-        result: {
-          graph: { typeNodes: [], defs: [], root: 0 },
-          value: { valueNodes: [], root: 0 },
-        },
+      start: () => ({
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: {
+            result: {
+              graph: { typeNodes: [], defs: [], root: 0 },
+              value: { valueNodes: [], root: 0 },
+            },
+          },
+        }),
         stdout,
+        cancel: vi.fn(),
       }),
     });
 
-    await expect(
-      runtime.invokeAndAwait([], {
+    const invocation = runtime.start(
+      [],
+      {
         graph: { defs: new Map(), root: bridge.t.tuple([]) },
         value: bridge.v.tuple([]),
-      }),
-    ).rejects.toThrow();
-    expect(close).toHaveBeenCalledOnce();
+      },
+      undefined,
+      true,
+    );
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).rejects.toThrow();
+    const chunks = [];
+    for await (const item of invocation.stdout!) chunks.push(item);
+    expect(chunks).toEqual([{ tag: 'ok', val: Uint8Array.of(1, 2) }]);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('transfers stdout ownership when structured tool result decoding succeeds', async () => {
     const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
-    const stdout: AsyncIterable<number> = {
+    const stdout = {
       [Symbol.asyncIterator]: () => ({
         next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
         return: close,
@@ -174,15 +435,29 @@ describe('public bridge runtime', () => {
       value: bridge.v.string('ok'),
     };
     const runtime = bridge.createToolClientRuntime('valid-result', {
-      invokeAndAwait: () => ({ result: bridge.typedSchemaValueToWit(typed), stdout }),
+      start: () => ({
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: { result: bridge.typedSchemaValueToWit(typed) },
+        }),
+        stdout,
+        cancel: vi.fn(),
+      }),
     });
 
-    await expect(
-      runtime.invokeAndAwait([], {
+    const invocation = runtime.start(
+      [],
+      {
         graph: { defs: new Map(), root: bridge.t.tuple([]) },
         value: bridge.v.tuple([]),
-      }),
-    ).resolves.toEqual({ result: typed, stdout });
+      },
+      undefined,
+      true,
+    );
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).resolves.toEqual({
+      result: typed,
+    });
+    expect(invocation.stdout).toBe(stdout);
     expect(close).not.toHaveBeenCalled();
   });
 
@@ -195,11 +470,14 @@ describe('public bridge runtime', () => {
       bridge.splitToolRpcError(
         {
           tag: 'remote-tool-error',
-          val: { tag: 'custom-error', val: bridge.typedSchemaValueToWit(typed) },
+          val: {
+            tag: 'custom-error',
+            val: { name: 'failed', payload: bridge.typedSchemaValueToWit(typed) },
+          },
         },
-        (payload) => payload.value,
+        (name, payload) => ({ name, value: payload.value }),
       ),
-    ).toEqual({ tag: 'tool', error: bridge.v.string('bad') });
+    ).toEqual({ tag: 'tool', error: { name: 'failed', value: bridge.v.string('bad') } });
     expect(bridge.splitToolRpcError({ tag: 'denied', val: 'no' }, () => 'unused')).toEqual({
       tag: 'rpc',
       error: { tag: 'denied', val: 'no' },
@@ -211,15 +489,18 @@ describe('public bridge runtime', () => {
       tag: 'remote-tool-error',
       val: {
         tag: 'custom-error',
-        val: bridge.typedSchemaValueToWit({
-          graph: { defs: new Map(), root: bridge.t.string() },
-          value: bridge.v.string('bad'),
-        }),
+        val: {
+          name: 'failed',
+          payload: bridge.typedSchemaValueToWit({
+            graph: { defs: new Map(), root: bridge.t.string() },
+            value: bridge.v.string('bad'),
+          }),
+        },
       },
     } satisfies RpcError;
     for (const error of [custom, { tag: 'denied', val: 'no' } satisfies RpcError]) {
       expect(bridge.isRpcError(error)).toBe(true);
-      expect(bridge.splitToolRpcError(error, (payload) => payload.value).tag).toBe(
+      expect(bridge.splitToolRpcError(error, (_name, payload) => payload.value).tag).toBe(
         error === custom ? 'tool' : 'rpc',
       );
     }
@@ -253,7 +534,7 @@ describe('public bridge runtime', () => {
   it('does not classify malformed custom-error typed payloads as host RPC errors', () => {
     const malformed = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: { graph: null, value: null } },
+      val: { tag: 'custom-error', val: { name: 'broken', payload: { graph: null, value: null } } },
     };
 
     expect(bridge.isRpcError(malformed)).toBe(false);
@@ -273,15 +554,131 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'secret', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(true);
     expect(payload.value.valueNodes[0].val).toBe(raw);
-    expect(bridge.splitToolRpcError(error, (decoded) => decoded.value.tag)).toEqual({
+    expect(bridge.splitToolRpcError(error, (_name, decoded) => decoded.value.tag)).toEqual({
       tag: 'tool',
       error: 'secret',
     });
+  });
+
+  it('forwards an SDK-owned permission card through the generated-client bridge exactly once', () => {
+    const raw = fakeRawCard({ id: 'imported-card' }) as never;
+    const lifted = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'permission-card-handle', val: raw }],
+      root: 0,
+    });
+    const card = compileSchema(s.permissionCard({ polymorphic: false })).fromValue(
+      lifted,
+    ) as PermissionCard;
+    const encoded = bridge.schemaValueToWit(bridge.permissionCardToSchemaValue(card));
+    expect(encoded.valueNodes[encoded.root]).toEqual({ tag: 'permission-card-handle', val: raw });
+    expect(card.isMoved()).toBe(true);
+    expect(() => bridge.schemaValueToWit(bridge.permissionCardToSchemaValue(card))).toThrow(
+      /already transferred/,
+    );
+  });
+
+  it('keeps bridge capability conversions opaque and affine', () => {
+    const assertOpaque = (handle: unknown) => {
+      expect((handle as { take?: unknown }).take).toBeUndefined();
+      expect((handle as { withHandle?: unknown }).withHandle).toBeUndefined();
+      expect((handle as { isPresent?: unknown }).isPresent).toBeUndefined();
+    };
+
+    const secretRaw = { id: 'secret' } as never;
+    const secret = bridge.secretHandleToSchemaValue(secretRaw);
+    assertOpaque(secret.handle);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'secret-value', val: secretRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    expect(bridge.secretHandleFromSchemaValue(secret)).toBe(secretRaw);
+    expect(() => bridge.secretHandleFromSchemaValue(secret)).toThrow(/already consumed/);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).not.toThrow();
+
+    const cardRaw = fakeRawCard({ id: 'permission-card' }) as never;
+    const ownerCard = permissionCardFromRaw(cardRaw);
+    const card = bridge.permissionCardToSchemaValue(ownerCard);
+    if (card.tag !== 'permission-card') throw new Error('expected permission-card');
+    assertOpaque(card.handle);
+    expect(() => permissionCardFromRaw(cardRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'permission-card-handle', val: cardRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    // Decoding never moves the resource of a card into a second card.
+    expect(() => bridge.permissionCardFromSchemaValue(card)).toThrow(
+      /already held by another card/,
+    );
+    expect(rawOfPermissionCard(ownerCard)).toBe(cardRaw);
+    const lowered = bridge.schemaValueToWit(card);
+    expect(ownerCard.isMoved()).toBe(true);
+    expect(
+      rawOfPermissionCard(bridge.permissionCardFromSchemaValue(bridge.schemaValueFromWit(lowered))),
+    ).toBe(cardRaw);
+
+    const quotaRaw = { id: 'quota-token' } as never;
+    const quotaValue = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+      root: 0,
+    });
+    expect(quotaValue.tag).toBe('quota-token');
+    if (quotaValue.tag !== 'quota-token') throw new Error('expected quota-token');
+    assertOpaque(quotaValue.handle);
+    const quotaAliasTree = {
+      valueNodes: [{ tag: 'quota-token-handle' as const, val: quotaRaw }],
+      root: 0,
+    };
+    expect(() => bridge.schemaValueFromWit(quotaAliasTree)).toThrow(/already owned/);
+
+    let fakeKey: unknown;
+    const fakeToken = {
+      _toSchemaValue: (key: unknown) => {
+        fakeKey = key;
+        return quotaValue;
+      },
+    } as never;
+    expect(() => bridge.quotaTokenToSchemaValue(fakeToken)).toThrow(/invalid quota token/);
+    expect(fakeKey).toBeUndefined();
+
+    let intercepted = false;
+    const quotaClass = bridge.QuotaToken as unknown as Record<string, unknown>;
+    const quotaPrototype = bridge.QuotaToken.prototype as unknown as Record<string, unknown>;
+    quotaClass._fromSchemaValue = () => {
+      intercepted = true;
+    };
+    quotaPrototype._toSchemaValue = () => {
+      intercepted = true;
+    };
+    try {
+      const token = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const alias = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const encoded = bridge.quotaTokenToSchemaValue(token);
+      expect(intercepted).toBe(false);
+      const wire = bridge.schemaValueToWit(encoded);
+      expect(() =>
+        bridge.schemaValueFromWit({
+          valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+          root: 0,
+        }),
+      ).toThrow(/already owned/);
+      expect(bridge.schemaValueFromWit(wire).tag).toBe('quota-token');
+      expect(() => bridge.schemaValueToWit(bridge.quotaTokenToSchemaValue(alias))).toThrow(
+        /already transferred/,
+      );
+    } finally {
+      delete quotaClass._fromSchemaValue;
+      delete quotaPrototype._toSchemaValue;
+    }
   });
 
   it('rejects custom-error payloads whose rich value records are malformed', () => {
@@ -297,7 +694,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(() => bridge.typedSchemaValueFromWit(payload)).toThrow();
@@ -325,7 +722,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect.soft(bridge.isRpcError(error)).toBe(false);
@@ -345,7 +742,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(false);
@@ -367,8 +764,78 @@ describe('public bridge runtime', () => {
       },
     });
     await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
-      _tag: 'RemoteCallError',
+      _tag: 'RemoteOutputError',
       message: expect.stringContaining('.broken returned an invalid schema value'),
+    });
+  });
+
+  it.each<{
+    raw: AgentRpcError;
+    mapped: bridge.RemoteCallErrorCause;
+  }>([
+    {
+      raw: { tag: 'protocol-error', val: 'bad protocol' },
+      mapped: { tag: 'protocol-error', details: 'bad protocol' },
+    },
+    {
+      raw: { tag: 'denied', val: 'not allowed' },
+      mapped: { tag: 'denied', details: 'not allowed' },
+    },
+    {
+      raw: { tag: 'not-found', val: 'missing target' },
+      mapped: { tag: 'not-found', details: 'missing target' },
+    },
+    {
+      raw: { tag: 'remote-internal-error', val: 'remote failure' },
+      mapped: { tag: 'remote-internal-error', details: 'remote failure' },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-input', val: 'bad input' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-input', details: 'bad input' },
+      },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-method', val: 'bad method' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-method', details: 'bad method' },
+      },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-type', val: 'bad type' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-type', details: 'bad type' },
+      },
+    },
+    {
+      raw: {
+        tag: 'remote-agent-error',
+        val: { tag: 'invalid-agent-id', val: 'bad agent id' },
+      },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-agent-id', details: 'bad agent id' },
+      },
+    },
+  ])('maps $raw.tag agent RPC failures to the public cause model', async ({ raw, mapped }) => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockRejectedValue(raw),
+        cancel: vi.fn(),
+      },
+    });
+
+    await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
+      _tag: 'RemoteCallError',
+      cause: mapped,
     });
   });
 
@@ -381,7 +848,10 @@ describe('public bridge runtime', () => {
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
-    expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
+    const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
+    expect(scheduled).toStrictEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 
@@ -429,6 +899,213 @@ describe('public bridge runtime', () => {
     expect(streamNode).toMatchObject({ tag: 'stream-value' });
     expect(streamNode.val).toMatchObject({ reader: source });
   });
+
+  it('aborts during native wrapping before starting RPC and disposes the wrapped input', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const dispose = vi.fn();
+    const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
+    let release!: (stream: SchemaValueStream) => void;
+    const wrap = vi.spyOn(SchemaValueStream, 'wrap').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const reason = new Error('aborted while wrapping');
+    const stream = bridge.AgentStream.from<number>([]);
+    const codec: bridge.SchemaCodec = {
+      graph: graph(bridge.t.u32()),
+      toValue: (value) => bridge.v.u32(value as number),
+      fromValue: () => 0,
+    };
+    try {
+      const pending = bridge.withNativeStreamScope(
+        () => bridge.v.stream(bridge.agentStreamToHandle(stream, codec)),
+        (value) => remote.invokeAndAwait('consume', value, controller.signal),
+      );
+      await vi.waitFor(() => expect(wrap).toHaveBeenCalledOnce());
+      controller.abort(reason);
+      release(wrapped);
+      await expect(pending).rejects.toBe(reason);
+      expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      await expect(stream.next()).rejects.toThrow('transferred');
+    } finally {
+      wrap.mockRestore();
+    }
+  });
+
+  it('lifts only host permission-card resources and gives a lifted handle to one card', () => {
+    // Authority stays host-enforced: the decode paths of the public bridge never turn
+    // plain data into a card, and never wrap one lifted handle in two card objects.
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'permission-card-handle', val: { forged: true } as never }],
+        root: 0,
+      }),
+    ).toThrow(/not a host permission-card resource/);
+
+    const raw = fakeRawCard({ id: 'lifted-once' }) as never;
+    const lifted = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'permission-card-handle', val: raw }],
+      root: 0,
+    });
+    const card = bridge.permissionCardFromSchemaValue(lifted);
+    expect(rawOfPermissionCard(card)).toBe(raw);
+    expect(() => bridge.permissionCardFromSchemaValue(lifted)).toThrow(
+      /already held by another card/,
+    );
+    expect(() => bridge.permissionCardToSchemaValue({} as PermissionCard)).toThrow(
+      /Expected a PermissionCard/,
+    );
+  });
+
+  it('keeps polymorphic bridge conversions to template cards', () => {
+    const raw = fakeRawCard({ id: 'template-card' }) as never;
+    const template = polymorphicPermissionCardFromRaw(raw);
+    const concrete = permissionCardFromRaw(fakeRawCard({ id: 'concrete-card' }));
+    expect(() =>
+      bridge.polymorphicPermissionCardToSchemaValue(
+        concrete as unknown as PolymorphicPermissionCard,
+      ),
+    ).toThrow(/Expected a PolymorphicPermissionCard/);
+    expect(() => bridge.permissionCardToSchemaValue(template as unknown as PermissionCard)).toThrow(
+      /Expected a PermissionCard/,
+    );
+
+    const value = bridge.polymorphicPermissionCardToSchemaValue(template);
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(value)).toThrow(
+      /already held by another card/,
+    );
+    const lifted = bridge.schemaValueFromWit(bridge.schemaValueToWit(value));
+    expect(template.isMoved()).toBe(true);
+    const decoded = bridge.polymorphicPermissionCardFromSchemaValue(lifted);
+    expect(decoded).toBeInstanceOf(PolymorphicPermissionCard);
+    expect(rawOfPermissionCard(decoded)).toBe(raw);
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(lifted)).toThrow(
+      /already held by another card/,
+    );
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(bridge.v.bool(true))).toThrow(
+      /Expected a permission-card schema value/,
+    );
+  });
+
+  it('checks the scope card before moving argument cards and gives them back on early failure', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const card = permissionCardFromRaw(fakeRawCard({ id: 'argument-card' }));
+    const template = polymorphicPermissionCardFromRaw(fakeRawCard({ id: 'template-argument' }));
+    const params = () =>
+      bridge.v.record([
+        bridge.permissionCardToSchemaValue(card),
+        bridge.polymorphicPermissionCardToSchemaValue(template),
+      ]);
+
+    const released = scopeCardFromRaw(fakeRawCard({ id: 'released-scope' }));
+    released.release();
+    await expect(remote.invokeAndAwait('run', params(), undefined, released)).rejects.toThrow(
+      /already been released/,
+    );
+    expect(card.isMoved()).toBe(false);
+    await expect(
+      remote.invokeAndAwait('run', params(), undefined, card as unknown as bridge.ScopeCard),
+    ).rejects.toThrow(/expected a ScopeCard/);
+    expect(card.isMoved()).toBe(false);
+
+    // Aborting while the input is encoded fails before the host call; the lowered
+    // argument card goes back to its card instead of being disposed.
+    const controller = new AbortController();
+    const scope = scopeCardFromRaw(fakeRawCard({ id: 'live-scope' }));
+    const pending = remote.invokeAndAwait('run', params(), controller.signal, scope);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(card.isMoved()).toBe(false);
+    expect(rawOfPermissionCard(card)).toMatchObject({ id: 'argument-card' });
+    expect(template.isMoved()).toBe(false);
+    expect(rawOfPermissionCard(template)).toMatchObject({ id: 'template-argument' });
+    expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+    expect(scope.isMoved()).toBe(false);
+  });
+
+  it('disposes all still-owned WIT resources after partial RPC start lowering fails', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const resources = Array.from({ length: 4 }, () => ({
+      owned: true,
+      drop: vi.fn(),
+      [Symbol.dispose]() {
+        if (this.owned) {
+          this.owned = false;
+          this.drop();
+        }
+      },
+    }));
+    Object.setPrototypeOf(resources[3], Object.getPrototypeOf(fakeRawCard()));
+    // A cleanup failure must not prevent disposal of later siblings.
+    resources[1].drop.mockImplementation(() => {
+      throw new Error('cleanup');
+    });
+    const params = bridge.schemaValueFromWit({
+      valueNodes: [
+        { tag: 'stream-value', val: resources[0] },
+        { tag: 'secret-value', val: resources[1] },
+        { tag: 'quota-token-handle', val: resources[2] },
+        { tag: 'permission-card-handle', val: resources[3] },
+        { tag: 'record-value', val: [0, 1, 2, 3] },
+      ],
+      root: 4,
+    } as unknown as SchemaValueTree);
+    const reason = new Error('native lowering failed');
+    rpc.asyncInvokeAndAwait.mockImplementation(() => {
+      resources[0].owned = false; // Native take_handle's consumed sentinel.
+      throw reason;
+    });
+    const unwrap = vi.spyOn(SchemaValueStream, 'unwrap');
+    try {
+      await expect(remote.invokeAndAwait('consume', params)).rejects.toBe(reason);
+      expect(resources[0].drop).not.toHaveBeenCalled();
+      for (const resource of resources.slice(1)) expect(resource.drop).toHaveBeenCalledOnce();
+      expect(unwrap).not.toHaveBeenCalled();
+    } finally {
+      unwrap.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    'cleans prewrapped forwarded inputs only when RPC start fails (%s)',
+    async (fails) => {
+      const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+      const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+        asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      };
+      const dispose = vi.fn();
+      const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
+      const params = bridge.v.stream(
+        new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: wrapped }),
+      );
+      const reason = new Error('start failed');
+      rpc.asyncInvokeAndAwait.mockImplementation(() => {
+        if (fails) throw reason;
+        return { metadata: {}, future: { get: async () => undefined, cancel: vi.fn() } };
+      });
+      const pending = remote.invokeAndAwait('forward', params);
+      if (fails) {
+        await expect(pending).rejects.toBe(reason);
+        expect(dispose).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).resolves.toBeUndefined();
+        expect(dispose).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(['invoke', 'schedule'] as const)(
     'rejects native streams at the non-awaited %s boundary',

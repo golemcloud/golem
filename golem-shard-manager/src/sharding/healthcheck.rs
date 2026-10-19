@@ -34,7 +34,28 @@ pub async fn get_unhealthy_executors(
     health_check: &Arc<dyn HealthCheck>,
     executors: &[(ExecutorId, ExecutorAddr, Option<String>)],
 ) -> HashSet<ExecutorId> {
-    let futures: Vec<_> = executors
+    get_unhealthy_executors_within(health_check, executors, None)
+        .await
+        .unhealthy
+}
+
+/// What a health check of several executors found by the time it ended.
+pub struct HealthCheckOutcome {
+    /// The executors that answered that they are unhealthy.
+    pub unhealthy: HashSet<ExecutorId>,
+    /// How many executors had not answered when the time ran out.
+    pub unfinished: usize,
+}
+
+/// Like [`get_unhealthy_executors`], but stops waiting after `limit` and keeps what it found by
+/// then: an executor that answered "unhealthy" is reported as such, and only the ones that had not
+/// answered are left out of the set (and counted).
+pub async fn get_unhealthy_executors_within(
+    health_check: &Arc<dyn HealthCheck>,
+    executors: &[(ExecutorId, ExecutorAddr, Option<String>)],
+    limit: Option<std::time::Duration>,
+) -> HealthCheckOutcome {
+    let mut pending: futures::stream::FuturesUnordered<_> = executors
         .iter()
         .map(|(executor_id, addr, pod_name)| {
             let health_check = health_check.clone();
@@ -49,11 +70,31 @@ pub async fn get_unhealthy_executors(
             })
         })
         .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
+    let mut unhealthy = HashSet::new();
+    let deadline = async {
+        match limit {
+            Some(limit) => tokio::time::sleep(limit).await,
+            None => std::future::pending().await,
+        }
+    };
+    let mut deadline = std::pin::pin!(deadline);
+    loop {
+        tokio::select! {
+            biased;
+            answered = futures::StreamExt::next(&mut pending) => match answered {
+                Some(Some(executor_id)) => {
+                    unhealthy.insert(executor_id);
+                }
+                Some(None) => {}
+                None => break,
+            },
+            () = &mut deadline => break,
+        }
+    }
+    HealthCheckOutcome {
+        unhealthy,
+        unfinished: pending.len(),
+    }
 }
 
 async fn health_check_with_retries<F>(

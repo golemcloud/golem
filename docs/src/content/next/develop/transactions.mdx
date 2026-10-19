@@ -1,26 +1,31 @@
 import { Callout, Tabs } from "nextra/components"
 
-# High level transactions
+# High-level transactions
 
-On top of the [durability controls](/next/develop/durability) and [retry controls](/next/develop/retries), the SDKs also provide high level functions for defining transactions supporting **compensation actions** in case of getting reverted.
+The SDKs provide saga helpers for workflows that need **compensation actions** after a domain failure.
 
-Although Golem's automatic retry policies and low-level atomic regions provide a lot of power automatically, many times a set of external operations such as HTTP requests needs to be executed **transactionally**; if one of the operations fails, the whole transaction need to be rolled back by executing some compensation actions.
+Each host call remains durable on its own. A saga registers compensations for successful steps and runs them in reverse order when a later step fails. Compensation is a new external action, not deletion of the earlier effect.
+
+Sagas do not provide atomicity or isolation. Earlier calls and their compensations remain in history, and other tasks can observe effects before compensation runs.
 
 The SDK provides support for two different types of transactions:
 
-- **fallible transactions** are only dealing with domain errors
-- **infallible transactions** must always succeed, and Golem applies its active retry policy to it
+- **fallible transactions** compensate failures and report the outcome
+- **infallible transactions** compensate failures and ask the host policy before appending a new attempt
 
 ### Fallible transactions
 
-Many times external operations (such as HTTP calls to remote hosts) need to be executed transactionally. If some operations failed, the transaction needs to be rolled back; compensation actions need to undo whatever the already successfully performed operations did.
+A workflow can use compensations to counter earlier successful operations when a later operation fails. For example, a compensation can request a refund after a charge. It does not erase the charge or hide it from other tasks, and the compensation itself can fail.
 
-A **fallible transaction** only deals with domain errors. Within the transaction every operation that succeeds gets recorded. If an operation fails, all the recorded operations get compensated in reverse order before the transaction block returns with a failure.
+A **fallible transaction** deals with domain errors. Successful steps register compensations. Propagating a domain error out of the transaction body triggers these compensations in reverse order; handling the error inside the body does not automatically trigger rollback. The failing step has no registered compensation. TypeScript, Rust, Scala and Go stop at the first compensation error and report partial rollback. Effect's `withFallibleCompensation` continues the remaining compensations and reports the first compensation error.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        In TypeScript, a fallible transaction can be executed using the async `fallibleTransaction` function, by
+        In TypeScript, a fallible saga can be executed using the async `fallibleSaga` function, by
         passing an async callback that can execute operations on the open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Effect TypeScript, wrap an Effect program with `Saga.fallibleTransaction`. Typed failures, caught defects and interruption trigger registered compensations. Complete rollback preserves the original Cause; partial rollback retains original and compensation failures. External cancellation terminates retries without losing this evidence.
     </Tabs.Tab>
     <Tabs.Tab>
         In Rust, a fallible transaction can be executed using the async `fallible_transaction` function in
@@ -33,24 +38,48 @@ A **fallible transaction** only deals with domain errors. Within the transaction
     </Tabs.Tab>
     <Tabs.Tab>
         In MoonBit, the SDK does not currently provide a dedicated high-level fallible transaction helper. Implement
-        the same pattern manually by combining lower-level durability helpers such as `with_atomic_operation` with
-        explicit compensation logic for the operations you need to roll back.
+        the same pattern manually with explicit compensation logic for the operations you need to undo.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Go, a fallible transaction can be executed using the `transaction.Fallible` function of the
+        `github.com/golemcloud/golem/sdks/go/golem/transaction` package, by passing a function that can execute
+        operations on the open transaction (see below). A domain error returned from the body triggers the
+        compensations, and the transaction returns a `transaction.Failure[E]`; rollback stops at the first
+        compensation error, which is reported in its `CompensationFailure` field.
     </Tabs.Tab>
 </Tabs>
 
 ### Infallible transactions
 
-An infallible transaction must always succeed; in case of a failure or interruption, it gets retried. If there is a domain error, the compensation actions are executed before the retry.
+After each failed, fully compensated infallible attempt, the SDK resolves a host policy with verb
+`saga`, noun the agent URN, and `attempt`/`error-kind` properties. The host's `next-retry-delay`
+uses the existing evaluator and an opaque binary continuation. SDKs carry that state unchanged
+and use durable clocks and timers. No matching policy selects the agent default. Unbounded
+policies are rejected rather than silently capped. Count/time/never exhaustion returns a typed
+guest failure; selector/evaluator errors retain the original failure too.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+New attempts append calls and retain failed attempts and compensations. Bounds keep attempts
+finite; they do not rewind history. Reconstruction repairs an incomplete call at its original
+`Start`, without discarding sibling history. TS, Effect, Scala and Go compensate caught failures
+in reverse order. Fallible helpers propagate the original exception/panic only after complete
+rollback; partial rollback retains both failures. Effect external cancellation stops retries and
+preserves original and compensation evidence in Cause; self-interruption is policy-retryable.
+Rust WASM panic aborts without compensation. An uncatchable deterministic guest trap permanently
+fails the invocation; generic infrastructure retry handling is unchanged. MoonBit exposes the
+retry API but has no saga helper.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        In TypeScript, an infallible transaction can be executed using the async `infallibleTransaction` function, by
+        In TypeScript, an infallible saga can be executed using the async `infallibleSaga` function, by
         passing an async callback that can execute operations on the open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        `Saga.infallibleTransaction` accepts a typed failure channel. Fully compensated failures, caught defects and self-interruption can be policy-retried; exhaustion, policy errors and partial rollback return `SagaRetryFailure`.
     </Tabs.Tab>
     <Tabs.Tab>
         In Rust, an infallible transaction can be executed using the async `infallible_transaction` function in
         `golem_rust`, by passing a closure wrapped with `boxed(async move { ... })` that can execute operations on the
-        open transaction (see below).
+        open transaction (see below). Return Result from the closure and handle the helper's Result for compensation failure, exhaustion and policy errors.
     </Tabs.Tab>
     <Tabs.Tab>
         In Scala, an infallible transaction can be executed using `Transactions.infallibleTransaction`, by passing a
@@ -58,9 +87,11 @@ An infallible transaction must always succeed; in case of a failure or interrupt
     </Tabs.Tab>
     <Tabs.Tab>
         In MoonBit, the SDK does not yet provide a dedicated high-level infallible transaction helper. Implement the
-        same pattern manually by saving the oplog position with `get_oplog_index`, wrapping each step in
-        `with_atomic_operation`, and rewinding with `set_oplog_index` after running compensations so the whole
-        transaction is retried from the saved checkpoint.
+        same pattern manually with a loop that starts a new attempt only after all required compensations succeed.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Go, an infallible transaction can be executed using the `transaction.Infallible` function, by passing a
+        function that can execute operations on the open transaction (see below). It returns a Result, including compensation failure, exhaustion and policy errors while retaining the original failure.
     </Tabs.Tab>
 </Tabs>
 
@@ -70,16 +101,16 @@ Both transaction types require the definition of **operations**.
 
 It is defined with the following interface:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         ```typescript
         /**
-        * Represents an atomic operation of the transaction which has a rollback action.
+        * Represents a compensable step of the transaction.
         *
-        * Implement this interface and use it within a `transaction` block.
-        * Operations can also be constructed from closures using `operation`.
+        * Implement this interface and use it within a saga block.
+        * Compensable steps can also be constructed with `compensable`.
         */
-        export interface Operation<In, Out, Err> {
+        export interface Compensable<In, Out, Err> {
         /**
          * The action to execute.
          * @param input - The input to the operation.
@@ -97,25 +128,42 @@ It is defined with the following interface:
     }
         ```
 
-        There are two ways to define an operation:
+        There are two ways to define a compensable step:
 
-        1. Implement the `Operation` interface manually
-        2. Use the `operation` function to create an operation from a pair of closures
+        1. Implement the `Compensable` interface manually
+        2. Use the `compensable` function to create one from a pair of closures
 
         ```typescript
-        export function operation<In, Out, Err>(
+        export function compensable<In, Out, Err>(
             execute: (input: In) => Promise<Result<Out, Err>>,
             compensate: (input: In, result: Out) => Promise<Result<void, Err>>,
-        ): Operation<In, Out, Err>
+        ): Compensable<In, Out, Err>
         ```
 
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        `Saga.operation` creates a reusable Effect step. The compensation receives the input, successful output, and failure cause, and must have an infallible (`never`) error channel:
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Saga } from "@golemcloud/effect-golem"
+
+        const op = Saga.operation({
+          execute: (idx: number) => Effect.succeed(`id-${idx}`),
+          compensate: (idx, id, _cause) =>
+            Effect.log(`reverting ${id}, ${idx}`),
+        })
+        ```
+
+        Use `Saga.withFallibleCompensation` instead when a compensation itself can fail.
     </Tabs.Tab>
 
     <Tabs.Tab>
 
       ```rust
 
-      /// Represents an atomic operation of the transaction which has a rollback action.
+      /// Represents a compensable step of the transaction.
       ///
       /// Implement this trait and use it within a `transaction` block.
       /// Operations can also be constructed from closures using `operation`.
@@ -184,25 +232,37 @@ It is defined with the following interface:
     </Tabs.Tab>
 
     <Tabs.Tab>
+        The MoonBit SDK does not yet provide a high-level saga helper. Use ordinary async control flow with application callbacks for domain operations and their compensations. For example, an order workflow can reserve stock, charge a payment, and confirm the order. If a later step fails, refund the payment before releasing the stock.
+
+        This application-defined outcome keeps the original failure and any failed compensations. An empty compensation-error array means that every attempted compensation succeeded, not that the external systems provide an atomic rollback.
+
         ```moonbit
-        pub(all) struct Operation[In, Out, Err] {
-          execute : (In) -> Result[Out, Err]
-          compensate : (In, Out) -> Result[Unit, Err]
+        ///|
+        enum OrderOutcome {
+          Confirmed
+          Failed(String, Array[(String, String)])
         }
         ```
 
-        There are two ways to define an operation:
+    </Tabs.Tab>
 
-        1. Construct the `Operation` struct manually
-        2. Use the `operation` function to create an operation from a pair of closures
-
-        ```moonbit
-        pub fn[In, Out, Err] operation(
-          execute : (In) -> Result[Out, Err],
-          compensate : (In, Out) -> Result[Unit, Err],
-        ) -> Operation[In, Out, Err] {
-          { execute, compensate }
+    <Tabs.Tab>
+        ```go
+        // Operation is a compensable step: an action paired with the rollback to undo it.
+        // compensate receives both the original input and the output execute produced.
+        type Operation[In, Out, E any] struct {
+            // unexported fields
         }
+        ```
+
+        An operation is created with `transaction.NewOperation` from a pair of functions. Domain errors are
+        the error arm of a `golem.Result`:
+
+        ```go
+        func NewOperation[In, Out, E any](
+            execute func(In) golem.Result[Out, E],
+            compensate func(In, Out) golem.Result[golem.Unit, E],
+        ) Operation[In, Out, E]
         ```
 
     </Tabs.Tab>
@@ -213,13 +273,13 @@ It is defined with the following interface:
 
 The defined operations can be executed in _fallible_ or _infallible_ mode:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
-    import { fallibleTransaction, infallibleTransaction, operation, Result } from "@golemcloud/golem-ts-sdk"
+    import { compensable, fallibleSaga, infallibleSaga, Result } from "@golemcloud/golem-ts-sdk"
 
     // example operation with compensation
-    const op = operation<number, string, string>(
+    const op = compensable<number, string, string>(
       async (idx) => {
         // the operation / side effect
         return Result.ok("id-" + idx)
@@ -231,8 +291,8 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
       }
     )
 
-    // with fallibleTransaction errors have to be handled and propagated using the Result type
-    const resultFallible = await fallibleTransaction(async tx => {
+    // With fallibleSaga, errors are propagated using Result.
+    const resultFallible = await fallibleSaga(async tx => {
       const firstId = await tx.execute(op, 1)
       if (firstId.isErr()) return firstId
 
@@ -242,12 +302,33 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
       return Result.ok([firstId.val, secondId.val])
     })
 
-    // with infallibleTransaction no explicit error handling is needed, as it is handled by Golem retries
-    const resultInfallible = await infallibleTransaction(async tx => {
+    const resultInfallible = await infallibleSaga(async tx => {
       const firstId = await tx.execute(op, 1)
       const secondId = await tx.execute(op, 2)
       return [firstId, secondId]
     })
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```typescript
+    import { Effect } from "effect"
+    import { Saga } from "@golemcloud/effect-golem"
+
+    const op = Saga.operation({
+      execute: (idx: number) => Effect.succeed(`id-${idx}`),
+      compensate: (idx, id, _cause) =>
+        Effect.log(`reverting ${id}, ${idx}`),
+    })
+
+    // Construct an Effect program to yield from an agent method.
+    const resultFallible = Saga.fallibleTransaction(
+      Effect.gen(function* () {
+        const firstId = yield* op(1)
+        const secondId = yield* op(2)
+        return [firstId, secondId] as const
+      }),
+    )
+
     ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -277,9 +358,9 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     let result_infallible = infallible_transaction(|tx| {
         let op = op.clone();
         boxed(async move {
-            let first_id = tx.execute(op.clone(), 1).await;
-            let second_id = tx.execute(op, 2).await;
-            (first_id, second_id)
+            let first_id = tx.execute(op.clone(), 1).await?;
+            let second_id = tx.execute(op, 2).await?;
+            Ok((first_id, second_id))
         })
     })
     .await;
@@ -312,113 +393,119 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
         }
       }
 
-    val resultInfallible: Future[(String, String)] =
+    val resultInfallible: Future[Either[Transactions.TransactionFailure[Any], (String, String)]] =
       Transactions.infallibleTransaction { tx =>
         for {
           firstId <- tx.execute(op, 1)
           secondId <- tx.execute(op, 2)
         } yield (firstId, secondId)
       }
+    // Handle Left outcomes for exhaustion, policy error or partial rollback.
     ```
     </Tabs.Tab>
     <Tabs.Tab>
     <Callout type="info">
-    The MoonBit SDK does not yet provide high-level `fallibleTransaction` / `infallibleTransaction` helpers like the other languages. The saga pattern must be implemented manually using oplog primitives as shown below.
+    The MoonBit SDK does not provide high-level saga helpers. Implement the saga with ordinary control flow and durable host calls.
     </Callout>
 
+    The function below uses `OrderOutcome` from the previous example. The callbacks are application code, not SDK exports. Implement them with durable HTTP or RPC host calls. Each callback must return `Err` only when it knows that the requested effect did not occur; reconcile ambiguous remote outcomes before returning. Confirmation must not return `Err` after it commits the order.
+
     ```moonbit
-    import "golemcloud/golem_sdk/api" as @api
-
-    struct CompletedStep {
-      compensate : () -> Unit
-    }
-
-    fn compensate_all(steps : Array[CompletedStep]) -> Unit {
-      let mut i = steps.length()
-      while i > 0 {
-        i = i - 1
-        (steps[i].compensate)()
+    ///|
+    async fn place_order(
+      order_id : String,
+      reserve_stock : async (String) -> Result[String, String],
+      charge_payment : async (String) -> Result[String, String],
+      confirm_order : async (String) -> Result[Unit, String],
+      refund_payment : async (String) -> Result[Unit, String],
+      release_stock : async (String) -> Result[Unit, String],
+    ) -> OrderOutcome {
+      let reservation_id = match reserve_stock(order_id) {
+        Ok(id) => id
+        Err(error) => return Failed(error, [])
       }
+      let mut payment_id : String? = None
+      let original_error = match charge_payment(order_id) {
+        Err(error) => error
+        Ok(id) => {
+          payment_id = Some(id)
+          match confirm_order(order_id) {
+            Ok(_) => return Confirmed
+            Err(error) => error
+          }
+        }
+      }
+      let rollback_errors : Array[(String, String)] = []
+      if payment_id is Some(id) {
+        match refund_payment(id) {
+          Ok(_) => ()
+          Err(error) => rollback_errors.push(("refund payment", error))
+        }
+      }
+      // Attempt stock release even if the refund failed.
+      match release_stock(reservation_id) {
+        Ok(_) => ()
+        Err(error) => rollback_errors.push(("release stock", error))
+      }
+      Failed(original_error, rollback_errors)
     }
+    ```
 
-    // example operation with compensation
-    let op : Operation[Int, String, String] = operation(
-      fn(idx : Int) -> Result[String, String] {
-        Result::Ok("id-" + idx.to_string())
-      },
-      fn(idx : Int, id : String) -> Result[Unit, String] {
-        println("reverting " + id + ", " + idx.to_string())
-        Result::Ok(())
-      },
+    This workflow handles returned domain errors. Raised errors propagate to the caller; they do not trigger this rollback path. It does not retry operations or failed compensations automatically. The caller must handle partial rollback explicitly, for example by recording the order for reconciliation instead of reporting that rollback completed.
+
+    Keep execute and compensation calls duplicate-safe, with stable application idempotency keys such as the order ID and an operation name. Ordinary local callbacks are not durable by themselves. Golem records supported host calls and replays their results during recovery; a crash reconstructs the recorded prefix and repairs eligible incomplete calls. It does not undo external effects or make a remote service idempotent.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```go
+    import (
+        "fmt"
+
+        "github.com/golemcloud/golem/sdks/go/golem"
+        "github.com/golemcloud/golem/sdks/go/golem/transaction"
     )
 
-    fn run_fallible() -> Result[(String, String), String] {
-      let completed : Array[CompletedStep] = []
-
-      let first_id = match @api.with_atomic_operation(fn() { (op.execute)(1) }) {
-        Ok(id) => id
-        Err(error) => return Err(error)
-      }
-
-      completed.push({
-        compensate: fn() {
-          @api.with_atomic_operation(fn() {
-            let _ = (op.compensate)(1, first_id)
-            ()
-          })
+    // example operation with compensation
+    var op = transaction.NewOperation(
+        func(idx int32) golem.Result[string, string] {
+            // the operation / side effect
+            return golem.Ok[string, string](fmt.Sprintf("id-%d", idx))
         },
-      })
-
-      let second_id = match @api.with_atomic_operation(fn() { (op.execute)(2) }) {
-        Ok(id) => id
-        Err(error) => {
-          compensate_all(completed)
-          return Err(error)
-        }
-      }
-
-      Ok((first_id, second_id))
-    }
-
-    fn run_infallible() -> (String, String) {
-      let checkpoint = @api.get_oplog_index()
-      let completed : Array[CompletedStep] = []
-
-      let first_id = match @api.with_atomic_operation(fn() { (op.execute)(1) }) {
-        Ok(id) => id
-        Err(_) => {
-          compensate_all(completed)
-          @api.set_oplog_index(checkpoint)
-          panic()
-        }
-      }
-
-      completed.push({
-        compensate: fn() {
-          @api.with_atomic_operation(fn() {
-            let _ = (op.compensate)(1, first_id)
-            ()
-          })
+        func(idx int32, id string) golem.Result[golem.Unit, string] {
+            // compensation
+            fmt.Printf("reverting %s, %d\n", id, idx)
+            return golem.Ok[golem.Unit, string](golem.Unit{})
         },
-      })
+    )
 
-      let second_id = match @api.with_atomic_operation(fn() { (op.execute)(2) }) {
-        Ok(id) => id
-        Err(_) => {
-          compensate_all(completed)
-          @api.set_oplog_index(checkpoint)
-          panic()
+    type Pair = golem.Tuple2[string, string]
+
+    // With Fallible, errors are propagated using golem.Result.
+    resultFallible := transaction.Fallible(func(tx *transaction.Tx[string]) golem.Result[Pair, string] {
+        firstID := tx.Step(op, 1)
+        if firstID.IsErr() {
+            return golem.Err[Pair, string](firstID.Err())
         }
-      }
+        secondID := tx.Step(op, 2)
+        if secondID.IsErr() {
+            return golem.Err[Pair, string](secondID.Err())
+        }
+        return golem.Ok[Pair, string](Pair{A: firstID.Ok(), B: secondID.Ok()})
+    })
 
-      (first_id, second_id)
-    }
-
-    // with fallible transactions errors are returned after compensating completed steps
-    let result_fallible = run_fallible()
-
-    // with infallible transactions errors compensate and rewind to retry from the saved oplog position
-    let result_infallible = run_infallible()
+    // With Infallible, a returned error compensates and retries the whole transaction.
+    resultInfallible := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[Pair, string] {
+        firstID := tx.Step(op, 1)
+        if firstID.IsErr() {
+            return golem.Err[Pair, string](firstID.Err())
+        }
+        secondID := tx.Step(op, 2)
+        if secondID.IsErr() {
+            return golem.Err[Pair, string](secondID.Err())
+        }
+        return golem.Ok[Pair, string](Pair{A: firstID.Ok(), B: secondID.Ok()})
+    })
     ```
+
+    Both `resultFallible` and `resultInfallible` are `golem.Result[Pair, transaction.Failure[string]]`.
     </Tabs.Tab>
 </Tabs>

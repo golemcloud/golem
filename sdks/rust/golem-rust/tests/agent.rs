@@ -21,21 +21,23 @@ test_r::enable!();
 mod tests {
     use golem_rust::agentic::{
         AgentStream, AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
-        UnstructuredBinary, UnstructuredText,
+        SnapshotData, UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::agentic::{Principal, create_webhook};
+    use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, CachePolicy, Snapshotting,
-        SnapshottingConfig,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
+        CachePolicy, DurableStreamSlotSource, Snapshotting, SnapshottingConfig,
     };
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
-        AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, IntoSchema, MultimodalSchema,
+        AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, FromWire, IntoSchema,
+        IntoWire, MultimodalSchema, WireSchema,
     };
-    use golem_rust::{ScheduledTime, SchemaType, SchemaValue};
+    use golem_rust::{ScheduledTime, SchemaType, SchemaValue, http_router};
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
     use golem_rust_macro::{description, endpoint, prompt, read_only};
     use std::fmt::Debug;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
     fn schema_value<T: IntoSchema>(value: T) -> SchemaValue {
@@ -46,7 +48,262 @@ mod tests {
         T::from_schema_value(value, T::get_type()).unwrap()
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    fn wire_input(fields: Vec<SchemaValue>) -> golem_rust::schema::wit::wire::SchemaValueTree {
+        golem_rust::encode_schema_value(&SchemaValue::Record { fields }).unwrap()
+    }
+
+    #[derive(FromWire, IntoWire, WireSchema)]
+    #[schema(transparent)]
+    struct WireOnlyValue(u32);
+
+    #[derive(Debug, PartialEq, FromWire, IntoWire, WireSchema)]
+    #[schema(transparent)]
+    struct TransparentUnit(());
+
+    impl IntoSchema for WireOnlyValue {
+        fn type_id() -> golem_rust::schema::TypeId {
+            <u32 as IntoSchema>::type_id()
+        }
+
+        fn register_in(_: &mut golem_rust::schema::SchemaBuilder) -> SchemaType {
+            panic!("generated descriptors must not build the schema model")
+        }
+
+        fn to_value(&self) -> SchemaValue {
+            panic!("generated invocation must not encode through the model")
+        }
+    }
+
+    impl FromSchema for WireOnlyValue {
+        fn from_value(_: &SchemaValue) -> Result<Self, golem_rust::schema::FromSchemaError> {
+            panic!("generated invocation must not decode through the model")
+        }
+    }
+
+    type CallerPrincipal = Principal;
+
+    #[agent_definition]
+    trait DirectDispatch {
+        fn new(seed: WireOnlyValue, caller: CallerPrincipal) -> Self;
+        fn run(
+            &mut self,
+            caller: CallerPrincipal,
+            first: WireOnlyValue,
+            second: Vec<Option<Result<u32, String>>>,
+        ) -> WireOnlyValue;
+        fn sync_unit(&mut self) -> TransparentUnit;
+        async fn async_boxed_unit(&mut self) -> Box<TransparentUnit>;
+    }
+
+    struct DirectDispatchImpl {
+        calls: usize,
+    }
+
+    #[agent_implementation]
+    impl DirectDispatch for DirectDispatchImpl {
+        fn new(seed: WireOnlyValue, caller: CallerPrincipal) -> Self {
+            assert!(matches!(caller, Principal::Anonymous));
+            Self {
+                calls: seed.0 as usize,
+            }
+        }
+
+        fn run(
+            &mut self,
+            caller: CallerPrincipal,
+            first: WireOnlyValue,
+            second: Vec<Option<Result<u32, String>>>,
+        ) -> WireOnlyValue {
+            assert!(matches!(caller, Principal::Anonymous));
+            self.calls += 1;
+            WireOnlyValue(
+                first.0
+                    + second
+                        .into_iter()
+                        .flatten()
+                        .map(|value| value.unwrap_or_else(|s| s.len() as u32))
+                        .sum::<u32>(),
+            )
+        }
+
+        fn sync_unit(&mut self) -> TransparentUnit {
+            self.calls += 1;
+            TransparentUnit(())
+        }
+
+        async fn async_boxed_unit(&mut self) -> Box<TransparentUnit> {
+            self.calls += 1;
+            Box::new(TransparentUnit(()))
+        }
+    }
+
+    #[test]
+    fn generated_agent_descriptor_uses_wire_schema_and_preserves_principal_alias() {
+        use golem_rust::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
+        use golem_rust::schema::wit::wire::SchemaTypeBody;
+        let descriptor = golem_rust::agentic::get_agent_type_by_name(&AgentTypeName(
+            "DirectDispatch".to_string(),
+        ))
+        .unwrap();
+        let InputSchema::Parameters(fields) = &descriptor.constructor.input_schema;
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["seed", "caller"]
+        );
+        assert!(matches!(
+            descriptor.schema.type_nodes[fields[0].schema as usize].body,
+            SchemaTypeBody::U32Type(None)
+        ));
+        assert!(matches!(fields[1].source, FieldSource::AutoInjected(_)));
+        let reflected = golem_rust::agentic::get_enriched_agent_type_by_name(&AgentTypeName(
+            "DirectDispatch".to_string(),
+        ))
+        .unwrap();
+        assert!(
+            reflected
+                .principal_params_in_constructor()
+                .contains("caller")
+        );
+    }
+
+    #[test]
+    async fn generated_agent_dispatch_uses_direct_codecs_and_rejects_invalid_structure_before_calling()
+     {
+        use golem_rust::schema::wit::{direct, wire};
+        #[derive(IntoWire)]
+        struct Arguments {
+            first: u32,
+            second: Vec<Option<Result<u32, String>>>,
+        }
+        let input = || {
+            direct::encode(&Arguments {
+                first: 7,
+                second: vec![Some(Err("fail".into())), None, Some(Ok(23))],
+            })
+            .unwrap()
+        };
+        let mut agent = DirectDispatchImpl::new(WireOnlyValue(0), Principal::Anonymous);
+        let output = agent
+            .invoke("run".to_string(), input(), Principal::Anonymous)
+            .await
+            .unwrap();
+        assert_eq!(direct::decode::<u32>(output.value.unwrap()).unwrap(), 34);
+        for mode in 0..4 {
+            let mut bad = input();
+            let wire::SchemaValueNode::RecordValue(fields) =
+                &mut bad.value_nodes[bad.root as usize]
+            else {
+                panic!("record input")
+            };
+            match mode {
+                0 => {
+                    fields.pop();
+                }
+                1 => {
+                    fields.push(fields[0]);
+                }
+                2 => {
+                    fields[1] = fields[0];
+                }
+                _ => {
+                    fields[0] = -1;
+                }
+            }
+            assert!(
+                agent
+                    .invoke("run".to_string(), bad, Principal::Anonymous)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(agent.calls, 1);
+
+        #[derive(IntoWire)]
+        struct NoArguments {}
+        let sync = agent
+            .invoke(
+                "sync_unit".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert!(sync.value.is_none());
+        assert_eq!(
+            direct::decode_result_payload::<TransparentUnit>(sync.value).unwrap(),
+            TransparentUnit(())
+        );
+        let asynchronous = agent
+            .invoke(
+                "async_boxed_unit".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert!(asynchronous.value.is_none());
+        assert_eq!(
+            direct::decode_result_payload::<Box<TransparentUnit>>(asynchronous.value).unwrap(),
+            Box::new(TransparentUnit(()))
+        );
+        assert_eq!(agent.calls, 3);
+    }
+
+    #[test]
+    async fn generated_agent_constructor_uses_direct_codecs_and_checks_record_structure() {
+        use golem_rust::agentic::with_agent_initiator;
+        use golem_rust::schema::wit::{direct, wire};
+        #[derive(IntoWire)]
+        struct Arguments {
+            seed: u32,
+        }
+        DirectDispatchImpl::__register_agent_type();
+        let name = AgentTypeName("DirectDispatch".into());
+        let input = || direct::encode(&Arguments { seed: 19 }).unwrap();
+        assert!(
+            with_agent_initiator(
+                |initiator| async move { initiator.initiate(input(), Principal::Anonymous).await },
+                &name
+            )
+            .await
+            .is_ok()
+        );
+        for mode in 0..4 {
+            let mut bad = input();
+            let wire::SchemaValueNode::RecordValue(fields) =
+                &mut bad.value_nodes[bad.root as usize]
+            else {
+                panic!("record input")
+            };
+            match mode {
+                0 => {
+                    fields.clear();
+                }
+                1 => {
+                    fields.push(fields[0]);
+                }
+                2 => {
+                    fields[0] = -1;
+                }
+                _ => {
+                    bad.value_nodes[bad.root as usize] = wire::SchemaValueNode::BoolValue(false);
+                }
+            }
+            assert!(
+                with_agent_initiator(
+                    |initiator| async move { initiator.initiate(bad, Principal::Anonymous).await },
+                    &name
+                )
+                .await
+                .is_err()
+            );
+        }
+    }
+
+    #[derive(Clone, Debug, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     struct Config {
         model: String,
     }
@@ -243,6 +500,91 @@ mod tests {
         PngImage,
     }
 
+    #[test]
+    fn direct_unstructured_codecs_preserve_roles_restrictions_and_values() {
+        use golem_rust::schema::wit::{decode_graph, direct};
+
+        fn check<
+            T: Schema + Clone + golem_rust::FromWire + golem_rust::IntoWire + golem_rust::WireSchema,
+        >(
+            value: T,
+        ) {
+            let expected_schema = T::get_type().get_schema_graph().unwrap();
+            assert_eq!(
+                decode_graph(&direct::schema::<T>()).unwrap(),
+                expected_schema
+            );
+            let expected = value.clone().to_schema_value().unwrap();
+            let decoded = direct::decode::<T>(direct::encode(&value).unwrap()).unwrap();
+            assert_eq!(decoded.to_schema_value().unwrap(), expected);
+        }
+
+        check(UnstructuredText::from_inline("Grüße", MyLang::German));
+        check(UnstructuredText::from_inline_any("unrestricted"));
+        check(UnstructuredText::<MyLang>::Url(
+            "https://example.com/text".to_string(),
+        ));
+        check(UnstructuredBinary::from_inline(
+            vec![0, 255, 19],
+            MyMimeType::PngImage,
+        ));
+        check(UnstructuredBinary::<MyMimeType>::from_url(
+            "https://example.com/image",
+        ));
+        check(UnstructuredBinary::from_inline(
+            vec![3, 7],
+            "application/test".to_string(),
+        ));
+    }
+
+    #[test]
+    fn direct_unstructured_codecs_reject_wrong_payloads_and_restrictions() {
+        use golem_rust::schema::wit::{direct, wire};
+
+        let text =
+            UnstructuredText::from_inline("bonjour", golem_rust::agentic::AnyLanguage::new("fr"));
+        assert!(
+            direct::decode::<UnstructuredText<MyLang>>(direct::encode(&text).unwrap()).is_err()
+        );
+        let binary = UnstructuredBinary::from_inline(vec![5], "application/json".to_string());
+        assert!(
+            direct::decode::<UnstructuredBinary<MyMimeType>>(direct::encode(&binary).unwrap())
+                .is_err()
+        );
+
+        for case in [0, 2] {
+            let tree = || wire::SchemaValueTree {
+                value_nodes: vec![
+                    wire::SchemaValueNode::UrlValue("https://example.com".to_string()),
+                    wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+                        case,
+                        payload: Some(0),
+                    }),
+                ],
+                root: 1,
+            };
+            assert!(direct::decode::<UnstructuredText<MyLang>>(tree()).is_err());
+            assert!(direct::decode::<UnstructuredBinary<MyMimeType>>(tree()).is_err());
+        }
+        let without_mime = wire::SchemaValueTree {
+            value_nodes: vec![
+                wire::SchemaValueNode::BinaryValue(wire::BinaryValuePayload {
+                    bytes: vec![41],
+                    mime_type: None,
+                }),
+                wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+                    case: 0,
+                    payload: Some(0),
+                }),
+            ],
+            root: 1,
+        };
+        assert!(
+            matches!(direct::decode::<UnstructuredBinary<MyMimeType>>(without_mime).unwrap(),
+            UnstructuredBinary::Inline { data, mime_type: MyMimeType::PlainText } if data == [41])
+        );
+    }
+
     #[agent_implementation]
     impl Echo for EchoImpl {
         fn new(id: UserId, llm_config: Config) -> Self {
@@ -314,8 +656,18 @@ mod tests {
             input
         }
 
-        async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-            Ok(())
+        async fn load_snapshot(
+            _bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            Ok(Self {
+                _id: UserId {
+                    id: "restored".to_string(),
+                },
+                _llm_config: Config {
+                    model: "restored".to_string(),
+                },
+            })
         }
 
         async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -504,13 +856,15 @@ mod tests {
 
         fn rpc_call_schedule(&self, string: String) {
             let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
-            client.schedule_echo(
-                string,
-                ScheduledTime {
-                    seconds: 1,
-                    nanoseconds: 1,
-                },
-            );
+            client
+                .schedule_echo(
+                    string,
+                    ScheduledTime {
+                        seconds: 1,
+                        nanoseconds: 1,
+                    },
+                )
+                .expect("schedule accepts a stream-free input");
         }
     }
 
@@ -569,13 +923,13 @@ mod tests {
         }
     }
 
-    #[derive(IntoSchema, FromSchema, MultimodalSchema)]
+    #[derive(IntoSchema, FromSchema, MultimodalSchema, FromWire, IntoWire, WireSchema)]
     enum TextOrImage {
         Text(String),
         Image(Vec<u8>),
     }
 
-    #[derive(IntoSchema, FromSchema, Clone)]
+    #[derive(golem_rust::Schema, Clone)]
     struct UserId {
         id: String,
     }
@@ -659,9 +1013,7 @@ mod tests {
         let output = agent
             .invoke(
                 "echo_multimodal_advanced".to_string(),
-                SchemaValue::Record {
-                    fields: vec![input],
-                },
+                wire_input(vec![input]),
                 Principal::Anonymous,
             )
             .await
@@ -669,7 +1021,8 @@ mod tests {
             .value
             .unwrap();
 
-        let SchemaValue::List { elements } = output else {
+        let SchemaValue::List { elements } = golem_rust::schema::wit::decode_value(output).unwrap()
+        else {
             panic!("expected multimodal output schema list")
         };
         assert!(matches!(
@@ -698,12 +1051,10 @@ mod tests {
         let result = agent
             .invoke(
                 "echo".to_string(),
-                SchemaValue::Record {
-                    fields: vec![
-                        SchemaValue::String("hello".to_string()),
-                        SchemaValue::String("extra".to_string()),
-                    ],
-                },
+                wire_input(vec![
+                    SchemaValue::String("hello".to_string()),
+                    SchemaValue::String("extra".to_string()),
+                ]),
                 Principal::Anonymous,
             )
             .await;
@@ -769,35 +1120,44 @@ mod tests {
     async fn agent_stream_dispatch_rejects_missing_streams() {
         StreamingAgentImpl::__register_agent_type();
         let mut agent = StreamingAgentImpl::new();
-        let scalar = SchemaValue::Record {
-            fields: vec![SchemaValue::String("p".to_string())],
-        };
+        let scalar = wire_input(vec![SchemaValue::String("p".to_string())]);
         assert!(
             agent
-                .invoke("combine".to_string(), scalar.clone(), Principal::Anonymous)
+                .invoke("combine".to_string(), scalar, Principal::Anonymous)
                 .await
                 .is_err()
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn assert_forwarded_stream_identity(agent: &mut impl BaseAgent) {
+        use golem_rust::schema::wit::wire::{SchemaValueNode, SchemaValueStream, SchemaValueTree};
+        let input = SchemaValueTree {
+            value_nodes: vec![
+                SchemaValueNode::RecordValue(vec![1]),
+                SchemaValueNode::StreamValue(unsafe { SchemaValueStream::from_handle(59) }),
+            ],
+            root: 0,
+        };
+        let output = agent
+            .invoke("forward".to_string(), input, Principal::Anonymous)
+            .await
+            .unwrap()
+            .value
+            .unwrap();
+        assert_eq!(output.value_nodes.len(), 1);
+        match output.value_nodes.into_iter().next().unwrap() {
+            SchemaValueNode::StreamValue(stream) => assert_eq!(stream.take_handle(), 59),
+            _ => panic!("expected forwarded stream"),
+        }
+    }
+
     #[test]
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn agent_stream_dispatch_preserves_forwarded_stream_identity() {
         StreamingAgentImpl::__register_agent_type();
         let mut agent = StreamingAgentImpl::new();
-        let (_writer, stream) = AgentStream::<String>::new();
-        let input_stream = stream.to_value();
-        let invocation = agent
-            .invoke(
-                "forward".to_string(),
-                SchemaValue::Record {
-                    fields: vec![input_stream.clone()],
-                },
-                Principal::Anonymous,
-            )
-            .await
-            .unwrap();
-        assert_eq!(invocation.value, Some(input_stream));
+        assert_forwarded_stream_identity(&mut agent).await;
     }
 
     type AliasedAgentStream<T> = AgentStream<T>;
@@ -822,24 +1182,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn agent_stream_alias_dispatches_through_recursive_value_tree() {
         AliasedStreamingAgentImpl::__register_agent_type();
         let mut agent = AliasedStreamingAgentImpl::new();
-        let (_writer, stream) = AgentStream::<String>::new();
-        let input_stream = stream.to_value();
-        let invocation = agent
-            .invoke(
-                "forward".to_string(),
-                SchemaValue::Record {
-                    fields: vec![input_stream.clone()],
-                },
-                Principal::Anonymous,
-            )
-            .await
-            .expect("a Rust type alias must not change AgentStream ABI dispatch");
-
-        assert_eq!(invocation.value, Some(input_stream));
+        assert_forwarded_stream_identity(&mut agent).await;
     }
 
     #[agent_definition]
@@ -869,17 +1216,15 @@ mod tests {
         let invocation = agent
             .invoke(
                 "echo".to_string(),
-                SchemaValue::Record {
-                    fields: vec![SchemaValue::String("payload".to_string())],
-                },
+                wire_input(vec![SchemaValue::String("payload".to_string())]),
                 Principal::Anonymous,
             )
             .await
             .expect("a scalar parameter name must not affect native stream validation");
 
         assert_eq!(
-            invocation.value,
-            Some(SchemaValue::String("payload".to_string()))
+            golem_rust::schema::wit::direct::decode::<String>(invocation.value.unwrap()).unwrap(),
+            "payload"
         );
     }
 
@@ -1019,6 +1364,92 @@ mod tests {
     }
 
     #[agent_definition(
+        mount = "/c/{customer}/{instance}",
+        phantom_id(path = "instance", optional = true)
+    )]
+    trait SelectedPathAgent {
+        fn new(customer: String) -> Self;
+        #[endpoint(get = "/read")]
+        fn read(&self) -> String;
+    }
+    struct SelectedPathAgentImpl(String);
+    #[agent_implementation]
+    impl SelectedPathAgent for SelectedPathAgentImpl {
+        fn new(customer: String) -> Self {
+            Self(customer)
+        }
+        fn read(&self) -> String {
+            self.0.clone()
+        }
+    }
+
+    #[agent_definition(mount = "/c/{customer}", phantom_id(query = "instance"))]
+    trait SelectedQueryAgent {
+        fn new(customer: String) -> Self;
+        #[endpoint(get = "/read")]
+        fn read(&self) -> String;
+    }
+    struct SelectedQueryAgentImpl(String);
+    #[agent_implementation]
+    impl SelectedQueryAgent for SelectedQueryAgentImpl {
+        fn new(customer: String) -> Self {
+            Self(customer)
+        }
+        fn read(&self) -> String {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn phantom_http_metadata_from_public_macros() {
+        use golem_rust::golem_agentic::golem::agent::common::{
+            PhantomIdBinding, PhantomIdBindingDetails,
+        };
+        SelectedPathAgentImpl::__register_agent_type();
+        SelectedQueryAgentImpl::__register_agent_type();
+        let agents = golem_rust::agentic::get_all_agent_types();
+        for (name, expected) in [
+            (
+                "SelectedPathAgent",
+                PhantomIdBinding::Path(PhantomIdBindingDetails {
+                    name: "instance".into(),
+                    optional: true,
+                }),
+            ),
+            (
+                "SelectedQueryAgent",
+                PhantomIdBinding::Query(PhantomIdBindingDetails {
+                    name: "instance".into(),
+                    optional: false,
+                }),
+            ),
+        ] {
+            let agent = agents.iter().find(|a| a.type_name == name).unwrap();
+            let actual = agent
+                .http_mount
+                .as_ref()
+                .unwrap()
+                .phantom_id_binding
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                std::mem::discriminant(actual),
+                std::mem::discriminant(&expected)
+            );
+            let (PhantomIdBinding::Path(actual) | PhantomIdBinding::Query(actual)) = actual;
+            let (PhantomIdBinding::Path(expected) | PhantomIdBinding::Query(expected)) = expected;
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.optional, expected.optional);
+            let golem_rust::golem_agentic::golem::agent::common::InputSchema::Parameters(fields) =
+                &agent.constructor.input_schema;
+            assert_eq!(
+                fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+                vec!["customer"]
+            );
+        }
+    }
+
+    #[agent_definition(
         mount = "/chats/{agent-type}/{foo}/{bar}",
         webhook_suffix = "/{agent-type}/events/{foo}/{bar}",
         auth = true,
@@ -1034,7 +1465,22 @@ mod tests {
         )]
         fn path_and_header(&self, resource_id: String, request_id: String) -> String;
 
-        #[endpoint(get = "/greet?l={location}&n={name}")]
+        #[endpoint(
+            get = "/greet?l={location}&n={name}",
+            durable_streams(
+                input("location", name = "messages"),
+                output(
+                    "$result",
+                    name = "results",
+                    content_type = "application/vnd.golem.events"
+                ),
+                allow_external_writes = true,
+                allow_stream_delete = false,
+                allow_invocation_delete = false,
+                max_concurrent_readers_per_stream = 8,
+                max_append_requests_per_second_per_stream = 25,
+            )
+        )]
         fn greet1(&self, location: String, name: String) -> String;
 
         #[endpoint(get = "/greet?l={location}&n={name}")]
@@ -1107,7 +1553,46 @@ mod tests {
             "All methods should have HTTP endpoint details"
         );
 
-        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)
+        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),);
+
+        let greet1 = agent
+            .methods
+            .iter()
+            .find(|method| method.name == "greet1")
+            .unwrap();
+        let options = greet1.http_endpoint[0].durable_streams.as_ref().unwrap();
+        assert_eq!(options.slots.len(), 2);
+        assert!(
+            matches!(&options.slots[0].source, DurableStreamSlotSource::Input(slot) if slot == "location")
+        );
+        assert_eq!(options.slots[0].name.as_deref(), Some("messages"));
+        assert_eq!(options.slots[0].content_type, None);
+        assert!(
+            matches!(&options.slots[1].source, DurableStreamSlotSource::Output(slot) if slot == "$result")
+        );
+        assert_eq!(options.slots[1].name.as_deref(), Some("results"));
+        assert_eq!(
+            options.slots[1].content_type.as_deref(),
+            Some("application/vnd.golem.events")
+        );
+        assert_eq!(options.allow_external_writes, Some(true));
+        assert_eq!(options.allow_stream_delete, Some(false));
+        assert_eq!(options.allow_invocation_delete, Some(false));
+        let load = options.load.as_ref().unwrap();
+        assert_eq!(load.max_concurrent_readers_per_stream, Some(8));
+        assert_eq!(load.max_append_requests_per_second_per_stream, Some(25));
+
+        let greet2 = agent
+            .methods
+            .iter()
+            .find(|method| method.name == "greet2")
+            .unwrap();
+        assert!(
+            greet2
+                .http_endpoint
+                .iter()
+                .all(|endpoint| endpoint.durable_streams.is_none())
+        );
     }
 
     #[agent_definition(mount = "/chats/{agent-type}")]
@@ -1365,6 +1850,7 @@ mod tests {
         fn echo(&self, message: String) -> String;
     }
 
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct AgentSnapshottingEnabledImpl {
         _id: String,
     }
@@ -1385,6 +1871,7 @@ mod tests {
         fn echo(&self, message: String) -> String;
     }
 
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct AgentSnapshottingPeriodicImpl {
         _id: String,
     }
@@ -1405,6 +1892,7 @@ mod tests {
         fn echo(&self, message: String) -> String;
     }
 
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct AgentSnapshottingEveryNImpl {
         _id: String,
     }
@@ -1476,9 +1964,13 @@ mod tests {
 
     // -- Snapshot auto-serialization tests --
 
+    static SERIALIZABLE_AGENT_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+    static CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+    static CUSTOM_SNAPSHOT_AGENT_RESTORATIONS: AtomicUsize = AtomicUsize::new(0);
+
     // Agent with serde derives but no custom snapshot methods:
     // should auto-serialize/deserialize via JSON
-    #[agent_definition]
+    #[agent_definition(snapshotting = "enabled")]
     trait SerializableAgent {
         fn new(name: String) -> Self;
         fn get_name(&self) -> String;
@@ -1492,6 +1984,7 @@ mod tests {
     #[agent_implementation]
     impl SerializableAgent for SerializableAgentImpl {
         fn new(name: String) -> Self {
+            SERIALIZABLE_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
             Self { name }
         }
         fn get_name(&self) -> String {
@@ -1507,6 +2000,7 @@ mod tests {
         fn get_value(&self) -> u32;
     }
 
+    #[derive(Debug)]
     struct NonSerializableAgentImpl {
         value: u32,
     }
@@ -1536,15 +2030,21 @@ mod tests {
     #[agent_implementation]
     impl CustomSnapshotAgent for CustomSnapshotAgentImpl {
         fn new(data: String) -> Self {
+            CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
             Self { data }
         }
         fn get_data(&self) -> String {
             self.data.clone()
         }
 
-        async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-            self.data = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-            Ok(())
+        async fn load_snapshot(
+            bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            Ok(Self {
+                data: String::from_utf8(bytes).map_err(|e| e.to_string())?,
+            })
         }
 
         async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -1554,7 +2054,6 @@ mod tests {
 
     #[test]
     fn test_serializable_agent_auto_json_snapshot() {
-        use golem_rust::agentic::snapshot_auto::LoadHelper;
         use golem_rust::agentic::snapshot_auto::SaveHelper;
 
         let agent = SerializableAgentImpl {
@@ -1565,27 +2064,77 @@ mod tests {
         let helper = SaveHelper(&agent);
         let result = helper.snapshot_save();
         assert!(result.is_ok(), "Save should succeed for serializable agent");
-        let snapshot = result.unwrap();
-        assert_eq!(snapshot.mime_type, "application/json");
-        let json_value: serde_json::Value = serde_json::from_slice(&snapshot.data).unwrap();
+        let SnapshotData::Json(snapshot) = result.unwrap() else {
+            panic!("expected JSON");
+        };
+        let json_value: serde_json::Value = serde_json::from_slice(&snapshot).unwrap();
         assert_eq!(json_value["name"], "test-agent");
 
-        // Load: should deserialize from JSON
-        let mut agent2 = SerializableAgentImpl {
-            name: "old".to_string(),
-        };
-        let mut load_helper = LoadHelper(&mut agent2);
-        let load_result = load_helper.snapshot_load(&snapshot.data);
-        assert!(
-            load_result.is_ok(),
-            "Load should succeed for serializable agent"
-        );
+        let agent2 =
+            <SerializableAgentImpl as SerializableAgent>::__golem_auto_load_snapshot(&snapshot)
+                .unwrap();
         assert_eq!(agent2.name, "test-agent");
     }
 
     #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
+    async fn test_auto_restore_factory_does_not_call_constructor_and_can_save() {
+        use golem_rust::agentic::{SnapshotRestoreContext, with_agent_initiator};
+
+        SerializableAgentImpl::__register_agent_type();
+        let agent_type = AgentTypeName("SerializableAgent".to_string());
+        SERIALIZABLE_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+
+        let initialized = with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .initiate(
+                        wire_input(vec![SchemaValue::String("created".to_string())]),
+                        Principal::Anonymous,
+                    )
+                    .await
+            },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+        assert_eq!(SERIALIZABLE_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst), 1);
+        drop(initialized);
+
+        SERIALIZABLE_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+        let context = SnapshotRestoreContext {
+            principal: Principal::Anonymous,
+            agent_type: agent_type.0.clone(),
+            parameters: wire_input(vec![SchemaValue::String("created".to_string())]),
+            phantom_id: None,
+        };
+        let restored = with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .restore(
+                        SnapshotData::Json(br#"{"name":"restored"}"#.to_vec()),
+                        context,
+                    )
+                    .await
+            },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(SERIALIZABLE_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
+        let saved = restored.agent.borrow().save_snapshot_base().await.unwrap();
+        let SnapshotData::Json(saved) = saved else {
+            panic!("expected JSON");
+        };
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&saved).unwrap()["name"],
+            "restored"
+        );
+    }
+
+    #[test]
     fn test_non_serializable_agent_snapshot_returns_error() {
-        use golem_rust::agentic::snapshot_auto::{LoadHelper, SnapshotLoadFallback};
         use golem_rust::agentic::snapshot_auto::{SaveHelper, SnapshotSaveFallback};
 
         let agent = NonSerializableAgentImpl { value: 42 };
@@ -1599,36 +2148,81 @@ mod tests {
         );
         assert!(result.unwrap_err().contains("not implemented"));
 
-        // Load: should return error
-        let mut agent2 = NonSerializableAgentImpl { value: 0 };
-        let mut load_helper = LoadHelper(&mut agent2);
-        let load_result = load_helper.snapshot_load(b"{}");
-        assert!(
-            load_result.is_err(),
-            "Load should fail for non-serializable agent"
-        );
-        assert!(load_result.unwrap_err().contains("not implemented"));
+        let load_result =
+            <NonSerializableAgentImpl as NonSerializableAgent>::__golem_auto_load_snapshot(b"{}");
+        assert_eq!(load_result.unwrap_err(), "snapshotting is disabled");
     }
 
     #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
     async fn test_custom_snapshot_agent_uses_custom_methods() {
-        use golem_rust::agentic::BaseAgent;
+        use golem_rust::agentic::{
+            BaseAgent, SnapshotRestoreContext, get_principal, get_resolved_agent,
+            with_agent_initiator,
+        };
 
-        let mut agent = CustomSnapshotAgentImpl {
+        let agent = CustomSnapshotAgentImpl {
             data: "hello-world".to_string(),
         };
 
         // save_snapshot_base should use the custom method and return octet-stream
         let save_result = agent.save_snapshot_base().await;
         assert!(save_result.is_ok());
-        let snapshot = save_result.unwrap();
-        assert_eq!(snapshot.mime_type, "application/octet-stream");
-        assert_eq!(snapshot.data, b"hello-world");
+        let SnapshotData::Bytes(snapshot) = save_result.unwrap() else {
+            panic!("expected bytes");
+        };
+        assert_eq!(snapshot, b"hello-world");
 
-        // load_snapshot_base should use the custom method
-        let load_result = agent.load_snapshot_base(b"new-data".to_vec()).await;
-        assert!(load_result.is_ok());
-        assert_eq!(agent.data, "new-data");
+        CustomSnapshotAgentImpl::__register_agent_type();
+        CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+        CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.store(0, Ordering::SeqCst);
+        let agent_type = AgentTypeName("CustomSnapshotAgent".to_string());
+        let context = || SnapshotRestoreContext {
+            principal: Principal::Anonymous,
+            agent_type: agent_type.0.clone(),
+            parameters: wire_input(vec![SchemaValue::String("original".to_string())]),
+            phantom_id: None,
+        };
+
+        let failed_context = context();
+        let context = context();
+        let failed = with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .restore(SnapshotData::Bytes(vec![0xff]), failed_context)
+                    .await
+            },
+            &agent_type,
+        )
+        .await;
+        assert!(failed.is_err());
+        assert!(get_principal().is_none());
+        assert!(get_resolved_agent().is_none());
+        assert_eq!(
+            CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst),
+            0
+        );
+
+        let restored = with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .restore(SnapshotData::Bytes(b"new-data".to_vec()), context)
+                    .await
+            },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst),
+            0
+        );
+        assert_eq!(CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.load(Ordering::SeqCst), 2);
+        let saved = restored.agent.borrow().save_snapshot_base().await.unwrap();
+        let SnapshotData::Bytes(saved) = saved else {
+            panic!("expected bytes");
+        };
+        assert_eq!(saved, b"new-data");
     }
 
     #[test]
@@ -2041,6 +2635,507 @@ mod tests {
         assert!(err.contains("Language code 'fr' is not allowed"));
     }
 
+    #[agent_definition]
+    trait RawResponseAgent {
+        fn new(id: String) -> Self;
+
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>>;
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String>;
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String>;
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText>;
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String>;
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String>;
+    }
+
+    struct RawResponseAgentImpl;
+
+    #[agent_implementation]
+    impl RawResponseAgent for RawResponseAgentImpl {
+        fn new(_id: String) -> Self {
+            RawResponseAgentImpl
+        }
+
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
+            input
+        }
+
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>> {
+            input
+        }
+
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String> {
+            input
+        }
+
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String> {
+            input
+        }
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang> {
+            input
+        }
+
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText> {
+            input
+        }
+
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String> {
+            input
+        }
+
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String> {
+            input
+        }
+    }
+
+    #[allow(dead_code)]
+    #[golem_rust::agent_client]
+    trait RawResponseApi {
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>>;
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String>;
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String>;
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText>;
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String>;
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String>;
+    }
+
+    #[allow(dead_code)]
+    #[golem_rust::agent_client(type_name = "RawResponseAgent")]
+    trait CompleteRawResponseApi {
+        fn new(id: String) -> Self;
+
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>>;
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String>;
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String>;
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText>;
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String>;
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String>;
+    }
+
+    fn raw_leaf(ty: &SchemaType) -> &SchemaType {
+        match ty {
+            SchemaType::Option { inner, .. } => raw_leaf(inner),
+            SchemaType::Result { spec, .. } => {
+                raw_leaf(spec.ok.as_deref().expect("result ok payload"))
+            }
+            other => other,
+        }
+    }
+
+    fn assert_raw_schema_on_both_paths<T: IntoSchema + FromSchema + WireSchema>(
+        expected_leaf: &SchemaType,
+    ) {
+        use golem_rust::schema::wit::{decode_graph, direct};
+
+        let name = std::any::type_name::<T>();
+        let model = golem_rust::schema::try_into_schema_graph::<T>().unwrap();
+        assert_eq!(
+            decode_graph(&direct::schema::<T>()).unwrap(),
+            model,
+            "{name}"
+        );
+        assert_eq!(
+            <T as Schema>::get_type().get_schema_graph().unwrap(),
+            model,
+            "{name}"
+        );
+        assert!(model.defs.is_empty(), "{name}");
+        assert_eq!(raw_leaf(&model.root), expected_leaf, "{name}");
+    }
+
+    fn restrictions(all: &[&str]) -> Option<Vec<String>> {
+        (!all.is_empty()).then(|| all.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn raw_unstructured_schemas_are_identical_on_model_and_wire_paths() {
+        use golem_rust::agentic::unstructured_text_schema_type;
+        use golem_rust::agentic::{AnyLanguage, unstructured_binary_schema_type};
+
+        let binary = unstructured_binary_schema_type(restrictions(
+            <MyMimeType as golem_rust::agentic::AllowedMimeTypes>::all(),
+        ));
+        assert_eq!(
+            binary.metadata().role,
+            Some(golem_rust::schema::Role::UnstructuredBinary)
+        );
+        assert_raw_schema_on_both_paths::<UnstructuredBinary<MyMimeType>>(&binary);
+        assert_raw_schema_on_both_paths::<Option<UnstructuredBinary<MyMimeType>>>(&binary);
+        assert_raw_schema_on_both_paths::<Result<UnstructuredBinary<MyMimeType>, String>>(&binary);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredBinary<MyMimeType>>, String>>(
+            &binary,
+        );
+
+        let any_binary = unstructured_binary_schema_type(None);
+        assert_raw_schema_on_both_paths::<UnstructuredBinary<String>>(&any_binary);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredBinary<String>>, String>>(
+            &any_binary,
+        );
+
+        let text = unstructured_text_schema_type(restrictions(
+            <MyLang as golem_rust::agentic::AllowedLanguages>::all(),
+        ));
+        assert_eq!(
+            text.metadata().role,
+            Some(golem_rust::schema::Role::UnstructuredText)
+        );
+        assert_raw_schema_on_both_paths::<UnstructuredText<MyLang>>(&text);
+        assert_raw_schema_on_both_paths::<Option<UnstructuredText<MyLang>>>(&text);
+        assert_raw_schema_on_both_paths::<Result<UnstructuredText<MyLang>, String>>(&text);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredText<MyLang>>, String>>(&text);
+
+        let any_text = unstructured_text_schema_type(None);
+        assert_raw_schema_on_both_paths::<UnstructuredText<AnyLanguage>>(&any_text);
+        assert_raw_schema_on_both_paths::<Option<UnstructuredText>>(&any_text);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredText>, String>>(&any_text);
+    }
+
+    #[test]
+    fn raw_unstructured_agent_definition_schemas_match_agent_client_schemas() {
+        use golem_rust::golem_agentic::golem::agent::common::{InputSchema, OutputSchema};
+        use golem_rust::schema::wit::GraphDecoder;
+
+        fn model_root<T: IntoSchema>() -> SchemaType {
+            golem_rust::schema::try_into_schema_graph::<T>()
+                .unwrap()
+                .root
+        }
+
+        let expected = [
+            ("binary", model_root::<UnstructuredBinary<MyMimeType>>()),
+            (
+                "optional_binary",
+                model_root::<Option<UnstructuredBinary<MyMimeType>>>(),
+            ),
+            (
+                "fallible_binary",
+                model_root::<Result<UnstructuredBinary<MyMimeType>, String>>(),
+            ),
+            (
+                "fallible_optional_binary",
+                model_root::<Result<Option<UnstructuredBinary<MyMimeType>>, String>>(),
+            ),
+            ("text", model_root::<UnstructuredText<MyLang>>()),
+            ("optional_text", model_root::<Option<UnstructuredText>>()),
+            (
+                "fallible_text",
+                model_root::<Result<UnstructuredText<MyLang>, String>>(),
+            ),
+            (
+                "fallible_optional_text",
+                model_root::<Result<Option<UnstructuredText>, String>>(),
+            ),
+        ];
+
+        let descriptor = golem_rust::agentic::get_agent_type_by_name(&AgentTypeName(
+            "RawResponseAgent".to_string(),
+        ))
+        .expect("RawResponseAgent is registered");
+        let decoder = GraphDecoder::new(&descriptor.schema).unwrap();
+        for (name, root) in expected {
+            let method = descriptor
+                .methods
+                .iter()
+                .find(|method| method.name == name)
+                .unwrap_or_else(|| panic!("missing method {name}"));
+            let OutputSchema::Single(output) = method.output_schema else {
+                panic!("{name} must have a single output");
+            };
+            assert_eq!(
+                decoder.decode_type_at(output).unwrap(),
+                root,
+                "{name} output"
+            );
+            let InputSchema::Parameters(fields) = &method.input_schema;
+            assert_eq!(fields.len(), 1, "{name} input");
+            assert_eq!(
+                decoder.decode_type_at(fields[0].schema).unwrap(),
+                root,
+                "{name} input"
+            );
+        }
+
+        RawResponseApiClient::client_definition()
+            .expect("method-only agent_client accepts raw unstructured types");
+    }
+
+    fn assert_raw_value_on_both_paths<T>(value: T)
+    where
+        T: IntoSchema + FromSchema + IntoWire + FromWire + WireSchema,
+    {
+        use golem_rust::schema::wit::direct;
+
+        let name = std::any::type_name::<T>();
+        let model = value.to_value();
+        golem_rust::SchemaRef::new(golem_rust::schema::try_into_schema_graph::<T>().unwrap())
+            .validate_value(&model)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+
+        assert_eq!(
+            golem_rust::decode_schema_value(direct::encode(&value).unwrap()).unwrap(),
+            model,
+            "{name}"
+        );
+        assert_eq!(
+            direct::decode::<T>(golem_rust::encode_schema_value(&model).unwrap())
+                .unwrap()
+                .to_value(),
+            model,
+            "{name}"
+        );
+        assert_eq!(T::from_value(&model).unwrap().to_value(), model, "{name}");
+        assert_eq!(
+            direct::decode::<T>(direct::encode(&value).unwrap())
+                .unwrap()
+                .to_value(),
+            model,
+            "{name}"
+        );
+        assert_eq!(
+            <T as Schema>::from_schema_value(model.clone(), T::get_type())
+                .unwrap()
+                .to_value(),
+            model,
+            "{name}"
+        );
+    }
+
+    #[test]
+    fn raw_unstructured_values_round_trip_on_model_and_wire_paths() {
+        use golem_rust::agentic::AnyLanguage;
+
+        let png = || UnstructuredBinary::from_inline(vec![0, 255, 7], MyMimeType::PngImage);
+        let binary_url = || UnstructuredBinary::<MyMimeType>::from_url("https://example.com/b");
+        assert_raw_value_on_both_paths(png());
+        assert_raw_value_on_both_paths(binary_url());
+        assert_raw_value_on_both_paths(Some(png()));
+        assert_raw_value_on_both_paths(Some(binary_url()));
+        assert_raw_value_on_both_paths(None::<UnstructuredBinary<MyMimeType>>);
+        assert_raw_value_on_both_paths(Ok::<_, String>(png()));
+        assert_raw_value_on_both_paths(Ok::<_, String>(binary_url()));
+        assert_raw_value_on_both_paths(Err::<UnstructuredBinary<MyMimeType>, _>(
+            "boom".to_string(),
+        ));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(png())));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(binary_url())));
+        assert_raw_value_on_both_paths(Ok::<_, String>(None::<UnstructuredBinary<MyMimeType>>));
+        assert_raw_value_on_both_paths(Err::<Option<UnstructuredBinary<MyMimeType>>, _>(
+            "boom".to_string(),
+        ));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(UnstructuredBinary::from_inline(
+            vec![1],
+            "application/x-test".to_string(),
+        ))));
+
+        let german = || UnstructuredText::from_inline("Grüße", MyLang::German);
+        let text_url = || UnstructuredText::<MyLang>::Url("https://example.com/t".to_string());
+        assert_raw_value_on_both_paths(german());
+        assert_raw_value_on_both_paths(text_url());
+        assert_raw_value_on_both_paths(Some(german()));
+        assert_raw_value_on_both_paths(None::<UnstructuredText<MyLang>>);
+        assert_raw_value_on_both_paths(Ok::<_, String>(german()));
+        assert_raw_value_on_both_paths(Err::<UnstructuredText<MyLang>, _>("boom".to_string()));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(text_url())));
+        assert_raw_value_on_both_paths(Ok::<_, String>(None::<UnstructuredText<MyLang>>));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(UnstructuredText::from_inline_any(
+            "no language",
+        ))));
+        assert_raw_value_on_both_paths(Some(UnstructuredText::from_inline(
+            "bonjour",
+            AnyLanguage::new("fr"),
+        )));
+        assert_raw_value_on_both_paths(Err::<Option<UnstructuredText>, _>("boom".to_string()));
+    }
+
+    #[test]
+    fn raw_unstructured_model_decoding_matches_wire_restrictions() {
+        use golem_rust::schema::wit::direct;
+
+        let french = Some(UnstructuredText::from_inline(
+            "bonjour",
+            golem_rust::agentic::AnyLanguage::new("fr"),
+        ))
+        .to_value();
+        let err = Option::<UnstructuredText<MyLang>>::from_value(&french).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Language code 'fr' is not allowed")
+        );
+        assert!(
+            direct::decode::<Option<UnstructuredText<MyLang>>>(
+                golem_rust::encode_schema_value(&french).unwrap()
+            )
+            .is_err()
+        );
+
+        let json = Ok::<_, String>(UnstructuredBinary::from_inline(
+            vec![5],
+            "application/json".to_string(),
+        ))
+        .to_value();
+        let err = Result::<UnstructuredBinary<MyMimeType>, String>::from_value(&json).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'application/json' is not allowed")
+        );
+        assert!(
+            direct::decode::<Result<UnstructuredBinary<MyMimeType>, String>>(
+                golem_rust::encode_schema_value(&json).unwrap()
+            )
+            .is_err()
+        );
+
+        let without_mime = SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: Some(Box::new(SchemaValue::Binary(
+                golem_rust::schema::BinaryValuePayload {
+                    bytes: vec![41],
+                    mime_type: None,
+                },
+            ))),
+        });
+        assert!(matches!(
+            UnstructuredBinary::<MyMimeType>::from_value(&without_mime).unwrap(),
+            UnstructuredBinary::Inline { data, mime_type: MyMimeType::PlainText } if data == [41]
+        ));
+
+        for case in [0, 2] {
+            let value = SchemaValue::Variant(VariantValuePayload {
+                case,
+                payload: Some(Box::new(SchemaValue::Url {
+                    url: "https://example.com".to_string(),
+                })),
+            });
+            assert!(UnstructuredText::<MyLang>::from_value(&value).is_err());
+            assert!(UnstructuredBinary::<MyMimeType>::from_value(&value).is_err());
+        }
+        assert!(UnstructuredBinary::<MyMimeType>::from_value(&SchemaValue::Bool(true)).is_err());
+    }
+
+    async fn invoke_raw_response_agent<T: IntoSchema + FromSchema>(method: &str, value: T) -> T {
+        let mut agent = RawResponseAgentImpl;
+        let input = golem_rust::encode_schema_value(&SchemaValue::Record {
+            fields: vec![value.to_value()],
+        })
+        .unwrap();
+        let output = agent
+            .invoke(method.to_string(), input, Principal::Anonymous)
+            .await
+            .unwrap();
+        let output = golem_rust::decode_schema_value(output.value.expect("raw output")).unwrap();
+        T::from_value(&output).unwrap()
+    }
+
+    #[test]
+    async fn raw_unstructured_agent_definition_dispatch_interoperates_with_model_encoding() {
+        let png = || UnstructuredBinary::from_inline(vec![9, 8, 7], MyMimeType::PngImage);
+        let cases: Vec<Result<Option<UnstructuredBinary<MyMimeType>>, String>> = vec![
+            Ok(Some(png())),
+            Ok(Some(UnstructuredBinary::from_url(
+                "https://example.com/raw",
+            ))),
+            Ok(None),
+            Err("missing".to_string()),
+        ];
+        for value in cases {
+            let expected = value.to_value();
+            let echoed = invoke_raw_response_agent("fallible_optional_binary", value).await;
+            assert_eq!(echoed.to_value(), expected);
+        }
+
+        let echoed = invoke_raw_response_agent("binary", png()).await;
+        assert_eq!(echoed.to_value(), png().to_value());
+        let echoed = invoke_raw_response_agent("optional_binary", Some(png())).await;
+        assert_eq!(echoed.to_value(), Some(png()).to_value());
+        let echoed = invoke_raw_response_agent(
+            "fallible_binary",
+            Err::<UnstructuredBinary<MyMimeType>, _>("nope".to_string()),
+        )
+        .await;
+        assert_eq!(echoed.unwrap_err(), "nope");
+
+        let german = || UnstructuredText::from_inline("hallo", MyLang::German);
+        let echoed = invoke_raw_response_agent("text", german()).await;
+        assert_eq!(echoed.to_value(), german().to_value());
+        let echoed = invoke_raw_response_agent("fallible_text", Ok::<_, String>(german())).await;
+        assert_eq!(echoed.to_value(), Ok::<_, String>(german()).to_value());
+        let echoed = invoke_raw_response_agent("optional_text", None::<UnstructuredText>).await;
+        assert!(echoed.is_none());
+        let value = Ok::<_, String>(Some(UnstructuredText::from_inline_any("plain")));
+        let expected = value.to_value();
+        let echoed = invoke_raw_response_agent("fallible_optional_text", value).await;
+        assert_eq!(echoed.to_value(), expected);
+    }
+
     #[derive(IntoSchema, FromSchema, PartialEq, Debug, Clone)]
     enum EnumCasePayloadNames {
         Unit,
@@ -2128,6 +3223,30 @@ mod tests {
         }
     }
 
+    struct HttpRouterAgent;
+
+    #[http_router(
+        name = "HttpRouterAgent",
+        mount = "/raw",
+        auth = false,
+        cors = ["https://allowed.test"],
+    )]
+    impl HttpRouter for HttpRouterAgent {
+        type Config = ();
+
+        fn new(_: golem_rust::agentic::Config<Self::Config>) -> Self {
+            Self
+        }
+
+        async fn handle(&self, request: HttpRequest) -> HttpResponse {
+            HttpResponse {
+                status: 200,
+                headers: request.headers,
+                body: request.body,
+            }
+        }
+    }
+
     #[test]
     fn test_all_http_methods_supported() {
         use golem_rust::agentic::get_all_agent_types;
@@ -2138,6 +3257,8 @@ mod tests {
             .iter()
             .find(|a| a.type_name == "AllHttpMethodsAgent")
             .expect("AllHttpMethodsAgent not found");
+
+        assert!(matches!(agent.kind, AgentTypeKind::Regular));
 
         let expected_methods = vec![
             ("get_method", "HttpMethod::Get"),
@@ -2170,5 +3291,175 @@ mod tests {
                 method_name
             );
         }
+
+        let router = agent_types
+            .iter()
+            .find(|agent| agent.type_name == "HttpRouterAgent")
+            .expect("HttpRouterAgent not found");
+        assert!(matches!(router.kind, AgentTypeKind::HttpRouter));
+        assert!(matches!(router.mode, AgentMode::Ephemeral));
+        assert!(matches!(router.snapshotting, Snapshotting::Disabled));
+
+        let mount = router.http_mount.as_ref().expect("HTTP mount not found");
+        assert_eq!(
+            mount.auth_details.as_ref().map(|auth| auth.required),
+            Some(false)
+        );
+        assert_eq!(
+            mount.cors_options.allowed_patterns,
+            vec!["https://allowed.test"]
+        );
+
+        let route = router
+            .methods
+            .iter()
+            .find(|method| method.name == "handle")
+            .expect("handle method not found");
+        assert_eq!(route.http_endpoint.len(), 1);
+        assert!(matches!(
+            route.http_endpoint[0].http_method,
+            golem_rust::golem_agentic::golem::agent::common::HttpMethod::Any
+        ));
+        assert!(route.http_endpoint[0].path_suffix.is_empty());
+    }
+
+    static PARTS_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+    static PARTS_RESTORATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(golem_rust::serde::Serialize, golem_rust::serde::Deserialize)]
+    struct PartsSavedState {
+        revision: u32,
+    }
+
+    #[agent_definition(snapshotting = "enabled")]
+    trait MultipartIndexAgent {
+        fn new(revision: u32) -> Self;
+        fn revision(&self) -> u32;
+    }
+
+    struct MultipartIndexAgentImpl {
+        revision: u32,
+        index: Vec<u8>,
+    }
+
+    #[agent_implementation]
+    impl MultipartIndexAgent for MultipartIndexAgentImpl {
+        fn new(revision: u32) -> Self {
+            PARTS_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
+            Self {
+                revision,
+                index: vec![],
+            }
+        }
+
+        fn revision(&self) -> u32 {
+            self.revision
+        }
+
+        async fn save_snapshot_parts(
+            &self,
+        ) -> Result<golem_rust::agentic::MultipartSnapshot, String> {
+            golem_rust::agentic::MultipartSnapshot::from_state(
+                &PartsSavedState {
+                    revision: self.revision,
+                },
+                std::collections::BTreeMap::from([(
+                    "index".to_string(),
+                    golem_rust::agentic::SnapshotPart {
+                        bytes: self.index.clone(),
+                        content_type: "application/octet-stream".to_string(),
+                    },
+                )]),
+            )
+        }
+
+        async fn load_snapshot_parts(
+            snapshot: golem_rust::agentic::MultipartSnapshot,
+            context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            PARTS_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            assert!(matches!(context.principal, Principal::Anonymous));
+            let saved: PartsSavedState = snapshot.decode_state()?;
+            let index = snapshot
+                .require_part("index", "application/octet-stream")?
+                .to_vec();
+            Ok(Self {
+                revision: saved.revision,
+                index,
+            })
+        }
+    }
+
+    #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
+    async fn multipart_hooks_restore_fresh_nonserde_live_state_and_reject_wrong_modes() {
+        use golem_rust::agentic::{SnapshotRestoreContext, with_agent_initiator};
+        MultipartIndexAgentImpl::__register_agent_type();
+        PARTS_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+        PARTS_RESTORATIONS.store(0, Ordering::SeqCst);
+        let bytes: Vec<u8> = (0..=255).chain([13, 10]).collect();
+        let instance = MultipartIndexAgentImpl {
+            revision: 17,
+            index: bytes.clone(),
+        };
+        let saved = instance.save_snapshot_base().await.unwrap();
+        assert!(matches!(&saved, SnapshotData::Multipart { .. }));
+        let agent_type = AgentTypeName("MultipartIndexAgent".to_string());
+        let context = || SnapshotRestoreContext {
+            principal: Principal::Anonymous,
+            agent_type: agent_type.0.clone(),
+            parameters: wire_input(vec![SchemaValue::U32(0)]),
+            phantom_id: None,
+        };
+        for wrong in [
+            SnapshotData::Json(b"null".to_vec()),
+            SnapshotData::Bytes(vec![]),
+            SnapshotData::Multipart {
+                state: b"1e400".to_vec(),
+                parts: Default::default(),
+            },
+            SnapshotData::Multipart {
+                state: br#""\uD800""#.to_vec(),
+                parts: Default::default(),
+            },
+            SnapshotData::Multipart {
+                state: b"{".to_vec(),
+                parts: Default::default(),
+            },
+        ] {
+            let context = context();
+            let result = with_agent_initiator(
+                |initiator| async move { initiator.restore(wrong, context).await },
+                &agent_type,
+            )
+            .await;
+            assert!(result.is_err());
+        }
+        assert_eq!(PARTS_RESTORATIONS.load(Ordering::SeqCst), 0);
+        let context = context();
+        let restored = with_agent_initiator(
+            |initiator| async move { initiator.restore(saved, context).await },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+        assert_eq!(PARTS_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
+        assert_eq!(PARTS_RESTORATIONS.load(Ordering::SeqCst), 1);
+        let saved: golem_rust::agentic::MultipartSnapshot = restored
+            .agent
+            .borrow()
+            .save_snapshot_base()
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(saved.state, serde_json::json!({ "revision": 17 }));
+        assert_eq!(
+            saved
+                .require_part("index", "application/octet-stream")
+                .unwrap(),
+            bytes
+        );
+        assert_eq!(restored.agent.borrow().get_definition().methods.len(), 1);
     }
 }

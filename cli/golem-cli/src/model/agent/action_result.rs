@@ -15,14 +15,15 @@
 //! Lightweight structured result views for commands whose human-readable
 //! output is mostly progress text printed during the run.
 //!
-//! Each view implements `NoTextOutput`: when `--format text` is used
+//! Most views implement `NoTextOutput`: when `--format text` is used
 //! (the default), the user has already seen the progress lines on stdout
 //! and adding another rendering of the same information would just be
-//! noise. When `--format json/yaml/toon` is used, the progress text is routed
+//! noise (the bulk views only add a summary of failures). When
+//! `--format json/yaml/toon` is used, the progress text is routed
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 
-use crate::model::agent::RawAgentId;
+use crate::model::agent::{AgentActionError, RawAgentId};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
@@ -147,15 +148,28 @@ impl StructuredOutput for AgentCancelInvocationResult {
     const KIND: &'static str = "agent.cancel-invocation";
 }
 
+/// Result of redeploying agents. Redeploying is best-effort: `agents` lists the agents that were
+/// redeployed and `errors` the ones that failed, so `redeployed` is only true when there are no
+/// errors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRedeployResult {
     pub redeployed: bool,
     pub agents: Vec<AgentRedeploymentMeta>,
+    /// The agents that failed to redeploy, with their errors.
+    pub errors: Vec<AgentActionError>,
 }
 
-impl NoTextOutput for AgentRedeployResult {}
-impl TextOutput for AgentRedeployResult {}
+impl TextOutput for AgentRedeployResult {
+    /// Successful redeploys are already visible as progress lines; only failures get a summary.
+    fn log(&self) {
+        if !self.errors.is_empty() {
+            logln("");
+            logln(format!("Failed to redeploy {} agent(s)", self.errors.len()));
+            log_table(agent_errors_table(&self.errors));
+        }
+    }
+}
 
 impl StructuredOutput for AgentRedeployResult {
     const KIND: &'static str = "agent.redeploy";
@@ -177,8 +191,11 @@ pub struct AgentRedeploymentMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteAllView {
+    /// True when every agent was deleted, i.e. `errors` is empty.
     pub deleted: bool,
     pub agents: Vec<AgentDeletionMeta>,
+    /// The agents that failed to delete, with their errors.
+    pub errors: Vec<AgentActionError>,
 }
 
 impl TextOutput for AgentDeleteAllView {
@@ -196,7 +213,29 @@ impl TextOutput for AgentDeleteAllView {
         }
 
         log_table(table);
+
+        if !self.errors.is_empty() {
+            logln("");
+            logln(format!("Failed to delete {} agent(s)", self.errors.len()));
+            log_table(agent_errors_table(&self.errors));
+        }
     }
+}
+
+fn agent_errors_table(errors: &[AgentActionError]) -> ComfyTable {
+    let mut table = new_table_full_condensed(vec![
+        Column::new("Component"),
+        Column::new("Agent ID"),
+        Column::new("Error"),
+    ]);
+    for error in errors {
+        table.add_row(vec![
+            error.component_name.to_string(),
+            error.agent_id.to_string(),
+            error.error.clone(),
+        ]);
+    }
+    table
 }
 
 impl StructuredOutput for AgentDeleteAllView {

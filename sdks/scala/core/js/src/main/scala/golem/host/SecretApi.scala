@@ -18,14 +18,22 @@ package golem.host
 
 import golem.host.js.JsSecretResource
 import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree}
-import golem.schema.GuestSecretHandle
+import golem.runtime.autowire.SchemaPayload
+import golem.schema.{FromSchema, GuestSecretHandle, IntoSchema}
 
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 
-private[golem] object SecretApi {
+object SecretApi {
 
-  def reveal(handle: GuestSecretHandle, expected: JsSchemaGraph): JsSchemaValueTree =
+  /** Reveal an owned secret by borrowing its handle. */
+  def reveal[A](handle: GuestSecretHandle)(implicit into: IntoSchema[A], from: FromSchema[A]): A =
+    SchemaPayload.decode[A](reveal(handle, SchemaPayload.graph[A])) match {
+      case Right(value) => value
+      case Left(error)  => throw new IllegalArgumentException(s"Failed to decode revealed secret: $error")
+    }
+
+  private[golem] def reveal(handle: GuestSecretHandle, expected: JsSchemaGraph): JsSchemaValueTree =
     handle
       .withHandle(raw => RevealModule.reveal(raw.asInstanceOf[JsSecretResource], expected))
       .getOrElse(throw new IllegalStateException("secret handle was already transferred"))

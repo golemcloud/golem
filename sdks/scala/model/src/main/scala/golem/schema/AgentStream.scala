@@ -6,117 +6,600 @@
  */
 package golem.schema
 
-import scala.concurrent.{ExecutionContext, Future}
+import golem.schema.wire.*
+import zio.blocks.async.*
+import zio.blocks.streams.{JvmType, Stream}
+
+import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.collection.mutable
+import scala.util.{DynamicVariable, Failure, Success, Try}
 import scala.util.control.NonFatal
 
-/** A demand-driven, single-reader stream used by schema-native agent calls. */
+/**
+ * A lazy, pull-based, single-reader stream used by schema-native agent calls.
+ * The producer is asked for a value only when [[pull]] is called, and only one
+ * pull may be active at a time.
+ *
+ * An `AgentStream` is affine. Passing it through schema conversion, returning
+ * it from an agent method, or calling [[map]] transfers the stream; the
+ * original stream can no longer be pulled, closed, or transferred again.
+ *
+ * For a stream connected through the component protocol, closing the consumer
+ * drops its readable endpoint. Producer cancellation is cooperative: the
+ * producer observes the drop when a subsequent write is rejected, then closes
+ * its source. It cannot interrupt an arbitrary pending source pull, and remote
+ * cleanup is not guaranteed to finish before a later invocation. On the
+ * producer side, the next source pull starts only after the previous write is
+ * accepted, providing backpressure. Acceptance does not guarantee that the
+ * value becomes externally observable before an immediately following producer
+ * failure.
+ *
+ * A bare protocol stream has no recoverable terminal error or error reason. At
+ * that protocol boundary, producer and cleanup failures fail the active
+ * invocation. Applications that need recoverable failures must represent them
+ * explicitly in the element type.
+ *
+ * @tparam A
+ *   the type of values produced by this stream
+ */
 final class AgentStream[+A] private[golem] (
-  private[golem] val pullValue: () => Future[Option[A]],
-  private var directTransfer: Option[() => GuestSchemaValueStreamHandle] = None
-) {
-  private val lock       = new AnyRef
-  private var moved      = false
-  private var pullActive = false
+  private val backing: AgentStream.Backing[A],
+  private var directTransfer: Option[() => GuestSchemaValueStreamHandle] = None,
+  private var ownershipEntry: Option[AgentStreamOwnership.Entry] = None
+) extends AgentStreamOwnership.Owned {
+  private sealed trait State
+  private case object Open                          extends State
+  private case object Pulling                       extends State
+  private case object Completed                     extends State
+  private final case class Failed(error: Throwable) extends State
+  private final case class Closed(error: Throwable) extends State
+  private case object Transferred                   extends State
 
-  def pull(): Future[Option[A]] = lock.synchronized {
-    if (moved)
-      Future.failed(new IllegalStateException("agent stream was already transferred"))
-    else if (pullActive)
-      Future.failed(new IllegalStateException("agent stream already has an active pull"))
-    else {
-      pullActive = true
-      directTransfer = None
-      val result =
-        try pullValue()
-        catch {
-          case NonFatal(error) => Future.failed(error)
-        }
-      result.andThen { case _ => lock.synchronized { pullActive = false } }(ExecutionContext.parasitic)
+  private var state: State                             = Open
+  private var activePull: Option[Promise[Option[Any]]] = None
+  private var finalization: Option[Promise[Unit]]      = None
+  private val source                                   = new AgentStream.AsyncSource(backing)
+
+  /**
+   * Requests the next value from the producer.
+   *
+   * The returned future completes with `Some(value)` for an item and `None`
+   * after clean completion. A producer or decoding failure fails the future and
+   * is returned by later pulls as well. Calling `pull` while another pull is
+   * active returns a failed future.
+   */
+  def pull(): Future[Option[A]] = {
+    val result =
+      state match {
+        case Open =>
+          val promise = Promise[Option[Any]]()
+          state = Pulling
+          activePull = Some(promise)
+          directTransfer = None
+          val ownership = effectiveOwnership
+          val source    =
+            try pullSource(ownership)
+            catch {
+              case NonFatal(error) => Future.failed(error)
+            }
+          Left((promise, source))
+        case Pulling       => Right(Future.failed(new IllegalStateException("agent stream already has an active pull")))
+        case Completed     => Right(Future.successful(None))
+        case Failed(error) => Right(Future.failed(error))
+        case Closed(error) => Right(Future.failed(error))
+        case Transferred   => Right(Future.failed(new IllegalStateException("agent stream was already transferred")))
+      }
+
+    result match {
+      case Right(future)           => future
+      case Left((promise, source)) =>
+        source.onComplete(completePull(promise, _))(using ExecutionContext.parasitic)
+        promise.future.asInstanceOf[Future[Option[A]]]
     }
   }
 
   /**
-   * Transfers this stream into a mapped stream. The original can no longer be
-   * pulled or transferred.
+   * Stops this stream and releases its producer. Closing is idempotent and
+   * waits for the finalizer. An active pull fails immediately; its underlying
+   * producer operation may continue, but any later result is ignored.
+   *
+   * Closing a transferred stream returns a failed future because ownership has
+   * moved to another stream or schema value.
    */
-  def map[B](f: A => B)(implicit ec: ExecutionContext): AgentStream[B] =
-    lock.synchronized {
-      if (moved)
-        throw new IllegalStateException("agent stream was already transferred")
-      if (pullActive)
-        throw new IllegalStateException("agent stream cannot be transferred while a pull is active")
-      moved = true
-      directTransfer = None
-      AgentStream.fromPull(() => pullValue().map(_.map(f)))
-    }
+  def close(): Future[Unit] = {
+    val (pending, result, finalizer) =
+      state match {
+        case Transferred =>
+          (None, Future.failed(new IllegalStateException("agent stream was already transferred")), None)
+        case Completed | Failed(_) | Closed(_) =>
+          val (result, finalizer) = reserveFinalization()
+          (None, result, finalizer)
+        case Open | Pulling =>
+          val error = new IllegalStateException("agent stream was closed")
+          val pull  = activePull
+          state = Closed(error)
+          activePull = None
+          directTransfer = None
+          val (result, finalizer) = reserveFinalization()
+          (pull.map(_ -> error), result, finalizer)
+      }
+    pending.foreach { case (promise, error) => promise.tryFailure(error) }
+    runFinalizer(finalizer)
+    result
+  }
+
+  override private[golem] def closeOwned(): Future[Unit] = close()
+
+  /**
+   * Lazily transforms each produced value and transfers ownership into the
+   * returned stream. The original can no longer be pulled, closed, or
+   * transferred.
+   */
+  def map[B](f: A => B)(implicit ec: ExecutionContext): AgentStream[B] = {
+    ensureTransferable()
+    lazy val mapped: AgentStream[B] = new AgentStream(
+      AgentStream.streamFromPull(
+        () => {
+          val ownership = mapped.effectiveOwnership
+          pullSource(ownership)
+            .map(
+              _.map(value => AgentStreamOwnership.capture(ownership)(f(value)))
+            )
+        },
+        () => source.close()
+      ),
+      ownershipEntry = ownershipEntry
+    )
+    state = Transferred
+    directTransfer = None
+    ownershipEntry.foreach(_.replace(mapped))
+    mapped
+  }
+
+  /** Transfers this stream and runs cleanup after its producer is released. */
+  def ensuring(cleanup: () => Future[Unit])(implicit ec: ExecutionContext): AgentStream[A] = {
+    ensureTransferable()
+    val decorated = new AgentStream(
+      AgentStream.streamFromPull(
+        () => source.pull(),
+        () => {
+          val released = source.close()
+          released.transformWith { result =>
+            val cleaned =
+              try cleanup()
+              catch { case NonFatal(error) => Future.failed(error) }
+            cleaned.flatMap(_ => Future.fromTry(result))
+          }
+        }
+      ),
+      ownershipEntry = ownershipEntry
+    )
+    state = Transferred
+    directTransfer = None
+    ownershipEntry.foreach(_.replace(decorated))
+    decorated
+  }
 
   private[golem] def moveToSchemaValueStream(
     encode: A => SchemaValue
   )(implicit ec: ExecutionContext): GuestSchemaValueStreamHandle =
-    lock.synchronized {
-      if (moved)
-        throw new IllegalStateException("agent stream was already transferred")
-      if (pullActive)
-        throw new IllegalStateException("agent stream cannot be transferred while a pull is active")
-      moved = true
-      directTransfer match {
-        case Some(transfer) => transfer()
-        case None           => GuestSchemaValueStreamHandle.native(AgentStream.fromPull(() => pullValue().map(_.map(encode))))
+    moveToWireStream(value => SchemaWire.schemaValueToWit(encode(value)))
+
+  private[golem] def moveToWireStream(
+    encode: A => WitSchemaValueTree
+  )(implicit ec: ExecutionContext): GuestSchemaValueStreamHandle = {
+    ensureTransferable()
+    val handle = directTransfer match {
+      case Some(transfer) => transfer()
+      case None           =>
+        val nestedOwnership                              = new AgentStreamOwnership
+        lazy val stream: AgentStream[WitSchemaValueTree] = new AgentStream(
+          AgentStream.streamFromPull(
+            () => {
+              val ownership = stream.effectiveOwnership.orElse(Some(nestedOwnership))
+              pullSource(ownership)
+                .map(
+                  _.map { value =>
+                    AgentStreamOwnership.capture(ownership)(encode(value))
+                  }
+                )
+            },
+            () =>
+              source.close().transformWith(completed => nestedOwnership.close().flatMap(_ => Future.fromTry(completed)))
+          ),
+          ownershipEntry = ownershipEntry
+        )
+        GuestSchemaValueStreamHandle.nativeWire(stream)
+    }
+    val endpoint = handle.withHandle(identity).getOrElse {
+      throw new IllegalStateException("schema value stream was already transferred")
+    }
+    state = Transferred
+    ownershipEntry.foreach { entry =>
+      endpoint.attachOwnership(entry)
+      entry.replace(endpoint)
+    }
+    handle
+  }
+
+  private[golem] def ownership: Option[AgentStreamOwnership.Entry] = ownershipEntry
+
+  private def effectiveOwnership: Option[AgentStreamOwnership] =
+    ownershipEntry match {
+      case Some(entry) => entry.activeOwner
+      case None        => AgentStreamOwnership.currentOwner
+    }
+
+  private def pullSource(ownership: Option[AgentStreamOwnership]): Future[Option[A]] =
+    source
+      .pull()
+      .map(_.map(value => AgentStreamOwnership.adopt(value, ownership)))(using ExecutionContext.parasitic)
+
+  private[golem] def attachOwnership(entry: AgentStreamOwnership.Entry): Unit =
+    ownershipEntry match {
+      case Some(existing) if existing ne entry =>
+        throw new IllegalStateException("agent stream already belongs to another invocation")
+      case _ => ownershipEntry = Some(entry)
+    }
+
+  private def completePull(promise: Promise[Option[Any]], result: Try[Option[A]]): Unit = {
+    val completion =
+      if (state != Pulling || !activePull.contains(promise)) None
+      else {
+        result match {
+          case Success(None) =>
+            val (finalized, finalizer) = reserveFinalization()
+            Some((promise, Success(None), finalized, finalizer))
+          case Success(Some(value)) =>
+            activePull = None
+            state = Open
+            promise.trySuccess(Some(value.asInstanceOf[Any]))
+            None
+          case Failure(error) =>
+            val (finalized, finalizer) = reserveFinalization()
+            Some((promise, Failure(error), finalized, finalizer))
+        }
       }
+    completion.foreach { case (target, value, finalized, finalizer) =>
+      runFinalizer(finalizer)
+      finalized.onComplete { cleanup =>
+        val completed = value match {
+          case failure @ Failure(_) => failure
+          case success              => cleanup.map(_ => success.get)
+        }
+        if (state == Pulling && activePull.contains(target)) {
+          activePull = None
+          state = completed match {
+            case Success(_)     => Completed
+            case Failure(error) => Failed(error)
+          }
+          target.tryComplete(completed)
+        }
+      }(using ExecutionContext.parasitic)
+    }
+  }
+
+  private def reserveFinalization(): (Future[Unit], Option[Promise[Unit]]) =
+    finalization match {
+      case Some(promise) => (promise.future, None)
+      case None          =>
+        val promise = Promise[Unit]()
+        finalization = Some(promise)
+        (promise.future, Some(promise))
+    }
+
+  private def runFinalizer(finalizer: Option[Promise[Unit]]): Unit =
+    finalizer.foreach { promise =>
+      val result =
+        try source.close()
+        catch {
+          case NonFatal(error) => Future.failed(error)
+        }
+      result
+        .transformWith(completed =>
+          ownershipEntry
+            .map(_.closeTransferredOwnership())
+            .getOrElse(Future.successful(()))
+            .flatMap(_ => Future.fromTry(completed))(using ExecutionContext.parasitic)
+        )(using ExecutionContext.parasitic)
+        .onComplete(promise.tryComplete)(using ExecutionContext.parasitic)
+      ownershipEntry.foreach(_.release(this, promise.future))
+    }
+
+  private def ensureTransferable(): Unit =
+    state match {
+      case Open        => ()
+      case Pulling     => throw new IllegalStateException("agent stream cannot be transferred while a pull is active")
+      case Transferred => throw new IllegalStateException("agent stream was already transferred")
+      case Completed   => throw new IllegalStateException("completed agent stream cannot be transferred")
+      case Failed(_)   => throw new IllegalStateException("failed agent stream cannot be transferred")
+      case Closed(_)   => throw new IllegalStateException("closed agent stream cannot be transferred")
     }
 }
 
 object AgentStream {
-  def fromPull[A](pull: () => Future[Option[A]]): AgentStream[A] = new AgentStream(pull)
 
-  implicit def intoSchema[A](implicit element: IntoSchema[A], ec: ExecutionContext): IntoSchema[AgentStream[A]] =
+  private object End
+
+  private[golem] final class Finalizer(onFinalize: () => Future[Unit]) {
+    lazy val result: Future[Unit] =
+      try onFinalize()
+      catch { case NonFatal(error) => Future.failed(error) }
+
+    def async: Async[Unit] = Async.fromFuture(result)
+  }
+
+  private[golem] final case class Backing[+A](
+    stream: Stream[Nothing, A],
+    pull: Option[() => Future[Option[A]]],
+    finalizer: Option[Finalizer]
+  )
+
+  private final class AsyncSource[A](backing: Backing[A]) {
+    private implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
+    private lazy val reader                                 = backing.stream.startAsync.toFuture
+    private var terminalFailure: Option[Throwable]          = None
+    private lazy val closed                                 = backing.pull match {
+      case Some(_) => backing.finalizer.get.result
+      case None    =>
+        reader.flatMap(_.close().toFuture).recoverWith { case closeError =>
+          backing.finalizer match {
+            case Some(finalizer) =>
+              finalizer.result.transformWith {
+                case Success(_) if terminalFailure.exists(_ eq closeError) => Future.successful(())
+                case Success(_)                                            => Future.failed(closeError)
+                case Failure(cleanupError)                                 => Future.failed(cleanupError)
+              }
+            case None if terminalFailure.exists(_ eq closeError) => Future.successful(())
+            case None                                            => Future.failed(closeError)
+          }
+        }
+    }
+
+    def pull(): Future[Option[A]] = backing.pull match {
+      case Some(pull) =>
+        try pull()
+        catch { case NonFatal(error) => Future.failed(error) }
+      case None =>
+        reader
+          .flatMap(_.read[Any](End).toFuture)
+          .map { value =>
+            if (value.asInstanceOf[AnyRef] eq End) None
+            else Some(value.asInstanceOf[A])
+          }
+          .recoverWith { case error =>
+            terminalFailure = Some(error)
+            Future.failed(error)
+          }
+    }
+
+    def close(): Future[Unit] = closed
+  }
+
+  private def streamFromPull[A](
+    pull: () => Future[Option[A]],
+    onFinalize: () => Future[Unit]
+  ): Backing[A] = {
+    val finalizer = new Finalizer(onFinalize)
+    Backing(
+      Stream
+        .unfoldAsync(())(_ => Async.attempt(pull()).flatMap(Async.fromFuture).map(_.map(_ -> ())))(using
+          JvmType.Infer.boxed[A]
+        )
+        .ensuringAsync(finalizer.async),
+      Some(pull),
+      Some(finalizer)
+    )
+  }
+
+  /**
+   * Creates a lazy stream backed by a pull function.
+   *
+   * `pull` is invoked only in response to demand and must return `Some(value)`
+   * or `None` for clean completion. `onFinalize` is invoked exactly once after
+   * clean completion, producer failure, or explicit close;
+   * [[AgentStream.close]] waits for it.
+   *
+   * @param pull
+   *   obtains the next value or clean end of stream
+   * @param onFinalize
+   *   releases resources owned by the producer
+   */
+  def fromPull[A](
+    pull: () => Future[Option[A]],
+    onFinalize: () => Future[Unit] = () => Future.successful(())
+  ): AgentStream[A] = {
+    var owner                       = Option.empty[AgentStream[A]]
+    lazy val result: AgentStream[A] = new AgentStream(
+      streamFromPull(
+        () => AgentStreamOwnership.capture(owner.flatMap(_.effectiveOwnership))(pull()),
+        onFinalize
+      )
+    )
+    owner = Some(result)
+    AgentStreamOwnership.own(result)
+  }
+
+  /** Creates an affine protocol stream backed by a ZIO Blocks stream. */
+  def fromStream[A](stream: Stream[Nothing, A]): AgentStream[A] =
+    AgentStreamOwnership.own(new AgentStream(Backing(stream, None, None)))
+
+  implicit def intoSchema[A](implicit element: IntoSchema[A]): IntoSchema[AgentStream[A]] =
     new IntoSchema[AgentStream[A]] {
+      private implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
+
       override lazy val graph: SchemaGraph =
         SchemaGraph(element.graph.defs, SchemaType(SchemaTypeBody.StreamType(Some(element.graph.root))))
       override def toValue(value: AgentStream[A]): SchemaValue =
         SchemaValue.StreamValue(value.moveToSchemaValueStream(element.toValue))
     }
 
-  implicit def fromSchema[A](implicit element: FromSchema[A], ec: ExecutionContext): FromSchema[AgentStream[A]] =
+  implicit def fromSchema[A](implicit element: FromSchema[A]): FromSchema[AgentStream[A]] =
     new FromSchema[AgentStream[A]] {
-      private def decode(stream: AgentStream[SchemaValue]): AgentStream[A] =
-        new AgentStream(() =>
-          stream.pull().flatMap {
-            case None        => Future.successful(None)
-            case Some(value) =>
-              element.fromValue(value).fold(e => Future.failed(e), a => Future.successful(Some(a)))
-          }
-        )
-
       override def fromValue(value: SchemaValue): Either[FromSchemaError, AgentStream[A]] = value match {
         case SchemaValue.StreamValue(handle) =>
-          handle.take() match {
-            case Some(GuestSchemaValueStream.Native(stream)) =>
-              Right(decode(stream))
-            case Some(wrapped @ GuestSchemaValueStream.Wrapped(_, unwrap)) =>
-              lazy val stream = unwrap()
-              Right(
-                new AgentStream(
-                  () => stream.flatMap(decode(_).pull()),
-                  Some(() => GuestSchemaValueStreamHandle.endpoint(wrapped))
-                )
-              )
-            case None => Left(FromSchemaError("schema value stream was already transferred"))
-          }
+          decodeHandle(handle, value => element.fromValue(SchemaWire.schemaValueFromWit(value)).fold(throw _, identity))
         case other => Left(FromSchemaError(s"Expected stream value, got $other"))
       }
     }
+
+  def concreteCodec[A](element: ConcreteCodec[A]): ConcreteCodec[AgentStream[A]] = new ConcreteCodec[AgentStream[A]] {
+    def describe(out: WireTypes): Int                      = out.add(WitSchemaTypeBody.StreamType(Some(element.describe(out))))
+    def write(value: AgentStream[A], out: WireValues): Int = {
+      val handle = value.moveToWireStream(element.encodeValue)(using ExecutionContext.parasitic)
+      out.add(WitSchemaValueNode.StreamValue(handle))
+    }
+    def read(in: WireValuesReader, index: Int): AgentStream[A] = in.at(index) {
+      case WitSchemaValueNode.StreamValue(handle) => decodeHandle(handle, element.decode).fold(throw _, identity)
+    }
+  }
+
+  private def decodeHandle[A](
+    handle: GuestSchemaValueStreamHandle,
+    decodeValue: WitSchemaValueTree => A
+  ): Either[FromSchemaError, AgentStream[A]] = {
+    implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
+
+    def decode(
+      pull: () => Future[Option[WitSchemaValueTree]],
+      finalize: () => Future[Unit],
+      directTransfer: Option[() => GuestSchemaValueStreamHandle],
+      ownership: Option[AgentStreamOwnership.Entry]
+    ): AgentStream[A] = {
+      val decoded = new AgentStream(
+        streamFromPull(
+          () =>
+            pull().flatMap {
+              case None        => Future.successful(None)
+              case Some(value) =>
+                val result = Try {
+                  AgentStreamOwnership.capture(ownership.flatMap(_.activeOwner)) {
+                    decodeValue(value)
+                  }
+                }
+                result match {
+                  case Success(item) =>
+                    ownership.foreach(_.handoffDecodedItem())
+                    Future.successful(Some(item))
+                  case Failure(error) =>
+                    AgentStreamOwnership
+                      .cleanup(
+                        ownership.map(_.closeTransferredOwnership()).getOrElse(Future.successful(()))
+                      )
+                      .flatMap(_ => Future.failed(error))
+                }
+            },
+          finalize
+        ),
+        directTransfer,
+        ownership
+      )
+      ownership.foreach(_.replace(decoded))
+      AgentStreamOwnership.own(decoded)
+    }
+
+    handle.take() match {
+      case Some(native: GuestSchemaValueStream.Native[?]) =>
+        Right(decode(() => native.pull(), () => native.value.close(), None, native.ownership))
+      case Some(wrapped: GuestSchemaValueStream.Wrapped) =>
+        lazy val stream = wrapped.unwrap()
+        Right(
+          decode(
+            () => stream.flatMap(_.pull()),
+            () => stream.flatMap(_.close()),
+            Some(() => GuestSchemaValueStreamHandle.endpoint(wrapped)),
+            wrapped.ownership
+          )
+        )
+      case None => Left(FromSchemaError("schema value stream was already transferred"))
+    }
+  }
 }
 
-private[golem] sealed trait GuestSchemaValueStream {
+private[golem] sealed trait GuestSchemaValueStream extends AgentStreamOwnership.Owned {
   def ownershipKey: Any
+  def dispose(): Future[Unit]
+
+  override private[golem] final def closeOwned(): Future[Unit] = dispose()
+
+  private var ownershipEntry: Option[AgentStreamOwnership.Entry] = None
+  private var committed                                          = false
+
+  private[golem] final def ownership: Option[AgentStreamOwnership.Entry] = ownershipEntry
+
+  /**
+   * Runs the one-time disposal of the underlying stream and releases this
+   * endpoint from its owner, which then no longer needs to dispose it.
+   */
+  protected final def disposeOwned(dispose: => Future[Unit]): Future[Unit] = {
+    val result = dispose
+    ownership.foreach(_.release(this, result))
+    result
+  }
+
+  private[golem] final def activeOwnership: Option[AgentStreamOwnership] =
+    ownership.flatMap(_.activeOwner)
+
+  private[golem] final def closeTransferredOwnership(): Future[Unit] =
+    ownership.map(_.closeTransferredOwnership()).getOrElse(Future.successful(()))
+
+  private[golem] final def attachOwnership(entry: AgentStreamOwnership.Entry): Unit =
+    ownershipEntry match {
+      case Some(existing) if existing ne entry =>
+        throw new IllegalStateException("schema value stream already belongs to another invocation")
+      case _ => ownershipEntry = Some(entry)
+    }
+
+  private[golem] final def commitTransfer(): Unit = {
+    committed = true
+    ownershipEntry.foreach(_.commit())
+  }
+
+  private[golem] final def isTransferCommitted: Boolean = committed
 }
 private[golem] object GuestSchemaValueStream {
-  final case class Wrapped(raw: Any, unwrap: () => Future[AgentStream[SchemaValue]]) extends GuestSchemaValueStream {
-    override def ownershipKey: Any = raw
+  final case class Wrapped(raw: Any, unwrapValue: () => Future[AgentStream[WitSchemaValueTree]])
+      extends GuestSchemaValueStream {
+    private lazy val stream =
+      try unwrapValue()
+      catch {
+        case NonFatal(error) => Future.failed(error)
+      }
+    private lazy val disposal = disposeOwned(
+      stream
+        .flatMap(_.close())(using ExecutionContext.parasitic)
+        .transformWith(result =>
+          AgentStreamOwnership
+            .cleanup(closeTransferredOwnership())
+            .flatMap(_ => Future.fromTry(result))(using ExecutionContext.parasitic)
+        )(using ExecutionContext.parasitic)
+    )
+
+    def unwrap(): Future[AgentStream[WitSchemaValueTree]] = stream
+
+    override def ownershipKey: Any       = raw
+    override def dispose(): Future[Unit] = disposal
   }
-  final case class Native(value: AgentStream[SchemaValue]) extends GuestSchemaValueStream {
-    override def ownershipKey: Any = value
+  final case class Native[A](value: AgentStream[A], encode: A => WitSchemaValueTree) extends GuestSchemaValueStream {
+    value.ownership.foreach(attachOwnership)
+
+    def pull(): Future[Option[WitSchemaValueTree]] =
+      value
+        .pull()
+        .map(item => AgentStreamOwnership.capture(activeOwnership)(item.map(encode)))(using ExecutionContext.parasitic)
+
+    private lazy val disposal = disposeOwned(
+      value
+        .close()
+        .transformWith(result =>
+          AgentStreamOwnership
+            .cleanup(closeTransferredOwnership())
+            .flatMap(_ => Future.fromTry(result))(using ExecutionContext.parasitic)
+        )(using ExecutionContext.parasitic)
+    )
+
+    override def ownershipKey: Any       = value
+    override def dispose(): Future[Unit] = disposal
   }
 }
 
@@ -133,13 +616,247 @@ final class GuestSchemaValueStreamHandle private (private var cell: Option[Guest
 object GuestSchemaValueStreamHandle {
   private[golem] def wrapped(
     raw: Any,
-    unwrap: () => Future[AgentStream[SchemaValue]]
-  ): GuestSchemaValueStreamHandle =
-    endpoint(GuestSchemaValueStream.Wrapped(raw, unwrap))
+    unwrap: () => Future[AgentStream[WitSchemaValueTree]]
+  ): GuestSchemaValueStreamHandle = endpoint(GuestSchemaValueStream.Wrapped(raw, unwrap))
 
-  private[golem] def endpoint(value: GuestSchemaValueStream): GuestSchemaValueStreamHandle =
+  private[golem] def endpoint(value: GuestSchemaValueStream): GuestSchemaValueStreamHandle = {
+    AgentStreamOwnership.own(value)
+    AgentStreamOutputTransaction.track(value)
     new GuestSchemaValueStreamHandle(Some(value))
+  }
 
   private[golem] def native(stream: AgentStream[SchemaValue]): GuestSchemaValueStreamHandle =
-    new GuestSchemaValueStreamHandle(Some(GuestSchemaValueStream.Native(stream)))
+    endpoint(GuestSchemaValueStream.Native(stream, SchemaWire.schemaValueToWit))
+
+  private[golem] def nativeWire(stream: AgentStream[WitSchemaValueTree]): GuestSchemaValueStreamHandle =
+    endpoint(GuestSchemaValueStream.Native(stream, identity))
+}
+
+/**
+ * Tracks the streams an invocation must close when it ends. An entry stays
+ * registered only while the owner may still have to close it: it is dropped
+ * once its stream finalizes on its own, once its cleanup has run, or once the
+ * stream is transferred out of the owner.
+ */
+private[golem] final class AgentStreamOwnership {
+  private implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
+  private val entries                                     = mutable.LinkedHashSet.empty[AgentStreamOwnership.Entry]
+  private var closed                                      = false
+
+  private[golem] def register(owned: AgentStreamOwnership.Owned): AgentStreamOwnership.Entry = {
+    val entry = new AgentStreamOwnership.Entry(this, owned)
+    if (!closed) entries += entry
+    else AgentStreamOwnership.cleanup(entry.close())
+    entry
+  }
+
+  private def remove(entry: AgentStreamOwnership.Entry): Unit =
+    if (!closed) entries -= entry
+
+  private[golem] def pendingEntries: Int = entries.size
+
+  /** Successful decoding transfers all acquired streams to the caller. */
+  def handoff(): Unit = entries.toList.foreach(_.commit())
+
+  private[golem] def transferTo(target: AgentStreamOwnership): Unit = {
+    val acquired = entries.toList
+    entries.clear()
+    acquired.foreach(target.accept)
+  }
+
+  private def accept(entry: AgentStreamOwnership.Entry): Unit = {
+    entry.owner = this
+    if (!closed) entries += entry
+    else AgentStreamOwnership.cleanup(entry.close())
+  }
+
+  def close(): Future[Unit] = {
+    val owned =
+      if (closed) Nil
+      else {
+        closed = true
+        val snapshot = entries.toList
+        entries.clear()
+        snapshot
+      }
+    Future
+      .sequence(owned.map(entry => AgentStreamOwnership.cleanup(entry.close())))
+      .map(_ => ())
+  }
+}
+
+private[golem] object AgentStreamOwnership {
+  private val current = new DynamicVariable[Option[AgentStreamOwnership]](None)
+
+  private[golem] def currentOwner: Option[AgentStreamOwnership] = current.value
+
+  /**
+   * A resource an ownership entry closes. Streams derived from an owned stream
+   * take over its entry, so an entry always targets the single resource whose
+   * cleanup releases the whole derivation chain.
+   */
+  private[golem] trait Owned {
+    private[golem] def closeOwned(): Future[Unit]
+  }
+
+  final class Entry private[AgentStreamOwnership] (
+    private[AgentStreamOwnership] var owner: AgentStreamOwnership,
+    initialOwned: Owned
+  ) {
+    private var owned: Owned                                       = initialOwned
+    private var state: Either[Boolean, Promise[Unit]]              = Left(false)
+    private var transferredOwnership: Option[AgentStreamOwnership] = None
+
+    def replace(target: Owned): Unit =
+      state match {
+        case Left(false) => owned = target
+        case _           => ()
+      }
+
+    def commit(): Unit = {
+      val committed =
+        state match {
+          case Left(false) =>
+            transferredOwnership = Some(new AgentStreamOwnership)
+            state = Left(true)
+            true
+          case _ => false
+        }
+      if (committed) owner.remove(this)
+    }
+
+    /**
+     * Records that `target` started finalizing on its own, so the owner no
+     * longer has to close it. Ignored unless `target` is the resource this
+     * entry currently closes; inner streams of a derivation chain finalize as
+     * part of the outer stream and must not settle the shared entry early.
+     */
+    def release(target: Owned, completion: Future[Unit]): Unit = {
+      val released =
+        state match {
+          case Left(false) if owned eq target =>
+            val done = Promise[Unit]()
+            state = Right(done)
+            Some(done)
+          case _ => None
+        }
+      released.foreach(settle(_, completion))
+    }
+
+    private def settle(done: Promise[Unit], completion: Future[Unit]): Unit =
+      completion.onComplete { result =>
+        done.tryComplete(result)
+        owner.remove(this)
+      }(using ExecutionContext.parasitic)
+
+    def activeOwner: Option[AgentStreamOwnership] =
+      state match {
+        case Left(false) => Some(owner)
+        case Left(true)  => transferredOwnership
+        case Right(_)    => None
+      }
+
+    /**
+     * Only an already handed-off reader owns a private per-item child scope.
+     */
+    def handoffDecodedItem(): Unit = transferredOwnership.foreach(_.handoff())
+
+    def closeTransferredOwnership(): Future[Unit] = {
+      val transferred = {
+        val result = transferredOwnership
+        transferredOwnership = None
+        result
+      }
+      transferred.map(_.close()).getOrElse(Future.successful(()))
+    }
+
+    def close(): Future[Unit] = {
+      val result =
+        state match {
+          case Left(true)  => Right(Future.successful(()))
+          case Right(done) => Right(done.future)
+          case Left(false) =>
+            val done = Promise[Unit]()
+            state = Right(done)
+            Left((done, owned))
+        }
+      result match {
+        case Right(done)          => done
+        case Left((done, target)) =>
+          val closing =
+            try target.closeOwned()
+            catch {
+              case NonFatal(error) => Future.failed(error)
+            }
+          settle(done, closing)
+          done.future
+      }
+    }
+  }
+
+  def capture[A](ownership: AgentStreamOwnership)(body: => A): A =
+    current.withValue(Some(ownership))(body)
+
+  def capture[A](ownership: Option[AgentStreamOwnership])(body: => A): A =
+    current.withValue(ownership)(body)
+
+  def own[A](stream: AgentStream[A]): AgentStream[A] = {
+    if (stream.ownership.isEmpty) {
+      current.value.foreach { owner =>
+        stream.attachOwnership(owner.register(stream))
+      }
+    }
+    stream
+  }
+
+  def adopt[A](value: A, ownership: Option[AgentStreamOwnership]): A = {
+    value match {
+      case stream: AgentStream[?] if stream.ownership.isEmpty =>
+        capture(ownership)(own(stream))
+      case _ => ()
+    }
+    value
+  }
+
+  def own(stream: GuestSchemaValueStream): GuestSchemaValueStream = {
+    if (stream.ownership.isEmpty) {
+      current.value.foreach { owner =>
+        stream.attachOwnership(owner.register(stream))
+      }
+    }
+    stream
+  }
+
+  def cleanup(action: => Future[Unit]): Future[Unit] =
+    try action.recover { case _ => () }(using ExecutionContext.parasitic)
+    catch {
+      case _: Throwable => Future.successful(())
+    }
+}
+
+private[golem] final class AgentStreamOutputTransaction {
+  private implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
+  private val streams                                     = mutable.ListBuffer.empty[GuestSchemaValueStream]
+
+  def register(stream: GuestSchemaValueStream): Unit =
+    if (!streams.exists(_ eq stream)) streams += stream
+
+  def rollback(): Future[Unit] =
+    close(streams.toList.reverse)
+
+  def closeUncommitted(): Future[Unit] =
+    close(streams.toList.reverse.filterNot(_.isTransferCommitted))
+
+  private def close(values: List[GuestSchemaValueStream]): Future[Unit] =
+    Future.sequence(values.map(stream => AgentStreamOwnership.cleanup(stream.dispose()))).map(_ => ())
+}
+
+private[golem] object AgentStreamOutputTransaction {
+  private val current = new DynamicVariable[Option[AgentStreamOutputTransaction]](None)
+
+  def capture[A](transaction: AgentStreamOutputTransaction)(body: => A): A =
+    current.withValue(Some(transaction))(body)
+
+  def track(stream: GuestSchemaValueStream): Unit =
+    current.value.foreach(_.register(stream))
 }

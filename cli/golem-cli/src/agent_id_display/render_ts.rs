@@ -39,7 +39,7 @@ fn render_cm_value(buf: &mut String, graph: &SchemaGraph, ty: &SchemaType, value
         return;
     }
 
-    let (resolved, _) = resolve_named_ref(graph, ty);
+    let resolved = graph.resolve_ref(ty).unwrap_or(ty);
     match (resolved, value) {
         (SchemaType::Bool { .. }, SchemaValue::Bool(b)) => {
             buf.push_str(if *b { "true" } else { "false" });
@@ -133,8 +133,7 @@ fn render_cm_value(buf: &mut String, graph: &SchemaGraph, ty: &SchemaType, value
         }
         (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: v }) => match v {
             Some(payload) => {
-                let (inner_resolved, _) = resolve_named_ref(graph, inner);
-                if matches!(inner_resolved, SchemaType::Option { .. }) {
+                if matches!(graph.resolve_ref(inner), Ok(SchemaType::Option { .. })) {
                     buf.push_str("{ some: ");
                     render_cm_value(buf, graph, inner, payload);
                     buf.push_str(" }");
@@ -179,6 +178,9 @@ fn render_cm_value(buf: &mut String, graph: &SchemaGraph, ty: &SchemaType, value
         (SchemaType::Url { .. }, SchemaValue::Url { url }) => {
             let s = canonical::url::to_text(url).unwrap_or_else(|_| url.clone());
             render_rich_constructor(buf, "Url", &s);
+        }
+        (SchemaType::Uuid { .. }, SchemaValue::Uuid(uuid)) => {
+            render_rich_constructor(buf, "Uuid", &uuid.to_string());
         }
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             let s = canonical::datetime::to_text(value).unwrap_or_else(|_| value.to_string());
@@ -353,6 +355,7 @@ fn render_type_ts_inner(
         SchemaType::Binary { .. } => "binary".to_string(),
         SchemaType::Path { .. } => "path".to_string(),
         SchemaType::Url { .. } => "url".to_string(),
+        SchemaType::Uuid { .. } => "Uuid".to_string(),
         SchemaType::Datetime { .. } => "datetime".to_string(),
         SchemaType::Duration { .. } => "duration".to_string(),
         SchemaType::Quantity { .. } => "quantity".to_string(),

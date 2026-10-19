@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::schema_value_stream::{StoreValueResolver, contains_stream};
+use crate::durable_host::durability::{
+    ClassifiedHostError, DurabilityHost, DurableCallTrapContextMarker, DurableRecoveryFailure,
+    DurableRecoveryFailureKind, SemanticTrapRetryOverrideMarker,
+};
+use crate::durable_host::schema_value_stream::StoreValueResolver;
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::preview2::exports::golem::agent::guest as guest_exports;
@@ -20,32 +25,55 @@ use crate::preview2::exports::golem::api1_5_0::load_snapshot as load_snapshot_ex
 use crate::preview2::exports::golem::api1_5_0::save_snapshot as save_snapshot_exports;
 use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_processor as oplog_processor_exports;
 use crate::preview2::{golem_agent, golem_api_1_x};
+use crate::services::HasWorker;
+use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
+use golem_common::model::AgentId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
-use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
+use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
 #[cfg(test)]
 use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
-use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema, contains_stream_in_graph};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
+
+pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+/// Grows smaller native thread stacks for worker construction and nested invocation futures.
+/// The temporary stack is released after each poll, before the future yields. A poll must not
+/// suspend a Wasmtime fiber while on the temporary stack. Remaining-stack estimation uses native
+/// thread bounds, so growth is not guaranteed when already running on a Wasmtime fiber stack.
+pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(|cx| {
+        stacker::maybe_grow(INVOCATION_STACK_SIZE, INVOCATION_STACK_SIZE, || {
+            future.as_mut().poll(cx)
+        })
+    })
+    .await
+}
 
 /// Describes how an invocation is being executed with respect to the oplog.
 #[allow(clippy::large_enum_variant)]
 pub enum InvocationMode {
     /// The invocation is happening live and should write oplog markers.
-    Live(AgentInvocation),
+    Live(crate::worker::HydratedInvocation),
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
 }
@@ -53,6 +81,7 @@ pub enum InvocationMode {
 /// Invokes a function on a worker.
 ///
 /// The context is held until the invocation finishes
+/// The caller owns suspension after output streams and invocation bookkeeping settle.
 ///
 /// Arguments:
 /// - `lowered`: the lowered invocation describing what to invoke
@@ -164,7 +193,10 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         }
     };
 
-    store.data_mut().set_running();
+    let manages_owner_execution_status = primary_body.is_some();
+    if manages_owner_execution_status {
+        store.data_mut().set_running();
+    }
 
     // Arm the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`).
     // When it fires, a synthetic interrupt wakes every cooperative host park point and traps
@@ -187,33 +219,212 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             .enter_operator_authorized_oplog_processor_invocation()
     });
 
+    let invocation_principal = call.principal();
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .set_invocation_principal(invocation_principal);
     let call_future = dispatch_call(&mut store, instance, call, &display_name);
 
     let call_outcome = std::panic::AssertUnwindSafe(call_future)
         .catch_unwind()
         .await;
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .set_invocation_principal(None);
 
     if read_only_method.is_some() {
         store.data_mut().exit_read_only_mode();
     }
     drop(operator_authorization);
 
-    store.data_mut().on_agent_invocation_finished().await;
-
-    let call_result = match call_outcome {
+    let mut call_result = match call_outcome {
         Ok(result) => result,
         Err(payload) => std::panic::resume_unwind(payload),
     };
 
-    let call_result = apply_invocation_deadline(&mut store, deadline, call_result).await;
-
-    store.data().set_suspended();
-
-    if let Some(primary_body) = primary_body {
-        primary_body.complete().await;
+    if matches!(
+        &call_result,
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::Jump,
+            ..
+        })
+    ) {
+        let ctx = store.data().durable_ctx();
+        ctx.begin_stream_runtime_teardown();
+        crate::durable_host::tool::fence_tool_operations_for_jump(&mut store).await?;
     }
 
-    call_result
+    if let Some(parent) = primary_body
+        .as_ref()
+        .and_then(|primary_body| primary_body.invocation().cloned())
+    {
+        if let Err(error) =
+            crate::durable_host::tool::prepare_tool_parent_end(&mut store, parent.clone()).await
+        {
+            call_result = Err(error);
+        }
+        if let Some(primary_body) = primary_body {
+            primary_body.complete();
+        }
+        if let Err(error) =
+            crate::durable_host::tool::settle_tool_children(&mut store, parent).await
+        {
+            call_result = Err(error);
+        }
+        if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
+            let consumed_fuel = call_result
+                .as_ref()
+                .map(InvokeResult::consumed_fuel)
+                .unwrap_or_default();
+            call_result = match owner_failure {
+                OwnerFailureWinner::Trap(trap) => {
+                    Ok(InvokeResult::from_trap_type(consumed_fuel, trap))
+                }
+                OwnerFailureWinner::Lifecycle(interrupt_kind) => Ok(InvokeResult::Interrupted {
+                    consumed_fuel,
+                    interrupt_kind,
+                }),
+                OwnerFailureWinner::Infrastructure(error) => Err(error),
+            };
+        }
+    }
+
+    store.data_mut().on_agent_invocation_finished().await;
+
+    apply_invocation_deadline(&mut store, deadline, call_result).await
+}
+
+/// Publishes the early stream-bearing result and drives its producers to completion.
+/// Live execution and replay use the same trap classification as the guest export.
+pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
+    store: &mut impl AsContextMut<Data = Ctx>,
+    result: Result<InvokeResult, WorkerExecutorError>,
+    display_name: &str,
+    idempotency_key: &IdempotencyKey,
+) -> Result<InvokeResult, WorkerExecutorError> {
+    let Ok(InvokeResult::Succeeded {
+        result: invocation_result,
+        consumed_fuel,
+    }) = result
+    else {
+        return result;
+    };
+    let AgentInvocationResult::AgentMethod { output } = *invocation_result else {
+        return Ok(InvokeResult::Succeeded {
+            result: invocation_result,
+            consumed_fuel,
+        });
+    };
+    let mut store = store.as_context_mut();
+    if let Some(interrupt_kind) = store.data().check_interrupt() {
+        return Ok(InvokeResult::Interrupted {
+            consumed_fuel,
+            interrupt_kind,
+        });
+    }
+    let component = store.data().component_metadata();
+    let agent_id = store.data().parsed_agent_id();
+    let agent_type = agent_id
+        .as_ref()
+        .and_then(|id| {
+            component
+                .metadata
+                .find_agent_type_by_name_ref(&id.agent_type)
+        })
+        .ok_or_else(|| {
+            WorkerExecutorError::runtime("durable invocation result schema is unavailable")
+        })?;
+    let method = agent_type
+        .methods
+        .iter()
+        .find(|method| method.name == display_name)
+        .ok_or_else(|| {
+            WorkerExecutorError::runtime("durable invocation result method schema is unavailable")
+        })?;
+    let graph = agent_type.schema.clone();
+    let root = method
+        .output_schema
+        .schema()
+        .cloned()
+        .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
+    let component_revision = component.revision;
+    let worker = store.data().get_public_state().worker();
+    let interrupt = store.data().durable_ctx().create_interrupt_signal();
+    let runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let entity_invocation = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .map(|scope| scope.invocation_id().clone());
+    let policy = store.data().durable_ctx().suspension_policy();
+    let runtime_for_call = runtime.clone();
+    let preparation = runtime.as_ref().map(|runtime| runtime.external_activity());
+    let future = store
+        .as_context_mut()
+        .run_concurrent(async move |accessor| {
+            if let (Some(runtime), Some(activity)) =
+                (&runtime_for_call, accessor.runtime_activity())
+            {
+                runtime.certify_root(activity);
+            }
+            tokio::select! {
+                biased;
+                result = worker.materialize_durable_streaming_result(
+                    idempotency_key,
+                    output,
+                    &graph,
+                    &root,
+                    component_revision,
+                    runtime_for_call.as_ref().map(|runtime| runtime.source()),
+                    preparation,
+                ) => Ok(result),
+                interrupt_kind = interrupt => Err(interrupt_kind),
+            }
+        });
+    let materialized = match runtime {
+        Some(runtime) => {
+            runtime
+                .drive(future, entity_invocation.as_ref(), policy)
+                .await
+        }
+        None => future.await,
+    };
+    let interrupted = store.data().durable_ctx().is_interrupting();
+    let output = match classify_guest_call_settlement(
+        store.data().agent_id(),
+        materialized,
+        None,
+        interrupted,
+    ) {
+        Ok(Ok(result)) => result?,
+        Ok(Err(interrupt_kind)) => {
+            return Ok(InvokeResult::Interrupted {
+                consumed_fuel,
+                interrupt_kind,
+            });
+        }
+        Err(GuestCallSettlementError::Infrastructure(error)) => return Err(error),
+        Err(
+            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error),
+        ) => {
+            return invoke_result_from_trap(&mut store, consumed_fuel, error).await;
+        }
+    };
+    if let Err(error) = run_guest_call_settled(&mut store, async |_accessor| ()).await {
+        return match error {
+            GuestCallSettlementError::Infrastructure(error) => Err(error),
+            GuestCallSettlementError::Trap(error)
+            | GuestCallSettlementError::Interrupted(error) => {
+                invoke_result_from_trap(&mut store, consumed_fuel, error).await
+            }
+        };
+    }
+    Ok(InvokeResult::Succeeded {
+        result: Box::new(AgentInvocationResult::AgentMethod { output }),
+        consumed_fuel,
+    })
 }
 
 /// Converts the synthetic interrupt raised by an exceeded invocation deadline into a typed
@@ -243,11 +454,9 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
             interrupt_kind: InterruptKind::Interrupt(_),
         }) => {
             let retry_from = store.data().get_current_retry_point().await;
-            let in_atomic_region = store.data().current_in_atomic_region();
-            let atomic_region_had_side_effects =
-                store.data().current_atomic_region_had_side_effects();
             Ok(InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: true,
                 error: OplogAgentError::InternalError(format!(
                     "invocation exceeded the configured maximum invocation duration of {:?}",
                     deadline
@@ -255,8 +464,6 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
                         .expect("an exceeded deadline always has a configured duration")
                 )),
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override: None,
             })
         }
@@ -265,10 +472,145 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
 }
 
 /// Pure settlement predicate for [`run_guest_call_settled`]: an invocation's tail work is
-/// settled when no tracked spawned store task is active (every one has finished or parked at a
-/// safe park point) and no task holds an open replay-cursor transaction.
-fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> bool {
-    active_spawned_tasks == 0 && !replay_cursor_open
+/// settled when no tracked spawned Store task is active (every one has finished or parked at a
+/// safe park point).
+fn tail_work_settled(active_spawned_tasks: usize) -> bool {
+    active_spawned_tasks == 0
+}
+
+#[derive(Debug)]
+pub(crate) enum GuestCallSettlementError {
+    Interrupted(wasmtime::Error),
+    Trap(wasmtime::Error),
+    Infrastructure(WorkerExecutorError),
+}
+
+fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
+    let chain_contains = |predicate: &dyn Fn(&(dyn std::error::Error + 'static)) -> bool| {
+        error.chain().any(predicate)
+    };
+
+    if let Some(trap) = error.root_cause().downcast_ref::<wasmtime::Trap>() {
+        return !matches!(trap, wasmtime::Trap::AsyncDeadlock);
+    }
+    if chain_contains(&|cause| {
+        cause.is::<GolemSpecificWasmTrap>()
+            || cause.is::<ClassifiedHostError>()
+            || cause.is::<SemanticTrapRetryOverrideMarker>()
+            || cause.is::<DurableCallTrapContextMarker>()
+            || cause.is::<wasmtime_wasi::I32Exit>()
+            || matches!(
+                cause.downcast_ref::<WorkerExecutorError>(),
+                Some(
+                    WorkerExecutorError::InvalidRequest { .. }
+                        | WorkerExecutorError::UnexpectedOplogEntry { .. }
+                        | WorkerExecutorError::ParamTypeMismatch { .. }
+                        | WorkerExecutorError::ValueMismatch { .. }
+                        | WorkerExecutorError::InvocationFailed { .. }
+                        | WorkerExecutorError::ReadOnlyViolation { .. }
+                        | WorkerExecutorError::PermissionDenied { .. }
+                )
+            )
+    }) {
+        return true;
+    }
+    if chain_contains(&|cause| cause.is::<WorkerExecutorError>()) {
+        return false;
+    }
+
+    error.downcast_ref::<wasmtime::WasmBacktrace>().is_some()
+}
+
+/// The oplog that a host call could not read, in the chain of `error`, with the agent it belongs
+/// to: either already a `WorkerExecutorError`, or the read failure itself. The error is
+/// `OplogFailed` for good, or `RecoveryRequired` when a later read can pass.
+fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<(AgentId, WorkerExecutorError)> {
+    error
+        .chain()
+        .find_map(|cause| match cause.downcast_ref::<WorkerExecutorError>() {
+            Some(error @ WorkerExecutorError::OplogFailed { agent_id, .. }) => {
+                Some((agent_id.clone(), error.clone()))
+            }
+            _ => cause
+                .downcast_ref::<UnreadableOplog>()
+                .map(|error| (error.agent_id.clone(), error.clone().into())),
+        })
+}
+
+fn classify_guest_call_settlement<R>(
+    own_agent_id: &AgentId,
+    result: wasmtime::Result<R>,
+    tail_timeout: Option<(std::time::Duration, usize)>,
+    interrupted: bool,
+) -> Result<R, GuestCallSettlementError> {
+    if let Some((timeout, active)) = tail_timeout {
+        return Err(GuestCallSettlementError::Infrastructure(
+            WorkerExecutorError::runtime(format!(
+                "invocation tail work did not settle within {timeout:?}: {active} spawned task(s) still active"
+            )),
+        ));
+    }
+    result.map_err(|error| {
+        if interrupted
+            || error.root_cause().downcast_ref::<InterruptKind>().is_some()
+            || matches!(
+                error.root_cause().downcast_ref::<WorkerExecutorError>(),
+                Some(WorkerExecutorError::Interrupted { .. })
+            )
+        {
+            GuestCallSettlementError::Interrupted(error)
+        } else if let Some((agent_id, unreadable)) = unreadable_oplog_in(&error) {
+            // The oplog of this agent is a failure of the agent. The oplog of another agent that
+            // failed for good fails only the call that read it, as a trap that the retry policy
+            // of this agent handles; when a later read can pass, this agent recovers and retries.
+            if agent_id == *own_agent_id
+                || !matches!(unreadable, WorkerExecutorError::OplogFailed { .. })
+            {
+                GuestCallSettlementError::Infrastructure(unreadable)
+            } else {
+                GuestCallSettlementError::Trap(error)
+            }
+        } else if let Some(recovery_failure) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<DurableRecoveryFailure>())
+        {
+            let retry_from = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<DurableCallTrapContextMarker>())
+                .map(|marker| marker.payload.retry_from);
+            let details = format!(
+                "durable runtime reconstruction failed: {:#}",
+                recovery_failure.inner
+            );
+            GuestCallSettlementError::Infrastructure(match recovery_failure.kind {
+                DurableRecoveryFailureKind::Retryable => match retry_from {
+                    Some(retry_from) => {
+                        WorkerExecutorError::recovery_required_from(details, retry_from)
+                    }
+                    None => WorkerExecutorError::recovery_required(details),
+                },
+                DurableRecoveryFailureKind::Permanent => {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "valid durable recovery data",
+                        details,
+                    )
+                }
+            })
+        } else if let Some(error) = error.chain().find_map(|cause| {
+            let error = cause.downcast_ref::<WorkerExecutorError>()?;
+            (matches!(error, WorkerExecutorError::RecoveryRequired { .. })
+                || crate::durable_host::is_tool_attachment_live_admission_rejection(error))
+            .then(|| error.clone())
+        }) {
+            GuestCallSettlementError::Infrastructure(error)
+        } else if is_guest_semantic_trap(&error) {
+            GuestCallSettlementError::Trap(error)
+        } else {
+            GuestCallSettlementError::Infrastructure(WorkerExecutorError::runtime(format!(
+                "guest call settlement task failed: {error}"
+            )))
+        }
+    })
 }
 
 /// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
@@ -284,12 +626,10 @@ fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> b
 /// finished or parked at a designated safe park point (a wait on future guest action, which may
 /// legitimately span invocations). Safe-parked tasks are left parked in the store.
 ///
-/// Settlement additionally requires that no task holds an open replay-cursor transaction: a task
-/// suspended inside one keeps the fair cursor lock held, which would deadlock the cursor reads
-/// the completion path performs outside the event loop (e.g. reading `AgentInvocationFinished`
-/// after a replayed invocation). Tracked tasks park only outside cursor transactions, so this is
-/// a redundant safety net that keeps the invariant explicit even if a future task's accounting
-/// regresses.
+/// Tracked tasks park only outside replay-cursor transactions. A task waiting for or holding the
+/// cursor therefore remains active until it releases the transaction. The cursor itself is shared
+/// by every owner Store, so its global lock state cannot be used as a Store-local settlement
+/// condition: a sibling sidecar may legitimately hold it while this Store has settled.
 ///
 /// The drain phase is bounded by `limits.tail_work_settle_timeout`. It normally settles as soon as
 /// the tasks' pending durable appends and I/O complete; the bound only fires when such work is
@@ -305,16 +645,27 @@ fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> b
 /// is instead delivered *cooperatively*: every blocking host park point races the worker's
 /// interrupt signal, abandons its durable call handles for the trap, and unwinds the event loop
 /// with the interrupt from within.
-async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
+pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     store: &mut StoreContextMut<'_, Ctx>,
     fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
-) -> wasmtime::Result<R> {
+) -> Result<R, GuestCallSettlementError> {
+    let runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let entity_invocation = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .map(|scope| scope.invocation_id().clone());
+    let policy = store.data().durable_ctx().suspension_policy();
     let tracker = store.data().durable_ctx().tail_work_tracker();
     let tracker_for_error = tracker.clone();
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
     let fun = {
         let drain_started = drain_started.clone();
+        let runtime = runtime.clone();
         async move |accessor: &Accessor<Ctx>| {
+            if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
+                runtime.certify_root(activity);
+            }
             let result = fun(accessor).await;
             // The root future has completed: everything from here on is the (bounded) drain
             // phase. Arm the timeout here rather than in the settlement predicate — the
@@ -324,34 +675,37 @@ async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
             result
         }
     };
-    let mut settled = move |store: StoreContextMut<'_, Ctx>| {
+    let mut settled = move |_store: StoreContextMut<'_, Ctx>| {
         let active = tracker.active_count();
-        let replay_cursor_open = store
-            .data()
-            .durable_ctx()
-            .has_open_replay_cursor_transaction();
-        tracing::debug!(
-            "invocation tail-work settlement check: {active} spawned task(s) active, replay cursor open: {replay_cursor_open}"
-        );
-        tail_work_settled(active, replay_cursor_open)
+        tracing::debug!("invocation tail-work settlement check: {active} spawned task(s) active");
+        tail_work_settled(active)
     };
     let tail_work_deadline = store
         .data()
         .durable_ctx()
         .arm_tail_work_deadline(drain_started);
-    let result = store
+    let future = store
         .as_context_mut()
-        .run_concurrent_and_settle(fun, &mut settled)
-        .await;
-    if tail_work_deadline.exceeded() && !store.data().durable_ctx().is_interrupting() {
-        let timeout = tail_work_deadline.duration();
-        Err(wasmtime::Error::msg(format!(
-            "invocation tail work did not settle within {timeout:?}: {} spawned task(s) still active",
-            tracker_for_error.active_count()
-        )))
+        .run_concurrent_and_settle(fun, &mut settled);
+    let result = match runtime {
+        Some(runtime) => {
+            runtime
+                .drive(future, entity_invocation.as_ref(), policy)
+                .await
+        }
+        None => future.await,
+    };
+    let interrupted = store.data().durable_ctx().is_interrupting()
+        || store.data().durable_ctx().invocation_deadline_exceeded();
+    let tail_timeout = if tail_work_deadline.exceeded() && !interrupted {
+        Some((
+            tail_work_deadline.duration(),
+            tracker_for_error.active_count(),
+        ))
     } else {
-        result
-    }
+        None
+    };
+    classify_guest_call_settlement(store.data().agent_id(), result, tail_timeout, interrupted)
 }
 
 /// Dispatches a single lowered invocation to the matching typed guest export
@@ -377,17 +731,23 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     .call_initialize(accessor, agent_type, input, principal)
                     .await
             })
-            .await
-            .and_then(|result| result);
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(Ok(())) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(Ok(()))) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::AgentInitialization,
+                    result: Box::new(AgentInvocationResult::AgentInitialization),
                 }),
-                Ok(Err(wire_err)) => invoke_result_from_agent_error(store, consumed_fuel, wire_err),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Ok(Err(wire_err))) => {
+                    invoke_result_from_agent_error(store, consumed_fuel, wire_err)
+                }
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::Invoke {
@@ -399,14 +759,17 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
             let result = if expected_output.uses_streams() {
-                store
+                let result = store
                     .as_context_mut()
                     .run_concurrent(async |accessor| {
                         guest
                             .call_invoke(accessor, method_name, input, principal)
                             .await
                     })
-                    .await
+                    .await;
+                let interrupted = store.data().durable_ctx().is_interrupting()
+                    || store.data().durable_ctx().invocation_deadline_exceeded();
+                classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted)
             } else {
                 run_guest_call_settled(store, async |accessor| {
                     guest
@@ -414,21 +777,27 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                         .await
                 })
                 .await
-            }
-            .and_then(|result| result);
+            };
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(Ok(invoke_output)) => {
+                Ok(Ok(Ok(invoke_output))) => {
                     let output = decode_invoke_output(store, invoke_output)?;
                     validate_invoke_output(display_name, &expected_output, &output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
-                        result: AgentInvocationResult::AgentMethod { output },
+                        result: Box::new(AgentInvocationResult::AgentMethod { output }),
                     })
                 }
-                Ok(Err(wire_err)) => invoke_result_from_agent_error(store, consumed_fuel, wire_err),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Ok(Err(wire_err))) => {
+                    invoke_result_from_agent_error(store, consumed_fuel, wire_err)
+                }
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::SaveSnapshot => {
@@ -436,18 +805,22 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             prepare_guest_call(store, display_name).await;
             let result =
                 run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
-                    .await
-                    .and_then(|result| result);
+                    .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(snapshot) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(snapshot)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::SaveSnapshot {
+                    result: Box::new(AgentInvocationResult::SaveSnapshot {
                         snapshot: snapshot.into(),
-                    },
+                    }),
                 }),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::LoadSnapshot { snapshot } => {
@@ -456,16 +829,20 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let result = run_guest_call_settled(store, async |accessor| {
                 guest.call_load(accessor, snapshot).await
             })
-            .await
-            .and_then(|result| result);
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(inner) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(inner)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::LoadSnapshot { error: inner.err() },
+                    result: Box::new(AgentInvocationResult::LoadSnapshot { error: inner.err() }),
                 }),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::ProcessOplogEntries {
@@ -493,16 +870,68 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     )
                     .await
             })
-            .await
-            .and_then(|result| result);
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(inner) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(inner)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
-                    result: AgentInvocationResult::ProcessOplogEntries { error: inner.err() },
+                    result: Box::new(AgentInvocationResult::ProcessOplogEntries {
+                        error: inner.err(),
+                    }),
                 }),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
+            }
+        }
+        PreparedCall::ExternalTool {
+            activation,
+            tool_name,
+            command_path,
+            input,
+            stdin,
+            stdout,
+            stderr,
+            principal,
+        } => {
+            prepare_guest_call(store, display_name).await;
+            let result = crate::durable_host::tool::invoke_external_tool(
+                store,
+                activation,
+                tool_name,
+                command_path,
+                *input,
+                stdin,
+                stdout,
+                stderr,
+                principal,
+            )
+            .await;
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(Ok(result)) => Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: Box::new(AgentInvocationResult::ExternalTool { result }),
+                }),
+                Ok(Err(error)) => {
+                    let retry_from = store.data().get_current_retry_point().await;
+                    Ok(InvokeResult::from_error::<Ctx>(
+                        consumed_fuel,
+                        &error,
+                        retry_from,
+                        store.data().agent_mode(),
+                    ))
+                }
+                Err(GuestCallSettlementError::Interrupted(error))
+                | Err(GuestCallSettlementError::Trap(error)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, error).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
     }
@@ -510,7 +939,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
 
 /// Resets call counters and emits the invocation-start event before a guest
 /// call. Mirrors the bookkeeping the legacy dynamic dispatch performed.
-async fn prepare_guest_call<Ctx: WorkerCtx>(
+pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) {
@@ -533,24 +962,38 @@ pub(crate) fn rearm_fuel_check<T>(store: &mut StoreContextMut<'_, T>) {
 
 /// Builds an [`InvokeResult`] from a wasmtime trap (guest panic, interrupt,
 /// exit, or runtime error) raised by a typed export call.
-async fn invoke_result_from_trap<Ctx: WorkerCtx>(
+pub(crate) async fn invoke_result_from_trap<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     consumed_fuel: u64,
     err: wasmtime::Error,
-) -> InvokeResult {
+) -> Result<InvokeResult, WorkerExecutorError> {
     let retry_from = store.data().get_current_retry_point().await;
-    let in_atomic_region = store.data().current_in_atomic_region();
-    let atomic_region_had_side_effects = store.data().current_atomic_region_had_side_effects();
     let agent_mode = store.data().agent_mode();
     let err: anyhow::Error = err.into();
-    InvokeResult::from_error::<Ctx>(
+    if let Some(error) = replay_divergence_from_trap(&err, store.data().is_live()) {
+        return Err(error);
+    }
+    Ok(InvokeResult::from_error::<Ctx>(
         consumed_fuel,
         &err,
         retry_from,
-        in_atomic_region,
-        atomic_region_had_side_effects,
         agent_mode,
-    )
+    ))
+}
+
+fn replay_divergence_from_trap(
+    error: &anyhow::Error,
+    is_live: bool,
+) -> Option<WorkerExecutorError> {
+    (!is_live)
+        .then(|| {
+            error
+                .chain()
+                .find_map(|error| error.downcast_ref::<WorkerExecutorError>())
+        })
+        .flatten()
+        .filter(|error| matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. }))
+        .cloned()
 }
 
 /// Maps a guest-returned `agent-error` (the `Err` arm of `initialize` /
@@ -575,10 +1018,9 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
             })?;
     Ok(InvokeResult::Failed {
         consumed_fuel,
+        timed_out: false,
         error: OplogAgentError::InternalError(agent_error.to_string()),
         retry_from: OplogIndex::INITIAL,
-        in_atomic_region: false,
-        atomic_region_had_side_effects: false,
         semantic_trap_retry_override: None,
     })
 }
@@ -638,11 +1080,12 @@ pub struct ExpectedInvokeOutput {
     /// The method's declared output type; the canonical empty tuple for
     /// `unit` outputs (see [`decode_invoke_output`]).
     root: SchemaType,
+    uses_streams: bool,
 }
 
 impl ExpectedInvokeOutput {
     fn uses_streams(&self) -> bool {
-        contains_stream_in_graph(&self.graph, &self.root)
+        self.uses_streams
     }
 }
 
@@ -693,8 +1136,8 @@ pub(crate) struct AgentExportFuncs {
 /// `DurableWorkerCtx`; subsequent calls return the cached handle, skipping the
 /// name-based lookup and typed signature checks.
 macro_rules! cached_guest_loader {
-    ($fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
-        fn $fn_name<Ctx: WorkerCtx>(
+    ($vis:vis $fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
+        $vis fn $fn_name<Ctx: WorkerCtx>(
             store: &mut StoreContextMut<'_, Ctx>,
             instance: &wasmtime::component::Instance,
         ) -> Result<$exports::Guest, WorkerExecutorError> {
@@ -741,7 +1184,7 @@ cached_guest_loader!(
     "failed to load save-snapshot export"
 );
 cached_guest_loader!(
-    load_load_snapshot_guest,
+    pub(crate) load_load_snapshot_guest,
     load_snapshot_exports,
     load_snapshot,
     "load-snapshot export not available",
@@ -755,7 +1198,7 @@ cached_guest_loader!(
     "failed to load oplog-processor export"
 );
 
-async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
+pub(crate) async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) -> Result<u64, WorkerExecutorError> {
@@ -785,14 +1228,10 @@ pub enum InvokeResult {
     Failed {
         consumed_fuel: u64,
         error: OplogAgentError,
+        /// Deadline failures share the public internal-error representation but are not evidence
+        /// that a restored snapshot disagrees with recorded execution.
+        timed_out: bool,
         retry_from: OplogIndex,
-        /// Whether the trapping call was inside an atomic region (membership). Round-tripped via
-        /// `as_trap_type` into `TrapType::Error` so the post-trap recovery decision uses the call's
-        /// own region rather than "any region currently active".
-        in_atomic_region: bool,
-        /// Whether the trapping call's atomic region had recorded side effects. Round-tripped into
-        /// the persisted `OplogEntry::Error.inside_atomic_region`.
-        atomic_region_had_side_effects: bool,
         /// Ephemeral semantic-retry override extracted from the failing
         /// `anyhow::Error` chain. Round-tripped via `as_trap_type` so the
         /// post-trap recovery path can honour it.
@@ -802,7 +1241,7 @@ pub enum InvokeResult {
     /// The invoked function succeeded and produced a result
     Succeeded {
         consumed_fuel: u64,
-        result: AgentInvocationResult,
+        result: Box<AgentInvocationResult>,
     },
     /// The function was running but got interrupted
     Interrupted {
@@ -812,21 +1251,34 @@ pub enum InvokeResult {
 }
 
 impl InvokeResult {
+    fn from_trap_type(consumed_fuel: u64, trap: TrapType) -> Self {
+        match trap {
+            TrapType::Interrupt(interrupt_kind) => Self::Interrupted {
+                consumed_fuel,
+                interrupt_kind,
+            },
+            TrapType::Exit => Self::Exited { consumed_fuel },
+            TrapType::Error {
+                error,
+                retry_from,
+                semantic_trap_retry_override,
+            } => Self::Failed {
+                consumed_fuel,
+                timed_out: false,
+                error,
+                retry_from,
+                semantic_trap_retry_override,
+            },
+        }
+    }
+
     pub fn from_error<Ctx: WorkerCtx>(
         consumed_fuel: u64,
         error: &anyhow::Error,
         fallback_retry_from: OplogIndex,
-        fallback_in_atomic_region: bool,
-        fallback_atomic_region_had_side_effects: bool,
         agent_mode: AgentMode,
     ) -> Self {
-        match TrapType::from_error::<Ctx>(
-            error,
-            fallback_retry_from,
-            fallback_in_atomic_region,
-            fallback_atomic_region_had_side_effects,
-            agent_mode,
-        ) {
+        match TrapType::from_error::<Ctx>(error, fallback_retry_from, agent_mode) {
             TrapType::Interrupt(kind) => InvokeResult::Interrupted {
                 consumed_fuel,
                 interrupt_kind: kind,
@@ -835,18 +1287,30 @@ impl InvokeResult {
             TrapType::Error {
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             } => InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: false,
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             },
         }
+    }
+
+    pub(crate) fn is_snapshot_replay_divergence(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                timed_out: false,
+                error: OplogAgentError::DeterministicTrap(_)
+                    | OplogAgentError::PermanentError(_)
+                    | OplogAgentError::InternalError(_)
+                    | OplogAgentError::ReadOnlyViolation(_)
+                    | OplogAgentError::StackOverflow,
+                ..
+            }
+        )
     }
 
     pub fn consumed_fuel(&self) -> u64 {
@@ -863,15 +1327,11 @@ impl InvokeResult {
             InvokeResult::Failed {
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
                 ..
             } => Some(TrapType::Error {
                 error: error.clone(),
                 retry_from: *retry_from,
-                in_atomic_region: *in_atomic_region,
-                atomic_region_had_side_effects: *atomic_region_had_side_effects,
                 semantic_trap_retry_override: semantic_trap_retry_override.clone(),
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
@@ -893,9 +1353,10 @@ pub struct LoweredInvocation {
     /// (e.g., the agent method name "do-something")
     pub display_name: String,
     /// `Some(method_name)` when the invocation targets an `AgentMethod` whose
-    /// `read_only` metadata is set. The worker-executor uses this to enable the
-    /// read-only invocation strictness mode for the duration of the call, trapping
-    /// outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
+    /// `read_only` metadata is set, or `Some("load-snapshot")` for the specially
+    /// restricted snapshot-loading lifecycle call. The worker-executor uses this
+    /// to enable read-only invocation strictness for the duration of the call,
+    /// trapping outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
     pub read_only_method: Option<String>,
     /// The typed export call to perform.
     call: LoweredCall,
@@ -933,6 +1394,16 @@ enum LoweredCall {
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
     },
+    ExternalTool {
+        activation: Box<ToolActivationSnapshot>,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+        principal: golem_common::model::agent::Principal,
+    },
 }
 
 /// A [`LoweredCall`] whose schema-native inputs have been materialized into the
@@ -965,6 +1436,30 @@ enum PreparedCall {
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
     },
+    ExternalTool {
+        activation: std::sync::Arc<ToolActivationSnapshot>,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+        principal: golem_common::model::agent::Principal,
+    },
+}
+
+impl PreparedCall {
+    fn principal(&self) -> Option<golem_common::model::agent::Principal> {
+        match self {
+            Self::Initialize { principal, .. } | Self::Invoke { principal, .. } => {
+                Some(principal.clone().into())
+            }
+            Self::ExternalTool { principal, .. } => Some(principal.clone()),
+            Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
+                None
+            }
+        }
+    }
 }
 
 /// Encode the schema-native inputs of a [`LoweredCall`] into the wire trees the
@@ -1038,6 +1533,25 @@ fn materialize_call<Ctx: WorkerCtx>(
             first_entry_index,
             entries,
         },
+        LoweredCall::ExternalTool {
+            activation,
+            tool_name,
+            command_path,
+            input,
+            stdin,
+            stdout,
+            stderr,
+            principal,
+        } => PreparedCall::ExternalTool {
+            activation: std::sync::Arc::from(activation),
+            tool_name,
+            command_path,
+            input,
+            stdin,
+            stdout,
+            stderr,
+            principal,
+        },
     })
 }
 
@@ -1088,10 +1602,17 @@ pub fn lower_invocation(
                 })?;
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
-            validate_method_invocation(agent_type, method, &input, &method_name)?;
+            let stream_metadata = validate_method_invocation(
+                component_metadata,
+                agent_type,
+                method,
+                &input,
+                &method_name,
+            )?;
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
+                uses_streams: stream_metadata.output,
                 root: match method.output_schema.schema() {
                     Some(ty) => ty.clone(),
                     None => SchemaType::tuple(Vec::new()),
@@ -1109,6 +1630,30 @@ pub fn lower_invocation(
                 },
             })
         }
+        AgentInvocation::ExternalTool {
+            tool_name,
+            command_path,
+            input,
+            stdin,
+            stdout,
+            stderr,
+            activation,
+            principal,
+            ..
+        } => Ok(LoweredInvocation {
+            display_name: format!("{tool_name}:{}", command_path.join("/")),
+            read_only_method: None,
+            call: LoweredCall::ExternalTool {
+                activation,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                stderr,
+                principal,
+            },
+        }),
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
             "ManualUpdate should not be invoked as a wasm function directly".to_string(),
         )),
@@ -1119,7 +1664,7 @@ pub fn lower_invocation(
         }),
         AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
             display_name: "load-snapshot".to_string(),
-            read_only_method: None,
+            read_only_method: Some("load-snapshot".to_string()),
             call: LoweredCall::LoadSnapshot {
                 snapshot: snapshot.into(),
             },
@@ -1183,23 +1728,48 @@ pub fn validate_agent_method_invocation(
             ))
         })?;
 
-    validate_method_invocation(agent_type, method, input, method_name)
+    validate_method_invocation(component_metadata, agent_type, method, input, method_name)
+        .map(AgentMethodStreamMetadata::uses_streams)
 }
 
-pub fn method_uses_streams(
-    agent_type: &AgentTypeSchema,
-    method: &AgentMethodSchema,
-    input: &SchemaValue,
+/// Classifies session work using the executing component's input and output schemas, including
+/// input-only streams and optional streams that are absent from this invocation's values.
+pub(crate) fn invocation_uses_streams(
+    invocation: &AgentInvocation,
+    component_metadata: &ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
 ) -> bool {
-    contains_stream(input) || method.uses_streams(&agent_type.schema)
+    if matches!(invocation, AgentInvocation::ExternalTool { .. }) {
+        return true;
+    }
+    let AgentInvocation::AgentMethod { method_name, .. } = invocation else {
+        return false;
+    };
+    let method = resolve_agent_type(component_metadata, agent_id)
+        .ok()
+        .and_then(|agent_type| {
+            agent_type
+                .methods
+                .iter()
+                .find(|method| method.name == *method_name)
+                .map(|method| (agent_type, method))
+        });
+    // Missing metadata is not proof of a scalar invocation; preserve session failure handling
+    // while the normal lowering path reports the schema error.
+    method.is_none_or(|(agent_type, method)| {
+        component_metadata
+            .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+            .is_none_or(|metadata| metadata.uses_streams())
+    })
 }
 
-pub fn validate_method_invocation(
+fn validate_method_invocation(
+    component_metadata: &ComponentMetadata,
     agent_type: &AgentTypeSchema,
     method: &AgentMethodSchema,
     input: &SchemaValue,
     method_name: &str,
-) -> Result<bool, WorkerExecutorError> {
+) -> Result<AgentMethodStreamMetadata, WorkerExecutorError> {
     method
         .validate_input(&agent_type.schema, input)
         .map_err(|error| {
@@ -1207,7 +1777,13 @@ pub fn validate_method_invocation(
                 "Method '{method_name}': invalid input parameter value: {error}"
             ))
         })?;
-    Ok(method_uses_streams(agent_type, method, input))
+    component_metadata
+        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Streaming classification for method '{method_name}' is missing from component metadata"
+            ))
+        })
 }
 
 /// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
@@ -1248,6 +1824,7 @@ mod tests {
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::{AgentTypeName, Principal};
     use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::RawSnapshotData;
     use golem_common::schema::TypedSchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
@@ -1256,6 +1833,135 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    fn snapshot_divergence_excludes_deadlines_and_infrastructure_failures() {
+        for (error, timed_out, expected) in [
+            (
+                OplogAgentError::InternalError("boundary mismatch".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::InternalError("deadline".into()),
+                true,
+                false,
+            ),
+            (
+                OplogAgentError::DeterministicTrap("unreachable".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::ReadOnlyViolation(
+                    golem_common::model::oplog::ReadOnlyViolationError {
+                        method: "load-snapshot".into(),
+                        host_function: "keyvalue.set".into(),
+                    },
+                ),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::TransientError("storage unavailable".into()),
+                false,
+                false,
+            ),
+            (
+                OplogAgentError::Unknown("unclassified host failure".into()),
+                false,
+                false,
+            ),
+            (OplogAgentError::OutOfMemory, false, false),
+            (OplogAgentError::ExceededMemoryLimit, false, false),
+        ] {
+            let result = InvokeResult::Failed {
+                consumed_fuel: 0,
+                error,
+                timed_out,
+                retry_from: OplogIndex::INITIAL,
+                semantic_trap_retry_override: None,
+            };
+            assert_eq!(
+                result.is_snapshot_replay_divergence(),
+                expected,
+                "{result:?}"
+            );
+        }
+        assert!(
+            !InvokeResult::Interrupted {
+                consumed_fuel: 0,
+                interrupt_kind: InterruptKind::Restart,
+            }
+            .is_snapshot_replay_divergence()
+        );
+    }
+
+    #[test]
+    fn unexpected_oplog_trap_is_propagated_during_replay_only() {
+        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "Start");
+        let error = anyhow::Error::new(divergence.clone()).context("guest call failed");
+
+        assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
+        assert_eq!(replay_divergence_from_trap(&error, true), None);
+    }
+
+    #[test]
+    fn invocation_poll_reuses_production_thread_stack() {
+        let runtime = crate::bootstrap::create_runtime().unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let mut polls = 0;
+                with_invocation_stack(std::future::poll_fn(|cx| {
+                    // A temporary stack would have less than INVOCATION_STACK_SIZE remaining.
+                    // Check every poll, including after suspension and possible task migration.
+                    assert!(stacker::remaining_stack().unwrap() >= INVOCATION_STACK_SIZE);
+                    polls += 1;
+                    if polls < 100 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(())
+                    }
+                }))
+                .await;
+                assert_eq!(polls, 100);
+            })
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn invocation_poll_stack_is_reestablished_after_suspension() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(256 * 1024)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                assert!(stacker::remaining_stack().unwrap() < 1024 * 1024);
+                let mut polls = 0;
+                let result = with_invocation_stack(std::future::poll_fn(|cx| {
+                    assert!(stacker::remaining_stack().unwrap() > 8 * 1024 * 1024);
+                    polls += 1;
+                    if polls < 3 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(42)
+                    }
+                }))
+                .await;
+                assert_eq!(result, 42);
+                assert_eq!(polls, 3);
+                assert!(stacker::remaining_stack().unwrap() < 1024 * 1024);
+            })
+            .await
+            .unwrap();
+        });
+    }
 
     const AGENT_TYPE: &str = "test-agent";
     const METHOD_NAME: &str = "do-work";
@@ -1295,6 +2001,7 @@ mod tests {
 
     fn metadata_with_method(method: AgentMethodSchema) -> ComponentMetadata {
         let at = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName(AGENT_TYPE.to_string()),
             description: String::new(),
             source_language: String::new(),
@@ -1351,6 +2058,40 @@ mod tests {
         let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
             .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
+        assert!(lowered.read_only_method.is_none());
+    }
+
+    #[test]
+    fn load_snapshot_uses_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::LoadSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-load".to_string()),
+                snapshot: RawSnapshotData {
+                    data: vec![1, 2, 3],
+                    mime_type: "application/octet-stream".to_string(),
+                },
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot load should lower");
+
+        assert_eq!(lowered.display_name, "load-snapshot");
+        assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
+    }
+
+    #[test]
+    fn save_snapshot_does_not_use_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::SaveSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-save".to_string()),
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot save should lower");
+
+        assert_eq!(lowered.display_name, "save-snapshot");
         assert!(lowered.read_only_method.is_none());
     }
 
@@ -1474,6 +2215,115 @@ mod tests {
     }
 
     #[test]
+    fn method_stream_classification_survives_metadata_roundtrips_and_copies() {
+        let streaming = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                "input",
+                SchemaType::option(SchemaType::stream(Some(SchemaType::u32()))),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let streaming = streaming
+            .with_provision_configs(BTreeMap::new())
+            .with_tools(BTreeMap::new());
+        let bytes = golem_common::serialization::serialize(&streaming).unwrap();
+        let stored: ComponentMetadata = golem_common::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(stored, streaming);
+        let json = serde_json::to_value(&stored).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ComponentMetadata>(json.clone()).unwrap(),
+            stored
+        );
+        let mut missing = json;
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("agentMethodStreams");
+        assert!(serde_json::from_value::<ComponentMetadata>(missing).is_err());
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            stored.try_into().unwrap();
+        let decoded = ComponentMetadata::try_from(proto).unwrap();
+        assert_eq!(decoded, streaming);
+        assert_eq!(
+            decoded
+                .agent_method_stream_metadata(&AgentTypeName(AGENT_TYPE.to_string()), METHOD_NAME)
+                .unwrap(),
+            golem_common::model::component_metadata::AgentMethodStreamMetadata {
+                input: true,
+                output: false,
+            }
+        );
+    }
+
+    #[test]
+    fn invocation_session_classification_covers_scalar_and_absent_streams() {
+        let optional_stream = SchemaType::option(SchemaType::stream(Some(SchemaType::u32())));
+        for (input_schema, output_schema, fields, expected, output_streams) in [
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Unit,
+                Vec::new(),
+                false,
+                false,
+            ),
+            (
+                InputSchema::Parameters(vec![NamedField::user_supplied(
+                    "input",
+                    optional_stream.clone(),
+                )]),
+                OutputSchema::Unit,
+                vec![SchemaValue::Option { inner: None }],
+                true,
+                false,
+            ),
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Single(Box::new(optional_stream)),
+                Vec::new(),
+                true,
+                true,
+            ),
+        ] {
+            let metadata = metadata_with_method(AgentMethodSchema {
+                name: METHOD_NAME.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema,
+                output_schema,
+                http_endpoint: Vec::new(),
+                read_only: None,
+            });
+            let invocation = method_invocation(SchemaValue::Record { fields });
+            assert_eq!(
+                invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
+                expected
+            );
+            let lowered = lower_invocation(invocation, &metadata, Some(&agent_id())).unwrap();
+            let LoweredCall::Invoke {
+                expected_output, ..
+            } = lowered.call
+            else {
+                panic!("expected a lowered method invocation");
+            };
+            assert_eq!(expected_output.uses_streams(), output_streams);
+        }
+        let mut unknown = method_invocation(SchemaValue::Record { fields: Vec::new() });
+        if let AgentInvocation::AgentMethod { method_name, .. } = &mut unknown {
+            *method_name = "missing".to_string();
+        }
+        assert!(invocation_uses_streams(
+            &unknown,
+            &metadata(),
+            Some(&agent_id())
+        ));
+    }
+
+    #[test]
     fn materializing_boundary_rejects_a_real_stream_handle() {
         let stream = golem_common::schema::stream::SchemaValueStream::from_host_endpoint(());
         let output = SchemaValue::Record {
@@ -1496,6 +2346,7 @@ mod tests {
         ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::tuple(Vec::new()),
+            uses_streams: false,
         }
     }
 
@@ -1527,6 +2378,7 @@ mod tests {
         let expected = ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::u32(),
+            uses_streams: false,
         };
         validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
             .expect("matching value must pass output validation");
@@ -1537,6 +2389,7 @@ mod tests {
         let expected = ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::u32(),
+            uses_streams: false,
         };
         let Err(err) = validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true))
         else {
@@ -1565,6 +2418,7 @@ mod tests {
                 root: SchemaType::record(Vec::new()),
             },
             root: SchemaType::ref_to(TypeId::new("Answer")),
+            uses_streams: false,
         };
         validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
             .expect("ref output must resolve through the agent graph");
@@ -1577,21 +2431,341 @@ mod tests {
     #[test]
     fn tail_work_settlement_truth_table() {
         let cases = [
-            // (active_spawned_tasks, replay_cursor_open, expected)
-            (0, false, true),
+            // (active_spawned_tasks, expected)
+            (0, true),
             // An active spawned task (pending durable append or I/O) blocks settlement.
-            (1, false, false),
-            (3, false, false),
-            // An open replay-cursor transaction blocks settlement even with no active task.
-            (0, true, false),
-            (2, true, false),
+            (1, false),
+            (3, false),
         ];
-        for (active_spawned_tasks, replay_cursor_open, expected) in cases {
+        for (active_spawned_tasks, expected) in cases {
             assert_eq!(
-                tail_work_settled(active_spawned_tasks, replay_cursor_open),
+                tail_work_settled(active_spawned_tasks),
                 expected,
-                "active_spawned_tasks: {active_spawned_tasks}, replay_cursor_open: {replay_cursor_open}"
+                "active_spawned_tasks: {active_spawned_tasks}"
             );
         }
+    }
+
+    #[test]
+    fn wrapped_replay_jump_settles_as_interruption() {
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::from_anyhow(
+                    anyhow::Error::new(WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Jump,
+                    })
+                    .context("durable scope restart"),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Interrupted(_))
+        ));
+    }
+
+    /// The agent whose guest calls the tests settle.
+    fn own_agent_id() -> AgentId {
+        AgentId {
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+            agent_id: "own".to_string(),
+        }
+    }
+
+    /// A host call whose oplog read failed fails the agent, not the guest call: the read failure,
+    /// raw or already a `WorkerExecutorError`, settles as an unreadable oplog of the agent.
+    #[test]
+    fn an_unreadable_oplog_settles_as_infrastructure() {
+        let unreadable = UnreadableOplog {
+            agent_id: own_agent_id(),
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        };
+        let expected = WorkerExecutorError::from(unreadable.clone());
+        for error in [
+            wasmtime::Error::from_anyhow(
+                anyhow::Error::from(unreadable.clone()).context("host call"),
+            ),
+            wasmtime::Error::from_anyhow(
+                anyhow::Error::from(expected.clone()).context("host call"),
+            ),
+        ] {
+            match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false) {
+                Err(GuestCallSettlementError::Infrastructure(error)) => {
+                    assert_eq!(error, expected)
+                }
+                Err(_) => panic!("an unreadable oplog did not settle as infrastructure"),
+                Ok(()) => panic!("an unreadable oplog settled"),
+            }
+        }
+    }
+
+    /// The oplog of another agent that a host call could not read fails only the call, as a trap,
+    /// when it failed for good, and recovers this agent when a later read can pass. Neither fails
+    /// this agent with the cause of the other.
+    #[test]
+    fn an_unreadable_oplog_of_another_agent_fails_only_the_call() {
+        let other = AgentId {
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+            agent_id: "other".to_string(),
+        };
+        let unreadable = |error| UnreadableOplog {
+            agent_id: other.clone(),
+            error,
+        };
+        let corrupt = unreadable(crate::services::oplog::OplogReadError::Gap {
+            start: OplogIndex::INITIAL,
+            end: OplogIndex::from_u64(2),
+        });
+        for error in [
+            anyhow::Error::from(corrupt.clone()),
+            anyhow::Error::from(WorkerExecutorError::from(corrupt)),
+        ] {
+            assert!(matches!(
+                classify_guest_call_settlement::<()>(
+                    &own_agent_id(),
+                    Err(wasmtime::Error::from_anyhow(error.context("host call"))),
+                    None,
+                    false,
+                ),
+                Err(GuestCallSettlementError::Trap(_))
+            ));
+        }
+        let unavailable = unreadable(crate::services::oplog::OplogReadError::source_unavailable(
+            crate::services::oplog::OplogReadSource::Archive(1),
+            "outage",
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::from_anyhow(
+                    anyhow::Error::from(unavailable).context("host call")
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Infrastructure(
+                WorkerExecutorError::RecoveryRequired { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn guest_trap_and_settlement_failures_keep_distinct_provenance() {
+        let guest_trap = classify_guest_call_settlement(
+            &own_agent_id(),
+            Ok::<_, wasmtime::Error>(Err::<(), _>(wasmtime::Error::msg("guest trapped"))),
+            None,
+            false,
+        )
+        .expect("the event loop itself settled");
+        assert!(guest_trap.is_err());
+
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::from_anyhow(
+                    wasmtime::Trap::UnreachableCodeReached.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Trap(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::from_anyhow(
+                    GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Trap(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::from_anyhow(
+                    wasmtime::Trap::AsyncDeadlock.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Infrastructure(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::msg("host task failed")),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Infrastructure(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::msg("interrupted")),
+                None,
+                true,
+            ),
+            Err(GuestCallSettlementError::Interrupted(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::from_anyhow(
+                    InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()).into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Interrupted(_))
+        ));
+    }
+
+    #[test]
+    fn host_infrastructure_error_with_wasm_backtrace_stays_infrastructure() {
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"
+                (module
+                    (import "host" "fail" (func $fail))
+                    (func (export "run")
+                        call $fail))
+            "#,
+        )
+        .unwrap();
+        for failure in [
+            WorkerExecutorError::runtime("registry unavailable"),
+            crate::durable_host::tool_attachment_live_admission_rejected_error(),
+        ] {
+            let mut linker = wasmtime::Linker::new(&engine);
+            let host_failure = failure.clone();
+            linker
+                .func_wrap("host", "fail", move || -> wasmtime::Result<()> {
+                    Err(wasmtime::Error::from_anyhow(host_failure.clone().into()))
+                })
+                .unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            let instance = linker.instantiate(&mut store, &module).unwrap();
+            let run = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap();
+            let error = run.call(&mut store, ()).unwrap_err();
+
+            assert!(
+                error.downcast_ref::<wasmtime::WasmBacktrace>().is_some(),
+                "the reproducer must exercise Wasmtime's attached backtrace context"
+            );
+            let Err(GuestCallSettlementError::Infrastructure(classified)) =
+                classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
+            else {
+                panic!("host failure must remain infrastructure");
+            };
+            if crate::durable_host::is_tool_attachment_live_admission_rejection(&failure) {
+                assert_eq!(classified, failure);
+            }
+        }
+    }
+
+    #[test]
+    fn durable_recovery_failure_precedes_durable_call_semantic_marker() {
+        use crate::durable_host::durability::{DurableCallTrapContext, DurableRecoveryFailure};
+
+        let error = crate::durable_host::durability::mark_durable_call_trap_context(
+            anyhow::Error::new(DurableRecoveryFailure::new(
+                DurableRecoveryFailureKind::Retryable,
+                std::io::Error::other("payload backend unavailable"),
+            )),
+            DurableCallTrapContext {
+                retry_from: OplogIndex::from_u64(17),
+            },
+        );
+        let result = classify_guest_call_settlement::<()>(
+            &own_agent_id(),
+            Err(wasmtime::Error::from_anyhow(error)),
+            None,
+            false,
+        );
+
+        let Err(GuestCallSettlementError::Infrastructure(WorkerExecutorError::RecoveryRequired {
+            details,
+            retry_from,
+        })) = result
+        else {
+            panic!("retryable recovery failure must remain infrastructure recovery");
+        };
+        assert!(details.contains("payload backend unavailable"));
+        assert_eq!(retry_from, Some(OplogIndex::from_u64(17)));
+    }
+
+    #[test]
+    fn bare_recovery_required_preserves_its_retry_point() {
+        let result = classify_guest_call_settlement::<()>(
+            &own_agent_id(),
+            Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                WorkerExecutorError::recovery_required_from(
+                    "completed prefix payload unavailable",
+                    OplogIndex::from_u64(23),
+                ),
+            ))),
+            None,
+            false,
+        );
+
+        let Err(GuestCallSettlementError::Infrastructure(WorkerExecutorError::RecoveryRequired {
+            details,
+            retry_from,
+        })) = result
+        else {
+            panic!("bare recovery requirement must remain typed infrastructure recovery");
+        };
+        assert_eq!(details, "completed prefix payload unavailable");
+        assert_eq!(retry_from, Some(OplogIndex::from_u64(23)));
+    }
+
+    #[test]
+    fn permanent_durable_recovery_failure_is_not_retryable_recovery() {
+        use crate::durable_host::durability::DurableRecoveryFailure;
+
+        let inner = anyhow::anyhow!("payload 123 is missing")
+            .context("failed to download incoming body chunk payload");
+        let result = classify_guest_call_settlement::<()>(
+            &own_agent_id(),
+            Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                DurableRecoveryFailure::new(DurableRecoveryFailureKind::Permanent, inner),
+            ))),
+            None,
+            false,
+        );
+
+        let Err(GuestCallSettlementError::Infrastructure(
+            WorkerExecutorError::UnexpectedOplogEntry { expected, got },
+        )) = result
+        else {
+            panic!("permanent recovery failure must remain non-retryable infrastructure");
+        };
+        assert_eq!(expected, "valid durable recovery data");
+        assert!(got.contains("failed to download incoming body chunk payload"));
+        assert!(got.contains("payload 123 is missing"));
+    }
+
+    #[test]
+    fn settlement_timeout_is_infrastructure_even_after_root_return() {
+        let result = classify_guest_call_settlement(
+            &own_agent_id(),
+            Ok(()),
+            Some((std::time::Duration::from_secs(2), 1)),
+            false,
+        );
+        let Err(GuestCallSettlementError::Infrastructure(error)) = result else {
+            panic!("tail-work timeout must be an infrastructure failure");
+        };
+        assert!(error.to_string().contains("did not settle within 2s"));
     }
 }

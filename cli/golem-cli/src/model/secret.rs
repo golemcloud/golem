@@ -14,11 +14,12 @@
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::model::cli_output::StructuredOutput;
+use crate::model::create_action::CreateAction;
 use crate::model::masking::{Masked, MaskingConfig, mask_json_secret_value};
 use crate::model::text_format::*;
 
 use comfy_table::Cell;
-use golem_common::model::agent_secret::AgentSecretDto;
+use golem_client::model::AgentSecretDto;
 use golem_common::schema::{SchemaGraph, SchemaValue};
 use serde::Serialize as _;
 use serde::Serializer;
@@ -43,7 +44,7 @@ impl From<AgentSecretDto> for SecretView {
             path: value.path,
             revision: value.revision,
             secret_type: value.secret_type,
-            secret_value: value.secret_value,
+            secret_value: value.secret_value.map(|value| value.into_inner()),
         }
     }
 }
@@ -57,25 +58,35 @@ impl Masked for SecretView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(transparent)]
-pub struct SecretCreateView(pub SecretView);
+pub struct SecretCreateView {
+    pub action: CreateAction,
+    #[serde(flatten)]
+    pub secret: SecretView,
+}
 
 impl Masked for SecretCreateView {
     fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
-        Ok(Self(self.0.masked(config)?))
+        Ok(Self {
+            action: self.action,
+            secret: self.secret.masked(config)?,
+        })
     }
 }
 
 impl MessageWithFields for SecretCreateView {
     fn message(&self) -> String {
-        format!(
-            "Created a new secret {}",
-            format_message_highlight(&self.0.id),
-        )
+        let id = format_message_highlight(&self.secret.id);
+        match self.action {
+            CreateAction::Created => format!("Created a new secret {id}"),
+            CreateAction::Updated => format!("Updated existing secret {id}"),
+            CreateAction::Replaced => {
+                format!("Replaced existing secret with a new secret {id}")
+            }
+        }
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        secret_view_fields(&self.0)
+        secret_view_fields(&self.secret)
     }
 }
 
@@ -148,7 +159,7 @@ impl MessageWithFields for SecretUpdateView {
 }
 
 impl StructuredOutput for SecretUpdateView {
-    const KIND: &'static str = "secret.update-value";
+    const KIND: &'static str = "secret.update";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
     where
@@ -337,11 +348,12 @@ impl StructuredOutput for SecretListView {
 mod tests {
     use super::{SecretGetView, SecretListView, wrap_uuid_for_table};
     use crate::model::masking::{Masked, MaskingConfig};
+    use golem_client::model::AgentSecretDto;
     use golem_common::model::agent_secret::{
-        AgentSecretDto, AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
     };
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
     use serde_json::json;
     use test_r::test;
 
@@ -356,7 +368,10 @@ mod tests {
             path: CanonicalAgentSecretPath(vec!["token".to_string()]),
             revision: AgentSecretRevision::new(7).unwrap(),
             secret_type: SchemaGraph::anonymous(SchemaType::string()),
-            secret_value: Some(SchemaValue::String("super-secret".to_string())),
+            secret_value: Some(
+                ExternalSchemaValue::try_from(SchemaValue::String("super-secret".to_string()))
+                    .unwrap(),
+            ),
         }
         .into()
     }

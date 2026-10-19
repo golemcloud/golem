@@ -46,6 +46,10 @@ priv struct GeneratedFileWrite {
   path : String
   content : String
   message : String
+  /// Content already on disk, recorded by `GeneratedFilePlan::preflight` so
+  /// `apply` can skip byte-identical rewrites without reading the file twice.
+  /// `None` means the file is absent, or that `preflight` has not run yet.
+  mut existing : String?
 }
 
 ///|
@@ -66,7 +70,7 @@ fn GeneratedFilePlan::stage_write(
   content : String,
   message : String,
 ) -> Unit {
-  self.writes.push({ path, content, message, })
+  self.writes.push({ path, content, message, existing: None, })
 }
 
 ///|
@@ -78,9 +82,11 @@ fn GeneratedFilePlan::stage_removal(
 }
 
 ///|
+/// Validates every staged path before any state is changed, and records the
+/// content currently on disk so `apply` can skip unchanged writes.
 fn GeneratedFilePlan::preflight(self : GeneratedFilePlan) -> Unit raise {
   for write in self.writes {
-    validate_generated_write_path(write.path)
+    write.existing = read_generated_write_target(write.path)
   }
   for path in self.removals {
     validate_generated_removal_path(path)
@@ -88,10 +94,26 @@ fn GeneratedFilePlan::preflight(self : GeneratedFilePlan) -> Unit raise {
 }
 
 ///|
-fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Unit raise {
+/// Applies the staged writes and removals. Writes whose content is already
+/// byte-identical on disk are skipped so that unchanged generated files keep
+/// their modification time: `moon` is mtime-driven, so rewriting identical
+/// bytes would rebuild the package and in turn invalidate every later build
+/// step. Returns the number of files actually written.
+///
+/// Must be called after `preflight`; without it every write is applied, which
+/// is the previous behaviour rather than a wrong result.
+fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Int raise {
+  let mut written = 0
   for write in self.writes {
-    @fs.write_string_to_file(write.path, write.content)
-    println(write.message)
+    let unchanged = match write.existing {
+      Some(existing) => existing == write.content
+      None => false
+    }
+    if !unchanged {
+      @fs.write_string_to_file(write.path, write.content)
+      println(write.message)
+      written = written + 1
+    }
   }
   for path in self.removals {
     if @fs.path_exists(path) {
@@ -99,6 +121,7 @@ fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Unit raise {
       println("Removed stale \{path}")
     }
   }
+  written
 }
 
 ///|
@@ -106,7 +129,7 @@ fn main {
   let args = @env.args()
   if args.length() < 2 {
     println(
-      "Usage: golem_sdk_tools <command> <args>\nCommands:\n  reexports <sdk-path> <target-dir> --role <role>\n  agents <project-root> --component-dir <component-dir> --role <role>",
+      "Usage: golem_sdk_tools <command> <args>\nCommands:\n  reexports <sdk-path> <target-dir>\n  agents <project-root> --component-dir <component-dir>",
     )
     @sys.exit(1)
     return
@@ -123,7 +146,7 @@ fn main {
         return
       }
     }
-    run_reexports(options.sdk_path, options.target_dir, options.role) catch {
+    run_reexports(options.sdk_path, options.target_dir) catch {
       @lib.ComponentRoleError(message) => {
         println("Error: \{message}")
         @sys.exit(1)
@@ -141,8 +164,12 @@ fn main {
         return
       }
     }
-    run_agents(options.project_root, options.component_dir, options.role) catch {
+    run_agents(options.project_root, options.component_dir) catch {
       @lib.ComponentRoleError(message) => {
+        println("Error: \{message}")
+        @sys.exit(1)
+      }
+      @lib.ToolEmitError(message) => {
         println("Error: \{message}")
         @sys.exit(1)
       }
@@ -160,11 +187,7 @@ fn main {
 ///|
 /// Runs the `agents` subcommand: scans a project for shared schema context and
 /// writes generated code only to the selected component package.
-fn run_agents(
-  project_root : String,
-  component_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
+fn run_agents(project_root : String, component_dir : String) -> Unit raise {
   let scans = @lib.discover_and_scan(project_root)
   let target_dir = @lib.component_target_dir(project_root, component_dir)
   if !scans.iter().any(fn(scan) { scan.pkg.dir == target_dir }) {
@@ -199,17 +222,11 @@ fn run_agents(
     let agents = @lib.parse_agents(files)
     let tools = @lib.parse_tools(files)
     let has_middleware_annotations = @lib.has_middleware_annotations(files)
-    @lib.validate_component_role(
-      role,
-      agents.length(),
-      has_middleware_annotations,
-    )
     let middlewares = if has_middleware_annotations {
       @lib.parse_tool_middlewares(files)
     } else {
       []
     }
-    validate_component_role_marker(pkg_dir, role)
     let has_derive = value_types.length() > 0 ||
       multimodal_enums.length() > 0 ||
       config_types.length() > 0
@@ -218,9 +235,19 @@ fn run_agents(
     let has_middlewares = middlewares.length() > 0
     let required_pkg_imports : Array[(String, String)] = []
     let file_plan = GeneratedFilePlan::new()
-    if has_middlewares && role.allows_tool_middleware_registration() {
+    let (export_hooks, export_imports) = @lib.generate_export_hooks(
+      has_agents, has_tools, has_middlewares,
+    )
+    required_pkg_imports.append(export_imports)
+    let hooks_path = "\{pkg_dir}/golem_exports.mbt"
+    file_plan.stage_write(
+      hooks_path,
+      generated_file_banner + "\n\n" + @formatter.impls_to_string(export_hooks),
+      "Generated \{hooks_path}",
+    )
+    if has_middlewares {
       let middleware_impls = @lib.generate_tool_middleware_registration(
-        middlewares, tools, role,
+        middlewares, tools,
       )
       let middleware_formatted = fix_broken_strings(
         @formatter.impls_to_string(middleware_impls),
@@ -240,16 +267,7 @@ fn run_agents(
       if middlewares.any(middleware => {
           middleware.scope is @lib.ToolMiddlewareScopeInfo::Monomorphic(_)
         }) {
-        required_pkg_imports.push(
-          (
-            if role is @lib.ComponentRole::ToolMiddleware {
-              "golemcloud/golem_sdk/tool-core"
-            } else {
-              "golemcloud/golem_sdk/tool"
-            },
-            "@tool",
-          ),
-        )
+        required_pkg_imports.push(("golemcloud/golem_sdk/tool", "@tool"))
         required_pkg_imports.push(("golemcloud/golem_sdk/schema", "@schema"))
         required_pkg_imports.push(
           ("golemcloud/golem_sdk/schema_model", "@model"),
@@ -266,7 +284,7 @@ fn run_agents(
     } else {
       file_plan.stage_removal("\{pkg_dir}/golem_tool_middlewares.mbt")
     }
-    if has_tools && role.allows_tool_registration() {
+    if has_tools {
       let tool_impls = @lib.generate_tool_registration(tools)
       let tool_formatted = fix_broken_strings(
         @formatter.impls_to_string(tool_impls),
@@ -307,7 +325,7 @@ fn run_agents(
       file_plan.stage_removal("\{pkg_dir}/golem_tools.mbt")
       file_plan.stage_removal("\{pkg_dir}/golem_tool_clients.mbt")
     }
-    if has_agents && role.allows_agent_registration() {
+    if has_agents {
       // --- Agent package: generate golem_agents.mbt, golem_derive.mbt, golem_clients.mbt ---
       if agents[0].has_init {
         println(
@@ -351,6 +369,7 @@ fn run_agents(
       // golem_clients.mbt
       let client_impls = @lib.generate_client_code(
         agents,
+        value_types~,
         config_types=all_config_types,
         agent_package=scan.pkg.rel_path,
       )
@@ -373,6 +392,9 @@ fn run_agents(
         ("golemcloud/golem_sdk/interface/golem/core/types", "@types"),
       )
       required_pkg_imports.push(("golemcloud/golem_sdk/rpc", "@rpc"))
+      required_pkg_imports.push(
+        ("golemcloud/golem_sdk/permissions", "@permissions"),
+      )
       required_pkg_imports.push(
         ("golemcloud/golem_sdk/interface/golem/agent/host", "@agentHost"),
       )
@@ -448,16 +470,13 @@ fn run_agents(
     let pkg_path = "\{pkg_dir}/moon.pkg"
     let pkg_content = @fs.read_file_to_string(pkg_path)
     let reconciled_pkg = @lib.reconcile_generated_pkg_imports(
-      pkg_content,
-      required_pkg_imports,
-      forbid_ambient_tool=role is @lib.ComponentRole::ToolMiddleware,
+      pkg_content, required_pkg_imports,
     )
     file_plan.preflight()
-    file_plan.apply()
+    file_plan.apply() |> ignore
     if reconciled_pkg != pkg_content {
       @fs.write_string_to_file(pkg_path, reconciled_pkg)
     }
-    commit_component_role_marker(pkg_dir, role)
   }
 }
 
@@ -514,14 +533,25 @@ fn generate_derive_file(
 }
 
 ///|
-/// Writes a generated file without replacing a user-owned file at the managed path.
-fn write_generated_file(path : String, content : String) -> Unit raise {
-  validate_generated_write_path(path)
+/// Writes a generated file without replacing a user-owned file at the managed
+/// path. Skips the write when the content is already byte-identical so the file
+/// keeps its modification time. Returns whether it actually wrote.
+fn write_generated_file(path : String, content : String) -> Bool raise {
+  let unchanged = match read_generated_write_target(path) {
+    Some(existing) => existing == content
+    None => false
+  }
+  if unchanged {
+    return false
+  }
   @fs.write_string_to_file(path, content)
+  true
 }
 
 ///|
-fn validate_generated_write_path(path : String) -> Unit raise {
+/// Validates that a managed path may be written, and returns the content
+/// currently on disk. `None` means the file does not exist yet.
+fn read_generated_write_target(path : String) -> String? raise {
   if @fs.path_exists(path) {
     let existing = @fs.read_file_to_string(path)
     if !existing.has_prefix(generated_file_banner + "\n") {
@@ -529,6 +559,9 @@ fn validate_generated_write_path(path : String) -> Unit raise {
         "Refusing to overwrite non-generated file '" + path + "'",
       )
     }
+    Some(existing)
+  } else {
+    None
   }
 }
 
@@ -541,45 +574,6 @@ fn validate_generated_removal_path(path : String) -> Unit raise {
         "Refusing to remove non-generated file '" + path + "'",
       )
     }
-  }
-}
-
-///|
-/// Validates that existing generated role state agrees with the selected role.
-fn validate_component_role_marker(
-  component_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
-  let marker_path = "\{component_dir}/.golem-sdk-role"
-  if @fs.path_exists(marker_path) {
-    let selected = @lib.parse_component_role_marker(
-      @fs.read_file_to_string(marker_path),
-    )
-    if selected != role {
-      @lib.raise_component_role_error(
-        "Component role mismatch: '" +
-        component_dir +
-        "' was already generated as '" +
-        selected.name() +
-        "' but this command selected '" +
-        role.name() +
-        "'",
-      )
-    }
-  }
-}
-
-///|
-/// Commits role state after every other command operation has succeeded.
-fn commit_component_role_marker(
-  component_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
-  validate_component_role_marker(component_dir, role)
-  let marker_path = "\{component_dir}/.golem-sdk-role"
-  if !@fs.path_exists(marker_path) {
-    @fs.write_string_to_file(marker_path, @lib.component_role_marker(role))
-    println("Generated \{marker_path} for role \{role.name()}")
   }
 }
 
@@ -608,22 +602,10 @@ fn has_multimodal_agent(agents : Array[@lib.AgentInfo]) -> Bool {
 }
 
 ///|
-/// Runs the `reexports` subcommand from the exact generated package selected by
-/// the component role, then updates `golem_reexports.mbt` and `moon.pkg`.
-fn run_reexports(
-  sdk_path : String,
-  target_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
-  validate_component_role_marker(target_dir, role)
+fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
   let target_pkg_path = "\{target_dir}/moon.pkg"
   let target_pkg_content = @fs.read_file_to_string(target_pkg_path)
-  let role_safe_pkg_content = if role is @lib.ComponentRole::ToolMiddleware {
-    @lib.reconcile_pure_role_pkg_imports(target_pkg_content)
-  } else {
-    target_pkg_content
-  }
-  let gen_package = role.gen_package()
+  let gen_package = "gen"
   let gen_dir = "\{sdk_path}/\{gen_package}"
   let entries = @fs.read_dir(gen_dir)
   entries.sort_by((left, right) => left.compare(right))
@@ -637,13 +619,21 @@ fn run_reexports(
       }
     }
   }
-  let impls = @lib.generate_reexports(fns, "gen")
+  let files = @lib.scan_package({ rel_path: "", dir: target_dir, }).files
+  let has_agents = !@lib.parse_agents(files).is_empty()
+  let has_tools = !@lib.parse_tools(files).is_empty()
+  let has_middlewares = @lib.has_middleware_annotations(files) &&
+    !@lib.parse_tool_middlewares(files).is_empty()
+  let impls = @lib.generate_component_reexports(
+    fns, has_agents, has_tools, has_middlewares,
+  )
   let formatted = @formatter.impls_to_string(impls)
   let output = generated_file_banner + "\n\n" + formatted
   let output_path = "\{target_dir}/golem_reexports.mbt"
-  write_generated_file(output_path, output)
-  println("Generated \{output_path} with \{fns.length()} functions")
-  // Update target moon.pkg with the selected generated package's link section.
+  if write_generated_file(output_path, output) {
+    println("Generated \{output_path} with \{fns.length()} functions")
+  }
+  // Update target moon.pkg with the generated package's link section.
   let gen_pkg_path = if @fs.path_exists("\{gen_dir}/moon.pkg") {
     "\{gen_dir}/moon.pkg"
   } else {
@@ -651,14 +641,17 @@ fn run_reexports(
   }
   let gen_pkg_content = @fs.read_file_to_string(gen_pkg_path)
   let exports = @lib.transform_exports(@lib.parse_pkg_exports(gen_pkg_content))
-  // Generated wrappers consistently use @gen while the imported package is
-  // selected exactly from the component role.
-  let with_gen_import = @lib.ensure_role_gen_import(
-    role_safe_pkg_content,
+  let with_gen_import = @lib.ensure_pkg_import(
+    target_pkg_content,
     "golemcloud/golem_sdk/\{gen_package}",
+    "@gen",
   )
-  let updated = @lib.update_pkg_link(with_gen_import, exports)
-  @fs.write_string_to_file(target_pkg_path, updated)
-  println("Updated \{target_pkg_path} with \{exports.length()} exports")
-  commit_component_role_marker(target_dir, role)
+  let with_minimal_import = @lib.ensure_pkg_import(
+    with_gen_import, "golemcloud/golem_sdk/minimal-exports", "@minimalExports",
+  )
+  let updated = @lib.update_pkg_link(with_minimal_import, exports)
+  if updated != target_pkg_content {
+    @fs.write_string_to_file(target_pkg_path, updated)
+    println("Updated \{target_pkg_path} with \{exports.length()} exports")
+  }
 }

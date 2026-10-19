@@ -1,0 +1,230 @@
+import { describe, it, expect } from "@effect/vitest"
+import { Effect, HashMap, Option, Result, Schema } from "effect"
+import { toWitCodec } from "../src/WitCodec.js"
+import {
+  Float32,
+  Int8,
+  Int16,
+  Int32,
+  Int64,
+  Uint8,
+  Uint16,
+  Uint32,
+  Uint64,
+} from "../src/WitTypes.js"
+
+const roundtrip = <S extends Schema.Codec<any, any, never, never>>(s: S, value: S["Type"]) =>
+  Effect.gen(function* () {
+    const wc = yield* toWitCodec(s)
+    const sv = yield* Schema.encodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(
+      value,
+    )
+    const back = yield* Schema.decodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(
+      sv,
+    )
+    return { wc, sv, back }
+  })
+
+describe("toWitCodec — option-shaped types", () => {
+  it.effect("NullOr<string>: option<string> with null/value", () =>
+    Effect.gen(function* () {
+      const S = Schema.NullOr(Schema.String)
+      const a = yield* roundtrip(S, "hi")
+      expect(a.back).toBe("hi")
+      expect(a.wc.graph.root.body.tag).toBe("option")
+
+      const b = yield* roundtrip(S, null)
+      expect(b.back).toBeNull()
+    }),
+  )
+
+  it.effect("UndefinedOr<number>: option<f64> with undefined/value", () =>
+    Effect.gen(function* () {
+      const S = Schema.UndefinedOr(Schema.Number)
+      const a = yield* roundtrip(S, 42)
+      expect(a.back).toBe(42)
+
+      const b = yield* roundtrip(S, undefined)
+      expect(b.back).toBeUndefined()
+    }),
+  )
+
+  it.effect("Schema.Option<string>: option<string> with Effect Option", () =>
+    Effect.gen(function* () {
+      const S = Schema.Option(Schema.String)
+      const a = yield* roundtrip(S, Option.some("hi"))
+      expect(Option.isSome(a.back)).toBe(true)
+      expect((a.back as Option.Option<string>).pipe(Option.getOrThrow)).toBe("hi")
+
+      const b = yield* roundtrip(S, Option.none())
+      expect(Option.isNone(b.back)).toBe(true)
+      expect(b.wc.graph.root.body.tag).toBe("option")
+    }),
+  )
+})
+
+describe("toWitCodec — Result", () => {
+  it.effect("Result<number, string> as success and failure", () =>
+    Effect.gen(function* () {
+      const S = Schema.Result(Schema.Number, Schema.String)
+      const ok = yield* roundtrip(S, Result.succeed(7))
+      expect(Result.isSuccess(ok.back)).toBe(true)
+      expect((ok.back as Result.Result<number, string>).pipe(Result.getOrThrow)).toBe(7)
+      expect(ok.wc.graph.root.body.tag).toBe("result")
+
+      const err = yield* roundtrip(S, Result.fail("nope"))
+      expect(Result.isFailure(err.back)).toBe(true)
+      expect(err.back as Result.Result<number, string>).toMatchObject({
+        _tag: "Failure",
+        failure: "nope",
+      })
+    }),
+  )
+})
+
+describe("toWitCodec — Maps", () => {
+  it.effect("ReadonlyMap<string, number> as list<tuple<string, f64>>", () =>
+    Effect.gen(function* () {
+      const S = Schema.ReadonlyMap(Schema.String, Schema.Number)
+      const value = new Map<string, number>([
+        ["a", 1],
+        ["b", 2],
+      ])
+      const r = yield* roundtrip(S, value)
+      expect(r.back).toBeInstanceOf(Map)
+      expect(Array.from((r.back as Map<string, number>).entries())).toEqual([
+        ["a", 1],
+        ["b", 2],
+      ])
+      // Root is list<tuple<k, v>>
+      expect(r.wc.graph.root.body.tag).toBe("list")
+    }),
+  )
+
+  it.effect("HashMap<string, number> round-trips and stays a HashMap", () =>
+    Effect.gen(function* () {
+      const S = Schema.HashMap(Schema.String, Schema.Number)
+      const value: HashMap.HashMap<string, number> = HashMap.fromIterable([
+        ["a", 1] as const,
+        ["b", 2] as const,
+      ])
+      const r = yield* roundtrip(S, value)
+      expect(HashMap.isHashMap(r.back)).toBe(true)
+      expect(HashMap.size(r.back as HashMap.HashMap<string, number>)).toBe(2)
+      expect(
+        HashMap.get(r.back as HashMap.HashMap<string, number>, "a").pipe(Option.getOrNull),
+      ).toBe(1)
+    }),
+  )
+})
+
+describe("toWitCodec — sized integer schemas", () => {
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly schema: Schema.Top
+    readonly typeTag: string
+    readonly valueTag: string
+    readonly value: number | bigint
+  }> = [
+    { name: "Uint8", schema: Uint8, typeTag: "u8", valueTag: "u8", value: 200 },
+    {
+      name: "Uint16",
+      schema: Uint16,
+      typeTag: "u16",
+      valueTag: "u16",
+      value: 65000,
+    },
+    {
+      name: "Uint32",
+      schema: Uint32,
+      typeTag: "u32",
+      valueTag: "u32",
+      value: 4_000_000_000,
+    },
+    { name: "Int8", schema: Int8, typeTag: "s8", valueTag: "s8", value: -100 },
+    { name: "Int16", schema: Int16, typeTag: "s16", valueTag: "s16", value: -32000 },
+    {
+      name: "Int32",
+      schema: Int32,
+      typeTag: "s32",
+      valueTag: "s32",
+      value: -2_000_000_000,
+    },
+    {
+      name: "Float32",
+      schema: Float32,
+      typeTag: "f32",
+      valueTag: "f32",
+      value: 1.5,
+    },
+    {
+      name: "Int64",
+      schema: Int64,
+      typeTag: "s64",
+      valueTag: "s64",
+      value: -9_000_000_000_000n,
+    },
+    {
+      name: "Uint64",
+      schema: Uint64,
+      typeTag: "u64",
+      valueTag: "u64",
+      value: 9_000_000_000_000n,
+    },
+  ]
+
+  for (const c of cases) {
+    it.effect(`${c.name} maps to ${c.typeTag} and round-trips`, () =>
+      Effect.gen(function* () {
+        const wc = yield* toWitCodec(c.schema as any)
+        expect(wc.graph.root.body.tag).toBe(c.typeTag)
+        const codec = wc.codec as Schema.Codec<any, any, never, never>
+        const sv = yield* Schema.encodeEffect(codec)(c.value)
+        expect((sv as any).tag).toBe(c.valueTag)
+        const back = yield* Schema.decodeEffect(codec)(sv)
+        expect(back).toEqual(c.value)
+      }),
+    )
+  }
+
+  it.effect("default Schema.Number stays f64", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Schema.Number)
+      expect(wc.graph.root.body.tag).toBe("f64")
+    }),
+  )
+
+  it.effect("default Schema.BigInt stays s64", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Schema.BigInt)
+      expect(wc.graph.root.body.tag).toBe("s64")
+    }),
+  )
+})
+
+describe("toWitCodec — composite uses of new types", () => {
+  it.effect("Result<ReadonlyMap<string, Uint32>, string>", () =>
+    Effect.gen(function* () {
+      const S = Schema.Result(Schema.ReadonlyMap(Schema.String, Uint32), Schema.String)
+      const value = Result.succeed(new Map([["x", 7]]))
+      const r = yield* roundtrip(S, value)
+      expect(Result.isSuccess(r.back)).toBe(true)
+      const m = (r.back as Result.Result<Map<string, number>, string>).pipe(Result.getOrThrow)
+      expect(Array.from(m.entries())).toEqual([["x", 7]])
+    }),
+  )
+
+  it.effect("Struct with NullOr and Schema.Option fields", () =>
+    Effect.gen(function* () {
+      const S = Schema.Struct({
+        name: Schema.String,
+        nick: Schema.NullOr(Schema.String),
+        age: Schema.Option(Uint8),
+      })
+      const v = { name: "Ada", nick: null, age: Option.some(36) }
+      const r = yield* roundtrip(S, v)
+      expect(r.back).toMatchObject({ name: "Ada", nick: null })
+      expect(Option.getOrNull((r.back as { age: Option.Option<number> }).age)).toBe(36)
+    }),
+  )
+})

@@ -886,6 +886,82 @@ fn typed_reject_decoder_drains_handle_before_decoding_invalid_graph() {
 }
 
 #[test]
+fn tool_wit_uses_directional_started_stream_contract() {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("golem-common is a workspace member");
+    let tool_wit = workspace_root.join("wit/deps/golem-tool");
+    let common = std::fs::read_to_string(tool_wit.join("common.wit"))
+        .expect("failed to read canonical tool common WIT");
+    let host = std::fs::read_to_string(tool_wit.join("host.wit"))
+        .expect("failed to read canonical tool host WIT");
+    let guest = std::fs::read_to_string(tool_wit.join("guest.wit"))
+        .expect("failed to read canonical tool guest WIT");
+    let streams = std::fs::read_to_string(tool_wit.join("streams.wit"))
+        .expect("failed to read canonical tool streams WIT");
+    let core =
+        std::fs::read_to_string(workspace_root.join("wit/deps/golem-core-v2/golem-core-v2.wit"))
+            .expect("failed to read canonical core WIT");
+    let rpc_error = core
+        .split_once("variant tool-rpc-error {")
+        .and_then(|(_, rest)| rest.split_once("\n    }").map(|(body, _)| body))
+        .expect("core WIT must define tool-rpc-error");
+
+    assert!(common.contains(
+        "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n    stderr:  option<stream<u8>>,\n  }"
+    ));
+
+    for required in [
+        "type byte-stream-item = result<list<u8>, byte-stream-failure>;",
+        "resource tool-output-writer {",
+        "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
+        "finish: async func() -> result<_, stream-write-error>;",
+        "fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;",
+    ] {
+        assert!(
+            streams.contains(required),
+            "missing streams WIT contract: {required}"
+        );
+    }
+
+    for required in [
+        "use golem:core/types@2.0.0.{typed-schema-value, component-id, tool-rpc-error};",
+        "use streams.{byte-stream-failure, byte-stream-item, byte-stream-close-cause, stream-write-error};",
+        "create-stdin: func() -> tuple<\n    own<tool-stdin-writer>,\n    own<tool-stdin>,\n    own<tool-stdin-closed>\n  >;",
+        "create-output: func() -> tuple<own<tool-output>, stream<byte-stream-item>>;",
+        "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
+        "invoke-and-await: async func(",
+        "stdin:        option<own<tool-stdin>>",
+        "stdout:       option<own<tool-output>>",
+        "stderr:       option<own<tool-output>>",
+        "invoke: func(",
+        "async-invoke-and-await: func(",
+        "get: async func() -> result<invocation-result, tool-rpc-error>;",
+        "get-invoke-results: async func(\n    futures: list<borrow<future-invoke-result>>,\n  ) -> list<result<invocation-result, tool-rpc-error>>;",
+    ] {
+        assert!(
+            host.contains(required),
+            "missing host WIT contract: {required}"
+        );
+    }
+    assert!(rpc_error.contains("cancelled,"));
+    assert!(rpc_error.contains("resource-exhausted(string)"));
+    assert!(!host.contains("option<stream<u8>>"));
+
+    for required in [
+        "use streams.{byte-stream-item, tool-output-writer};",
+        "stdin:        option<stream<byte-stream-item>>",
+        "stdout:       option<own<tool-output-writer>>",
+        "stderr:       option<own<tool-output-writer>>",
+    ] {
+        assert!(
+            guest.contains(required),
+            "missing guest WIT contract: {required}"
+        );
+    }
+}
+
+#[test]
 fn secrets_types_and_reveal_interfaces_are_imported_by_host_and_sdk_worlds() {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

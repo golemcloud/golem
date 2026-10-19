@@ -3,7 +3,10 @@ use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
-use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
+use crate::services::{
+    HasComponentService, HasConfig, HasOplogService, HasWorkerService, UsesAllDeps,
+};
+use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -16,7 +19,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
-use tracing::{Instrument, info};
+use tracing::{Instrument, info, warn};
 
 /// Returns `true` if `filter` contains any `Mode(...)` reference at any depth.
 fn contains_mode(filter: &AgentFilter) -> bool {
@@ -147,7 +150,13 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 
         let mut workers: Vec<AgentMetadata> = vec![];
         for (agent_id, worker) in active_agents {
-            let metadata = worker.get_latest_worker_metadata().await;
+            let initial = worker.get_initial_worker_metadata();
+            let owned_agent_id =
+                golem_common::model::OwnedAgentId::new(initial.environment_id, &agent_id);
+            let Some(metadata) = Worker::get_latest_metadata(worker.all(), &owned_agent_id).await?
+            else {
+                continue;
+            };
             if agent_id.component_id == *component_id
                 && (metadata.last_known_status.status == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
@@ -177,6 +186,17 @@ pub trait WorkerEnumerationService: Send + Sync {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError>;
+}
+
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -221,24 +241,51 @@ impl DefaultWorkerEnumerationService {
             .await?;
 
         for owned_agent_id in keys {
-            let worker_metadata = self
+            // An agent whose oplog failed for good has no metadata to list: it is left out, and
+            // every other agent is listed. A storage that did not answer fails the listing, which
+            // the caller can retry.
+            let worker_metadata = match self
                 .worker_service
                 .get(&owned_agent_id)
                 .instrument(tracing::info_span!("get_worker_metadata"))
-                .await;
+                .await
+            {
+                Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
+                    warn!(agent_id = %owned_agent_id, error = %error, "Leaving an agent with an unreadable oplog out of the listing");
+                    continue;
+                }
+                result => result?,
+            };
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
                     let agent_mode = worker_metadata.initial_worker_metadata.agent_mode;
-                    let last_known_status = calculate_last_known_status_with_checkpoint(
+                    let cached_status = worker_metadata.last_known_status.clone();
+                    let last_known_status = match calculate_last_known_status_with_checkpoint(
                         self,
                         &owned_agent_id,
+                        worker_metadata.initial_worker_metadata.fingerprint,
                         agent_mode,
                         worker_metadata.last_known_status,
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await
-                    .expect("Failed to calculate worker status for existing worker");
+                    .map_err(WorkerExecutorError::from)
+                    {
+                        // The oplog failed for good: the agent fails with it when it next runs,
+                        // so it is listed as failed.
+                        Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
+                            warn!(agent_id = %owned_agent_id, error = %error, "Listing an agent with an unreadable oplog as failed");
+                            let mut status = cached_status.unwrap_or_default();
+                            status.status = AgentStatus::Failed;
+                            status
+                        }
+                        result => result?.ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "worker oplog disappeared during precise enumeration",
+                            )
+                        })?,
+                    };
 
                     AgentMetadata {
                         last_known_status,
@@ -296,6 +343,8 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+        validate_agent_enumeration_count(count)?;
+
         info!(
             environment_id = %environment_id,
             component_id = %component_id,
@@ -336,11 +385,19 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
 #[cfg(test)]
 mod tests {
-    use super::modes_from_filter;
+    use super::{modes_from_filter, validate_agent_enumeration_count};
     use golem_common::base_model::worker_filter::{FilterComparator, StringFilterComparator};
     use golem_common::model::AgentFilter;
     use golem_common::model::agent::AgentMode;
     use test_r::test;
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
+    }
 
     #[test]
     fn no_filter_defaults_to_durable() {

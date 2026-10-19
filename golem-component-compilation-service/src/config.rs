@@ -23,7 +23,8 @@ use golem_service_base::service::compiled_component::CompiledComponentServiceCon
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fmt::Write;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::Duration;
 
@@ -45,8 +46,11 @@ pub struct ServerConfig {
     // Engine
     pub engine: EngineConfig,
 
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
+
     // Metrics and healthcheck
-    pub http_host: String,
     pub http_port: u16,
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
@@ -88,7 +92,7 @@ impl SafeDisplay for ServerConfig {
         let _ = writeln!(&mut result, "engine:");
         let _ = writeln!(&mut result, "{}", self.engine.to_safe_string_indented());
 
-        let _ = writeln!(&mut result, "HTTP host: {}", self.http_host);
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
         let _ = writeln!(
             &mut result,
@@ -100,9 +104,12 @@ impl SafeDisplay for ServerConfig {
 }
 
 impl ServerConfig {
-    pub fn http_addr(&self) -> Option<SocketAddrV4> {
-        let address = self.http_host.parse::<Ipv4Addr>().ok()?;
-        Some(SocketAddrV4::new(address, self.http_port))
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
     }
 }
 
@@ -116,7 +123,7 @@ impl Default for ServerConfig {
             compile_worker: Default::default(),
             grpc: GrpcApiConfig::default(),
             engine: EngineConfig::default(),
-            http_host: "0.0.0.0".to_string(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8084,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
@@ -213,6 +220,8 @@ impl SafeDisplay for StaticRegistryServiceConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompileWorkerConfig {
+    pub queue_capacity: NonZeroUsize,
+    pub upload_queue_capacity: NonZeroUsize,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
 }
@@ -220,6 +229,12 @@ pub struct CompileWorkerConfig {
 impl SafeDisplay for CompileWorkerConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
+        let _ = writeln!(&mut result, "queue capacity: {}", self.queue_capacity);
+        let _ = writeln!(
+            &mut result,
+            "upload queue capacity: {}",
+            self.upload_queue_capacity
+        );
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -243,6 +258,8 @@ impl Default for RegistryServiceConfig {
 impl Default for CompileWorkerConfig {
     fn default() -> Self {
         Self {
+            queue_capacity: NonZeroUsize::new(100).unwrap(),
+            upload_queue_capacity: NonZeroUsize::new(100).unwrap(),
             client_config: GrpcClientConfig {
                 retries_on_unavailable: RetryConfig::max_attempts_3(),
                 connect_timeout: Duration::from_secs(10),
@@ -273,10 +290,30 @@ pub fn make_config_loader() -> ConfigLoader<ServerConfig> {
 mod tests {
     use test_r::test;
 
-    use crate::config::make_config_loader;
+    use crate::config::{ServerConfig, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    fn queue_capacities_are_configurable_and_nonzero() {
+        let figment = make_config_loader()
+            .default_figment()
+            .merge(("compile_worker.queue_capacity", 7))
+            .merge(("compile_worker.upload_queue_capacity", 3));
+        let config: ServerConfig = figment.extract().unwrap();
+        assert_eq!(config.compile_worker.queue_capacity.get(), 7);
+        assert_eq!(config.compile_worker.upload_queue_capacity.get(), 3);
+        for field in ["queue_capacity", "upload_queue_capacity"] {
+            assert!(
+                figment
+                    .clone()
+                    .merge((format!("compile_worker.{field}"), 0))
+                    .extract::<ServerConfig>()
+                    .is_err()
+            );
+        }
     }
 }

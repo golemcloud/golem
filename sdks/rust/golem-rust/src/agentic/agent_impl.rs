@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{agent_registry, get_principal, get_resolved_agent, register_principal};
+use crate::agentic::{
+    agent_registry, get_principal, get_resolved_agent, register_initialized_agent,
+};
 use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
-use crate::schema::wit::{decode_value, encode_value_async};
 use crate::{
     agentic::{
         AgentTypeName, with_agent_initiator, with_agent_instance, with_agent_instance_async,
@@ -30,12 +31,166 @@ fn serialize_principal(p: &Principal) -> Vec<u8> {
 }
 
 fn deserialize_principal(bytes: &[u8]) -> Result<Principal, String> {
-    serde_json::from_slice(bytes).map_err(|e| format!("Failed to deserialize principal: {e}"))
+    super::principal_serde::from_json_bytes(bytes)
+        .map_err(|e| format!("Failed to deserialize principal: {e}"))
 }
 
-pub struct Component;
+#[derive(serde::Deserialize)]
+struct JsonSnapshotEnvelope<'a> {
+    #[serde(borrow, default, deserialize_with = "present_json_field")]
+    version: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow, default, deserialize_with = "present_json_field")]
+    principal: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow, default, deserialize_with = "present_json_field")]
+    state: Option<&'a serde_json::value::RawValue>,
+}
 
-impl Guest for Component {
+fn present_json_field<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<&'de serde_json::value::RawValue>, D::Error> {
+    <&serde_json::value::RawValue as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+fn encode_json_snapshot(principal: &Principal, state: &[u8]) -> Vec<u8> {
+    #[derive(serde::Serialize)]
+    struct Envelope<'a> {
+        principal: &'a Principal,
+        state: &'a serde_json::value::RawValue,
+        version: u8,
+    }
+
+    let state = serde_json::from_slice(state).expect("Failed to parse snapshot JSON");
+    serde_json::to_vec(&Envelope {
+        principal,
+        state,
+        version: 1,
+    })
+    .expect("Failed to serialize snapshot envelope")
+}
+
+fn decode_snapshot(
+    snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
+) -> Result<(Principal, super::SnapshotData), String> {
+    if snapshot
+        .mime_type
+        .split(';')
+        .next()
+        .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("multipart/mixed"))
+    {
+        return super::snapshot_parts::decode(&snapshot.payload, &snapshot.mime_type);
+    }
+    let bytes = snapshot.payload;
+    let is_json = snapshot.mime_type == "application/json";
+
+    if bytes.is_empty() {
+        return Err("Snapshot is empty".into());
+    }
+
+    if is_json {
+        let json: JsonSnapshotEnvelope<'_> = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Failed to parse JSON snapshot: {e}"))?;
+        let version = json
+            .version
+            .ok_or_else(|| "JSON snapshot missing 'version' field".to_string())?;
+        if serde_json::from_str::<u64>(version.get()).ok() != Some(1) {
+            return Err("JSON snapshot version must be 1".to_string());
+        }
+        let principal = json
+            .principal
+            .ok_or_else(|| "JSON snapshot missing 'principal' field".to_string())?;
+        let principal = super::principal_serde::from_json_bytes(principal.get().as_bytes())
+            .map_err(|e| format!("Failed to deserialize principal from JSON: {e}"))?;
+        let state = json
+            .state
+            .ok_or_else(|| "JSON snapshot missing 'state' field".to_string())?;
+        let agent_snapshot = state.get().as_bytes().to_vec();
+        Ok((principal, super::SnapshotData::Json(agent_snapshot)))
+    } else {
+        let version = bytes[0];
+        match version {
+            1 => {
+                let agent_snapshot = bytes[1..].to_vec();
+                let principal = get_principal().unwrap_or(Principal::Anonymous);
+                Ok((principal, super::SnapshotData::Bytes(agent_snapshot)))
+            }
+            2 => {
+                if bytes.len() < 5 {
+                    return Err("Version 2 snapshot too short for principal length".into());
+                }
+                let principal_len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                let principal_start = 5usize;
+                let principal_end = principal_start
+                    .checked_add(principal_len)
+                    .ok_or_else(|| "Version 2 snapshot principal length overflow".to_string())?;
+                if bytes.len() < principal_end {
+                    return Err("Version 2 snapshot too short for principal data".into());
+                }
+                let principal = deserialize_principal(&bytes[principal_start..principal_end])?;
+                let agent_snapshot = bytes[principal_end..].to_vec();
+                Ok((principal, super::SnapshotData::Bytes(agent_snapshot)))
+            }
+            _ => Err(format!("Unsupported snapshot version: {}", version)),
+        }
+    }
+}
+
+struct ParsedRestoreIdentity {
+    agent_type: String,
+    parameters: crate::schema::wit::wire::SchemaValueTree,
+    phantom_id: Option<crate::Uuid>,
+}
+
+fn parse_restore_identity(id: &str) -> Result<ParsedRestoreIdentity, String> {
+    let (agent_type, parameters, phantom_id) = parse_agent_id(id).map_err(|e| e.to_string())?;
+    Ok(ParsedRestoreIdentity {
+        agent_type,
+        parameters: parameters.value,
+        phantom_id: phantom_id.map(Into::into),
+    })
+}
+
+async fn load_agent_snapshot(
+    snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
+    id: &str,
+    parse_identity: impl FnOnce(&str) -> Result<ParsedRestoreIdentity, String>,
+) -> Result<(), String> {
+    let (principal, agent_snapshot) = decode_snapshot(snapshot)?;
+    let identity = parse_identity(id)?;
+    let agent_type_name = AgentTypeName(identity.agent_type.clone());
+    let context = crate::agentic::SnapshotRestoreContext {
+        principal: principal.clone(),
+        agent_type: identity.agent_type,
+        parameters: identity.parameters,
+        phantom_id: identity.phantom_id,
+    };
+    let resolved = with_agent_initiator(
+        |initiator| async move { initiator.restore(agent_snapshot, context).await },
+        &agent_type_name,
+    )
+    .await?;
+    register_initialized_agent(principal, resolved);
+    Ok(())
+}
+
+struct AgentRuntime;
+
+#[doc(hidden)]
+pub fn install_agent_exports() {
+    let _ = super::exports::AGENT.set(super::exports::AgentHooks {
+        initialize: |name, input, principal| {
+            Box::pin(AgentRuntime::initialize(name, input, principal))
+        },
+        invoke: |name, input, principal| Box::pin(AgentRuntime::invoke(name, input, principal)),
+        get_definition: AgentRuntime::get_definition,
+        discover: AgentRuntime::discover_agent_types,
+        load: |snapshot| Box::pin(AgentRuntime::load(snapshot)),
+        save: || Box::pin(AgentRuntime::save()),
+    });
+    #[cfg(target_arch = "wasm32")]
+    super::exports::raw::agent_exports::install::<AgentRuntime>();
+}
+
+impl Guest for AgentRuntime {
     async fn initialize(
         agent_type: String,
         input: crate::schema::wit::wire::SchemaValueTree,
@@ -45,10 +200,9 @@ impl Guest for Component {
         log::set_max_level(log::LevelFilter::Trace);
 
         let agent_type_name = AgentTypeName(agent_type.clone());
-        let _agent_type = agent_registry::get_enriched_agent_type_by_name(&agent_type_name)
-            .unwrap_or_else(|| {
-                let agent_types = agent_registry::get_all_agent_types();
-                panic!(
+        if !agent_registry::has_registered_agent_type(&agent_type_name) {
+            let agent_types = agent_registry::get_all_agent_types();
+            panic!(
                 "Agent definition not found for agent name: {}. Available agents in this app is {}",
                 agent_type,
                 agent_types
@@ -57,18 +211,16 @@ impl Guest for Component {
                     .collect::<Vec<_>>()
                     .join(", ")
             )
-            });
+        }
 
-        register_principal(&principal);
-
-        let input = decode_value(input)
-            .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
-
-        with_agent_initiator(
-            |initiator| async move { initiator.initiate(input, principal).await.map(|_| ()) },
+        let commit_principal = principal.clone();
+        let resolved = with_agent_initiator(
+            |initiator| async move { initiator.initiate(input, principal).await },
             &agent_type_name,
         )
-        .await
+        .await?;
+        register_initialized_agent(commit_principal, resolved);
+        Ok(())
     }
 
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
@@ -84,9 +236,6 @@ impl Guest for Component {
             parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;
         }
 
-        let input = decode_value(input)
-            .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
-
         with_agent_instance_async(|resolved_agent| async move {
             let result = resolved_agent
                 .agent
@@ -94,12 +243,7 @@ impl Guest for Component {
                 .as_mut()
                 .invoke(method_name, input, principal)
                 .await?;
-            match result.value {
-                Some(value) => encode_value_async(&value).await.map(Some).map_err(|e| {
-                    AgentError::InvalidInput(format!("invalid schema value output: {e}"))
-                }),
-                None => Ok(None),
-            }
+            Ok(result.value)
         })
         .await
     }
@@ -115,14 +259,12 @@ impl Guest for Component {
     }
 }
 
-impl LoadSnapshotGuest for Component {
+impl LoadSnapshotGuest for AgentRuntime {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     async fn load(
         snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
     ) -> Result<(), String> {
-        let bytes = snapshot.payload;
-        let is_json = snapshot.mime_type == "application/json";
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
@@ -132,90 +274,21 @@ impl LoadSnapshotGuest for Component {
             return Err("Agent is already initialized".to_string());
         }
 
-        if bytes.is_empty() {
-            return Err("Snapshot is empty".into());
-        }
-
-        let (principal, agent_snapshot) = if is_json {
-            // JSON snapshot: unwrap envelope { version, principal, state }
-            let json: serde_json::Value = serde_json::from_slice(&bytes)
-                .map_err(|e| format!("Failed to parse JSON snapshot: {e}"))?;
-            let principal = if let Some(p) = json.get("principal") {
-                serde_json::from_value(p.clone())
-                    .map_err(|e| format!("Failed to deserialize principal from JSON: {e}"))?
-            } else {
-                get_principal().unwrap_or(Principal::Anonymous)
-            };
-            let state = json
-                .get("state")
-                .ok_or_else(|| "JSON snapshot missing 'state' field".to_string())?;
-            let agent_snapshot = serde_json::to_vec(state)
-                .map_err(|e| format!("Failed to re-serialize state from JSON snapshot: {e}"))?;
-            (principal, agent_snapshot)
-        } else {
-            // Binary snapshot with version envelope
-            let version = bytes[0];
-            match version {
-                1 => {
-                    let agent_snapshot = bytes[1..].to_vec();
-                    let principal = get_principal().unwrap_or(Principal::Anonymous);
-                    (principal, agent_snapshot)
-                }
-                2 => {
-                    if bytes.len() < 5 {
-                        return Err("Version 2 snapshot too short for principal length".into());
-                    }
-                    let principal_len =
-                        u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
-                    let principal_start = 5;
-                    let principal_end = principal_start + principal_len;
-                    if bytes.len() < principal_end {
-                        return Err("Version 2 snapshot too short for principal data".into());
-                    }
-                    let principal = deserialize_principal(&bytes[principal_start..principal_end])?;
-                    let agent_snapshot = bytes[principal_end..].to_vec();
-                    (principal, agent_snapshot)
-                }
-                _ => {
-                    return Err(format!("Unsupported snapshot version: {}", version));
-                }
-            }
-        };
-
-        register_principal(&principal);
-
         let id = std::env::var("GOLEM_AGENT_ID")
             .expect("GOLEM_AGENT_ID environment variable must be set");
 
-        let (agent_type_name, agent_parameters, _) =
-            parse_agent_id(&id).map_err(|e| e.to_string())?;
-        let agent_parameters = crate::decode_typed_schema_value(&agent_parameters)
-            .map_err(|e| e.to_string())?
-            .into_parts()
-            .1;
-
-        with_agent_initiator(
-            |initiator| async move { initiator.initiate(agent_parameters, principal).await },
-            &AgentTypeName(agent_type_name),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-        with_agent_instance_async(|resolved_agent| async move {
-            resolved_agent
-                .agent
-                .borrow_mut()
-                .load_snapshot_base(agent_snapshot)
-                .await
-        })
-        .await
+        load_agent_snapshot(snapshot, &id, parse_restore_identity).await
     }
 }
 
-impl SaveSnapshotGuest for Component {
+impl SaveSnapshotGuest for AgentRuntime {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     async fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+        // Loading a snapshot initializes libc's environment cache when reading the agent ID.
+        // Initialize it before saving too, so suffix replay makes the same host calls.
+        let _ = std::env::vars_os().count();
+
         with_agent_instance_async(|resolved_agent| async move {
             let snapshot_data = resolved_agent
                 .agent
@@ -226,45 +299,393 @@ impl SaveSnapshotGuest for Component {
 
             let principal = get_principal().unwrap_or(Principal::Anonymous);
 
-            if snapshot_data.mime_type == "application/json" {
-                // JSON snapshot: wrap in envelope { version, principal, state }
-                let state: serde_json::Value = serde_json::from_slice(&snapshot_data.data)
-                    .expect("Failed to parse snapshot JSON");
-                let envelope = serde_json::json!({
-                    "version": 1,
-                    "principal": serde_json::to_value(&principal)
-                        .expect("Failed to serialize principal"),
-                    "state": state,
-                });
-                let data =
-                    serde_json::to_vec(&envelope).expect("Failed to serialize snapshot envelope");
-                crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                    payload: data,
-                    mime_type: "application/json".to_string(),
+            match snapshot_data {
+                super::SnapshotData::Multipart { state, parts } => {
+                    let (payload, mime_type) =
+                        super::snapshot_parts::encode(&state, &parts, &principal)
+                            .expect("Failed to encode multipart snapshot");
+                    crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                        payload,
+                        mime_type,
+                    }
                 }
-            } else {
-                // Custom binary snapshot: version 2 format with principal
-                let principal_bytes = serialize_principal(&principal);
-                let total_length = 1 + 4 + principal_bytes.len() + snapshot_data.data.len();
-                let mut full_snapshot = Vec::with_capacity(total_length);
-                full_snapshot.push(2);
-                full_snapshot.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
-                full_snapshot.extend_from_slice(&principal_bytes);
-                full_snapshot.extend_from_slice(&snapshot_data.data);
-                crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                    payload: full_snapshot,
-                    mime_type: "application/octet-stream".to_string(),
+                super::SnapshotData::Json(data) => {
+                    let data = encode_json_snapshot(&principal, &data);
+                    crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                        payload: data,
+                        mime_type: "application/json".to_string(),
+                    }
+                }
+                super::SnapshotData::Bytes(data) => {
+                    // Custom binary snapshot: version 2 format with principal
+                    let principal_bytes = serialize_principal(&principal);
+                    let total_length = 1 + 4 + principal_bytes.len() + data.len();
+                    let mut full_snapshot = Vec::with_capacity(total_length);
+                    full_snapshot.push(2);
+                    full_snapshot.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
+                    full_snapshot.extend_from_slice(&principal_bytes);
+                    full_snapshot.extend_from_slice(&data);
+                    crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                        payload: full_snapshot,
+                        mime_type: "application/octet-stream".to_string(),
+                    }
                 }
             }
         })
         .await
     }
 }
-#[cfg(not(feature = "export_golem_agentic_tool_middleware"))]
-crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-crate::golem_agentic_tool_middleware::export_golem_agentic_tool_middleware!(
-    Component with_types_in crate::golem_agentic_tool_middleware
-);
-crate::save_snapshot::export_save_snapshot!(Component with_types_in crate::save_snapshot);
-crate::load_snapshot::export_load_snapshot!(Component with_types_in crate::load_snapshot);
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ParsedRestoreIdentity, decode_snapshot, encode_json_snapshot, load_agent_snapshot,
+        serialize_principal,
+    };
+    use crate::agentic::{
+        AgentInitiator, AgentInvocationResult, BaseAgent, ResolvedAgent, SnapshotData,
+        SnapshotRestoreContext, get_principal, get_resolved_agent, get_state,
+        register_agent_initiator, with_agent_instance_async,
+    };
+    use crate::golem_agentic::exports::golem::agent::guest::AgentType;
+    use crate::golem_agentic::golem::agent::common::{AgentError, Principal};
+    use crate::load_snapshot;
+    use crate::schema::wit::wire::{SchemaValueNode, SchemaValueTree};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::test;
+
+    static INITIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static RESTORE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestAgent {
+        snapshot: Vec<u8>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl BaseAgent for TestAgent {
+        fn get_agent_id(&self) -> String {
+            "RestoreTest()".to_string()
+        }
+
+        async fn invoke(
+            &mut self,
+            _method_name: String,
+            _input: crate::schema::wit::wire::SchemaValueTree,
+            _principal: Principal,
+        ) -> Result<AgentInvocationResult, AgentError> {
+            unreachable!()
+        }
+
+        fn get_definition(&self) -> AgentType {
+            unreachable!()
+        }
+
+        async fn save_snapshot_base(&self) -> Result<SnapshotData, String> {
+            Ok(SnapshotData::Bytes(self.snapshot.clone()))
+        }
+    }
+
+    struct TestInitiator;
+
+    #[async_trait::async_trait(?Send)]
+    impl AgentInitiator for TestInitiator {
+        async fn initiate(
+            &self,
+            _params: crate::schema::wit::wire::SchemaValueTree,
+            _principal: Principal,
+        ) -> Result<ResolvedAgent, AgentError> {
+            INITIALIZE_CALLS.fetch_add(1, Ordering::SeqCst);
+            unreachable!()
+        }
+
+        async fn restore(
+            &self,
+            snapshot: SnapshotData,
+            context: SnapshotRestoreContext,
+        ) -> Result<ResolvedAgent, String> {
+            let SnapshotData::Bytes(snapshot) = snapshot else {
+                return Err("expected bytes".to_string());
+            };
+            RESTORE_CALLS.fetch_add(1, Ordering::SeqCst);
+            let expected_phantom =
+                crate::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+            let mut parameters = crate::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let parameters_match =
+                parameters.take::<String>().map_err(|e| e.to_string())? == "constructor";
+            parameters.finish().map_err(|e| e.to_string())?;
+            if context.agent_type != "RestoreTest"
+                || !matches!(context.principal, Principal::Anonymous)
+                || !parameters_match
+                || context.phantom_id != Some(expected_phantom)
+            {
+                return Err("unexpected restore context".to_string());
+            }
+            if snapshot == b"fail" {
+                return Err("restore failed".to_string());
+            }
+            Ok(ResolvedAgent::new(Box::new(TestAgent { snapshot })))
+        }
+    }
+
+    fn parsed_test_identity(id: &str) -> Result<ParsedRestoreIdentity, String> {
+        assert_eq!(
+            id,
+            "RestoreTest(\"constructor\")[00000000-0000-0000-0000-000000000001]"
+        );
+        Ok(ParsedRestoreIdentity {
+            agent_type: "RestoreTest".to_string(),
+            parameters: SchemaValueTree {
+                value_nodes: vec![
+                    SchemaValueNode::RecordValue(vec![1]),
+                    SchemaValueNode::StringValue("constructor".to_string()),
+                ],
+                root: 0,
+            },
+            phantom_id: Some(
+                crate::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
+            ),
+        })
+    }
+
+    fn binary_snapshot(
+        state: &[u8],
+    ) -> load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+        let principal_bytes = serialize_principal(&Principal::Anonymous);
+        let mut payload = vec![2];
+        payload.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&principal_bytes);
+        payload.extend_from_slice(state);
+        load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+            payload,
+            mime_type: "application/octet-stream".to_string(),
+        }
+    }
+
+    #[test]
+    fn snapshot_envelopes_decode_before_restoration() {
+        let principal = Principal::Anonymous;
+        let json = serde_json::json!({
+            "version": 1,
+            "principal": serde_json::to_value(&principal).unwrap(),
+            "state": { "value": 42 },
+        });
+        let (decoded_principal, state) = decode_snapshot(
+            load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                payload: serde_json::to_vec(&json).unwrap(),
+                mime_type: "application/json".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(decoded_principal, Principal::Anonymous));
+        let SnapshotData::Json(state) = state else {
+            panic!("expected JSON");
+        };
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&state).unwrap(),
+            json["state"]
+        );
+
+        let principal_bytes = serialize_principal(&principal);
+        let mut binary = vec![2];
+        binary.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
+        binary.extend_from_slice(&principal_bytes);
+        binary.extend_from_slice(b"state");
+        let (decoded_principal, state) = decode_snapshot(
+            load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                payload: binary,
+                mime_type: "application/octet-stream".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(decoded_principal, Principal::Anonymous));
+        let SnapshotData::Bytes(state) = state else {
+            panic!("expected bytes");
+        };
+        assert_eq!(state, b"state");
+    }
+
+    #[test]
+    fn json_snapshot_envelope_preserves_state_semantics_without_materializing_it() {
+        for state in [
+            "null",
+            "false",
+            "18446744073709551615",
+            r#"[7, { "z": [null, false], "a": "árvíz" }, -12]"#,
+            r#"{ "z": 3, "a": {"x": 17.5}, "text": "quote: \"" }"#,
+        ] {
+            let payload = encode_json_snapshot(&Principal::Anonymous, state.as_bytes());
+            let parsed: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+            let old_envelope = serde_json::json!({
+                "version": 1,
+                "principal": serde_json::to_value(Principal::Anonymous).unwrap(),
+                "state": serde_json::from_str::<serde_json::Value>(state).unwrap(),
+            });
+            assert_eq!(parsed, old_envelope);
+            let (principal, restored) = decode_snapshot(
+                load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                    payload,
+                    mime_type: "application/json".into(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(principal, Principal::Anonymous));
+            let SnapshotData::Json(restored) = restored else {
+                panic!("expected JSON");
+            };
+            assert_eq!(restored, state.as_bytes());
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&restored).unwrap(),
+                old_envelope["state"]
+            );
+        }
+        let state = br#"{"a":1,"z":[false,null]}"#;
+        let expected = serde_json::json!({
+            "principal": serde_json::to_value(Principal::Anonymous).unwrap(),
+            "state": serde_json::from_slice::<serde_json::Value>(state).unwrap(),
+            "version": 1,
+        });
+        assert_eq!(
+            encode_json_snapshot(&Principal::Anonymous, state),
+            serde_json::to_vec(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn json_snapshot_distinguishes_null_fields_and_requires_integer_version() {
+        for version in ["null", "1.0", "1e0", "-1", "\"1\"", "true"] {
+            let payload = format!(
+                r#"{{"version":{version},"principal":{{"tag":"anonymous"}},"state":null}}"#
+            );
+            let error = decode_snapshot(
+                load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                    payload: payload.into_bytes(),
+                    mime_type: "application/json".into(),
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, "JSON snapshot version must be 1");
+        }
+        let error = decode_snapshot(
+            load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                payload: br#"{"version":1,"principal":null,"state":null}"#.to_vec(),
+                mime_type: "application/json".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Failed to deserialize principal from JSON:"));
+    }
+
+    #[test]
+    fn json_snapshot_requires_complete_version_one_envelope() {
+        let cases = [
+            (
+                serde_json::json!({ "principal": { "tag": "anonymous" }, "state": {} }),
+                "JSON snapshot missing 'version' field",
+            ),
+            (
+                serde_json::json!({ "version": 2, "principal": { "tag": "anonymous" }, "state": {} }),
+                "JSON snapshot version must be 1",
+            ),
+            (
+                serde_json::json!({ "version": 1, "state": {} }),
+                "JSON snapshot missing 'principal' field",
+            ),
+            (
+                serde_json::json!({ "version": 1, "principal": { "tag": "anonymous" } }),
+                "JSON snapshot missing 'state' field",
+            ),
+        ];
+
+        for (payload, expected) in cases {
+            let error = decode_snapshot(
+                load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                    payload: serde_json::to_vec(&payload).unwrap(),
+                    mime_type: "application/json".to_string(),
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, expected);
+        }
+    }
+
+    #[test]
+    fn binary_snapshot_rejects_truncated_envelopes() {
+        for payload in [vec![2], vec![2, 0, 0, 0], vec![2, 0, 0, 0, 2, b'{']] {
+            assert!(
+                decode_snapshot(
+                    load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                        payload,
+                        mime_type: "application/octet-stream".to_string(),
+                    },
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
+    async fn restoration_commits_principal_and_instance_only_after_success() {
+        *get_state().agent_instance.borrow_mut() = Default::default();
+        register_agent_initiator("RestoreTest", std::sync::Arc::new(TestInitiator));
+        INITIALIZE_CALLS.store(0, Ordering::SeqCst);
+        RESTORE_CALLS.store(0, Ordering::SeqCst);
+
+        let encoded_agent_id = "RestoreTest(\"constructor\")[00000000-0000-0000-0000-000000000001]";
+        for envelope in [
+            r#"[1,{"tag":"anonymous"},null]"#,
+            r#"{"version":1,"principal":["anonymous",null],"state":null}"#,
+            r#"{"version":1,"principal":{"tag":"agent","val":["10203040-5060-7080-9012-3456789abcde","worker(7)"]},"state":null}"#,
+        ] {
+            let snapshot = load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                payload: format!("--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name=\"state\"\r\n\r\n{envelope}\r\n--b--\r\n").into_bytes(),
+                mime_type: "multipart/mixed; boundary=b".to_string(),
+            };
+            assert!(
+                load_agent_snapshot(snapshot, encoded_agent_id, |_| {
+                    panic!("malformed metadata must fail before identity resolution")
+                })
+                .await
+                .is_err()
+            );
+            assert!(get_principal().is_none());
+            assert!(get_resolved_agent().is_none());
+            assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 0);
+            assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
+        }
+        let failure = load_agent_snapshot(
+            binary_snapshot(b"fail"),
+            encoded_agent_id,
+            parsed_test_identity,
+        )
+        .await;
+        assert_eq!(failure.unwrap_err(), "restore failed");
+        assert!(get_principal().is_none());
+        assert!(get_resolved_agent().is_none());
+        assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
+
+        load_agent_snapshot(
+            binary_snapshot(b"restored"),
+            encoded_agent_id,
+            parsed_test_identity,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(get_principal(), Some(Principal::Anonymous)));
+        assert!(get_resolved_agent().is_some());
+        assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
+        assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 2);
+
+        let saved = with_agent_instance_async(|agent| async move {
+            agent.agent.borrow().save_snapshot_base().await.unwrap()
+        })
+        .await;
+        let SnapshotData::Bytes(saved) = saved else {
+            panic!("expected bytes");
+        };
+        assert_eq!(saved, b"restored");
+
+        *get_state().agent_instance.borrow_mut() = Default::default();
+    }
+}

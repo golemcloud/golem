@@ -8,10 +8,16 @@ export default {
   ts: {
     title: "TypeScript",
   },
+  effect: {
+    title: "Effect",
+  },
   scala: {
     title: "Scala",
   },
   moonbit: {
     title: "MoonBit",
+  },
+  go: {
+    title: "Go",
   },
 }

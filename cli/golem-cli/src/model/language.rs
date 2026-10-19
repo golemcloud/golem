@@ -38,9 +38,12 @@ use strum_macros::EnumIter;
 pub enum GuestLanguage {
     #[value(alias = "ts")]
     TypeScript,
+    Effect,
     Rust,
     Scala,
     MoonBit,
+    #[value(alias = "golang")]
+    Go,
 }
 
 impl GuestLanguage {
@@ -48,8 +51,10 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
+            "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
+            "go" | "golang" => Some(GuestLanguage::Go),
             _ => None,
         }
     }
@@ -58,26 +63,22 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" => Some(GuestLanguage::TypeScript),
+            "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
+            "go" => Some(GuestLanguage::Go),
             _ => None,
         }
-    }
-
-    pub fn from_component_template_name(s: impl AsRef<str>) -> Option<GuestLanguage> {
-        let template_name = s.as_ref();
-        let language_id = template_name
-            .split_once('-')
-            .map_or(template_name, |(language_id, _)| language_id);
-        Self::from_id_string(language_id)
     }
 
     pub fn id(&self) -> &'static str {
         match self {
             GuestLanguage::Rust => "rust",
             GuestLanguage::TypeScript => "ts",
+            GuestLanguage::Effect => "effect",
             GuestLanguage::Scala => "scala",
             GuestLanguage::MoonBit => "moonbit",
+            GuestLanguage::Go => "go",
         }
     }
 
@@ -85,9 +86,50 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
+            GuestLanguage::Effect => "Effect",
             GuestLanguage::Scala => "Scala",
             GuestLanguage::MoonBit => "MoonBit",
+            GuestLanguage::Go => "Go",
         }
+    }
+}
+
+/// Serde support for optional guest languages in the application manifest, which uses the
+/// language ids (e.g. `ts`) rather than the display names used in structured CLI output.
+pub mod manifest_guest_language {
+    use super::GuestLanguage;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use strum::IntoEnumIterator;
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<GuestLanguage>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(language) => serializer.serialize_str(language.id()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<GuestLanguage>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|id| {
+                GuestLanguage::iter()
+                    .find(|language| language.id() == id)
+                    .ok_or_else(|| {
+                        let ids = GuestLanguage::iter()
+                            .map(|language| language.id())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        D::Error::custom(format!(
+                            "unknown guest language `{id}`, expected one of: {ids}"
+                        ))
+                    })
+            })
+            .transpose()
     }
 }
 
@@ -108,43 +150,5 @@ impl FromStr for GuestLanguage {
                 .join(", ");
             format!("Unknown guest language: {s}. Expected one of {all}")
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::GuestLanguage;
-    use test_r::test;
-
-    #[test]
-    fn component_template_names_retain_their_language_prefix() {
-        assert_eq!(
-            GuestLanguage::from_component_template_name("moonbit-tool-middleware"),
-            Some(GuestLanguage::MoonBit)
-        );
-        assert_eq!(
-            GuestLanguage::from_component_template_name("ts-tool-middleware"),
-            Some(GuestLanguage::TypeScript)
-        );
-        assert_eq!(
-            GuestLanguage::from_component_template_name("ts-agent-tool-middleware"),
-            Some(GuestLanguage::TypeScript)
-        );
-        assert_eq!(
-            GuestLanguage::from_component_template_name("scala-tool-middleware"),
-            Some(GuestLanguage::Scala)
-        );
-        assert_eq!(
-            GuestLanguage::from_component_template_name("rust"),
-            Some(GuestLanguage::Rust)
-        );
-        assert_eq!(
-            GuestLanguage::from_component_template_name("custom-moonbit"),
-            None
-        );
-        assert_eq!(
-            GuestLanguage::from_component_template_name("custom-ts"),
-            None
-        );
     }
 }

@@ -16,12 +16,23 @@ LABEL cloud.golem.cpu.features="neon,crc,lse,aes,sha2,dotprod"
 
 FROM platform-${TARGETARCH} AS final
 
+# The image has no time zone database. jiff reads this POSIX rule without one, so the snapshot
+# store writes no time zone warning for each timestamp.
+ENV TZ=UTC0
+
 WORKDIR /app
 COPY /target/$RUST_TARGET/release/worker-executor ./
 COPY /golem-worker-executor/config/worker-executor.toml ./config/worker-executor.toml
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
 RUN update-ca-certificates
+
+# Runs the service as uid and gid 65534; see the script.
+RUN --mount=type=bind,source=docker/prepare-service-image.sh,target=/tmp/prepare-service-image.sh \
+    sh /tmp/prepare-service-image.sh /data /data/blob_storage
+
+ENV HOME=/home/golem
+USER 65534:65534
 
 EXPOSE 9000
 

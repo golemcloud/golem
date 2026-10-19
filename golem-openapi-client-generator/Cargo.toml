@@ -12,7 +12,6 @@ repository = "https://github.com/golemcloud/golem-openapi-client-generator"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-fmt = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 indoc = { workspace = true }

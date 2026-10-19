@@ -67,6 +67,7 @@ pub(all) struct AgentConfigDef {
 /// and calls `to_agent_type` to obtain the wire `@common.AgentType`.
 pub(all) struct AgentTypeDef {
   type_name : String
+  kind : @common.AgentTypeKind
   description : String
   source_language : String
   constructor_ : AgentConstructorDef
@@ -193,6 +194,7 @@ pub fn AgentTypeDef::to_agent_type(
   let schema = encoder.finish()
   {
     type_name: self.type_name,
+    kind: self.kind,
     description: self.description,
     source_language: self.source_language,
     schema,

@@ -4,12 +4,16 @@ export default {
     type: "separator",
     title: "Getting Started",
   },
-  "why-golem": "Why Golem?",
-  fundamentals: "Fundamentals",
+  "what-is-golem": "What is Golem?",
   quickstart: "Quickstart",
   concepts: {
     title: "Concepts",
   },
+  "-- Evaluate": {
+    type: "separator",
+    title: "Evaluate",
+  },
+  comparison: "How Golem compares",
   "-- Develop": {
     type: "separator",
     title: "Develop",
@@ -19,6 +23,7 @@ export default {
     type: "separator",
     title: "Usage",
   },
+  usage: "Overview",
   deploy: {
     title: "Deploy",
   },
@@ -49,5 +54,6 @@ export default {
   "name-mapping": "Name Mapping",
   "type-mapping": "Type Mapping",
   "rest-api": "REST API",
+  "stream-session-public-protocol-v1": "Streaming Protocol v1",
   "js-apis": "JavaScript APIs",
 }

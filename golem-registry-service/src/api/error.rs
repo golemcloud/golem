@@ -25,8 +25,16 @@ use crate::services::deployment::{DeployValidationError, DeploymentError, Deploy
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
+use crate::services::environment_tool_grant::{
+    EnvironmentToolGrantError, EnvironmentToolValidationError,
+};
+use crate::services::environment_tool_middleware_grant::{
+    EnvironmentToolMiddlewareGrantError, EnvironmentToolMiddlewareValidationError,
+};
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
+use crate::services::mcp_import::McpImportResolverError;
+use crate::services::mcp_oauth::McpOAuthError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::permission_share::PermissionShareError;
 use crate::services::plan::PlanError;
@@ -36,6 +44,8 @@ use crate::services::resource_definition::ResourceDefinitionError;
 use crate::services::retry_policy::RetryPolicyError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
+use crate::services::tool_middleware_release::ToolMiddlewareReleaseError;
+use crate::services::tool_release::ToolReleaseError;
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -43,6 +53,7 @@ use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -149,6 +160,19 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::McpDeploymentUnknownSecurityScheme { .. } => {
             api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
         }
+        DeployValidationError::InvalidMcpImport { .. }
+        | DeployValidationError::McpImportToolHasDefaultToolName { .. }
+        | DeployValidationError::McpImportNotReadWithDefaultToolName { .. } => {
+            api::error_code::deployment_validation::FAILED
+        }
+        DeployValidationError::McpImportSecuritySchemeNotFound { .. } => {
+            api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
+        }
+        DeployValidationError::McpDeploymentEmpty { .. }
+        | DeployValidationError::McpDeploymentInvalidTool { .. }
+        | DeployValidationError::McpDeploymentToolNameCollision { .. } => {
+            api::error_code::deployment_validation::MCP_INVALID_TOOL
+        }
         DeployValidationError::SecurityOverrideDisabled => {
             api::error_code::deployment_validation::SECURITY_OVERRIDE_DISABLED
         }
@@ -178,6 +202,9 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         }
         DeployValidationError::McpDeploymentMissingAgentType { .. } => {
             api::error_code::deployment_validation::MCP_MISSING_AGENT_TYPE
+        }
+        DeployValidationError::DomainHasHttpApiAndMcpDeployments { .. } => {
+            api::error_code::deployment_validation::DOMAIN_HAS_HTTP_API_AND_MCP_DEPLOYMENTS
         }
         DeployValidationError::ComponentNotFound(_) => {
             api::error_code::deployment_validation::COMPONENT_NOT_FOUND
@@ -212,11 +239,36 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::ToolDefinitionNameMismatch { .. } => {
             api::error_code::deployment_validation::TOOL_DEFINITION_NAME_MISMATCH
         }
-        DeployValidationError::InvalidTool { .. } => {
+        DeployValidationError::InvalidTool { .. }
+        | DeployValidationError::ToolMetadataSerialization { .. }
+        | DeployValidationError::ToolFilesystemRequirement { .. } => {
             api::error_code::deployment_validation::INVALID_TOOL
         }
         DeployValidationError::DuplicateToolImplementation { .. } => {
             api::error_code::deployment_validation::DUPLICATE_TOOL_IMPLEMENTATION
+        }
+        DeployValidationError::ToolSourceCollision { .. } => {
+            api::error_code::deployment_validation::TOOL_SOURCE_COLLISION
+        }
+        DeployValidationError::RemoteToolUnavailable { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_UNAVAILABLE
+        }
+        DeployValidationError::RemoteToolNameMismatch { .. }
+        | DeployValidationError::RemoteToolDefinitionNameMismatch { .. }
+        | DeployValidationError::RemoteToolVersionMismatch { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_IDENTITY_MISMATCH
+        }
+        DeployValidationError::RemoteToolUnsupportedMetadataVersion { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_UNSUPPORTED_METADATA_VERSION
+        }
+        DeployValidationError::RemoteToolMetadataDigestMismatch { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_METADATA_DIGEST_MISMATCH
+        }
+        DeployValidationError::InvalidRemoteTool { .. } => {
+            api::error_code::deployment_validation::INVALID_REMOTE_TOOL
+        }
+        DeployValidationError::RemoteToolBindingUnknownAgent { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_BINDING_UNKNOWN_AGENT
         }
         DeployValidationError::ToolBindingUnknownAgent { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_UNKNOWN_AGENT
@@ -227,8 +279,12 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::ToolBindingAccountMismatch { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_ACCOUNT_MISMATCH
         }
-        DeployValidationError::ToolBindingParametersMustBeObject { .. } => {
+        DeployValidationError::ToolBindingParametersMustBeObject { .. }
+        | DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_PARAMETERS_MUST_BE_OBJECT
+        }
+        DeployValidationError::ToolMiddleware { .. } => {
+            api::error_code::deployment_validation::INVALID_TOOL
         }
     }
 }
@@ -251,7 +307,12 @@ impl ApiErrorDetails for ApiError {
             Self::BadRequest(_) => true,
             Self::NotFound(_) => true,
             Self::Unauthorized(_) => true,
-            Self::InternalError(_) => false,
+            Self::InternalError(body) => matches!(
+                body.code.as_str(),
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE
+                    | api::error_code::MCP_IMPORT_UPSTREAM_REJECTED
+                    | api::error_code::MCP_IMPORT_PROJECTION_FAILED
+            ),
             Self::Forbidden(_) => true,
             Self::Conflict(_) => true,
             Self::LimitExceeded(_) => true,
@@ -423,8 +484,11 @@ impl From<CardError> for ApiError {
             CardError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
-            CardError::RuntimeCardConflict(_) | CardError::RuntimeCardRevoked(_) => {
+            CardError::RuntimeCardConflict(_) => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            CardError::RuntimeCardRevoked(_) => {
+                Self::conflict(api::error_code::RUNTIME_CARD_REVOKED, error)
             }
             CardError::RuntimeCardCannotBeSystemCard => {
                 Self::bad_request(api::error_code::INVALID_RUNTIME_CARD, error)
@@ -489,6 +553,9 @@ impl From<EnvironmentError> for ApiError {
             EnvironmentError::EnvironmentWithNameAlreadyExists => {
                 Self::conflict(api::error_code::ENVIRONMENT_ALREADY_EXISTS, error)
             }
+            EnvironmentError::MutableToolGrantsInVersionCheckedEnvironment => {
+                Self::bad_request(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error)
+            }
             EnvironmentError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
@@ -527,6 +594,18 @@ impl From<ComponentError> for ApiError {
                 code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
                 cause: None,
             })),
+            ComponentError::InvalidComponentConfig(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
+                cause: None,
+            })),
+            ComponentError::InvalidComponentInitialPermissionCard { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
+                    cause: None,
+                }))
+            }
             ComponentError::AgentFileNotFoundInArchive { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
@@ -615,6 +694,9 @@ impl From<ComponentError> for ApiError {
             ComponentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
+            ComponentError::ComponentSourceInUse(_) => {
+                Self::conflict(api::error_code::COMPONENT_IN_USE, error)
+            }
             ComponentError::ParentEnvironmentNotFound(_) => {
                 Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
             }
@@ -662,6 +744,14 @@ impl From<ComponentError> for ApiError {
             }
             ComponentError::ConflictingToolFileTarget { .. } => {
                 Self::bad_request(api::error_code::INVALID_COMPONENT_FILE_PATH, error)
+            }
+            ComponentError::InvalidToolMiddlewareName { .. }
+            | ComponentError::DuplicateToolMiddlewareName(_)
+            | ComponentError::InvalidToolMiddleware { .. }
+            | ComponentError::ToolMiddlewaresRequireSupportedGuestExport { .. }
+            | ComponentError::UndeclaredToolMiddlewareInProvisionConfig(_)
+            | ComponentError::MissingToolMiddlewareProvisionConfig(_) => {
+                Self::bad_request(api::error_code::INVALID_TOOL_METADATA, error)
             }
             ComponentError::NewAgentTypeMissingInitialPermissions(_) => Self::bad_request(
                 api::error_code::NEW_AGENT_TYPE_MISSING_INITIAL_PERMISSIONS,
@@ -786,7 +876,9 @@ impl From<PluginRegistrationError> for ApiError {
             PluginRegistrationError::ParentAccountNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
-            PluginRegistrationError::PluginRegistrationNotFound(_) => {
+            PluginRegistrationError::PluginRegistrationNotFound(_)
+            | PluginRegistrationError::PluginRegistrationByNameNotFound { .. }
+            | PluginRegistrationError::PluginRegistrationByEmailNotFound { .. } => {
                 Self::not_found(api::error_code::PLUGIN_REGISTRATION_NOT_FOUND, error)
             }
 
@@ -851,6 +943,186 @@ impl From<EnvironmentPluginGrantError> for ApiError {
     }
 }
 
+impl From<ToolReleaseError> for ApiError {
+    fn from(value: ToolReleaseError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            ToolReleaseError::ToolReleaseNotFound(_) => {
+                Self::not_found(api::error_code::TOOL_RELEASE_NOT_FOUND, error)
+            }
+            ToolReleaseError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND, error)
+            }
+            ToolReleaseError::ParentAccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            ToolReleaseError::PublicationToolNotFound(_) => {
+                Self::bad_request(api::error_code::TOOL_PUBLICATION_TOOL_NOT_FOUND, error)
+            }
+            ToolReleaseError::DuplicatePublication(_) => {
+                Self::bad_request(api::error_code::DUPLICATE_TOOL_PUBLICATION, error)
+            }
+            ToolReleaseError::PublicationOwnerMismatch(_) => {
+                Self::bad_request(api::error_code::TOOL_PUBLICATION_OWNER_MISMATCH, error)
+            }
+            ToolReleaseError::PublicationHostSource(_) => Self::bad_request(
+                api::error_code::TOOL_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+                error,
+            ),
+            ToolReleaseError::ImmutableReleaseConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            ToolReleaseError::DePublishedReleaseRequiresExplicitRestore
+            | ToolReleaseError::ToolReleaseNotPublished
+            | ToolReleaseError::ToolReleaseNotDePublished => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
+            }
+            ToolReleaseError::ProtectedToolRelease => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            ToolReleaseError::Unauthorized(inner) => inner.into(),
+            ToolReleaseError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentToolGrantError> for ApiError {
+    fn from(value: EnvironmentToolGrantError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            EnvironmentToolGrantError::ParentEnvironmentNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::GrantAlreadyExists => Self::conflict(
+                api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
+                error,
+            ),
+            EnvironmentToolGrantError::GrantNotDeleted(_)
+            | EnvironmentToolGrantError::AdministratorManagedToolGrant(_) => {
+                Self::conflict(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error)
+            }
+            EnvironmentToolGrantError::ConcurrentModification => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            EnvironmentToolGrantError::ProtectedToolGrant(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            EnvironmentToolGrantError::Unauthorized(inner) => inner.into(),
+            EnvironmentToolGrantError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentToolValidationError> for ApiError {
+    fn from(value: EnvironmentToolValidationError) -> Self {
+        match value {
+            EnvironmentToolValidationError::Grant(error) => error.into(),
+            EnvironmentToolValidationError::Publication(error) => error.into(),
+        }
+    }
+}
+
+impl From<ToolMiddlewareReleaseError> for ApiError {
+    fn from(value: ToolMiddlewareReleaseError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(_) => {
+                Self::not_found(api::error_code::TOOL_MIDDLEWARE_RELEASE_NOT_FOUND, error)
+            }
+            ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound => Self::not_found(
+                api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+                error,
+            ),
+            ToolMiddlewareReleaseError::ParentAccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            ToolMiddlewareReleaseError::Unauthorized(inner) => inner.into(),
+            ToolMiddlewareReleaseError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+            ToolMiddlewareReleaseError::ProtectedToolMiddlewareRelease => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            ToolMiddlewareReleaseError::ImmutableReleaseConflict => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+                error,
+            ),
+            _ => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+                error,
+            ),
+        }
+    }
+}
+
+impl From<EnvironmentToolMiddlewareGrantError> for ApiError {
+    fn from(value: EnvironmentToolMiddlewareGrantError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            EnvironmentToolMiddlewareGrantError::ParentEnvironmentNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
+            }
+            EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(_) => {
+                Self::not_found(
+                    api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_NOT_FOUND,
+                    error,
+                )
+            }
+            EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound => {
+                Self::not_found(
+                    api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+                    error,
+                )
+            }
+            EnvironmentToolMiddlewareGrantError::Unauthorized(inner) => inner.into(),
+            EnvironmentToolMiddlewareGrantError::InternalError(_) => {
+                Self::InternalError(Json(ErrorBody {
+                    error,
+                    code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                    cause: Some(value.into_anyhow()),
+                }))
+            }
+            EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(_) => Self::forbidden(
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_PROTECTED,
+                error,
+            ),
+            EnvironmentToolMiddlewareGrantError::GrantAlreadyExists => Self::conflict(
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_ALREADY_EXISTS,
+                error,
+            ),
+            _ => Self::conflict(
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_CONFLICT,
+                error,
+            ),
+        }
+    }
+}
+
+impl From<EnvironmentToolMiddlewareValidationError> for ApiError {
+    fn from(value: EnvironmentToolMiddlewareValidationError) -> Self {
+        match value {
+            EnvironmentToolMiddlewareValidationError::Grant(error) => error.into(),
+            EnvironmentToolMiddlewareValidationError::Publication(error) => error.into(),
+        }
+    }
+}
+
 impl From<DeploymentWriteError> for ApiError {
     fn from(value: DeploymentWriteError) -> Self {
         let error: String = value.to_safe_string();
@@ -860,6 +1132,15 @@ impl From<DeploymentWriteError> for ApiError {
             }
             DeploymentWriteError::DeploymentNotFound(_) => {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
+            }
+            DeploymentWriteError::AmbientToolConflict(_)
+            | DeploymentWriteError::DuplicateRouterFileTarget
+            | DeploymentWriteError::DuplicateRemoteToolName(_) => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::deployment_validation::FAILED.to_string(),
+                    cause: None,
+                }))
             }
 
             DeploymentWriteError::DeploymentValidationFailed(failed_validations) => {
@@ -894,6 +1175,20 @@ impl From<DeploymentWriteError> for ApiError {
             DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::conflict(api::error_code::ENVIRONMENT_NOT_DEPLOYED, error)
             }
+            DeploymentWriteError::ToolReleaseImmutableConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            DeploymentWriteError::ToolReleaseDePublishedConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
+            }
+            DeploymentWriteError::ToolMiddlewareReleaseImmutableConflict => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+                error,
+            ),
+            DeploymentWriteError::ToolMiddlewareReleaseDePublishedConflict => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+                error,
+            ),
 
             DeploymentWriteError::Unauthorized(inner) => inner.into(),
             DeploymentWriteError::InternalError(_) => Self::InternalError(Json(ErrorBody {
@@ -958,6 +1253,18 @@ impl From<DomainRegistrationError> for ApiError {
                 Self::conflict(api::error_code::DOMAIN_ALREADY_EXISTS, error)
             }
 
+            DomainRegistrationError::DomainReserved(_) => {
+                Self::bad_request(api::error_code::DOMAIN_RESERVED, error)
+            }
+
+            DomainRegistrationError::InvalidDomain(_) => {
+                Self::bad_request(api::error_code::INVALID_DOMAIN, error)
+            }
+
+            DomainRegistrationError::DomainNotCanonical { .. } => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_CANONICAL, error)
+            }
+
             DomainRegistrationError::DomainNotValidForHttpApi { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
             }
@@ -993,6 +1300,9 @@ impl From<SecuritySchemeError> for ApiError {
             SecuritySchemeError::InvalidRedirectUrl => {
                 Self::bad_request(api::error_code::INVALID_REDIRECT_URL, error)
             }
+            SecuritySchemeError::InvalidLoginConfiguration(_) => {
+                Self::bad_request(api::error_code::INVALID_SECURITY_SCHEME_LOGIN, error)
+            }
             SecuritySchemeError::InvalidCustomProviderIssuerUrl(_) => {
                 Self::bad_request(api::error_code::INVALID_CUSTOM_PROVIDER_ISSUER_URL, error)
             }
@@ -1010,6 +1320,123 @@ impl From<SecuritySchemeError> for ApiError {
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             })),
+        }
+    }
+}
+
+impl From<McpOAuthError> for ApiError {
+    fn from(value: McpOAuthError) -> Self {
+        Arc::new(value).into()
+    }
+}
+
+impl From<Arc<McpOAuthError>> for ApiError {
+    fn from(value: Arc<McpOAuthError>) -> Self {
+        let error = value.to_safe_string();
+        match value.as_ref() {
+            McpOAuthError::ImportNotFound => {
+                Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
+            }
+            McpOAuthError::SchemeNotFound => {
+                Self::not_found(api::error_code::SECURITY_SCHEME_NOT_FOUND, error)
+            }
+            McpOAuthError::NotOAuth
+            | McpOAuthError::InvalidCallback
+            | McpOAuthError::ConsentDenied => {
+                Self::bad_request(api::error_code::INVALID_OAUTH_SESSION, error)
+            }
+            McpOAuthError::ContextChanged | McpOAuthError::RefreshUnresolved(_) => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            McpOAuthError::AuthorizationRequired(_) => {
+                Self::conflict(api::error_code::INVALID_OAUTH_SESSION, error)
+            }
+            McpOAuthError::OwnerMismatch | McpOAuthError::Unauthorized(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            McpOAuthError::AccountUsage(inner) => match inner {
+                AccountUsageError::LimitExceeded(_) => Self::LimitExceeded(Json(ErrorBody {
+                    error,
+                    code: api::error_code::LIMIT_EXCEEDED.to_string(),
+                    cause: None,
+                })),
+                AccountUsageError::ComponentTooLarge(_) => {
+                    Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
+                }
+                AccountUsageError::AccountNotfound(_) => {
+                    Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+                }
+                AccountUsageError::Unauthorized(_) => {
+                    Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+                }
+                AccountUsageError::InternalError(_) => Self::internal(
+                    api::error_code::INTERNAL_UNKNOWN,
+                    error,
+                    Some(anyhow::Error::new(value)),
+                ),
+            },
+            McpOAuthError::Transport(golem_mcp_import::transport::TransportError::Denied) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            McpOAuthError::Transport(
+                golem_mcp_import::transport::TransportError::Configuration(_)
+                | golem_mcp_import::transport::TransportError::InvalidInput(_),
+            ) => Self::bad_request(api::error_code::INVALID_OAUTH_SESSION, error),
+            McpOAuthError::Transport(
+                golem_mcp_import::transport::TransportError::OAuthGrantRejected
+                | golem_mcp_import::transport::TransportError::AuthorizationRequired(_),
+            ) => Self::internal(api::error_code::MCP_IMPORT_UPSTREAM_REJECTED, error, None),
+            McpOAuthError::Transport(_) => Self::internal(
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+                error,
+                None,
+            ),
+            McpOAuthError::InternalError(_) => Self::internal(
+                api::error_code::INTERNAL_UNKNOWN,
+                error,
+                Some(anyhow::Error::new(value)),
+            ),
+        }
+    }
+}
+
+impl From<McpImportResolverError> for ApiError {
+    fn from(value: McpImportResolverError) -> Self {
+        match value {
+            McpImportResolverError::OAuth(error) => error.into(),
+            McpImportResolverError::SourceUnavailable {
+                import_index,
+                error,
+            } => {
+                let mut error = Self::from(*error);
+                match &mut error {
+                    Self::BadRequest(body) => {
+                        for message in &mut body.0.errors {
+                            *message = format!("MCP import {import_index}: {message}");
+                        }
+                    }
+                    Self::Unauthorized(body)
+                    | Self::Forbidden(body)
+                    | Self::NotFound(body)
+                    | Self::Conflict(body)
+                    | Self::LimitExceeded(body)
+                    | Self::InternalError(body) => {
+                        body.0.error = format!("MCP import {import_index}: {}", body.0.error);
+                    }
+                }
+                error
+            }
+            McpImportResolverError::Projection(error) => {
+                Self::internal(api::error_code::MCP_IMPORT_PROJECTION_FAILED, error, None)
+            }
+            McpImportResolverError::Fetch(error) => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, error, None)
+            }
+            other => Self::internal(
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+                other.to_string(),
+                None,
+            ),
         }
     }
 }
@@ -1043,6 +1470,9 @@ impl From<HttpApiDeploymentError> for ApiError {
 
             HttpApiDeploymentError::HttpApiDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::HTTP_API_DEPLOYMENT_ALREADY_EXISTS, error)
+            }
+            HttpApiDeploymentError::DomainHasMcpDeployment(_) => {
+                Self::conflict(api::error_code::DOMAIN_HAS_MCP_DEPLOYMENT, error)
             }
             HttpApiDeploymentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
@@ -1088,6 +1518,9 @@ impl From<McpDeploymentError> for ApiError {
             McpDeploymentError::McpDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::MCP_DEPLOYMENT_ALREADY_EXISTS, error)
             }
+            McpDeploymentError::DomainHasHttpApiDeployment(_) => {
+                Self::conflict(api::error_code::DOMAIN_HAS_HTTP_API_DEPLOYMENT, error)
+            }
             McpDeploymentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
@@ -1115,7 +1548,8 @@ impl From<AgentSecretError> for ApiError {
             AgentSecretError::AgentSecretValueDoesNotMatchType { .. } => {
                 Self::bad_request(api::error_code::AGENT_SECRET_VALUE_TYPE_MISMATCH, error)
             }
-            AgentSecretError::AgentSecretNotFound(_) => {
+            AgentSecretError::AgentSecretNotFound(_)
+            | AgentSecretError::AgentSecretByPathNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_SECRET_NOT_FOUND, error)
             }
             AgentSecretError::ParentEnvironmentNotFound(_) => {
@@ -1147,7 +1581,8 @@ impl From<RetryPolicyError> for ApiError {
             RetryPolicyError::RetryPolicyForNameAlreadyExists { .. } => {
                 Self::conflict(api::error_code::RETRY_POLICY_ALREADY_EXISTS, error)
             }
-            RetryPolicyError::RetryPolicyNotFound(_) => {
+            RetryPolicyError::RetryPolicyNotFound(_)
+            | RetryPolicyError::RetryPolicyByNameNotFound { .. } => {
                 Self::not_found(api::error_code::RETRY_POLICY_NOT_FOUND, error)
             }
             RetryPolicyError::ParentEnvironmentNotFound(_) => {
@@ -1203,6 +1638,63 @@ mod tests {
     use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::base_model::quota::ResourceName;
     use test_r::test;
+
+    #[test]
+    fn router_index_errors_preserve_failure_categories() {
+        assert!(matches!(
+            ApiError::from(DeploymentWriteError::DuplicateRouterFileTarget),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            ApiError::from(DeploymentWriteError::from(anyhow::anyhow!(
+                "storage failure"
+            ))),
+            ApiError::InternalError(_)
+        ));
+    }
+
+    #[test]
+    fn an_mcp_tool_with_the_name_of_a_default_tool_is_a_deployment_bad_request() {
+        let body = bad_request_from_validations(vec![
+            DeployValidationError::McpImportToolHasDefaultToolName {
+                index: 1,
+                tool_name: "bash".into(),
+            },
+        ]);
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].contains(
+            "MCP import 1 supplies a tool named 'bash', which is the name of a default tool"
+        ));
+    }
+
+    #[test]
+    fn an_mcp_import_that_cannot_be_read_and_can_supply_a_default_tool_name_is_a_deployment_bad_request()
+     {
+        let body = bad_request_from_validations(vec![
+            DeployValidationError::McpImportNotReadWithDefaultToolName {
+                index: 2,
+                tool_name: "bash".into(),
+                reason: "upstream is unavailable".into(),
+            },
+        ]);
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].contains("MCP import 2 can supply a tool named 'bash'"));
+        assert!(body.errors[0].contains("upstream is unavailable"));
+    }
+
+    #[test]
+    fn invalid_mcp_import_is_a_deployment_bad_request() {
+        let body = bad_request_from_validations(vec![DeployValidationError::InvalidMcpImport {
+            index: 3,
+            reason: "auth and securityScheme are mutually exclusive".into(),
+        }]);
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].contains("Invalid MCP import 3"));
+        assert!(body.errors[0].contains("mutually exclusive"));
+    }
 
     #[test]
     fn resource_override_errors_use_distinct_http_statuses() {
@@ -1342,6 +1834,264 @@ mod tests {
                 assert_eq!(body.0.code, api::error_code::CONCURRENT_UPDATE);
             }
             other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    fn status_and_code(api_error: ApiError) -> (&'static str, String) {
+        match api_error {
+            ApiError::BadRequest(body) => ("bad_request", body.0.code),
+            ApiError::NotFound(body) => ("not_found", body.0.code),
+            ApiError::Conflict(body) => ("conflict", body.0.code),
+            ApiError::Forbidden(body) => ("forbidden", body.0.code),
+            other => panic!("Expected client error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_release_errors_use_specific_codes() {
+        use golem_common::model::tool::ToolName;
+        use golem_common::model::tool_release::ToolReleaseId;
+
+        let tool_name = ToolName::try_from("echo").unwrap();
+        let cases = [
+            (
+                ToolReleaseError::ToolReleaseNotFound(ToolReleaseId::new()),
+                "not_found",
+                api::error_code::TOOL_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::ReferencedToolReleaseNotFound,
+                "not_found",
+                api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::PublicationToolNotFound(tool_name.clone()),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_TOOL_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::DuplicatePublication(tool_name.clone()),
+                "bad_request",
+                api::error_code::DUPLICATE_TOOL_PUBLICATION,
+            ),
+            (
+                ToolReleaseError::PublicationOwnerMismatch(tool_name.clone()),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_OWNER_MISMATCH,
+            ),
+            (
+                ToolReleaseError::PublicationHostSource(tool_name),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, expected_status);
+            assert_eq!(code, expected_code);
+        }
+    }
+
+    #[test]
+    fn environment_tool_grant_errors_distinguish_grants_from_releases() {
+        use golem_common::model::environment_tool_grant::EnvironmentToolGrantId;
+
+        let (status, code) = status_and_code(
+            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(EnvironmentToolGrantId::new())
+                .into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND);
+
+        let (status, code) =
+            status_and_code(EnvironmentToolGrantError::ReferencedToolReleaseNotFound.into());
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND);
+    }
+
+    #[test]
+    fn tool_middleware_release_errors_use_specific_codes() {
+        use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId;
+
+        let cases = [
+            (
+                ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(
+                    ToolMiddlewareReleaseId::new(),
+                ),
+                "not_found",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound,
+                "not_found",
+                api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolMiddlewareReleaseError::ImmutableReleaseConflict,
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+            ),
+            (
+                ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotPublished,
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, expected_status);
+            assert_eq!(code, expected_code);
+        }
+    }
+
+    #[test]
+    fn environment_tool_middleware_grant_errors_use_specific_codes() {
+        use golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantId;
+
+        let grant_id = EnvironmentToolMiddlewareGrantId::new();
+        let cases = [
+            (
+                EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(
+                    grant_id,
+                ),
+                "not_found",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_NOT_FOUND,
+            ),
+            (
+                EnvironmentToolMiddlewareGrantError::GrantAlreadyExists,
+                "conflict",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_ALREADY_EXISTS,
+            ),
+            (
+                EnvironmentToolMiddlewareGrantError::GrantNotDeleted(grant_id),
+                "conflict",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_CONFLICT,
+            ),
+            (
+                EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(grant_id),
+                "forbidden",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_PROTECTED,
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, expected_status);
+            assert_eq!(code, expected_code);
+        }
+
+        let (status, code) = status_and_code(
+            EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound.into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(
+            code,
+            api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn deployment_tool_not_found_keeps_tool_not_found_code() {
+        use golem_common::model::tool::ToolName;
+
+        let (status, code) = status_and_code(
+            DeploymentError::ToolNotFound(ToolName::try_from("echo").unwrap()).into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::TOOL_NOT_FOUND);
+    }
+
+    #[test]
+    fn mcp_import_errors_distinguish_upstream_projection_and_internal_failures() {
+        use golem_mcp_import::transport::TransportError;
+
+        for (error, expected_code) in [
+            (
+                McpImportResolverError::Timeout,
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+            ),
+            (
+                McpOAuthError::Transport(TransportError::Network).into(),
+                api::error_code::MCP_IMPORT_UPSTREAM_UNAVAILABLE,
+            ),
+            (
+                McpOAuthError::Transport(TransportError::AuthorizationRequired(401)).into(),
+                api::error_code::MCP_IMPORT_UPSTREAM_REJECTED,
+            ),
+            (
+                McpImportResolverError::Projection("listing exceeds limit".into()),
+                api::error_code::MCP_IMPORT_PROJECTION_FAILED,
+            ),
+            (
+                McpOAuthError::InternalError(anyhow::anyhow!("private-token")).into(),
+                api::error_code::INTERNAL_UNKNOWN,
+            ),
+        ] {
+            let api_error = ApiError::from(error);
+            assert_eq!(
+                api_error.is_expected(),
+                expected_code != api::error_code::INTERNAL_UNKNOWN
+            );
+            match &api_error {
+                ApiError::InternalError(body) => {
+                    assert_eq!(body.code, expected_code);
+                    assert!(!body.error.contains("private-token"));
+                }
+                other => panic!("expected server-side error, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn deployment_tool_release_immutable_conflict_uses_specific_code() {
+        let api_error = ApiError::from(DeploymentWriteError::ToolReleaseImmutableConflict);
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(
+                    body.0.code,
+                    api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT
+                );
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deployment_tool_release_de_published_conflict_uses_specific_code() {
+        let api_error = ApiError::from(DeploymentWriteError::ToolReleaseDePublishedConflict);
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(
+                    body.0.code,
+                    api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT
+                );
+                assert!(body.0.error.contains("de-published"));
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deployment_tool_middleware_release_conflicts_use_specific_codes() {
+        let cases = [
+            (
+                DeploymentWriteError::ToolMiddlewareReleaseImmutableConflict,
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+            ),
+            (
+                DeploymentWriteError::ToolMiddlewareReleaseDePublishedConflict,
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+            ),
+        ];
+
+        for (error, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, "conflict");
+            assert_eq!(code, expected_code);
         }
     }
 }

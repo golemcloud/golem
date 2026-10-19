@@ -1,0 +1,26 @@
+error[E0185]: method `load_snapshot_parts` has a `&self` declaration in the impl, but not in the trait
+  --> tests/ui/fail/multipart_snapshot_signature.rs:17:5
+   |
+ 3 |   #[agent_definition(snapshotting = "enabled")]
+   |   --------------------------------------------- trait method declared without `&self`
+...
+17 | /     async fn load_snapshot_parts(
+18 | |         &self,
+19 | |         snapshot: golem_rust::agentic::MultipartSnapshot,
+20 | |         context: golem_rust::agentic::SnapshotRestoreContext,
+21 | |     ) -> Result<Self, String> {
+   | |_____________________________^ `&self` used in impl
+
+warning: unused variable: `snapshot`
+  --> tests/ui/fail/multipart_snapshot_signature.rs:19:9
+   |
+19 |         snapshot: golem_rust::agentic::MultipartSnapshot,
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_snapshot`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `context`
+  --> tests/ui/fail/multipart_snapshot_signature.rs:20:9
+   |
+20 |         context: golem_rust::agentic::SnapshotRestoreContext,
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`

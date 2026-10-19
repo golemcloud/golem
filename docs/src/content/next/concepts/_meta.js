@@ -1,8 +1,9 @@
 export default {
-  reliability: "Reliability",
   agents: "Agents",
-  "worker-gateway": "API Gateway",
-  "agent-to-agent-communication": "Agent to Agent Communication",
-  "api-definitions": "API Definitions",
-  plugins: "Plugins",
+  "durable-execution": "Durable execution",
+  tools: "Tools",
+  permissions: "Permissions",
+  communication: "Agent communication",
+  artifacts: "Artifacts",
+  "agent-lifecycle": "Agent lifecycle",
 }

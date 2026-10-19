@@ -1,0 +1,78 @@
+{
+ "cases": {
+  "symlink escape: cp -a of the same symlink into a directory just as deep still works": {
+   "script": "f676917522a6ffc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../x\nstatus=0\n"
+   }
+  },
+  "symlink escape: cp -a recreates a symlink's target text in a shallower directory": {
+   "script": "6cb7343119809cf7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n../x\n"
+   }
+  },
+  "symlink escape: cp -s of a source above root fails": {
+   "script": "ebaf94135118d769",
+   "status": 0,
+   "stderr": {
+    "text": "cp: cannot stat '../../nonexistent-xyz': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "symlink escape: ln -s creates a relative target that climbs above root": {
+   "script": "1e9f05c20900d211",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n../../nonexistent-xyz\n"
+   }
+  },
+  "symlink escape: ln -s into a directory creates one link per target": {
+   "script": "f6aa7b43aca3399b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n../../a\n../../b\n"
+   }
+  },
+  "symlink escape: ln -s relative target that stays inside root still works": {
+   "script": "f4db612101df22c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../../x\nstatus=0\n"
+   }
+  },
+  "symlink escape: ln -sf replaces a file with such a link": {
+   "script": "46f81412fa381b3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n../../nonexistent-xyz\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

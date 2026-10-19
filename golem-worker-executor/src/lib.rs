@@ -16,10 +16,14 @@ pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub(crate) mod filesystem_pressure;
+pub(crate) mod filesystem_snapshot;
+#[cfg(feature = "test-utils")]
+pub mod filesystem_snapshot_testing;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;
 pub mod model;
+pub mod native_tool;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;
@@ -31,6 +35,17 @@ pub mod workerctx;
 
 #[cfg(test)]
 pub mod span_test_support;
+
+#[cfg(test)]
+use span_test_support::Tracing;
+#[cfg(test)]
+use test_r::test_dep;
+
+#[cfg(test)]
+#[test_dep(scope = PerWorker)]
+fn tracing() -> Tracing {
+    Tracing::init()
+}
 
 #[cfg(test)]
 test_r::enable!();
@@ -51,7 +66,10 @@ use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
-use crate::services::active_agents::ActiveAgents;
+use crate::services::active_agents::{ActiveAgents, InvocationLoops};
+use crate::services::agent_filesystem_snapshots::{
+    AgentFilesystemSnapshots, StoreSource, VolumeRoom,
+};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -70,6 +88,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
+use crate::services::oplog_sweep::OplogSweeper;
 use crate::services::promise::{DefaultPromiseService, DefaultPromiseWorkerAccess, PromiseService};
 use crate::services::quota::QuotaService;
 use crate::services::registry_event_subscriber::WorkerExecutorRegistryInvalidationHandler;
@@ -98,6 +117,7 @@ use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
+use crate::storage::keyvalue::retrying::RetryingKeyValueStorage;
 use crate::storage::scheduler::SchedulerStorage;
 use crate::storage::scheduler::memory::InMemorySchedulerStorage;
 use crate::storage::scheduler::postgres::PostgresSchedulerStorage;
@@ -109,9 +129,9 @@ use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::shard_manager::ExecutorEndpoint;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -124,17 +144,15 @@ use log::debug;
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
+use tonic::transport::server::TcpIncoming;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{Instrument, info};
@@ -152,6 +170,10 @@ pub struct RunDetails {
     /// Weak reference to a sentinel inside `All`. When `All` is properly
     /// deallocated, `upgrade()` returns `None`. Used by tests to detect leaks.
     pub leak_detector: std::sync::Weak<()>,
+    /// The worker and entity tasks of this executor, plus the owner actors they can submit writes
+    /// to. An in-process restart over the same storage must wait for this boundary to drain before
+    /// reopening workers' oplogs.
+    pub invocation_loops: InvocationLoops,
 }
 
 impl Drop for RunDetails {
@@ -164,35 +186,123 @@ impl Drop for RunDetails {
     }
 }
 
+/// Binds the service of the filesystem snapshots to the configuration, with the store `given`
+/// when a bootstrap gives one, and otherwise the configured store on `blob_storage`. The service
+/// stops its jobs and its store when the executor shuts down.
+fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
+    golem_config: &GolemConfig,
+    given: Option<StoreSource>,
+    blob_storage: Arc<dyn BlobStorage>,
+    active_agents: &Arc<ActiveAgents<Ctx>>,
+    shutdown: &services::shutdown::Shutdown,
+) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
+    let filesystems = active_agents.agent_filesystems();
+    let source = given.unwrap_or_else(|| {
+        StoreSource::configured(
+            blob_storage,
+            VolumeRoom::Pressure {
+                volume: filesystems.volume().clone(),
+                pressure: filesystems.pressure_policy().clone(),
+            },
+        )
+    });
+    AgentFilesystemSnapshots::bind(
+        &golem_config.filesystem_snapshots,
+        source,
+        filesystems.volume().copies_on_write(),
+        shutdown,
+    )
+    .map_err(|error| anyhow!(error))
+}
+
+/// Clears the owner write bit of the file mode creation mask of the process, and then starts the
+/// active agents of the executor, with the agent filesystem service in them.
+///
+/// On a Unix platform it clears bit 0o200 of the mask and keeps the other bits, so each file that
+/// an agent creates has write permission for its owner. Other platforms have no such mask, and
+/// there the function only starts the active agents. On Windows a file is read-only only when its
+/// read-only attribute is set, and an agent cannot set that attribute.
+async fn start_active_agents<
+    Ctx: WorkerCtx,
+    BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
+>(
+    bootstrap: &BootstrapImpl,
+    golem_config: &GolemConfig,
+    initial_files_service: Arc<InitialAgentFilesService>,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
+    #[cfg(unix)]
+    services::agent_filesystem::keep_owner_write_permission();
+    bootstrap
+        .create_active_agents(golem_config, initial_files_service, shutdown_token)
+        .await
+}
+
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
 /// of its services.
 /// With a valid `Bootstrap` implementation, the service can be started with the `run` method.
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Called after the complete service graph has been assembled and before it is moved into the
+    /// servers. In-process harnesses can retain a clone to exercise internal admission paths.
+    fn capture_services(&self, _services: &All<Ctx>) {}
+
+    fn create_native_tool_catalog(
+        &self,
+    ) -> anyhow::Result<Arc<crate::native_tool::NativeToolCatalog<Ctx>>> {
+        Ok(Arc::new(crate::native_tool::NativeToolCatalog::default()))
+    }
+
     /// Creates the [`ActiveAgents`] service, including the measured-headroom
     /// admission gate. The default builds the memory probe from the config
     /// (cgroup/process/override). The in-process test harness overrides this to
     /// inject a probe with a pinned limit and usage so the gate is deterministic
     /// and isolated from the shared test process's RSS.
-    fn create_active_agents(
+    ///
+    /// The file loader of the agent filesystems keeps the downloads of initial files from
+    /// `initial_files_service`. On a Unix platform, the owner write bit of the file mode creation
+    /// mask of the process is already clear when this method runs.
+    async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
-        Ok(Arc::new(ActiveAgents::<Ctx>::new(
-            &golem_config.memory,
-            &golem_config.filesystem_storage,
-            &golem_config.agent_status_flush,
-            shutdown_token,
-        )?))
+        Ok(Arc::new(
+            ActiveAgents::<Ctx>::new(
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                initial_files_service,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )
+            .await?,
+        ))
     }
 
+    /// Takes the whole [`services::shutdown::Shutdown`] rather than just its
+    /// token: the lease renewal loop has work to finish after the token trips
+    /// (it deregisters), so it spawns through the tracker that `main` waits on.
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        shard_service: Arc<dyn ShardService>,
+        shutdown: services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
-        Arc::new(crate::services::shard_manager::GrpcShardManagerService::new(shard_manager_client))
+        crate::services::shard_manager::GrpcShardManagerService::new(
+            shard_manager_client,
+            shard_service,
+            shutdown,
+        )
+    }
+
+    /// Overridable so a test can watch or fake shard ownership. Everything that
+    /// gates on ownership goes through this one service, including the periodic
+    /// re-check a caller parked in `Worker::wait_for_invocation_result` runs.
+    fn create_shard_service(&self) -> Arc<dyn ShardService> {
+        Arc::new(ShardServiceDefault::new())
     }
 
     fn create_quota_service(
@@ -202,10 +312,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn QuotaService> {
         let config = config.clone();
-        Arc::new(LazyQuotaService::new(async move |port| {
+        Arc::new(LazyQuotaService::new(async move |endpoint| {
             let service: Arc<dyn QuotaService> = crate::services::quota::GrpcQuotaService::new(
                 shard_manager_client,
-                port,
+                endpoint,
                 config,
                 shutdown_token,
             );
@@ -267,11 +377,37 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api))
     }
 
+    /// Wraps the key-value storage every service is built on, after the retry decorator has been
+    /// applied. The default is the identity. The in-process test harness uses it to inject
+    /// storage failures above the retry budget, standing in for an outage that outlived it.
+    fn wrap_key_value_storage(
+        &self,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        key_value_storage
+    }
+
+    /// Wraps scheduler persistence after the configured backend has been constructed. The default
+    /// is the identity; deterministic integration tests use this boundary to pause a real insert.
+    fn wrap_scheduler_storage(
+        &self,
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    ) -> Arc<dyn SchedulerStorage + Send + Sync> {
+        scheduler_storage
+    }
+
     fn create_key_value_service(
         &self,
         key_value_storage: &Arc<dyn KeyValueStorage + Send + Sync>,
     ) -> Arc<dyn KeyValueService> {
         Arc::new(DefaultKeyValueService::new(key_value_storage.clone()))
+    }
+
+    /// Wraps the blob storage every service is built on. The default is the identity. The
+    /// in-process test harness uses it to inject blob storage failures above the retry budget of
+    /// the backend, standing in for an outage that outlived it.
+    fn wrap_blob_storage(&self, blob_storage: Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> {
+        blob_storage
     }
 
     fn create_blob_store_service(
@@ -309,6 +445,19 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
+    /// Gives a store of the filesystem snapshots that replaces the store that the configuration
+    /// names. The default gives none.
+    fn filesystem_snapshot_store(&self) -> Option<StoreSource> {
+        None
+    }
+
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        service
+    }
+
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
@@ -337,6 +486,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         resource_limits: Arc<dyn ResourceLimits>,
         quota_service: Arc<dyn QuotaService>,
@@ -344,8 +494,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
+        mcp_transport: Arc<services::mcp::McpTransport>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
+        let native_tool_catalog = self.create_native_tool_catalog()?;
+        let external_durable_streams = Arc::new(
+            services::external_durable_stream::DefaultExternalDurableStreamService::new()?,
+        );
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -377,11 +532,15 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
+            mcp_transport.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -419,10 +578,14 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             resource_limits.clone(),
             shutdown_token.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
+            mcp_transport.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -432,6 +595,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             active_agents,
             agent_types_service,
             agent_webhooks_service,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -461,7 +625,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool.clone(),
+            mcp_transport,
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
+            native_tool_catalog,
             additional_deps,
             leak_sentinel,
         ))
@@ -495,6 +662,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::agent::durable_streams::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -543,7 +714,7 @@ pub async fn create_worker_executor_impl<
     bootstrap: &BootstrapImpl,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
-    shutdown_token: tokio_util::sync::CancellationToken,
+    shutdown: services::shutdown::Shutdown,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -554,6 +725,7 @@ pub async fn create_worker_executor_impl<
     ),
     anyhow::Error,
 > {
+    let shutdown_token = shutdown.token();
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -568,12 +740,9 @@ pub async fn create_worker_executor_impl<
             (Some(pool), None, key_value_storage)
         }
         KeyValueStorageConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(
-                postgres,
-                golem_config.key_value_storage_retry.clone(),
-            )
-            .await
-            .map_err(|err| anyhow!(err))?;
+            let kv = PostgresKeyValueStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
             join_set.spawn(async move { kv_metrics.run_metrics_loop("key_value_storage").await });
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
@@ -583,7 +752,6 @@ pub async fn create_worker_executor_impl<
             let (cache_redis, cache_sqlite, cache_storage) = build_inner_key_value_storage(
                 &namespace_routed.cache,
                 "key_value_storage_cache",
-                golem_config.key_value_storage_retry.clone(),
                 join_set,
             )
             .await?;
@@ -591,7 +759,6 @@ pub async fn create_worker_executor_impl<
                 build_inner_key_value_storage(
                     &namespace_routed.persistent,
                     "key_value_storage_persistent",
-                    golem_config.key_value_storage_retry.clone(),
                     join_set,
                 )
                 .await?;
@@ -610,12 +777,9 @@ pub async fn create_worker_executor_impl<
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
         KeyValueStorageConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(
-                sqlite,
-                golem_config.key_value_storage_retry.clone(),
-            )
-            .await
-            .map_err(|err| anyhow!(err))?;
+            let storage = SqliteKeyValueStorage::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             (None, Some(pool), key_value_storage)
@@ -626,13 +790,21 @@ pub async fn create_worker_executor_impl<
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
-                    golem_config.key_value_storage_retry.clone(),
                 ));
             (None, None, key_value_storage)
         }
     };
 
-    let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
+    // Applied outermost, above the namespace router, so every backend - and every namespace - gets
+    // the identical retry policy for transient failures.
+    let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = bootstrap
+        .wrap_key_value_storage(Arc::new(RetryingKeyValueStorage::new(
+            key_value_storage,
+            golem_config.key_value_storage_retry.clone(),
+        )));
+
+    let scheduler_storage = bootstrap
+        .wrap_scheduler_storage(build_scheduler_storage(&golem_config.scheduler_storage).await?);
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
     {
@@ -729,6 +901,7 @@ pub async fn create_worker_executor_impl<
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
     };
+    let blob_storage = bootstrap.wrap_blob_storage(blob_storage);
 
     let initial_files_service = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
@@ -776,9 +949,12 @@ pub async fn create_worker_executor_impl<
     let websocket_connection_pool = crate::durable_host::websocket::WebSocketConnectionPool::new(
         golem_config.max_websocket_connections,
     );
+    let mcp_transport = Arc::new(services::mcp::McpTransport::new(
+        golem_config.mcp_transport,
+    )?);
     let golem_config = Arc::new(golem_config);
 
-    let shard_service = Arc::new(ShardServiceDefault::new());
+    let shard_service = bootstrap.create_shard_service();
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
     for idx in 1..golem_config.oplog.indexed_storage_layers {
@@ -790,36 +966,35 @@ pub async fn create_worker_executor_impl<
         oplog_archives.push(svc);
     }
     for idx in 0..golem_config.oplog.blob_storage_layers {
-        let svc: Arc<dyn OplogArchiveService> =
-            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
+        let svc: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            indexed_storage.clone(),
+            idx,
+            golem_config.indexed_storage_retry.clone(),
+        ));
         oplog_archives.push(svc);
     }
+    // The sweeper is built further down, once the worker activator exists.
+    let sweep_archives = oplog_archives.clone();
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
+    // Built once for both shapes, so neither can be left without the observer: without it a
+    // refused write never reaches the shard manager, and a manager whose state lost history goes
+    // on minting below the oplog rows that refuse it.
+    let primary_oplog_service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        blob_storage.clone(),
+        golem_config.oplog.max_operations_before_commit,
+        golem_config.oplog.max_operations_before_commit_ephemeral,
+        golem_config.oplog.max_payload_size,
+        golem_config.indexed_storage_retry.clone(),
+    )
+    .await;
+
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
-        None => Arc::new(
-            PrimaryOplogService::new(
-                indexed_storage.clone(),
-                blob_storage.clone(),
-                golem_config.oplog.max_operations_before_commit,
-                golem_config.oplog.max_operations_before_commit_ephemeral,
-                golem_config.oplog.max_payload_size,
-                golem_config.indexed_storage_retry.clone(),
-            )
-            .await,
-        ),
+        None => Arc::new(primary_oplog_service),
         Some(oplog_archives) => {
-            let primary = Arc::new(
-                PrimaryOplogService::new(
-                    indexed_storage.clone(),
-                    blob_storage.clone(),
-                    golem_config.oplog.max_operations_before_commit,
-                    golem_config.oplog.max_operations_before_commit_ephemeral,
-                    golem_config.oplog.max_payload_size,
-                    golem_config.indexed_storage_retry.clone(),
-                )
-                .await,
-            );
+            let primary = Arc::new(primary_oplog_service);
 
             Arc::new(MultiLayerOplogService::new(
                 primary,
@@ -830,16 +1005,21 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_agents = bootstrap.create_active_agents(&golem_config, shutdown_token.clone())?;
-
-    let initial_file_cache_root = active_agents
-        .agent_filesystems()
-        .initial_file_cache_root()
-        .map(|path| path.to_path_buf());
-    let file_loader = Arc::new(FileLoader::new(
+    let active_agents = start_active_agents(
+        bootstrap,
+        &golem_config,
         initial_files_service.clone(),
-        initial_file_cache_root.as_deref(),
-    )?);
+        shutdown_token.clone(),
+    )
+    .await?;
+
+    services::resource_usage_metering::check_filesystem_metering(
+        golem_config.resource_usage_metering,
+        active_agents.agent_filesystems().agent_accounting(),
+    )
+    .map_err(|error| anyhow!(error))?;
+
+    let file_loader = active_agents.agent_filesystems().file_loader();
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
         active_agents.clone(),
@@ -852,8 +1032,11 @@ pub async fn create_worker_executor_impl<
             ),
         );
 
-    let shard_manager_service =
-        bootstrap.create_shard_manager_service(shard_manager_client.clone());
+    let shard_manager_service = bootstrap.create_shard_manager_service(
+        shard_manager_client.clone(),
+        shard_service.clone(),
+        shutdown.clone(),
+    );
 
     let quota_service = bootstrap.create_quota_service(
         shard_manager_client,
@@ -927,12 +1110,13 @@ pub async fn create_worker_executor_impl<
         component_service.clone(),
         golem_config.clone(),
     ));
-    let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-        worker_service.clone(),
-        oplog_service.clone(),
-        component_service.clone(),
-        golem_config.clone(),
-    ));
+    let worker_enumeration_service =
+        bootstrap.wrap_worker_enumeration_service(Arc::new(DefaultWorkerEnumerationService::new(
+            worker_service.clone(),
+            oplog_service.clone(),
+            component_service.clone(),
+            golem_config.clone(),
+        )));
 
     let promise_service = Arc::new(LazyPromiseService::new());
 
@@ -952,7 +1136,32 @@ pub async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
+    // Tracked by `shutdown` rather than the join set, so on termination the sweeper gets
+    // `SHUTDOWN_GRACE` to finish the archive step it is in before the join set is aborted.
+    let oplog_sweeper = OplogSweeper::over_layers(
+        golem_config.oplog.sweep.clone(),
+        indexed_storage.clone(),
+        &sweep_archives,
+        shard_service.clone(),
+        component_service.clone(),
+        Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
+    );
+    shutdown.spawn({
+        let shutdown_token = shutdown_token.clone();
+        async move {
+            oplog_sweeper.run(shutdown_token).await;
+        }
+    });
+
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
+
+    let agent_filesystem_snapshots = bind_agent_filesystem_snapshots(
+        &golem_config,
+        bootstrap.filesystem_snapshot_store(),
+        blob_storage.clone(),
+        &active_agents,
+        &shutdown,
+    )?;
 
     let direct_invocation_auth_service =
         bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
@@ -989,6 +1198,7 @@ pub async fn create_worker_executor_impl<
             oplog_processor_plugin,
             agent_type_service,
             environment_state_service,
+            agent_filesystem_snapshots,
             agent_webhooks_service,
             resource_limits,
             quota_service,
@@ -996,6 +1206,7 @@ pub async fn create_worker_executor_impl<
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             leak_sentinel,
         )
         .await?;
@@ -1022,7 +1233,11 @@ pub async fn create_worker_executor_impl<
 /// Derives a `DbSqliteConfig` for a module that should live in a separate
 /// SQLite DB file next to a base one (used by `KVStoreSqlite` to give the
 /// indexed storage its own DB and migration table).
-fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
+///
+/// Public so test utilities can open the same file an executor uses without copying the naming
+/// rule.
+#[doc(hidden)]
+pub fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
     let database = match base.database.strip_suffix(".db") {
         Some(stem) => format!("{stem}-{suffix}.db"),
         None => format!("{}-{suffix}", base.database),
@@ -1065,6 +1280,7 @@ pub async fn bootstrap_and_run_worker_executor<
     start_registry_invalidation_handler: bool,
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
+    golem_config.validate()?;
 
     let memory_snapshot = crate::services::active_agents::memory_probe::default_probe(
         golem_config.memory.system_memory_override,
@@ -1090,7 +1306,7 @@ pub async fn bootstrap_and_run_worker_executor<
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;
@@ -1119,6 +1335,8 @@ pub async fn bootstrap_and_run_worker_executor<
     };
 
     let leak_detector = worker_executor_impl.leak_detector();
+    let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
+    bootstrap.capture_services(&worker_executor_impl);
 
     crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),
@@ -1129,9 +1347,8 @@ pub async fn bootstrap_and_run_worker_executor<
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
-        golem_config.http_addr()?,
+        golem_config.http_addr(),
         prometheus_registry,
-        golem_config.runtime_metrics_sampling_interval,
         "Worker executor is running",
         join_set,
     )
@@ -1144,6 +1361,7 @@ pub async fn bootstrap_and_run_worker_executor<
         epoch_stop,
         shutdown,
         leak_detector,
+        invocation_loops,
     })
 }
 
@@ -1162,21 +1380,26 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.grpc.port);
-    let listener = TcpListener::bind(addr).await?;
+    let listener = golem_service_base::net::bind_tcp_listener(golem_config.grpc_addr())?;
 
     let grpc_port = listener.local_addr()?.port();
+    let endpoint = ExecutorEndpoint {
+        port: grpc_port,
+        advertised_ip: golem_config.grpc.advertised_ip,
+    };
 
     service_dependencies
         .quota_service()
-        .initialize(grpc_port)
+        .initialize(endpoint)
         .await;
 
-    let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
+    // The start of the service recovers the agents, and its future is large. It lives on the
+    // heap, so the stack of the caller stays small.
+    let worker_impl = Box::pin(WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,
         lazy_worker_activator,
-        grpc_port,
-    )
+        endpoint,
+    ))
     .await?;
 
     let service = WorkerExecutorServer::new(worker_impl)
@@ -1198,7 +1421,9 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
             .add_service(reflection_service)
             .add_service(service)
             .add_service(health_service)
-            .serve_with_incoming(TcpListenerStream::new(listener))
+            // Custom incoming streams bypass Server's TCP_NODELAY default. Streaming replies
+            // must not wait for a delayed ACK between the acceptance and the invocation result.
+            .serve_with_incoming(TcpIncoming::from(listener).with_nodelay(Some(true)))
             .map_err(anyhow::Error::from)
             .in_current_span()
     });
@@ -1211,7 +1436,6 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 async fn build_inner_key_value_storage(
     config: &KeyValueStorageInnerConfig,
     svc_name: &'static str,
-    retry_config: RetryConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -1231,7 +1455,7 @@ async fn build_inner_key_value_storage(
             Ok((Some(pool), None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(postgres, retry_config)
+            let kv = PostgresKeyValueStorage::configured(postgres)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
@@ -1245,7 +1469,7 @@ async fn build_inner_key_value_storage(
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(sqlite, retry_config)
+            let storage = SqliteKeyValueStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
@@ -1258,9 +1482,142 @@ async fn build_inner_key_value_storage(
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
-                    retry_config,
                 ));
             Ok((None, None, key_value_storage))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::services::NoAdditionalDeps;
+    #[cfg(target_os = "linux")]
+    use crate::services::agent_filesystem::file_creation_mask_for_test::{
+        thread_file_creation_mask, with_private_file_creation_mask,
+    };
+    use crate::services::golem_config::FilesystemStorageMode;
+    use crate::workerctx::default::Context;
+    use test_r::test;
+
+    /// Records the file mode creation mask of the thread when bootstrap starts the active agents,
+    /// and starts none.
+    #[cfg(target_os = "linux")]
+    #[derive(Default)]
+    struct MaskRecordingBootstrap {
+        mask: std::sync::Mutex<Option<libc::mode_t>>,
+    }
+
+    #[cfg(target_os = "linux")]
+    #[async_trait]
+    impl Bootstrap<Context> for MaskRecordingBootstrap {
+        fn create_additional_deps(
+            &self,
+            _registry_service: Arc<dyn RegistryService>,
+        ) -> NoAdditionalDeps {
+            NoAdditionalDeps {}
+        }
+
+        async fn create_active_agents(
+            &self,
+            _golem_config: &GolemConfig,
+            _initial_files_service: Arc<InitialAgentFilesService>,
+            _shutdown_token: tokio_util::sync::CancellationToken,
+        ) -> anyhow::Result<Arc<ActiveAgents<Context>>> {
+            *self.mask.lock().unwrap() = Some(thread_file_creation_mask());
+            Err(anyhow!("the test starts no active agents"))
+        }
+    }
+
+    fn in_memory_initial_files_service() -> Arc<InitialAgentFilesService> {
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        )))
+    }
+
+    /// The snapshot service gets the storage mode of the agent filesystems: on storage without
+    /// copy-on-write copies it refuses enabled snapshots.
+    #[test]
+    async fn the_snapshot_service_refuses_enabled_snapshots_on_storage_without_copy_on_write() {
+        let root = tempfile::tempdir().unwrap();
+        let key: Box<str> = "00".repeat(64).into_boxed_str();
+        let mut golem_config = GolemConfig::default();
+        golem_config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+            root: root.path().into(),
+        };
+        golem_config.filesystem_snapshots =
+            services::golem_config::FilesystemSnapshotsConfig::Enabled(Box::new(
+                services::golem_config::FilesystemSnapshotStoreConfig::new(
+                    &key,
+                    std::time::Duration::from_secs(60),
+                    1,
+                    1,
+                )
+                .unwrap(),
+            ));
+        let shutdown = services::shutdown::Shutdown::new();
+        let active_agents = Arc::new(
+            ActiveAgents::<Context>::new(
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                in_memory_initial_files_service(),
+                &golem_config.agent_status_flush,
+                shutdown.token(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        let bound = bind_agent_filesystem_snapshots(
+            &golem_config,
+            None,
+            Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new()),
+            &active_agents,
+            &shutdown,
+        );
+
+        let error = bound
+            .err()
+            .expect("enabled snapshots on storage without copy-on-write must be refused");
+        assert!(
+            format!("{error:#}").contains(
+                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
+            ),
+            "{error:#}"
+        );
+        shutdown.token().cancel();
+    }
+
+    /// Bootstrap runs on a thread with its own filesystem attributes and the mask 0o227. The mask
+    /// must be 0o027 when the active agents start, and stay 0o027 after.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn executor_bootstrap_clears_only_bit_0o200_before_the_agent_filesystems_start() {
+        let (started, recorded, after) = with_private_file_creation_mask(0o227, || {
+            let bootstrap = MaskRecordingBootstrap::default();
+            let started = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(start_active_agents(
+                    &bootstrap,
+                    &GolemConfig::default(),
+                    in_memory_initial_files_service(),
+                    tokio_util::sync::CancellationToken::new(),
+                ))
+                .is_ok();
+            let recorded = *bootstrap.mask.lock().unwrap();
+            (started, recorded, thread_file_creation_mask())
+        });
+
+        assert!(!started, "the recording bootstrap starts no active agents");
+        assert_eq!(
+            recorded,
+            Some(0o027),
+            "the mask 227 must be 27 when the agent filesystems start"
+        );
+        assert_eq!(after, 0o027, "the mask must stay 27, and it is {after:o}");
     }
 }

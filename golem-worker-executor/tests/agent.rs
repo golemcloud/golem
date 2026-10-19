@@ -19,7 +19,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -129,7 +129,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     let agent_id = agent_id!("StreamingRpcTarget", "rejected-schedule");
     let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
     let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
-    let input: golem_api_grpc::proto::golem::schema::SchemaValue =
+    let input: golem_schema::proto::golem::schema::SchemaValue =
         input.try_into().map_err(anyhow::Error::msg)?;
     let component_id = component.id.to_string();
     let blobs_before = files_below(&deps.blob_storage_root())?
@@ -165,6 +165,8 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                origin_invocation: None,
+                external_tool: None,
             })
             .await
             .expect_err("scheduled streaming invocation must be rejected");
@@ -178,10 +180,8 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
-    let assignment = golem_common::model::ShardAssignment {
-        number_of_shards: 1,
-        shard_ids: HashSet::from([golem_common::model::ShardId::new(0)]),
-    };
+    let assignment =
+        golem_common::model::ShardAssignment::unexpiring(1, [golem_common::model::ShardId::new(0)]);
     assert_eq!(
         scheduler
             .count_due(chrono::Utc::now() + chrono::Duration::days(1), &assignment)
@@ -247,6 +247,8 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await
         .expect_err("the old streaming schema must still reject scheduling");
@@ -632,6 +634,8 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
 
@@ -685,6 +689,8 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
@@ -746,6 +752,8 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
 
@@ -864,5 +872,446 @@ async fn create_oplog_entry_persists_ephemeral_agent_mode(
         .expect("Expected a Create entry at the start of the oplog");
 
     assert_eq!(create_entry.agent_mode, AgentMode::Ephemeral);
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn archived_ephemeral_agent_remains_observable_and_can_be_deleted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralEchoAgent", "archived-delete");
+
+    let result = executor
+        .invoke_and_await_agent(&component, &logical_agent_id, "changeAndGet", data_value!())
+        .await?;
+    let final_agent_id = result.agent_id().clone();
+    assert_eq!(result.into_typed::<String>()?, "archived-delete!");
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &final_agent_id);
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let metadata = executor.get_worker_metadata(&final_agent_id).await?;
+    assert_eq!(metadata.agent_id, final_agent_id);
+    assert!(
+        !executor
+            .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+            .await?
+            .is_empty()
+    );
+
+    executor.delete_worker(&final_agent_id).await?;
+    assert_eq!(
+        executor.get_worker_metadata_opt(&final_agent_id).await?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn fork_publication_retry_preserves_independent_state_across_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::StreamSessionRecord;
+    use golem_common::schema::FromSchema;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = crate::fork::start_with_local_resume(deps, &context, true).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let source = agent_id!("RpcCounter", "fork-retry");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &source, "inc_by", data_value!(5u64))
+        .await?;
+    let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
+    let cut = prefix.last().unwrap().oplog_index;
+    let target = golem_common::phantom_agent_id!("RpcCounter", uuid::Uuid::new_v4(), "fork-retry");
+    let target_id = AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
+    let error = executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await
+        .expect_err("injected lost response");
+    assert!(
+        error.to_string().contains("lost fork resume response"),
+        "{error}"
+    );
+    executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &source, "inc_by", data_value!(11u64))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &target, "inc_by", data_value!(2u64))
+        .await?;
+    // Retrying after the target has run must not overwrite it with the old prefix.
+    executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await?;
+    assert!(
+        executor
+            .fork_worker(&source_id, &target.to_string(), cut.previous())
+            .await
+            .is_err()
+    );
+    drop(executor);
+    let executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
+    executor
+        .fork_worker(&source_id, &target.to_string(), cut)
+        .await?;
+    let actual = executor
+        .invoke_and_await_agent(&component, &target, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(actual, 7);
+    let actual = executor
+        .invoke_and_await_agent(&component, &source, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(actual, 16);
+    let fork_history = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+    let markers = fork_history
+        .iter()
+        .filter_map(|entry| {
+            let PublicOplogEntry::StreamSession(record) = &entry.entry else {
+                return None;
+            };
+            let StreamSessionRecord::ForkCut(cut) =
+                StreamSessionRecord::from_value(record.record.value()).ok()?
+            else {
+                return None;
+            };
+            Some((entry.oplog_index, cut))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].0, cut.next());
+    assert_eq!(markers[0].1.cut_index, cut);
+    assert_eq!(
+        markers[0].1.creation_fingerprint,
+        executor.get_worker_metadata(&target_id).await?.fingerprint
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{OplogEntry, OplogPayload};
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use golem_worker_executor::services::HasWasmtimeEngine;
+    use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    for max_payload_size in [1, 1_000_000] {
+        let context = TestContext::new(last_unique_id);
+        let overrides = TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.oplog.max_payload_size = max_payload_size;
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_rpc_rust)
+            .store()
+            .await?;
+        let agent = agent_id!("RpcCounter", format!("payload-reuse-{max_payload_size}"));
+        let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            0
+        );
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let initial_loads = executor.instance_load_count(&worker_id);
+        let first_key = IdempotencyKey::fresh();
+        let mut started = executor.gate_next_invocation_started(&owned).await?;
+        let first = {
+            let executor = executor.clone();
+            let component = component.clone();
+            let agent = agent.clone();
+            let key = first_key.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &agent,
+                        &key,
+                        "inc_by",
+                        data_value!(7u64),
+                    )
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(20), started.entered()).await?;
+        let history = executor.stored_oplog(&worker_id).await;
+        assert!(history.iter().any(|entry| matches!(entry,
+            OplogEntry::PendingAgentInvocation { idempotency_key, .. } if *idempotency_key == first_key)));
+        assert!(!history.iter().any(|entry| matches!(entry,
+            OplogEntry::AgentInvocationStarted { idempotency_key, .. } if *idempotency_key == first_key)));
+        executor
+            .interrupt_loaded_worker(&worker_id, InterruptKind::Restart)
+            .await?;
+        executor
+            .active_agent(&owned)
+            .await
+            .unwrap()
+            .primary()
+            .engine()
+            .increment_epoch();
+        started.release();
+        tokio::time::timeout(Duration::from_secs(60), first).await???;
+        assert!(executor.instance_load_count(&worker_id) > initial_loads);
+
+        let second_key = IdempotencyKey::fresh();
+        let before_completion_restart = executor.instance_load_count(&worker_id);
+        let mut completion = executor.gate_next_agent_invocation_success(&worker_id);
+        let second = {
+            let executor = executor.clone();
+            let component = component.clone();
+            let agent = agent.clone();
+            let key = second_key.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &agent,
+                        &key,
+                        "inc_by",
+                        data_value!(11u64),
+                    )
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(20), completion.entered()).await?;
+        let history = executor.stored_oplog(&worker_id).await;
+        assert!(history.iter().any(|entry| matches!(entry,
+            OplogEntry::AgentInvocationStarted { idempotency_key, .. } if *idempotency_key == second_key)));
+        assert!(!history.iter().rev().take_while(|entry| !matches!(entry,
+            OplogEntry::AgentInvocationStarted { idempotency_key, .. } if *idempotency_key == second_key))
+            .any(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. })));
+        completion.abort_as_restart();
+        tokio::time::timeout(Duration::from_secs(60), second).await???;
+        assert!(executor.instance_load_count(&worker_id) > before_completion_restart);
+        let output_key = IdempotencyKey::fresh();
+        let expected_output = "x".repeat(10_000);
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    &output_key,
+                    "inc_and_return_text",
+                    data_value!(10_000u32),
+                )
+                .await?
+                .into_typed::<String>()?,
+            expected_output
+        );
+        drop(executor);
+
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        for (key, amount) in [(&first_key, 7u64), (&second_key, 11u64)] {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    key,
+                    "inc_by",
+                    data_value!(amount),
+                )
+                .await?;
+        }
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    &output_key,
+                    "inc_and_return_text",
+                    data_value!(10_000u32),
+                )
+                .await?
+                .into_typed::<String>()?,
+            expected_output
+        );
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            19
+        );
+        let history = executor.stored_oplog(&worker_id).await;
+        let mut active_key = None;
+        let mut completions = HashMap::new();
+        for entry in &history {
+            match entry {
+                OplogEntry::AgentInvocationStarted {
+                    idempotency_key, ..
+                } => {
+                    active_key = Some(idempotency_key);
+                }
+                OplogEntry::AgentInvocationFinished { .. } => {
+                    *completions
+                        .entry(active_key.take().expect("Started before Finished"))
+                        .or_insert(0usize) += 1;
+                }
+                _ => {}
+            }
+        }
+        for key in [&first_key, &second_key, &output_key] {
+            let pending = history
+                .iter()
+                .filter_map(|entry| match entry {
+                    OplogEntry::PendingAgentInvocation {
+                        idempotency_key,
+                        payload,
+                        ..
+                    } if idempotency_key == key => Some(payload),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(
+                matches!(pending[0], OplogPayload::External { .. }),
+                max_payload_size == 1
+            );
+            let starts = history
+                .iter()
+                .filter_map(|entry| match entry {
+                    OplogEntry::AgentInvocationStarted {
+                        idempotency_key,
+                        payload,
+                        ..
+                    } if idempotency_key == key => Some(payload),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!starts.is_empty());
+            for payload in starts {
+                assert_eq!(payload, pending[0]);
+            }
+            assert_eq!(completions.get(key), Some(&1));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn pending_payload_reuse_keeps_manual_snapshot_update_distinct_from_method_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let key = IdempotencyKey::fresh();
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent,
+                &key,
+                "stable_value",
+                data_value!()
+            )
+            .await?
+            .into_typed::<u32>()?,
+        7
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent, "pre_snapshot_value", data_value!())
+        .await?;
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "loaded_snapshot_revision",
+                data_value!()
+            )
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "stable_value", data_value!())
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "accumulated_value", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        11
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent, "stable_value", data_value!())
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "accumulated_value", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        21
+    );
     Ok(())
 }

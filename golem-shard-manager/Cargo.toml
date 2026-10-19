@@ -24,6 +24,7 @@ test = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
@@ -32,7 +33,9 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 conditional-trait-gen = { workspace = true }
 desert_rust = { workspace = true }
+etcd-client = { workspace = true }
 futures = { workspace = true }
+hex = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
@@ -44,11 +47,15 @@ prometheus = { workspace = true }
 prost-types = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
@@ -56,10 +63,21 @@ tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+x509-parser = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
+figment = { workspace = true }
 golem-test-framework = { workspace = true }
+h2 = { workspace = true }
+rcgen = { workspace = true, features = ["pem"] }
+rsa = { workspace = true }
 test-r = { workspace = true }
+tokio-rustls = { workspace = true }
+tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true }
 uuid = { workspace = true }
 tempfile = { workspace = true }

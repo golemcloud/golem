@@ -1,0 +1,698 @@
+{
+ "cases": {
+  "text-tools: cmp -b prints differing bytes": {
+   "script": "8781df01a024634c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: byte 1, line 1 is 141 a 142 b\n"
+   }
+  },
+  "text-tools: diff -d is a real accepted no-op": {
+   "script": "b35896f823a2f35a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "text-tools: diff -e escapes a . line at the very end of a hunk": {
+   "script": "7707e64188ae1c5e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c\nbefore\n..\n.\ns/.//\n"
+   }
+  },
+  "text-tools: diff -e escapes a . line with content on both sides of it": {
+   "script": "285fdff662a268fc",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c\nbefore\n..\n.\ns/.//\na\nafter\n.\n"
+   }
+  },
+  "text-tools: diff -e escapes a lone . line in a change": {
+   "script": "23a7c4c74fa280a8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c\n..\n.\ns/.//\na\n.foo\n.\n"
+   }
+  },
+  "text-tools: diff -e escapes a lone . line in an append": {
+   "script": "aa8a55161ce95fa4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2a\n..\n.\ns/.//\na\nafter\n.\n"
+   }
+  },
+  "text-tools: diff -e escapes several . lines in the same hunk": {
+   "script": "1d9db8132708f717",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c\n..\n.\ns/.//\na\n..\n.\ns/.//\n"
+   }
+  },
+  "text-tools: diff -e lists multiple change hunks from the end of the file backwards": {
+   "script": "82cf482c3ac1113f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10c\nZ\n.\n7c\nY\n.\n3c\nX\n.\n"
+   }
+  },
+  "text-tools: diff -e mixes a, c and d commands in one script, still bottom-up": {
+   "script": "06b1be12ea3ac33f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15a\nNEW\n.\n10c\nTEN\n.\n5d\n"
+   }
+  },
+  "text-tools: diff -e of byte-identical files missing a trailing newline still warns": {
+   "script": "69ce67b29880301d",
+   "status": 0,
+   "stderr": {
+    "text": "diff: eo5: No newline at end of file\n\ndiff: en5: No newline at end of file\n\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "text-tools: diff -e's later hunk keeps the original file's line numbers after an earlier delete": {
+   "script": "dcbcec9c3b8f4977",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8c\nX\n.\n3d\n"
+   }
+  },
+  "text-tools: diff -e's later hunk keeps the original file's line numbers after an earlier insert": {
+   "script": "c63c784254b94afe",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8c\nX\n.\n2a\nZ\n.\n"
+   }
+  },
+  "text-tools: diff DIR FILE without -r": {
+   "script": "6ff5d9a3b58a9b0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< content\n---\n> content2\nstatus=1\n"
+   }
+  },
+  "text-tools: diff DIR1 DIR2 without -r stays at the top level": {
+   "script": "0121c0da3d7c9f9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Only in d1: only1\nCommon subdirectories: d1/sub and d2/sub\ndiff d1/x d2/x\n1c1\n< a\n---\n> b\nstatus=1\n"
+   }
+  },
+  "text-tools: diff FILE DIR without -r": {
+   "script": "54a0ba3a7d83b8db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< content2\n---\n> content\nstatus=1\n"
+   }
+  },
+  "text-tools: grep -- group separator appears between file operands, not just within one": {
+   "script": "7c2389d9d4b2c577",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "gsep1-a\ngsep1:match\ngsep1-b\n--\ngsep1-a\ngsep1:match\ngsep1-b\n"
+   }
+  },
+  "text-tools: grep --color (bare, defaults to auto) produces no color": {
+   "script": "ad6308f7fbd5705d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "match\n"
+   }
+  },
+  "text-tools: grep --color=always colors matches on context lines and the -- separator": {
+   "script": "81ab679c4b8fe1c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "^[[01;31m^[[Kmatch^[[m^[[K\na\n^[[36m^[[K--^[[m^[[K\nd\n^[[01;31m^[[Kmatch^[[m^[[K\n"
+   }
+  },
+  "text-tools: grep --color=always colors the filename, line number and separator": {
+   "script": "fc5713a11cfd5ee5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "^[[32m^[[K1^[[m^[[K^[[36m^[[K:^[[m^[[Khell^[[01;31m^[[Ko^[[m^[[K w^[[01;31m^[[Ko^[[m^[[Krld\n"
+   }
+  },
+  "text-tools: grep --color=always highlights matches with GNU's SGR sequences": {
+   "script": "609ac33ff2e7cf7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hell^[[01;31m^[[Ko^[[m^[[K w^[[01;31m^[[Ko^[[m^[[Krld\n"
+   }
+  },
+  "text-tools: grep --color=always with -o colors just the matched text": {
+   "script": "9f98dea1815c8e9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "^[[01;31m^[[Ko^[[m^[[K\n^[[01;31m^[[Ko^[[m^[[K\n"
+   }
+  },
+  "text-tools: grep --color=auto produces no color when stdout is not a terminal": {
+   "script": "988d6b73c89c2f38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "match\n"
+   }
+  },
+  "text-tools: grep --color=never produces no color": {
+   "script": "48ffd2ca0a6b5eb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello world\n"
+   }
+  },
+  "text-tools: grep --exclude-dir filters a directory operand itself": {
+   "script": "5c9e38029d9ee25a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "text-tools: grep --include filters an explicit file operand": {
+   "script": "e46162181d34fa8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "text-tools: grep -A0 still separates non-adjacent matches": {
+   "script": "8a081451f6cc1349",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n--\nsix\n"
+   }
+  },
+  "text-tools: grep -E -F together is refused as conflicting": {
+   "script": "56593bbaec4c0005",
+   "status": 0,
+   "stderr": {
+    "text": "grep: conflicting matchers specified\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "text-tools: grep -E a leading {1} is dropped, not literal": {
+   "script": "aaabbacfd0ad33b4",
+   "status": 0,
+   "stderr": {
+    "text": "grep: warning: {...} at start of expression\n"
+   },
+   "stdout": {
+    "text": "{1}a\nba\n"
+   }
+  },
+  "text-tools: grep -E a{,2} treats a missing lower bound as 0": {
+   "script": "e3d1892cc69633f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\naa\naaa\n"
+   }
+  },
+  "text-tools: grep -G -G repeated is fine": {
+   "script": "84c75ac4bd08ac8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\n"
+   }
+  },
+  "text-tools: grep -P \\d is ASCII-only": {
+   "script": "c3cfbc1e9a10fc3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "text-tools: grep -f - reads patterns from the shell's stdin": {
+   "script": "347e1225daf25497",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "needle\n"
+   }
+  },
+  "text-tools: grep -f pattern file with a raw non-UTF-8 byte matches that byte": {
+   "script": "86b7c7c180610cac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "text-tools: grep -m0 selects nothing": {
+   "script": "dccaa0112eff1833",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "text-tools: grep -r with one directory operand keeps the filename prefix": {
+   "script": "043e2a36c6b56f05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d/nums:1:one\n"
+   }
+  },
+  "text-tools: grep -r with one plain file operand omits the filename prefix": {
+   "script": "49b69abac7a52b43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:one\n"
+   }
+  },
+  "text-tools: grep -v with --color=always produces no color": {
+   "script": "19a53a7474fccd34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello world\n"
+   }
+  },
+  "text-tools: grep -z lets . match an embedded newline": {
+   "script": "0cac26d769354b5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\u0000"
+   }
+  },
+  "text-tools: grep BRE a leading \\{1\\} is literal text": {
+   "script": "cfe8b5d1462cccf9",
+   "status": 0,
+   "stderr": {
+    "text": "grep: warning: stray \\ before {\n"
+   },
+   "stdout": {
+    "text": "{1}a\n"
+   }
+  },
+  "text-tools: grep BRE a\\{,2\\} treats a missing lower bound as 0": {
+   "script": "03661452055e8d5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\naa\naaa\n"
+   }
+  },
+  "text-tools: jq del multi-index descending order": {
+   "script": "8aaef04ac6ea0fc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2,4]\n"
+   }
+  },
+  "text-tools: jq del nested paths": {
+   "script": "34df16dd128346bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[1],[4]]\n"
+   }
+  },
+  "text-tools: jq del object keys": {
+   "script": "7b1b9941fb50a431",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"b\":2}\n"
+   }
+  },
+  "text-tools: jq division by an exact-zero divisor raises jq's own error": {
+   "script": "ab8b5ccb726b4dd9",
+   "status": 5,
+   "stderr": {
+    "text": "jq: error (at <unknown>): number (1) and number (0) cannot be divided because the divisor is zero\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "text-tools: jq excessive string repeat refuses instead of aborting": {
+   "script": "71f8c034b4c45b9b",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): Repeat string result too long\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "text-tools: jq indexing an object by a non-string key raises jq's own error": {
+   "script": "82a72da653638e9f",
+   "status": 5,
+   "stderr": {
+    "text": "jq: error (at <unknown>): Cannot index object with number (0)\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "text-tools: jq moderate string repeat still works": {
+   "script": "b6a9c047a7952370",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"ababababab\"\n"
+   }
+  },
+  "text-tools: jq nan and infinite still work as native constants": {
+   "script": "96f8ab7be11d0f79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[null,1.7976931348623157e+308,true,true,true]\n"
+   }
+  },
+  "text-tools: jq remainder by an exact-zero divisor raises jq's own error": {
+   "script": "304a28d11f7172cd",
+   "status": 5,
+   "stderr": {
+    "text": "jq: error (at <unknown>): number (5) and number (0) cannot be divided (remainder) because the divisor is zero\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "text-tools: jq replaces invalid UTF-8 input with U+FFFD on output": {
+   "script": "049bb1660665ca74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a�b\n"
+   }
+  },
+  "text-tools: jq scan ignores caller flags for globalness": {
+   "script": "a57f4ec51c48b74a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"1\",\"2\",\"2\"]\n"
+   }
+  },
+  "text-tools: jq zero-step range yields nothing instead of hanging": {
+   "script": "b4c1cb874d8264c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "text-tools: patch --dry-run omits the saving-rejects suffix": {
+   "script": "bf6ce3130c78f868",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "checking file x.txt\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED\nstatus=1\nnone=2\n"
+   }
+  },
+  "text-tools: patch -R on a not-yet-applied patch says Unreversed": {
+   "script": "1b03463a94d246c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file x.txt\nUnreversed patch detected!  Ignore -R? [n] \nApply anyway? [n] \nSkipping patch.\n1 out of 1 hunk ignored -- saving rejects to file x.txt.rej\nstatus=1\n--- x.txt\n+++ x.txt\n@@ -1,3 +1,3 @@\n one\n-TWO\n+two\n three\n"
+   }
+  },
+  "text-tools: patch -f is refused not misread": {
+   "script": "484fcd585b3ccc92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "text-tools: patch .rej header uses the stripped name": {
+   "script": "e91265f0c38458af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file x.txt\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file x.txt.rej\nstatus=1\n--- x.txt\n+++ x.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"
+   }
+  },
+  "text-tools: patch backs up on offset but not on an exact match": {
+   "script": "ebce68f92ca3c661",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nstatus=0\nnone=2\npatching file g\nHunk #1 succeeded at 6 (offset 5 lines).\nstatus=0\n0\n0\n0\n0\n0\nline1\nline2\nline3\n"
+   }
+  },
+  "text-tools: sed --help respects stdout redirection instead of leaking to real stdio": {
+   "script": "4c18f02fd70ca1fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "text-tools: sed --version reports its own name after another uucore tool has run": {
+   "script": "e3cc3f62ec7cc3a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sed\nstatus=0\n"
+   }
+  },
+  "text-tools: sed -@ respects stderr redirection instead of leaking to real stdio": {
+   "script": "977822c87e88d0f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "text-tools: sed -i continues past an unreadable file": {
+   "script": "03833baf34e35d24",
+   "status": 0,
+   "stderr": {
+    "text": "sed: can't read nope082: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "s=2\nz\n"
+   }
+  },
+  "text-tools: sed -i matches a raw byte from a shell variable too": {
+   "script": "5b2aa6e45e623212",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 0a\n"
+   }
+  },
+  "text-tools: sed \\xff does not match a real multi-byte UTF-8 character": {
+   "script": "9f84e4244d6b8beb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n"
+   }
+  },
+  "text-tools: sed \\xff in a script matches and produces a raw byte": {
+   "script": "8850847daaa6a466",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X\n ff 0a\n"
+   }
+  },
+  "text-tools: sed \\xff matches a raw byte in ERE mode too": {
+   "script": "42501c57cb6f0381",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X\n"
+   }
+  },
+  "text-tools: sed compile error names the -e expression, not a raw location": {
+   "script": "c8ea4a9f943c21fd",
+   "status": 0,
+   "stderr": {
+    "text": "sed: -e expression #2, char 5: unterminated `s' command\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "text-tools: sed e command refuses with the README's exact wording": {
+   "script": "d9c26463e0141c46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Fri Sep 25 20:06:16 UTC 2026\na\nsed=0\n"
+   }
+  },
+  "text-tools: sed matches a raw byte from a shell variable, not just \\xff syntax": {
+   "script": "e31e8fdea0c61768",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X\n"
+   }
+  },
+  "text-tools: sed y/// with a \\xff byte escape matches a raw byte": {
+   "script": "e504afcb702564e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Z\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

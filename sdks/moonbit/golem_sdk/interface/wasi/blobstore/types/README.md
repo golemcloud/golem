@@ -1,1 +1,0 @@
-Types used by blobstore

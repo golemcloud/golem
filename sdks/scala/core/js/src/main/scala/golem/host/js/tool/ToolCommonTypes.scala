@@ -30,14 +30,14 @@ import scala.scalajs.js.annotation.JSName
 // `undefined` (`js.UndefOr`) for absent options, camelCase record fields, and
 // the trailing-underscore `default_` field names emitted by wasm-rquickjs for
 // the reserved word `default`. Schema positions reuse the
-// `golem:core/types@2.0.0` facades from [[golem.host.js.schema]]; the
-// Preview 3 `stream<u8>` values use the JavaScript async-iterable protocol.
+// `golem:core/types@2.0.0` facades from [[golem.host.js.schema]]. The middleware
+// ABI still carries Preview 3 `stream<u8>` values as JavaScript async iterables.
 // ---------------------------------------------------------------------------
 
 @js.native
 sealed trait JsByteStreamIteratorResult extends js.Object {
   def done: Boolean = js.native
-  def value: Int    = js.native
+  def value: js.Any = js.native
 }
 
 @js.native
@@ -45,19 +45,12 @@ sealed trait JsByteStreamIterator extends js.Object {
   def next(): js.Promise[JsByteStreamIteratorResult] = js.native
 }
 
-/**
- * JavaScript representation of a Preview 3 `stream<u8>` supplied as tool stdin.
- */
 @js.native
 sealed trait JsWasiInputStream extends js.Object {
   @JSName(js.Symbol.asyncIterator)
   def asyncIterator(): JsByteStreamIterator = js.native
 }
 
-/**
- * JavaScript representation of a Preview 3 `stream<u8>` returned as tool
- * stdout.
- */
 @js.native
 sealed trait JsWasiOutputStream extends js.Object {
   @JSName(js.Symbol.asyncIterator)
@@ -498,6 +491,7 @@ sealed trait JsCommandBody extends js.Object {
   def constraints: js.Array[JsConstraint]           = js.native
   def stdin: js.UndefOr[JsStreamSpec]               = js.native
   def stdout: js.UndefOr[JsStreamSpec]              = js.native
+  def stderr: js.UndefOr[JsStreamSpec]              = js.native
   def result: js.UndefOr[JsResultSpec]              = js.native
   def errors: js.Array[JsErrorCase]                 = js.native
   def annotations: js.UndefOr[JsCommandAnnotations] = js.native
@@ -510,6 +504,7 @@ object JsCommandBody {
     constraints: js.Array[JsConstraint],
     stdin: js.UndefOr[JsStreamSpec],
     stdout: js.UndefOr[JsStreamSpec],
+    stderr: js.UndefOr[JsStreamSpec],
     result: js.UndefOr[JsResultSpec],
     errors: js.Array[JsErrorCase],
     annotations: js.UndefOr[JsCommandAnnotations]
@@ -523,6 +518,7 @@ object JsCommandBody {
     )
     stdin.foreach(v => o.updateDynamic("stdin")(v))
     stdout.foreach(v => o.updateDynamic("stdout")(v))
+    stderr.foreach(v => o.updateDynamic("stderr")(v))
     result.foreach(v => o.updateDynamic("result")(v))
     annotations.foreach(v => o.updateDynamic("annotations")(v))
     o.asInstanceOf[JsCommandBody]
@@ -572,13 +568,21 @@ object JsCommandTree {
 
 @js.native
 sealed trait JsTool extends js.Object {
-  def version: String         = js.native
-  def commands: JsCommandTree = js.native
-  def schema: JsSchemaGraph   = js.native
+  def version: String             = js.native
+  def requiresFilesystem: Boolean = js.native
+  def commands: JsCommandTree     = js.native
+  def schema: JsSchemaGraph       = js.native
 }
 object JsTool {
-  def apply(version: String, commands: JsCommandTree, schema: JsSchemaGraph): JsTool =
-    js.Dynamic.literal("version" -> version, "commands" -> commands, "schema" -> schema).asInstanceOf[JsTool]
+  def apply(version: String, requiresFilesystem: Boolean, commands: JsCommandTree, schema: JsSchemaGraph): JsTool =
+    js.Dynamic
+      .literal(
+        "version"            -> version,
+        "requiresFilesystem" -> requiresFilesystem,
+        "commands"           -> commands,
+        "schema"             -> schema
+      )
+      .asInstanceOf[JsTool]
 }
 
 // === Invocation contract ===
@@ -598,23 +602,26 @@ object JsToolError {
     JsShape.tagged[JsToolError]("constraint-violation", message)
   def invalidResult(message: String): JsToolError =
     JsShape.tagged[JsToolError]("invalid-result", message)
-  def customError(payload: JsTypedSchemaValue): JsToolError =
-    JsShape.tagged[JsToolError]("custom-error", payload)
+  def customError(name: String, payload: JsTypedSchemaValue): JsToolError =
+    JsShape.tagged[JsToolError]("custom-error", js.Dynamic.literal("name" -> name, "payload" -> payload))
 }
 
 @js.native
 sealed trait JsInvocationResult extends js.Object {
   def result: js.UndefOr[JsTypedSchemaValue] = js.native
   def stdout: js.UndefOr[JsWasiOutputStream] = js.native
+  def stderr: js.UndefOr[JsWasiOutputStream] = js.native
 }
 object JsInvocationResult {
   def apply(
     result: js.UndefOr[JsTypedSchemaValue],
-    stdout: js.UndefOr[JsWasiOutputStream]
+    stdout: js.UndefOr[JsWasiOutputStream] = js.undefined,
+    stderr: js.UndefOr[JsWasiOutputStream] = js.undefined
   ): JsInvocationResult = {
     val o = js.Dynamic.literal()
     result.foreach(v => o.updateDynamic("result")(v))
     stdout.foreach(v => o.updateDynamic("stdout")(v))
+    stderr.foreach(v => o.updateDynamic("stderr")(v))
     o.asInstanceOf[JsInvocationResult]
   }
 }
@@ -646,20 +653,31 @@ object JsToolMiddlewareScope {
 
 @js.native
 sealed trait JsToolMiddleware extends js.Object {
-  def name: String                 = js.native
-  def aliases: js.Array[String]    = js.native
-  def doc: JsDoc                   = js.native
-  def scope: JsToolMiddlewareScope = js.native
+  def name: String                                        = js.native
+  def version: String                                     = js.native
+  def aliases: js.Array[String]                           = js.native
+  def doc: JsDoc                                          = js.native
+  def scope: JsToolMiddlewareScope                        = js.native
+  def parameterSchema: golem.host.js.schema.JsSchemaGraph = js.native
 }
 object JsToolMiddleware {
   def apply(
     name: String,
+    version: String,
     aliases: js.Array[String],
     doc: JsDoc,
-    scope: JsToolMiddlewareScope
+    scope: JsToolMiddlewareScope,
+    parameterSchema: golem.host.js.schema.JsSchemaGraph
   ): JsToolMiddleware =
     js.Dynamic
-      .literal("name" -> name, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
+      .literal(
+        "name"            -> name,
+        "version"         -> version,
+        "aliases"         -> aliases,
+        "doc"             -> doc,
+        "scope"           -> scope,
+        "parameterSchema" -> parameterSchema
+      )
       .asInstanceOf[JsToolMiddleware]
 }
 
@@ -669,5 +687,13 @@ trait JsUnderlyingTool extends js.Object {
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream]
-  ): js.Promise[JsInvocationResult] = js.native
+  ): js.Promise[
+    js.Tuple3[JsUnderlyingInvokeResult, js.UndefOr[JsWasiOutputStream], js.UndefOr[JsWasiOutputStream]]
+  ] = js.native
+}
+
+@js.native
+trait JsUnderlyingInvokeResult extends js.Object {
+  def get(): js.Promise[js.UndefOr[JsTypedSchemaValue]] = js.native
+  def cancel(): Unit                                    = js.native
 }

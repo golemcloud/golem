@@ -11,7 +11,17 @@ use golem_rust::bindings::golem::rdbms::postgres::{
 use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct Statement {
     pub statement: String,
     pub params: Vec<String>,
@@ -19,14 +29,34 @@ pub struct Statement {
     pub sleep: Option<u64>,
 }
 
-#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub enum StatementAction {
     Execute,
     Query,
     QueryStream,
 }
 
-#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub enum TransactionEnd {
     Commit,
     Rollback,
@@ -338,6 +368,7 @@ impl RelationalDatabases for RelationalDatabasesImpl {
                         .map_err(|e| e.to_string())?;
                     let columns: Vec<_> = result_set
                         .get_columns()
+                        .map_err(|e| e.to_string())?
                         .into_iter()
                         .map(|c| {
                             let db_type = get_postgres_db_column_type(c.db_type);
@@ -345,7 +376,7 @@ impl RelationalDatabases for RelationalDatabasesImpl {
                         })
                         .collect();
                     let mut rows: Vec<String> = vec![];
-                    while let Some(vs) = result_set.get_next() {
+                    while let Some(vs) = result_set.get_next().map_err(|e| e.to_string())? {
                         for r in vs {
                             let row = get_postgres_db_row(r);
                             rows.push(format!("{:?}", row.values));
@@ -429,6 +460,7 @@ impl RelationalDatabases for RelationalDatabasesImpl {
                         .map_err(|e| e.to_string())?;
                     let columns: Vec<_> = result_set
                         .get_columns()
+                        .map_err(|e| e.to_string())?
                         .into_iter()
                         .map(|c| {
                             let db_type = get_postgres_db_column_type(c.db_type);
@@ -436,7 +468,7 @@ impl RelationalDatabases for RelationalDatabasesImpl {
                         })
                         .collect();
                     let mut rows: Vec<String> = vec![];
-                    while let Some(vs) = result_set.get_next() {
+                    while let Some(vs) = result_set.get_next().map_err(|e| e.to_string())? {
                         for r in vs {
                             let row = get_postgres_db_row(r);
                             rows.push(format!("{:?}", row.values));
@@ -503,9 +535,9 @@ impl RelationalDatabases for RelationalDatabasesImpl {
                     let result_set = connection
                         .query_stream(&statement.statement, &params)
                         .map_err(|e| e.to_string())?;
-                    let columns = result_set.get_columns();
+                    let columns = result_set.get_columns().map_err(|e| e.to_string())?;
                     let mut row_count = 0;
-                    while let Some(rs) = result_set.get_next() {
+                    while let Some(rs) = result_set.get_next().map_err(|e| e.to_string())? {
                         row_count += rs.len();
                     }
                     results.push(format!(
@@ -569,9 +601,9 @@ impl RelationalDatabases for RelationalDatabasesImpl {
                     let result_set = transaction
                         .query_stream(&statement.statement, &params)
                         .map_err(|e| e.to_string())?;
-                    let columns = result_set.get_columns();
+                    let columns = result_set.get_columns().map_err(|e| e.to_string())?;
                     let mut row_count = 0;
-                    while let Some(rs) = result_set.get_next() {
+                    while let Some(rs) = result_set.get_next().map_err(|e| e.to_string())? {
                         row_count += rs.len();
                     }
                     results.push(format!(

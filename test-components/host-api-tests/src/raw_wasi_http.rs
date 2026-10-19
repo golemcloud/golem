@@ -10,8 +10,8 @@ pub trait RawWasiHttp {
     async fn run_with_interrupt(&self) -> String;
     async fn send_request(&mut self);
     fn process_response(&mut self) -> String;
-    fn probe_p2(&self, operation: String, authority: String) -> Result<(), String>;
     async fn dispatch_result(&self, authority: String) -> Result<u16, String>;
+    async fn drop_unread_response_then_wait(&self) -> u16;
 }
 
 pub struct RawWasiHttpImpl {
@@ -58,31 +58,6 @@ impl RawWasiHttp for RawWasiHttpImpl {
         format!("{} {}", status, String::from_utf8(body).unwrap())
     }
 
-    fn probe_p2(&self, operation: String, authority: String) -> Result<(), String> {
-        use wasi::http::{outgoing_handler, types as p2_types};
-
-        if operation != "outgoing-handler-handle" {
-            return Err(format!("unknown P2 HTTP operation: {operation}"));
-        }
-        let headers = p2_types::Fields::new();
-        let request = p2_types::OutgoingRequest::new(headers);
-        request
-            .set_method(&p2_types::Method::Get)
-            .map_err(|_| "failed to set method".to_string())?;
-        request
-            .set_path_with_query(Some("/"))
-            .map_err(|_| "failed to set path".to_string())?;
-        request
-            .set_scheme(Some(&p2_types::Scheme::Http))
-            .map_err(|_| "failed to set scheme".to_string())?;
-        request
-            .set_authority(Some(&authority))
-            .map_err(|_| "failed to set authority".to_string())?;
-        outgoing_handler::handle(request, None)
-            .map(|_| ())
-            .map_err(|error| format!("{error:?}"))
-    }
-
     async fn dispatch_result(&self, authority: String) -> Result<u16, String> {
         let headers = types::Fields::from_list(&[]).map_err(|error| format!("{error:?}"))?;
         let (trailers_writer, trailers_reader) =
@@ -109,6 +84,14 @@ impl RawWasiHttp for RawWasiHttpImpl {
         let response = response.map_err(|error| format!("{error:?}"))?;
         transmitted.map_err(|error| format!("{error:?}"))?;
         Ok(response.get_status_code())
+    }
+
+    async fn drop_unread_response_then_wait(&self) -> u16 {
+        let response = send_http_request("/drop-unread").await;
+        let status = response.get_status_code();
+        drop(response);
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(1_000_000).await;
+        status
     }
 }
 

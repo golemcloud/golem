@@ -7,6 +7,7 @@ use golem_cli::fs;
 use golem_cli::model::agent::AgentTypeListView;
 use golem_cli::model::app::BridgeSdkTargetKind;
 use golem_cli::model::language::GuestLanguage;
+use std::collections::BTreeSet;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
@@ -15,6 +16,16 @@ inherit_test_dep!(Tracing);
 #[test]
 async fn build_and_deploy_all_templates_for_ts() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::TypeScript).await;
+}
+
+#[test]
+async fn build_and_deploy_all_templates_for_effect() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Effect).await;
+}
+
+#[test]
+async fn build_and_deploy_all_templates_for_scala() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Scala).await;
 }
 
 #[test]
@@ -27,11 +38,61 @@ async fn build_and_deploy_all_templates_for_moonbit() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::MoonBit).await;
 }
 
+#[test]
+async fn build_and_deploy_all_templates_for_go() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Go).await;
+}
+
+#[test]
+async fn go_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Go).await;
+}
+
+#[test]
+async fn rust_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Rust).await;
+}
+
+#[test]
+async fn typescript_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::TypeScript).await;
+}
+
+#[test]
+async fn effect_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Effect).await;
+}
+
+#[test]
+async fn scala_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Scala).await;
+}
+
+#[test]
+async fn moonbit_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::MoonBit).await;
+}
+
+async fn streaming_template_builds_for_lang(language: GuestLanguage) {
+    let mut ctx = TestContext::new();
+    let app_name = format!("{}-streaming-template", language.id());
+    let template = format!("{}/streaming", language.id());
+
+    fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, &template])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+}
+
 async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
-
-    let app_name = format!("all-templates-app-{}", language.id());
-
+    ctx.add_env_var("DURABLE_STREAM_TOKEN", "integration-test-capability");
     let outputs = ctx.cli([cmd::TEMPLATES, flag::FORMAT, "json"]).await;
     assert!(outputs.success_or_dump());
 
@@ -43,30 +104,26 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         .map(|template| template.name)
         .collect::<Vec<_>>();
 
-    // MoonBit does not yet support single->multi component upgrade via
-    // incremental template application, so we only apply the base template.
-    let templates: Vec<_> = if language == GuestLanguage::MoonBit {
-        vec![language.id().to_string()]
-    } else {
-        templates
-    };
+    ctx.start_server().await;
+    let root = ctx.cwd_path().to_path_buf();
+    for template in templates {
+        ctx.cd(&root);
+        build_and_deploy_template(&mut ctx, &template).await;
+    }
+}
 
-    println!("{templates:#?}");
-
+async fn build_and_deploy_template(ctx: &mut TestContext, template: &str) {
+    let app_name = format!("template-{}", template.replace('/', "-"));
     fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
     ctx.cd(app_name);
 
-    for template in &templates {
-        let outputs = ctx
-            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
-            .await;
-        assert!(outputs.success_or_dump());
-    }
-
-    let outputs = ctx.cli([cmd::BUILD]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
+        .await;
     assert!(outputs.success_or_dump());
 
-    ctx.start_server().await;
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
@@ -80,6 +137,109 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         .flat_map(|view| view.agent_types)
         .collect::<Vec<_>>();
 
+    let example = template.split_once('/').map_or("default", |(_, name)| name);
+    let expected_names: &[&str] = match example {
+        "default" => &["CounterAgent"],
+        "json" => &["TaskAgent"],
+        "snapshotting" => &["CounterWithSnapshotAgent"],
+        "human-in-the-loop" => &["HumanAgent", "WorkflowAgent"],
+        "streaming" => &["StreamingAgent"],
+        "counter-arktype" => &["CounterArktype"],
+        "counter-valibot" => &["CounterValibot"],
+        _ => panic!("unexpected public template: {template}"),
+    };
+    assert_eq!(
+        deployed_agent_types
+            .iter()
+            .map(|agent| agent.agent_type.type_name.as_str())
+            .collect::<BTreeSet<_>>(),
+        expected_names.iter().copied().collect::<BTreeSet<_>>(),
+        "agent names for {template}"
+    );
+
+    if example == "default" {
+        let counter = "CounterAgent(\"template-test\")";
+        for (method, args, expected) in [
+            ("increment", vec![], Some("1")),
+            ("add", vec!["7"], Some("8")),
+            ("value", vec![], Some("8")),
+            ("reset", vec![], None),
+            ("value", vec![], Some("0")),
+        ] {
+            let outputs = ctx
+                .cli([vec![cmd::AGENT, cmd::INVOKE, counter, method], args].concat())
+                .await;
+            assert!(outputs.success_or_dump());
+            if let Some(expected) = expected {
+                assert!(outputs.stdout_contains_ordered(["Invocation result", expected]));
+            }
+        }
+    }
+
+    if example == "human-in-the-loop" {
+        let workflow = "WorkflowAgent(\"report-q3\")";
+        let human = "HumanAgent(\"alice\")";
+        let snake_case = template.starts_with("rust/") || template.starts_with("moonbit/");
+        let (list, decide) = if snake_case {
+            ("list_pending_approvals", "decide_approval")
+        } else {
+            ("listPendingApprovals", "decideApproval")
+        };
+        let outputs = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                "--trigger",
+                "--idempotency-key",
+                "approval",
+                workflow,
+                "start",
+                "\"alice\"",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, human, list]).await;
+                assert!(outputs.success_or_dump());
+                if outputs.stdout_contains("report-q3") {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("the workflow did not register its constructor ID for approval");
+
+        let outputs = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                human,
+                decide,
+                "\"report-q3\"",
+                "\"approved\"",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains("Workflow report-q3 was approved"));
+
+        let outputs = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                "--idempotency-key",
+                "approval",
+                workflow,
+                "start",
+                "\"alice\"",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains("Workflow report-q3 was approved"));
+    }
+
     // Checking bridge SDK generation for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
     for language in GuestLanguage::iter()
@@ -88,6 +248,7 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         for deployed_agent_type in &deployed_agent_types {
             let output = ctx
                 .cli([
+                    flag::YES,
                     cmd::GENERATE_BRIDGE,
                     flag::LANGUAGE,
                     language.id(),
@@ -241,16 +402,33 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
                 "expected multi-component MoonBit layout: moon.mod.json should remain at the app root"
             );
         }
+        GuestLanguage::Go => {
+            // Unlike Scala/MoonBit, NOTHING stays behind: each Go component is
+            // its own module, and componentize-go only resolves the SDK's WIT
+            // when it runs from a module root.
+            assert!(
+                !app_root.join("go.mod").exists(),
+                "expected multi-component Go layout: go.mod should no longer be at the app root"
+            );
+            let has_go_at_root = std::fs::read_dir(app_root)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("go"));
+            assert!(
+                !has_go_at_root,
+                "expected multi-component Go layout: no *.go files should remain at the app root"
+            );
+        }
         _ => {}
     }
 }
 
-// We only select a few non-conflicting templates from all apps.
-// Scala and MoonBit defaults both define CounterAgent, so we give the
-// MoonBit component an explicit name to avoid agent-type collisions.
+// Agent type names are unique across an environment, not just within a component.
+// Keep the public templates consistent and rename colliding generated fixtures here.
 #[test]
 async fn build_mixed_language_app() {
     let mut ctx = TestContext::new();
+    ctx.add_env_var("DURABLE_STREAM_TOKEN", "integration-test-capability");
 
     let app_name = "mixed-lang-templates-app";
 
@@ -262,6 +440,7 @@ async fn build_mixed_language_app() {
         "rust/json",
         "rust/snapshotting",
         "scala",
+        "effect/streaming",
     ] {
         let outputs = ctx
             .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
@@ -290,11 +469,124 @@ async fn build_mixed_language_app() {
         fs::write(&path, content.replace("CounterAgent", "MoonbitCounter")).unwrap();
     }
 
-    let outputs = ctx.cli([cmd::BUILD]).await;
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "go",
+            flag::COMPONENT_NAME,
+            "mixed-lang-templates-app:go",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    for file in &["go/agents/counter/counter.go", "golem.yaml"] {
+        let path = ctx.cwd_path_join(file);
+        let content = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            content
+                .replace("CounterAgent", "GoCounter")
+                .replace("/counters/{name}", "/go-counters/{name}"),
+        )
+        .unwrap();
+    }
+
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
 
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([cmd::AGENT_TYPE, cmd::LIST, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let views = outputs.stdout_json::<AgentTypeListView>();
+    assert_eq!(
+        views
+            .iter()
+            .flat_map(|view| &view.agent_types)
+            .map(|agent| agent.agent_type.type_name.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "CounterAgent",
+            "CounterWithSnapshotAgent",
+            "GoCounter",
+            "HumanAgent",
+            "MoonbitCounter",
+            "StreamingAgent",
+            "TaskAgent",
+            "WorkflowAgent",
+        ])
+    );
+
+    for agent_type in [
+        "CounterAgent",
+        "CounterWithSnapshotAgent",
+        "GoCounter",
+        "MoonbitCounter",
+    ] {
+        let counter = format!("{agent_type}(\"mixed-language-test\")");
+        for (method, expected) in [("increment", "1"), ("increment", "2"), ("value", "2")] {
+            let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, &counter, method]).await;
+            assert!(outputs.success_or_dump());
+            assert!(outputs.stdout_contains_ordered(["Invocation result", expected]));
+        }
+    }
+}
+
+// Verifies that Go templates can be added after the first build, whose
+// `go mod tidy` has rewritten go.mod and go.sum: an agent template to the
+// existing component, then a second component, which also moves the first into
+// its own directory. The application builds after each step, and a rebuild with
+// no change does not run tidy.
+#[test]
+async fn go_templates_added_after_a_build_build() {
+    let mut ctx = TestContext::new();
+    let app_name = "go-templates-after-build";
+    let second_component = format!("{app_name}:go-second");
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go/json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "go",
+            flag::COMPONENT_NAME,
+            &second_component,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert_multi_component_layout(ctx.cwd_path(), GuestLanguage::Go);
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    // Nothing changed since: the build does not run go mod tidy again, so
+    // nothing a build writes counts as a change to the module's sources.
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stdout_contains("go mod tidy"));
 }

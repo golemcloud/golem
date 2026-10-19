@@ -1,0 +1,78 @@
+{
+ "cases": {
+  "redirections: command-level redirect still overrides exec": {
+   "script": "7d3e8558dc601fff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "redirections: exec 1>&2 moves stdout to stderr": {
+   "script": "01be42f0b9294ee2",
+   "status": 0,
+   "stderr": {
+    "text": "moved\n/\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "redirections: exec 2>&1 merges stderr into stdout": {
+   "script": "3b6993aa28ed20c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "builtin\nls: cannot access '/nope': No such file or directory\ncat: /nope: No such file or directory\nafter\n"
+   }
+  },
+  "redirections: exec 2>&1 reaches functions and subshells": {
+   "script": "ae4c4af8d22ee8b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: cannot access '/nope': No such file or directory\ncat: /nope: No such file or directory\ndone\n"
+   }
+  },
+  "redirections: exec 2>&1 reaches pipeline stages": {
+   "script": "912ab431feda48c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: cannot access '/nope': No such file or directory\nstatus=2 0\n"
+   }
+  },
+  "redirections: exec 2>file captures later diagnostics": {
+   "script": "d1c7b0197e0b85fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: cannot access '/nope': No such file or directory\ncat: /nope: No such file or directory\n"
+   }
+  },
+  "redirections: exec saves and restores stdout through fd 3": {
+   "script": "58c4ecba92c5751d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "back\nto-file\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

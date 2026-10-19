@@ -59,6 +59,7 @@ sdks/moonbit/
 │   │       ├── api/                   # host, context, oplog, retry bindings
 │   │       ├── durability/durability/ # Durability host imports
 │   │       ├── quota/                 # Quota-token host bindings
+│   │       ├── permissions/           # golem:permissions host bindings (raw; use @permissions)
 │   │       ├── rdbms/                 # RDBMS (Postgres, MySQL, …) bindings
 │   │       └── websocket/             # WebSocket client bindings
 │   │   └── wasi/                      # WASI bindings (blobstore, clocks, io, keyvalue, …)
@@ -83,6 +84,8 @@ sdks/moonbit/
 │   │   ├── compounds.mbt             # Impls for Option[T], Array[T], Result[T,E], Map[K,V], Bytes
 │   │   ├── tuples.mbt                # Impls for tuples (arity 2–8)
 │   │   ├── records.mbt              # record/enum/variant helpers used by generated code
+│   │   ├── rich_types.mbt           # Path, Url, Text[S], Duration, Quantity[U], Uuid, Datetime
+│   │   ├── unstructured.mbt         # UnstructuredText[L] / UnstructuredBinary[M] (role-marked inline/url variants)
 │   │   ├── schema_test.mbt
 │   │   └── records_test.mbt
 │   ├── multimodal/                    # Schema-native multimodal support
@@ -102,6 +105,10 @@ sdks/moonbit/
 │   ├── webhook/                       # Webhook helper (create/await incoming POST via promise)
 │   ├── api/                           # Golem host API re-exports (agents, idempotency, …)
 │   ├── quota/                         # Quota-token helpers
+│   ├── permissions/                   # Typed permission-card API (@permissions)
+│   ├── internal/                      # SDK-internal packages (not importable outside golem_sdk)
+│   │   ├── permission_card/           # Take-once card holders and the held-handle registry
+│   │   └── scope_card/                # Raw scope-card borrowing for the RPC clients
 │   ├── filesystem/                    # Filesystem helpers
 │   └── ffi/                           # Shared FFI helpers
 ├── golem_sdk_tools/                   # Code generation tools (native CLI, not WASM)
@@ -148,19 +155,21 @@ sdks/moonbit/
 ### WIT Bindgen
 
 All code under `async-core/`, `interface/`, `world/`, and `gen/` (except the
-`gen/interface/*/stub.mbt` files) is **auto-generated** by `wit-bindgen moonbit`. Do NOT edit these
-files. Regenerate with the script, which requires this exact revision of the
-[Golem wit-bindgen fork](https://github.com/golemcloud/wit-bindgen):
+hand-maintained `moon.pkg`, `stub.mbt`, test, and `stream_transfer.mbt` files) is generated on demand
+by `wit-bindgen moonbit` and is not tracked by Git. Do NOT edit generated files. Install the
+generator from the Golem fork's `wit-bindgen-golem-1.6` branch:
 
 ```sh
-cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb wit-bindgen-cli
+cd golem_sdk
+./scripts/install-wit-bindgen.sh
 ```
 
-The pin incorporates Bytecode Alliance's draft
+The branch incorporates Bytecode Alliance's draft
 [MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
 and Golem's additional outline-lift, named-memory-lowering, export-disambiguation, and deterministic
-emission changes. Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
+emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
+for types used across exported interfaces.
+Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
 exports required by this SDK.
 
 ```sh
@@ -169,7 +178,8 @@ cd golem_sdk
 ```
 
 The script (`scripts/regen-bindings.sh`):
-1. Refuses to run unless `wit-bindgen --version` identifies the pinned fork revision.
+1. Refuses to run unless the generator version matches the Golem fork build recorded by
+   `scripts/install-wit-bindgen.sh` from the `wit-bindgen-golem-1.6` branch.
 2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
 3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
@@ -177,10 +187,17 @@ The script (`scripts/regen-bindings.sh`):
    package metadata.
 5. Asserts the s8/s16 fix took effect.
 
-`--ignore-stub` means wit-bindgen will NOT (re)generate the stub files. The `stub.mbt` files under
-`gen/interface/` are the **SDK's implementation** of the WIT export interfaces — the dispatch logic
-the SDK actually runs. They are maintained by hand and operate purely on the new schema carrier
-(`@types.SchemaValueTree`); they contain no legacy value/type types.
+CI and release workflows run `scripts/check-generated-bindings.sh`, which regenerates twice and
+requires byte-identical output before compiling, testing, or publishing. Published mooncakes include
+the generated source even though it is ignored by Git: `golem_sdk/.moonignore` deliberately replaces
+`.gitignore` for `moon package` and `moon publish`.
+
+The regeneration script preserves hand-maintained `stub.mbt` files under `gen/interface/`.
+These implement the full world's exports with empty/error defaults. Generated `golem_exports.mbt`
+installs handlers only for categories found in source: `agent-exports` (including snapshots),
+`tool-exports`, and `tool-middleware-exports`. Keep full runtime imports out of the stubs so
+whole-program DCE can remove absent categories. Empty/error handlers must still release incoming
+capabilities, stdin, stdout, and underlying-tool resources.
 
 ### The Agent Registry Pattern
 
@@ -260,7 +277,9 @@ pub(open) trait FromSchema {
   *not* required.
 - Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64), `UInt64`
   (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`, `Option[T]`, `Array[T]`,
-  `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8.
+  `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
+  `Duration`, `Quantity[U]`, `@types.Uuid`, and `@types.Datetime`; and `UnstructuredText[L]` /
+  `UnstructuredBinary[M]` (see below).
 
 **Helpers** (in `schema.mbt`):
 - `type_tag[T]() -> TypeTag[T]` — a zero-sized handle to ask for a type's schema without a value
@@ -293,6 +312,48 @@ list of `Variant(case_idx, Some(payload))`. Nesting a multimodal type inside
 `Option`/`Array`/`Result`/`Tuple`/derived fields is rejected by the code generator
 (`value_types.mbt` / `http_validation.mbt`).
 
+### Unstructured text and binary (`schema/unstructured.mbt`)
+
+```moonbit
+pub(all) enum UnstructuredText[L] {
+  Inline(text~ : String, language~ : String?)
+  Url(String)
+}
+
+pub(all) enum UnstructuredBinary[M] {
+  Inline(bytes~ : Bytes, mime_type~ : String?)
+  Url(String)
+}
+
+pub(open) trait AllowedLanguages { languages() -> Array[String] }
+pub(open) trait AllowedMimeTypes { mime_types() -> Array[String] }
+```
+
+These are the MoonBit equivalents of Rust's `UnstructuredText<LC>` / `UnstructuredBinary<MT>` and
+TS's `s.unstructuredText(...)` / `s.unstructuredBinary(...)`. The wire contract is shared with the
+other SDKs and the host (`golem-schema/src/schema/unstructured.rs`):
+
+- Schema: `variant { inline: text, url: url }` with `metadata.role = unstructured-text`, and
+  `variant { inline: binary, url: url }` with `metadata.role = unstructured-binary`. The `inline`
+  case has index 0 and the `url` case has index 1. The wrapper is always emitted inline (never as a
+  named `Ref` definition), because the host detects it from the node's own role.
+- Restrictions are type-level, following the `Text[S]` / `Quantity[U]` pattern: the phantom type
+  argument implements `AllowedLanguages` / `AllowedMimeTypes`, and a non-empty list becomes the
+  `languages` / `mime-types` restriction of the inline case. `AnyLanguage` / `AnyMimeType` produce
+  no restriction. There are no `#derive.text_languages` / `#derive.mime_types` annotations.
+- Decoding (`FromWire` and `FromSchema`) accepts the wrapper variant or a bare text/binary value,
+  and rejects an inline language or MIME type outside a non-empty restriction list. The
+  constructors (`::inline`, `::url`, and the enum cases) do not validate.
+- `Eq` and `Debug` are implemented without constraints on the phantom argument.
+
+They are ordinary `IntoSchema` / `FromSchema` / `WireSchema` / `IntoWire` / `FromWire` types, so the
+code generator needs no special case: they parse as `Parameterized("@schema.UnstructuredText", …)`
+and work as parameters and return types, including nested in `T?` and `Result[T, E]` (for example
+`Result[@schema.UnstructuredBinary[M]?, E]`), in agent dispatch and generated RPC clients. Unlike
+`Multimodal`, nesting is allowed. The host renders such a return value of an HTTP endpoint as a raw
+response body (`None` → 404, `Err` → 500 JSON). `WeatherAgent::get_report` in the example uses this
+shape.
+
 ### Code Generation (`golem_sdk_tools`)
 
 The `golem_sdk_tools` CLI automates the boilerplate that connects user agent definitions to the
@@ -303,8 +364,8 @@ source via `moonbitlang/parser/fmt`. Two subcommands:
 
 ```sh
 cd golem_sdk_tools
-moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
-# e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/golem_moonbit_examples --role ordinary
+moon run cmd -- reexports <sdk-path> <target-dir>
+# e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/golem_moonbit_examples
 ```
 
 Generates `golem_reexports.mbt` (re-exports the WASM entry points — `cabi_realloc`, `wasmExport*` —
@@ -316,8 +377,8 @@ from the SDK's `gen` package) and updates the target `moon.pkg`: it ensures the
 
 ```sh
 cd golem_sdk_tools
-moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
-# e.g.: moon run cmd -- agents ../golem_sdk_example1 --component-dir golem_moonbit_examples --role ordinary
+moon run cmd -- agents <project-root> --component-dir <component-dir>
+# e.g.: moon run cmd -- agents ../golem_sdk_example1 --component-dir golem_moonbit_examples
 ```
 
 Generates, from source annotations:
@@ -329,6 +390,9 @@ Generates, from source annotations:
 2. **`golem_derive.mbt`** — `IntoSchema` / `FromSchema` impls for `#derive.golem_schema` types, and
    `MultimodalModality` impls for `#derive.multimodal` enums.
 3. **`golem_clients.mbt`** — RPC client stubs for agent-to-agent calls.
+4. **`golem_exports.mbt`** — source-derived runtime hooks for the full agent/tool/middleware world.
+   Both subcommands are required, including for empty and tool-only components. There is no role
+   argument or role-specific world. Generated imports are removed when a category disappears.
 
 Awaited RPC methods and scoped client helpers are generated as `async`; trigger and scheduling
 methods remain synchronous because they only enqueue work.
@@ -343,8 +407,8 @@ methods remain synchronous because they only enqueue work.
 - HTTP mount/endpoint annotations — drive the agent's HTTP mount + endpoint schema.
 - Doc comments (`///`) on structs, constructors, and methods become descriptions.
 
-There are **no** `#derive.text_languages` / `#derive.mime_types` annotations — the old unstructured
-text/binary annotation machinery was removed (see "Parity gap" below).
+There are **no** `#derive.text_languages` / `#derive.mime_types` annotations — unstructured
+text/binary restrictions are type-level (see "Unstructured text and binary" above).
 
 **Type parsing** (`agents.mbt`) recognizes `Simple(name)`, `Optional(T)`, `List(T)`,
 `ResultType(T, E)`, `Tuple(elems)`, `@multimodal.Multimodal[T]`, and `Parameterized(name, params)`.
@@ -400,6 +464,70 @@ pub(all) struct TaskInfo {
 An empty `fn main {}` must exist in the main package. Multiple agents can coexist in one package —
 each is registered in the single generated `fn init {}`.
 
+### Permission cards (`permissions`)
+
+The `permissions` package is the typed API over `golem:permissions@0.1.0`. `PermissionCard`
+(concrete) and `PolymorphicPermissionCard` (template) wrap an owned persistent card in
+`@card.GuestPermissionCardHandle`, and `ScopeCard` wraps the handle of an invocation-local scope
+card in `@card.ScopeCardHandle`. Both holders live in the internal package
+`internal/permission_card`. MoonBit lets only packages of the `golemcloud/golem_sdk` module import
+it, and calling a method of a type needs an import of the type's package. So code outside the SDK
+can keep a holder that it receives (`SchemaValue::PermissionCard`, `ScopeCard::handle`), but cannot
+create one, take or borrow its raw handle, or call any other operation on it.
+
+- `wallet()` returns the closed enum `WalletCard` (`Concrete`, `Template`, `Scope`) from the WIT
+  `wallet-card` variant. The enum is `pub`, so user code can match it but cannot build one. A
+  `GuestPermissionCardHandle` records the kind of the typed card that shares it (`claim_kind`):
+  host results and `FromWire` claim it at once, a holder lifted by `schema_value_from_wit` is
+  claimed by its first typed decode, and `FromSchema` rejects a holder of the other kind. So a
+  schema value never turns a held card into the other kind. A failed compound decode can leave the
+  claim on the holder. A card encoded into a wire tree leaves its holder, so decoding that tree
+  chooses the kind again, as for a received card. Both card types share the
+  `SchemaValue::PermissionCard` value and wire node; only the schema's `polymorphic` flag differs.
+- `revoke` and `install` take the handle out of the holder before the host call, because the host
+  drops it even on failure. Using a moved card aborts.
+- A failed invocation-input encode rolls back without taking permission cards: the wire path uses
+  `@schema.rollback_wire_fields` (from `into_wire_record(_async)` and generated tool clients) and the
+  schema-model path uses `SchemaValue::rollback_input_resources` (`@agents.encode_invocation_input`,
+  the reflection transport, `@tool.ToolClient` and the reflected tool clients). Output payloads are
+  not inputs: `into_wire_payload_record_async` (multi-field tool errors) drops the cards of a
+  payload that fails to encode. Every other release, such as `@schema.release_wire` and
+  `SchemaValue::release_resources`, drops cards. The sync `schema_value_to_wit` rejects a native
+  stream before it moves any capability.
+- `ScopeCard` is a separate type. `derive_scope` returns it, and `wallet()` returns the scope card
+  lent to the current invocation as `WalletCard::Scope`. It has `id`, `parents` (root card ids),
+  `expires_at` (the earliest root expiry), `inspect`, `drop` and `is_moved`, can be a
+  `scope_parents` entry of `derive_scope`, and has no
+  revoke, install, persistent derive, schema or wire support. A scope card is valid only during the
+  invocation that derived or received it; after it the host retires the handle, so attaching it is denied and
+  deriving from it is not permitted, while dropping it stays safe.
+- `PermissionError` mirrors the WIT `permission-error`. `permissions/moon.pkg` turns the
+  `partial_match` warning into an error, so a new WIT case breaks the build at the exhaustive
+  conversion.
+- `CardId` has only `Eq` and `Hash`; `Show`, `Debug` and `ToJson` print `CardId(<redacted>)`.
+- Awaited RPC calls (`@rpc.AgentClient::invoke_and_await`, the reflection clients' awaited
+  `invoke*` methods, and the generated typed and bridge clients) take `scope_card? : ScopeCard` and
+  fall back to a client default set with `set_default_scope_card`. Generated clients call
+  `@rpc.AgentClient::check_scope_card` and the reflection transport checks the scope card before
+  they encode the input, so a dropped scope card aborts before any argument card moves. The raw
+  handle is resolved again after the encode, which can suspend.
+  `internal/scope_card` borrows the raw handle for the host call. Trigger and schedule calls never
+  attach a scope card.
+- The registry in `internal/permission_card` records the raw handle of every present holder.
+  Decoding a wire tree (`FromWire`, `schema_value_from_wit`) rejects a permission-card node whose
+  handle a holder already owns, and the drop paths for wire trees skip such handles. Host-call
+  results use `@card.adopt`, which empties a stale holder of the same index.
+- The generated raw `@types.PermissionCard` is a `pub(all)` wrapper around a resource index, so
+  code that imports the raw interface packages can build one from an `Int` and put it in a raw
+  wire tree. Decoding such a tree yields a card only when no held card owns the index; the host
+  traps on an unknown handle, and a known one carries only authority that the agent already has
+  through the raw bindings. Authority is always host-enforced: the worst case is aliasing a raw
+  handle that no SDK card holds, never forged authority.
+- Unit tests run against a fake `golem:permissions` host in `scripts/run-wasm-test.mjs`. Test
+  binaries export no allocator, so a test hands guest-allocated buffers to the fake host with
+  `golem:test#push-permission-host-buffer` before it calls a function that returns strings or
+  lists.
+
 ### Durability
 
 The raw durability system in `interface/golem/durability/durability/` opens a custom durable
@@ -411,6 +539,14 @@ re-executes its whole body.
 SDK and library code should normally use `@api.durable` or `@api.durable_async`. These combinators
 own the live resource, run the body only for a live invocation, finish it after the body completes,
 and decode the recorded response during replay.
+
+**Custom durability is sequential-only.** Both combinators support properly nested calls. An async
+body may await host calls when no unrelated guest work runs during the wait. Do not overlap it with
+other tasks, including ordinary host calls: sibling effects can acquire the wrong scope and cause
+incorrect replay or invocation failure. Misuse is not reliably detected. Await each nested
+operation; do not detach tasks. Stop and join outstanding work before the body exits, including on
+failure or cancellation. Joining at the end does not make concurrent custom scopes supported.
+Ordinary built-in durability is not subject to this restriction when no custom operation is active.
 
 ## Current State & What Works
 
@@ -426,6 +562,8 @@ and decode the recorded response during replay.
   2–8), recursive/self-referential custom types, plus record/enum/variant helpers for generated code.
 - Multimodal is schema-native (`multimodal` package: `Multimodal[T]` + `MultimodalModality`,
   `list<variant>` with `role = multimodal`).
+- Unstructured text/binary is schema-native (`@schema.UnstructuredText[L]` /
+  `@schema.UnstructuredBinary[M]`, role-marked `variant { inline, url }`).
 - Code generation is complete: `reexports` (→ `golem_reexports.mbt` + `moon.pkg`) and `agents`
   (→ `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`).
 - The example package `golem_sdk_example1/golem_moonbit_examples` (8 agents) builds and deploys
@@ -437,17 +575,6 @@ and decode the recorded response during replay.
   `DataSchema`/`ElementValue`/`ElementSchema` and the deleted `builder`/`extractor`/`agents/types`
   packages are gone from the SDK, the tools, the generated stubs, and the example.
 
-### Parity gap (tracked follow-up, not part of the carrier migration)
-
-The new model has first-class `Text`/`Binary`/`Url` type/value nodes (in `schema_model`), but the
-SDK does **not** yet ship a high-level *user-facing* wrapper equivalent to the old
-`UnstructuredText`/`UnstructuredBinary` types (Rust's `unstructured_text.rs`/`unstructured_binary.rs`,
-TS's `textInput.ts`/`binaryInput.ts`). String maps to `SchemaTypeBody::String` (not `Text`) and
-`Bytes` maps to inline `Binary`. Adding ergonomic Text/Binary/Url wrappers (with language/MIME
-restrictions and inline-or-URL semantics) is a deliberate **feature addition** for a later phase —
-it must be designed against the new schema shape, and must NOT reintroduce the deleted annotation
-machinery (`#derive.text_languages` / `#derive.mime_types`) or the old carriers.
-
 ## Build & Test Commands
 
 ```sh
@@ -456,14 +583,15 @@ moon check --target wasm          # Type-check
 moon build --target wasm          # Build
 ./scripts/run-sdk-tests.sh         # Run tests with Golem host-import support
 moon info && moon fmt             # Regenerate .mbti and format
-./scripts/regen-bindings.sh        # Regenerate with the exact pinned Golem wit-bindgen fork
+./scripts/regen-bindings.sh        # Regenerate with the Golem wit-bindgen fork branch
+./scripts/check-generated-bindings.sh # Regenerate twice and verify deterministic output
 
 # In golem_sdk_tools/ (the codegen CLI, native target):
 moon check
 moon test
 moon info && moon fmt
-moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
-moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
+moon run cmd -- reexports <sdk-path> <target-dir>
+moon run cmd -- agents <project-root> --component-dir <component-dir>
 
 # In golem_sdk_example1/ (the example/template):
 moon check --target wasm
@@ -527,12 +655,14 @@ published to mooncakes.io for the release template to work.
 
 ## Dependencies & Tools
 
-- **wit-bindgen** — Golem's fork pinned at
-  `ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb`. It combines draft upstream PR #1659's MoonBit
+- **wit-bindgen** — Golem's fork on the `wit-bindgen-golem-1.6` branch. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
-  disambiguation changes, and emits deterministic bindings. Bindings are regenerated via
-  `scripts/regen-bindings.sh`, which rejects any other generator revision and applies the s8/s16
-  sign-extension fix in post-processing.
+  disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
+  lifting and lowering, and
+  deterministic bindings. Bindings are regenerated via
+  `scripts/regen-bindings.sh`, which checks the expected release line and applies the s8/s16
+  sign-extension fix in post-processing. Use `scripts/install-wit-bindgen.sh` to install it from the
+  branch used by Golem's Cargo dependencies.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.

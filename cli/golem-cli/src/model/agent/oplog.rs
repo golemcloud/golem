@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agent_id_display::SourceLanguage;
 use crate::log::logln;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::*;
@@ -20,19 +19,27 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
-    MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, StringAttributeValue,
+    MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
+    PublicEntityInvocationOperation, PublicExternalToolResult, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
+    PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-use crate::model::agent::{AgentMetadataView, AgentsMetadataResponseView, RawAgentId};
+use crate::agent_id_display::SourceLanguage;
+#[cfg(test)]
+use crate::model::agent::{
+    AgentGetView, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
+};
 #[cfg(test)]
 use golem_common::model::AgentStatus;
 #[cfg(test)]
 use golem_common::model::component::ComponentName;
+#[cfg(test)]
+use golem_common::model::oplog::OplogErrorKind;
 #[cfg(test)]
 use std::collections::HashMap;
 
@@ -40,7 +47,59 @@ use std::collections::HashMap;
 #[serde(rename_all = "camelCase")]
 pub struct AgentOplogEntryView {
     pub index: u64,
-    pub entry: PublicOplogEntry,
+    pub attribution: PublicOplogEntryAttribution,
+    pub entry: AgentOplogEntryContent,
+}
+
+/// The entry of an `agent.oplog` document: the full oplog entry, or the description of an entry
+/// that the oplog page omitted because it is too large, when `--omit-payloads` is set or the
+/// full entry could not be read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
+pub enum AgentOplogEntryContent {
+    Full(PublicOplogEntry),
+    Omitted(OmittedOplogEntryContent),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+pub enum OmittedOplogEntryContent {
+    Omitted {
+        entry_type: String,
+        timestamp: Timestamp,
+        size: u64,
+    },
+}
+
+impl From<PublicOplogEntry> for AgentOplogEntryContent {
+    fn from(entry: PublicOplogEntry) -> Self {
+        Self::Full(entry)
+    }
+}
+
+impl From<OmittedOplogEntry> for AgentOplogEntryView {
+    fn from(omitted: OmittedOplogEntry) -> Self {
+        Self {
+            index: omitted.oplog_index.as_u64(),
+            attribution: omitted.attribution,
+            entry: AgentOplogEntryContent::Omitted(OmittedOplogEntryContent::Omitted {
+                entry_type: omitted.entry_type,
+                timestamp: omitted.timestamp,
+                size: omitted.size,
+            }),
+        }
+    }
+}
+
+impl From<PublicOplogEntryWithIndex> for AgentOplogEntryView {
+    fn from(entry: PublicOplogEntryWithIndex) -> Self {
+        Self {
+            index: entry.oplog_index.as_u64(),
+            attribution: entry.attribution,
+            entry: AgentOplogEntryContent::Full(entry.entry),
+        }
+    }
 }
 
 impl StructuredOutput for AgentOplogEntryView {
@@ -53,8 +112,81 @@ impl TextOutput for AgentOplogEntryView {
             "{}: ",
             format_main_id(&format!("#{:0>5}", self.index))
         ));
-        self.entry.log()
+        for line in render_oplog_attribution_lines(&self.attribution) {
+            logln(line);
+        }
+        match &self.entry {
+            AgentOplogEntryContent::Full(entry) => entry.log(),
+            AgentOplogEntryContent::Omitted(OmittedOplogEntryContent::Omitted {
+                entry_type,
+                timestamp,
+                size,
+            }) => {
+                let pad = "          ";
+                logln(format_message_highlight("OMITTED ENTRY"));
+                logln(format!("{pad}at:                {}", format_id(timestamp)));
+                logln(format!("{pad}entry type:        {}", format_id(entry_type)));
+                logln(format!("{pad}size:              {size} bytes"));
+            }
+        }
     }
+}
+
+fn render_oplog_attribution_lines(attribution: &PublicOplogEntryAttribution) -> Vec<String> {
+    let pad = "          ";
+    match attribution {
+        PublicOplogEntryAttribution::Agent(_) => vec![format!("{pad}owner:             agent")],
+        PublicOplogEntryAttribution::Entity(context) => {
+            let mut lines = vec![
+                format!("{pad}owner:             entity"),
+                format!("{pad}entity chain:"),
+            ];
+            for ancestor in &context.ancestors {
+                lines.push(format_entity_invocation(pad, ancestor, false));
+            }
+            lines.push(format_entity_invocation(pad, &context.invocation, true));
+            if let Some(PublicEntityInvocationOperation::Tool(tool)) = &context.invocation.operation
+            {
+                lines.push(format!(
+                    "{pad}tool command:      {}",
+                    tool.command_path.join(" ")
+                ));
+                lines.push(format!("{pad}stdin requested:   {}", tool.has_stdin));
+                lines.push(format!("{pad}stdout requested:  {}", tool.has_stdout));
+                lines.push(format!("{pad}stdout declared:   {}", tool.declares_stdout));
+                lines.push(format!(
+                    "{pad}stdout recording:  none (live attachment only)"
+                ));
+                lines.push(format!("{pad}stderr requested:  {}", tool.has_stderr));
+                lines.push(format!("{pad}stderr declared:   {}", tool.declares_stderr));
+                lines.push(format!(
+                    "{pad}stderr recording:  none (live attachment only)"
+                ));
+            }
+            lines
+        }
+    }
+}
+
+fn format_entity_invocation(
+    pad: &str,
+    invocation: &PublicEntityInvocation,
+    current: bool,
+) -> String {
+    let kind = match invocation.entity.kind {
+        golem_common::model::oplog::PublicAgentEntityKind::Tool => "tool",
+        golem_common::model::oplog::PublicAgentEntityKind::ToolMiddleware => "tool middleware",
+    };
+    let call_mode = match invocation.call_mode {
+        PublicEntityCallMode::Synchronous => "synchronous",
+        PublicEntityCallMode::Asynchronous => "asynchronous",
+        PublicEntityCallMode::FireAndForget => "fire and forget",
+    };
+    let current = if current { " [current]" } else { "" };
+    format!(
+        "{pad}  - {kind} {} (start #{}, {call_mode}){current}",
+        invocation.entity.name, invocation.start_index
+    )
 }
 
 impl TextOutput for PublicOplogEntry {
@@ -110,6 +242,12 @@ impl TextOutput for PublicOplogEntry {
                         typed_schema_value_to_string(request)
                     ));
                 }
+                if let Some(span) = &params.span_started {
+                    logln(format!("{pad}span started:      {span:?}"));
+                }
+                if let Some(denial) = &params.denial {
+                    logln(format!("{pad}denied:            {denial}"));
+                }
             }
             PublicOplogEntry::End(params) => {
                 logln(format_message_highlight("END"));
@@ -127,6 +265,12 @@ impl TextOutput for PublicOplogEntry {
                 if params.forced_commit {
                     logln(format!("{pad}forced commit:     true"));
                 }
+                if let Some(span) = &params.span_finished {
+                    logln(format!("{pad}span finished:     {span:?}"));
+                }
+                if let Some(attributes) = &params.span_attributes {
+                    logln(format!("{pad}span attributes:   {attributes:?}"));
+                }
             }
             PublicOplogEntry::Cancelled(params) => {
                 logln(format_message_highlight("CANCELLED"));
@@ -140,6 +284,9 @@ impl TextOutput for PublicOplogEntry {
                         "{pad}partial result:    {}",
                         typed_schema_value_to_string(partial)
                     ));
+                }
+                if let Some(span) = &params.span_finished {
+                    logln(format!("{pad}span finished:     {span:?}"));
                 }
             }
             PublicOplogEntry::CompletionDiscarded(params) => {
@@ -165,27 +312,27 @@ impl TextOutput for PublicOplogEntry {
                     &params.timestamp,
                     &params.invocation,
                 );
-                if let Some(wallet_pin) = &params.wallet_pin {
-                    let wallet_id_hash = wallet_pin
-                        .wallet_token
-                        .wallet_id_hash
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>();
-                    logln(format!("{pad}wallet id hash:    {wallet_id_hash}"));
-                    logln(format!(
-                        "{pad}wallet generation: {}",
-                        wallet_pin.wallet_token.generation
-                    ));
-                    if let Some(scope_card_id) = wallet_pin.scope_card_id {
-                        logln(format!("{pad}scope card:        {scope_card_id}"));
-                    }
+                let wallet_id_hash = params
+                    .wallet_pin
+                    .wallet_token
+                    .wallet_id_hash
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                logln(format!("{pad}wallet id hash:    {wallet_id_hash}"));
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_pin.wallet_token.generation
+                ));
+                if let Some(scope_card_id) = params.wallet_pin.scope_card_id {
+                    logln(format!("{pad}scope card:        {scope_card_id}"));
                 }
             }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 let variant_label = match &params.result {
                     PublicAgentInvocationResult::AgentInitialization(_) => "initialization",
                     PublicAgentInvocationResult::AgentMethod(_) => "method",
+                    PublicAgentInvocationResult::ExternalTool(_) => "external tool",
                     PublicAgentInvocationResult::ManualUpdate(_) => "manual update",
                     PublicAgentInvocationResult::LoadSnapshot(_) => "load snapshot",
                     PublicAgentInvocationResult::SaveSnapshot(_) => "save snapshot",
@@ -208,8 +355,19 @@ impl TextOutput for PublicOplogEntry {
                     PublicAgentInvocationResult::AgentInitialization(output)
                     | PublicAgentInvocationResult::AgentMethod(output) => {
                         logln(format!("{pad}output:"));
-                        log_typed_schema_value(pad, &output.output, &SourceLanguage::default());
+                        log_typed_schema_value(pad, &output.output);
                     }
+                    PublicAgentInvocationResult::ExternalTool(result) => match &result.result {
+                        PublicExternalToolResult::Success(output) => {
+                            if let Some(output) = &output.result {
+                                logln(format!("{pad}output:"));
+                                log_typed_schema_value(pad, output);
+                            }
+                        }
+                        PublicExternalToolResult::Failure(_) => {
+                            logln(format!("{pad}result:            failed"));
+                        }
+                    },
                     PublicAgentInvocationResult::ManualUpdate(_) => {}
                     PublicAgentInvocationResult::LoadSnapshot(fallible) => {
                         log_optional_error(pad, &fallible.error);
@@ -235,14 +393,15 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                logln(format!("{pad}kind:              {:?}", params.kind));
                 logln(format!("{pad}retry from:        {}", params.retry_from));
                 logln(format!(
                     "{pad}error:             {}",
                     format_error(&params.error)
                 ));
             }
-            PublicOplogEntry::NoOp(params) => {
-                logln(format_message_highlight("NOP"));
+            PublicOplogEntry::RecoverySucceeded(params) => {
+                logln(format_message_highlight("RECOVERY SUCCEEDED"));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
@@ -277,25 +436,6 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
             }
-            PublicOplogEntry::BeginAtomicRegion(params) => {
-                logln(format_message_highlight("BEGIN ATOMIC REGION"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-            }
-            PublicOplogEntry::EndAtomicRegion(params) => {
-                logln(format_message_highlight("END ATOMIC REGION"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}begin index:       {}",
-                    format_id(&params.begin_index)
-                ));
-            }
-
             PublicOplogEntry::PendingAgentInvocation(params) => {
                 log_agent_invocation(
                     AgentInvocationRenderKind::Pending,
@@ -314,11 +454,21 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target revision:   {}",
                     format_id(&params.target_revision),
                 ));
+                logln(format!(
+                    "{pad}update attempt:    {}",
+                    format_id(&params.update_attempt_index),
+                ));
                 match &params.description {
                     PublicUpdateDescription::Automatic(_) => {
                         logln(format!(
                             "{pad}type:              {}",
                             format_id("automatic")
+                        ));
+                    }
+                    PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+                        logln(format!(
+                            "{pad}type:              {}",
+                            format_id("snapshot assisted automatic")
                         ));
                     }
                     PublicUpdateDescription::SnapshotBased(inner_params) => {
@@ -330,6 +480,9 @@ impl TextOutput for PublicOplogEntry {
                             "{pad}snapshot:          {}",
                             BASE64_STANDARD.encode(&inner_params.payload),
                         ));
+                        if let Some(name) = &inner_params.filesystem_snapshot {
+                            logln(format!("{pad}filesystem:        {}", format_id(name)));
+                        }
                     }
                 }
             }
@@ -343,6 +496,16 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target revision:   {}",
                     format_id(&params.target_revision),
                 ));
+                if let Some(details) = &params.snapshot_assisted_details {
+                    logln(format!(
+                        "{pad}source revision:   {}",
+                        format_id(&details.source_component_revision),
+                    ));
+                    logln(format!(
+                        "{pad}snapshot index:    {}",
+                        format_id(&details.snapshot_index),
+                    ));
+                }
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
@@ -363,8 +526,32 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target revision:   {}",
                     format_id(&params.target_revision),
                 ));
+                if let Some(update_attempt_index) = params.update_attempt_index {
+                    logln(format!(
+                        "{pad}update attempt:    {}",
+                        format_id(&update_attempt_index),
+                    ));
+                }
                 if let Some(details) = &params.details {
                     logln(format!("{pad}error:             {}", format_error(details)));
+                }
+                if let Some(details) = &params.snapshot_assisted_details {
+                    logln(format!(
+                        "{pad}pending update:    {}",
+                        format_id(&details.pending_update_index)
+                    ));
+                    logln(format!(
+                        "{pad}source revision:   {}",
+                        format_id(&details.source_component_revision)
+                    ));
+                    logln(format!(
+                        "{pad}revision start:    {}",
+                        format_id(&details.source_revision_start_index)
+                    ));
+                    logln(format!(
+                        "{pad}snapshot index:   {}",
+                        format_id(&details.snapshot_index)
+                    ));
                 }
             }
             PublicOplogEntry::GrowMemory(params) => {
@@ -408,6 +595,13 @@ impl TextOutput for PublicOplogEntry {
             }
             PublicOplogEntry::Restart(params) => {
                 logln(format_message_highlight("RESTART"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+            }
+            PublicOplogEntry::Resumed(params) => {
+                logln(format_message_highlight("RESUMED"));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
@@ -457,67 +651,6 @@ impl TextOutput for PublicOplogEntry {
                 logln(format!(
                     "{pad}idempotency key:   {}",
                     format_id(&params.idempotency_key),
-                ));
-            }
-            PublicOplogEntry::StartSpan(params) => {
-                logln(format_message_highlight("START SPAN"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-                if let Some(parent_id) = &params.parent_id {
-                    logln(format!("{pad}parent span:       {}", format_id(&parent_id),));
-                }
-                if let Some(linked_id) = &params.linked_context {
-                    logln(format!("{pad}linked span:       {}", format_id(&linked_id),));
-                }
-                logln(format!("{pad}attributes:"));
-                for kv in &params.attributes {
-                    logln(format!(
-                        "{pad}  - {}: {}",
-                        kv.key,
-                        match &kv.value {
-                            PublicAttributeValue::String(StringAttributeValue { value }) =>
-                                format_id(value),
-                        }
-                    ));
-                }
-            }
-            PublicOplogEntry::FinishSpan(params) => {
-                logln(format_message_highlight("FINISH SPAN"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-            }
-            PublicOplogEntry::SetSpanAttribute(params) => {
-                logln(format_message_highlight("SET SPAN ATTRIBUTE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}span id:           {}",
-                    format_id(&params.span_id)
-                ));
-                logln(format!(
-                    "{pad}key:               {}",
-                    format_id(&params.key)
-                ));
-                logln(format!(
-                    "{pad}value:             {}",
-                    match &params.value {
-                        PublicAttributeValue::String(StringAttributeValue { value }) =>
-                            format_id(value),
-                    }
                 ));
             }
             PublicOplogEntry::BeginRemoteTransaction(params) => {
@@ -581,7 +714,21 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                if let Some(name) = &params.filesystem_snapshot {
+                    logln(format!("{pad}filesystem:        {}", format_id(name)));
+                }
                 log_snapshot_data(pad, &params.data);
+            }
+            PublicOplogEntry::SnapshotConfirmed(params) => {
+                logln(format_message_highlight("SNAPSHOT CONFIRMED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}filesystem:        {}",
+                    format_id(&params.filesystem_snapshot)
+                ));
             }
             PublicOplogEntry::OplogProcessorCheckpoint(params) => {
                 logln(format_message_highlight("OPLOG PROCESSOR CHECKPOINT"));
@@ -647,9 +794,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::HostStreamFrame(params) => {
                 logln(format_message_highlight("HOST STREAM FRAME"));
@@ -669,6 +817,38 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}payload:           {}",
                     typed_schema_value_to_string(&params.payload)
                 ));
+            }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                logln(format_message_highlight("TOOL ATTACHMENT CONTROL"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}attachment:        {}",
+                    typed_schema_value_to_string(&params.attachment)
+                ));
+                logln(format!(
+                    "{pad}transition:        {}",
+                    typed_schema_value_to_string(&params.transition)
+                ));
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                logln(format_message_highlight("TOOL ATTACHMENT READ"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}observation:       {}",
+                    typed_schema_value_to_string(&params.observation)
+                ));
+                if let Some(payload) = &params.payload {
+                    logln(format!(
+                        "{pad}payload:           {}",
+                        BASE64_STANDARD.encode(payload)
+                    ));
+                }
             }
             PublicOplogEntry::StreamRegistered(params) => {
                 logln(format_message_highlight("STREAM REGISTERED"));
@@ -735,9 +915,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::CardEventQueued(params) => {
                 logln(format_message_highlight("CARD EVENT QUEUED"));
@@ -764,9 +945,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::CardInstallFailed(params) => {
                 logln(format_message_highlight("CARD INSTALL FAILED"));
@@ -801,9 +983,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}parent ids:        {}",
                     format_id(&format!("{:?}", params.parent_ids))
                 ));
-                if let Some(generation) = params.wallet_generation {
-                    logln(format!("{pad}wallet generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}wallet generation: {}",
+                    params.wallet_generation
+                ));
             }
             PublicOplogEntry::CardTransferStarted(params) => {
                 logln(format_message_highlight("CARD TRANSFER STARTED"));
@@ -823,9 +1006,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target holder:     {}",
                     format_id(&format!("{:?}", params.target_holder))
                 ));
-                if let Some(generation) = params.source_wallet_generation {
-                    logln(format!("{pad}source generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}source generation: {}",
+                    params.source_wallet_generation
+                ));
             }
             PublicOplogEntry::CardTransferred(params) => {
                 logln(format_message_highlight("CARD TRANSFER ADMITTED"));
@@ -837,12 +1021,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}transfer id:       {}",
                     format_id(&params.transfer_id)
                 ));
-                if let Some(source_card_id) = params.source_card_id {
-                    logln(format!(
-                        "{pad}source card id:    {}",
-                        format_id(&source_card_id)
-                    ));
-                }
+                logln(format!(
+                    "{pad}source card id:    {}",
+                    format_id(&params.source_card_id)
+                ));
                 logln(format!(
                     "{pad}installed card id: {}",
                     format_id(&params.installed_card_id)
@@ -851,9 +1033,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target holder:     {}",
                     format_id(&format!("{:?}", params.target_holder))
                 ));
-                if let Some(generation) = params.target_wallet_generation {
-                    logln(format!("{pad}target generation: {generation}"));
-                }
+                logln(format!(
+                    "{pad}target generation: {}",
+                    params.target_wallet_generation
+                ));
             }
             PublicOplogEntry::CardRevokedCascade(params) => {
                 logln(format_message_highlight("CARD REVOKED CASCADE"));
@@ -865,9 +1048,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}revoked card ids:  {}",
                     format_id(&format!("{:?}", params.revoked_card_ids))
                 ));
-                if let Some(generation) = params.local_wallet_generation {
-                    logln(format!("{pad}local generation:  {generation}"));
-                }
+                logln(format!(
+                    "{pad}local generation:  {}",
+                    params.local_wallet_generation
+                ));
             }
             PublicOplogEntry::CardTransferConfirmed(params) => {
                 logln(format_message_highlight("CARD TRANSFER CONFIRMED"));
@@ -952,7 +1136,6 @@ fn render_agent_invocation(
             lines.push(render_typed_schema_value_line(
                 pad,
                 &params.constructor_parameters,
-                &SourceLanguage::default(),
             ));
         }
         PublicAgentInvocation::AgentMethodInvocation(params) => {
@@ -961,11 +1144,20 @@ fn render_agent_invocation(
                 format_id(&params.idempotency_key)
             ));
             lines.push(format!("{pad}input:"));
-            lines.push(render_typed_schema_value_line(
-                pad,
-                &params.function_input,
-                &SourceLanguage::default(),
+            lines.push(render_typed_schema_value_line(pad, &params.function_input));
+        }
+        PublicAgentInvocation::ExternalTool(params) => {
+            lines.push(format!("{pad}tool:              {}", params.tool_name));
+            lines.push(format!(
+                "{pad}command:           {}",
+                params.command_path.join("/")
             ));
+            lines.push(format!(
+                "{pad}idempotency key:   {}",
+                format_id(&params.idempotency_key)
+            ));
+            lines.push(format!("{pad}input:"));
+            lines.push(render_typed_schema_value_line(pad, &params.input));
         }
         PublicAgentInvocation::SaveSnapshot(_) => {}
         PublicAgentInvocation::LoadSnapshot(params) => {
@@ -1010,6 +1202,13 @@ fn render_agent_invocation_header(
                 format_id(&params.method_name)
             )
         }
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::ExternalTool(params)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE EXTERNAL TOOL"),
+                format_id(&params.tool_name)
+            )
+        }
         (AgentInvocationRenderKind::Started, PublicAgentInvocation::SaveSnapshot(_)) => {
             format!(
                 "{} {}",
@@ -1051,6 +1250,13 @@ fn render_agent_invocation_header(
                 format_id(&params.method_name)
             )
         }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::ExternalTool(params)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("ENQUEUED EXTERNAL TOOL"),
+                format_id(&params.tool_name)
+            )
+        }
         (AgentInvocationRenderKind::Pending, PublicAgentInvocation::SaveSnapshot(_)) => {
             format_message_highlight("ENQUEUED SAVE SNAPSHOT")
         }
@@ -1067,20 +1273,20 @@ fn render_agent_invocation_header(
 }
 
 fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
-    golem_common::schema::render::value_to_cli_text(value.graph(), value.root_type(), value.value())
-        .unwrap_or_else(|err| format!("<rendering error: {err}>"))
+    golem_common::schema::render::value_to_cli_text_with_secret_metadata(
+        value.graph(),
+        value.root_type(),
+        value.value(),
+    )
+    .unwrap_or_else(|err| format!("<rendering error: {err}>"))
 }
 
-fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue, source_language: &SourceLanguage) {
-    logln(render_typed_schema_value_line(pad, value, source_language));
+fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue) {
+    logln(render_typed_schema_value_line(pad, value));
 }
 
-fn render_typed_schema_value_line(
-    pad: &str,
-    value: &TypedSchemaValue,
-    source_language: &SourceLanguage,
-) -> String {
-    let rendered = crate::agent_id_display::render_typed_schema_value(value, source_language);
+fn render_typed_schema_value_line(pad: &str, value: &TypedSchemaValue) -> String {
+    let rendered = typed_schema_value_to_string(value);
     format!("{pad}  {rendered}")
 }
 
@@ -1140,12 +1346,19 @@ mod tests {
     use comfy_table::{Cell, Table as ComfyTable};
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
     use golem_common::model::oplog::{
-        AgentInitializationParameters, AgentMethodInvocationParameters, LoadSnapshotParameters,
-        ManualUpdateParameters, ProcessOplogEntriesParameters, RawSnapshotData,
+        AgentInitializationParameters, AgentMethodInvocationParameters, HostRequestSecretReveal,
+        HostResponseSecretRevealed, LoadSnapshotParameters, ManualUpdateParameters,
+        ProcessOplogEntriesParameters, PublicAgentEntity, PublicAgentEntityKind,
+        PublicEntityInvocationContext, PublicToolInvocationOperation, RawSnapshotData,
     };
     use golem_common::model::{Empty, IdempotencyKey};
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::{
+        IntoTypedSchemaValue, NamedFieldType, PermissionCardSpec, PermissionCardValuePayload,
+        QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
+        SecretValuePayload,
+    };
     use test_r::test;
 
     fn timestamp() -> Timestamp {
@@ -1169,6 +1382,7 @@ mod tests {
             updates: Vec::new(),
             created_at: timestamp(),
             last_error: None,
+            last_error_kind: None,
             component_size: 0,
             total_linear_memory_size: 0,
             exported_resource_instances: HashMap::new(),
@@ -1198,6 +1412,28 @@ mod tests {
             "long id was not broken at its structure:\n{table}"
         );
         assert_rows_aligned(&table);
+    }
+
+    #[test]
+    fn recovery_failure_is_visible_in_agent_get_and_list() {
+        let mut agent = agent_metadata(r#"Counter("unavailable")"#);
+        agent.status = AgentStatus::Failed;
+        agent.last_error_kind = Some(OplogErrorKind::Recovery);
+        agent.last_error = Some("snapshot payload is unavailable".to_string());
+
+        let table = AgentsMetadataResponseView::format_table_wide(
+            std::slice::from_ref(&agent),
+            120,
+            false,
+            false,
+        );
+        assert!(table.contains("Unavailable"), "{table}");
+
+        let fields = AgentGetView::from_metadata(agent, true).fields();
+        assert!(fields.contains(&("Failure category".to_string(), "Recovery".to_string())));
+        assert!(fields.iter().any(|(name, value)| {
+            name == "Last error" && value.contains("snapshot payload is unavailable")
+        }));
     }
 
     /// Agent id cells carry their own coloring, which only lines up if
@@ -1314,6 +1550,203 @@ mod tests {
                 "rendered output contains debug-only text {forbidden:?}:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn oplog_attribution_renders_agent_and_nested_entity_ownership() {
+        let agent =
+            render_oplog_attribution_lines(&PublicOplogEntryAttribution::agent()).join("\n");
+        assert_eq!(agent, "          owner:             agent");
+
+        let ancestor = PublicEntityInvocation {
+            entity: PublicAgentEntity {
+                kind: PublicAgentEntityKind::ToolMiddleware,
+                name: "authorize".to_string(),
+            },
+            start_index: golem_common::model::OplogIndex::from_u64(7),
+            call_mode: PublicEntityCallMode::Synchronous,
+            operation: None,
+        };
+        let invocation = PublicEntityInvocation {
+            entity: PublicAgentEntity {
+                kind: PublicAgentEntityKind::Tool,
+                name: "filesystem".to_string(),
+            },
+            start_index: golem_common::model::OplogIndex::from_u64(11),
+            call_mode: PublicEntityCallMode::Asynchronous,
+            operation: Some(PublicEntityInvocationOperation::Tool(
+                PublicToolInvocationOperation {
+                    command_path: vec!["files".to_string(), "lookup".to_string()],
+                    has_stdin: true,
+                    has_stdout: false,
+                    has_stderr: true,
+                    declares_stdout: true,
+                    declares_stderr: true,
+                },
+            )),
+        };
+
+        let rendered = render_oplog_attribution_lines(&PublicOplogEntryAttribution::entity(
+            PublicEntityInvocationContext {
+                invocation,
+                ancestors: vec![ancestor],
+            },
+        ))
+        .join("\n");
+
+        assert_contains_all(
+            &rendered,
+            &[
+                "owner:             entity",
+                "entity chain:",
+                "tool middleware authorize (start #7, synchronous)",
+                "tool filesystem (start #11, asynchronous) [current]",
+                "tool command:      files lookup",
+                "stdin requested:   true",
+                "stdout requested:  false",
+                "stdout declared:   true",
+                "stdout recording:  none (live attachment only)",
+                "stderr requested:  true",
+                "stderr declared:   true",
+                "stderr recording:  none (live attachment only)",
+            ],
+        );
+        assert!(
+            rendered.find("authorize").unwrap() < rendered.find("filesystem").unwrap(),
+            "ancestor must render before the current invocation:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn oplog_typed_values_show_safe_secret_metadata() {
+        let secret_id = uuid::Uuid::from_u128(1);
+        let permission_card_id = uuid::Uuid::from_u128(2);
+        let schema = SchemaType::record(vec![
+            NamedFieldType {
+                name: "credential".to_string(),
+                body: SchemaType::secret(SecretSpec::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(QuotaTokenSpec::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "permission".to_string(),
+                body: SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
+                metadata: Default::default(),
+            },
+        ]);
+        let value = TypedSchemaValue::new(
+            SchemaGraph::anonymous(schema),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::Secret(SecretValuePayload {
+                        secret_id,
+                        config_key: Some(vec!["database".to_string(), "password".to_string()]),
+                        version: 7,
+                        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                        category: Some("api-key".to_string()),
+                    }),
+                    SchemaValue::QuotaToken(QuotaTokenValuePayload {
+                        environment_id: uuid::Uuid::nil().into(),
+                        resource_name: "private-quota-resource".to_string(),
+                        expected_use: 1,
+                        last_credit: 0,
+                        last_credit_at: chrono::DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+                    }),
+                    SchemaValue::PermissionCard(PermissionCardValuePayload {
+                        card_id: permission_card_id,
+                        parent_ids: vec![],
+                        expires_at: None,
+                        polymorphic: true,
+                    }),
+                ],
+            },
+        );
+
+        let mut invocation = agent_method_invocation();
+        let PublicAgentInvocation::AgentMethodInvocation(parameters) = &mut invocation else {
+            unreachable!()
+        };
+        parameters.function_input = value.clone();
+
+        for rendered in [
+            typed_schema_value_to_string(&value),
+            render_for_test(AgentInvocationRenderKind::Started, &invocation),
+        ] {
+            assert_contains_all(
+                &rendered,
+                &[
+                    "<secret metadata:",
+                    &secret_id.to_string(),
+                    "database",
+                    "password",
+                    "\"version\":7",
+                    "\"resolvedAt\":\"2023-11-14T22:13:20+00:00\"",
+                    "\"category\":\"api-key\"",
+                    "<redacted: quota-token>",
+                    "<redacted: permission-card>",
+                ],
+            );
+            assert!(!rendered.contains("<redacted: secret>"));
+            assert!(!rendered.contains("secretValue"));
+            assert!(!rendered.contains("private-quota-resource"));
+            assert!(!rendered.contains(&permission_card_id.to_string()));
+        }
+    }
+
+    #[test]
+    fn oplog_secret_reveal_payloads_show_audit_metadata_without_secret_values() {
+        let secret_id = uuid::Uuid::from_u128(3);
+        let request = HostRequestSecretReveal {
+            secret_id,
+            expected_type: SchemaGraph::anonymous(SchemaType::string()),
+        }
+        .into_typed_schema_value()
+        .expect("secret reveal request must be schema-encodable");
+        let response = HostResponseSecretRevealed {
+            secret_id,
+            pinned_revision: 11,
+            resolved_at: SerializableDateTime {
+                seconds: 1_700_000_004,
+                nanoseconds: 0,
+            },
+            result: Ok(()),
+            audit: SecretRevealAudit {
+                calling_agent: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                    agent_id: "secret-reveal-auditor".to_string(),
+                },
+                config_key: Some(vec!["database".to_string(), "password".to_string()]),
+                timestamp: SerializableDateTime {
+                    seconds: 1_700_000_005,
+                    nanoseconds: 0,
+                },
+            },
+        }
+        .into_typed_schema_value()
+        .expect("secret reveal response must be schema-encodable");
+
+        let rendered = [
+            typed_schema_value_to_string(&request),
+            typed_schema_value_to_string(&response),
+        ]
+        .join("\n");
+        assert_contains_all(
+            &rendered,
+            &[
+                &secret_id.to_string(),
+                "secret-reveal-auditor",
+                "database",
+                "password",
+                "1700000004",
+                "1700000005",
+                "11",
+            ],
+        );
+        assert!(!rendered.contains("secretValue"));
     }
 
     #[test]

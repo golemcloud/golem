@@ -1,8 +1,23 @@
-# Invoke workers
+# Invoke Agents
 
-Learn how to invoke [workers](/next/concepts/agents) using:
+Invoke [agents](/next/concepts/agents) from the command line, application code, HTTP clients, or AI tools. Use the guides below to choose an invocation method and expose your application to clients.
 
-- The [HTTP API](invoke/http)
-- The [CLI](invoke/cli)
-- The [REPL](invoke/repl)
-- By mapping to a [custom API](invoke/making-custom-apis)
+## Choose an invocation method
+
+- [REST API](/next/invoke/http): invoke an agent method through the Golem REST API.
+- [CLI](/next/invoke/cli): invoke methods, trigger background work, and schedule invocations.
+  - [REPL](/next/invoke/cli/repl): explore agents interactively during development.
+- [MCP](/next/invoke/mcp): expose agents to clients that use the Model Context Protocol.
+- [External bridge libraries](/next/invoke/bridge-libraries): generate typed clients for applications outside Golem.
+- [Custom HTTP APIs](/next/invoke/making-custom-apis): map HTTP endpoints to agent methods.
+  - [Authentication](/next/invoke/making-custom-apis/authentication): secure endpoints and identify callers with OpenID Connect.
+  - [HTTP routers and files](/next/invoke/making-custom-apis/http-routers): handle requests with a router or serve static and agent files.
+    - [Router and file semantics](/next/invoke/making-custom-apis/http-routers/semantics): understand routing precedence, authentication, and file-serving behavior.
+  - [Durable Streams over HTTP](/next/invoke/making-custom-apis/durable-streams): read and write streams for long-running invocations.
+    - [Compatibility and limitations](/next/invoke/making-custom-apis/durable-streams/compatibility): check supported protocol features and client behavior.
+    - [Forking Durable Streams](/next/invoke/making-custom-apis/durable-streams/forks): create an independent branch at an exact stream prefix.
+  - [Troubleshooting](/next/invoke/making-custom-apis/troubleshooting): resolve deployment and routing errors.
+
+## Protocol reference
+
+For the WebSocket transport used by CLI streaming and external bridge libraries, see [Streaming Protocol v1](/next/stream-session-public-protocol-v1) in References.

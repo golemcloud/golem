@@ -21,8 +21,7 @@ use std::sync::Arc;
 /// reachable. Used in cloud mode, where executors are internal cluster
 /// components with no external exposure.
 ///
-/// Lifecycle teardown methods (`kill_all`, `restart_all`) are no-ops so that
-/// `kill_all()` completes. `is_running()` returns `true` so that
+/// Lifecycle teardown and restart methods are no-ops. `is_running()` returns `true` so that
 /// `ensure_all_deps_running()` is a no-op. Per-executor operations panic with a
 /// clear message.
 pub struct UnavailableWorkerExecutorCluster;
@@ -33,7 +32,9 @@ impl WorkerExecutorCluster for UnavailableWorkerExecutorCluster {
         panic!("worker_executor_cluster() is not available in cloud mode");
     }
 
-    async fn kill_all(&self) {}
+    async fn kill_all_and_wait(&self, _deadline: tokio::time::Instant) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     async fn restart_all(&self) {}
 

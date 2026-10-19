@@ -19,10 +19,12 @@ package golem.runtime.autowire
 import golem.Principal
 import golem.FutureInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
-import golem.runtime.{ConstructorMetadata, InputRecordCodec}
+import golem.runtime.{ConstructorMetadata, InputRecordCodec, WireAgentMetadata, WireAgentInputError}
+import golem.schema.wire.ConcreteCodec
 
 import scala.concurrent.Future
 import scala.scalajs.js
+import scala.util.control.NonFatal
 
 /**
  * A wired agent constructor: decodes the `golem:agent@2.0.0` constructor input
@@ -37,6 +39,19 @@ trait AgentConstructor[Instance] {
 
 object AgentConstructor {
 
+  def wire[A, Instance](descriptor: WireAgentMetadata, codec: ConcreteCodec[A])(
+    build: (A, Principal) => Instance
+  ): AgentConstructor[Instance] = new AgentConstructor[Instance] {
+    def info: ConstructorMetadata                                                        = descriptor.reflectedConstructor
+    def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
+      FutureInterop.toPromise(SchemaPayload.withWireInput(input) { value =>
+        val decoded =
+          try codec.decode(value)
+          catch { case NonFatal(error) => throw WireAgentInputError(String.valueOf(error.getMessage)) }
+        Future.successful(build(decoded, principal))
+      })
+  }
+
   def sync[A, Instance](info: ConstructorMetadata, inputCodec: InputRecordCodec[A])(
     build: (A, Principal) => Instance
   ): AgentConstructor[Instance] =
@@ -50,15 +65,12 @@ object AgentConstructor {
       override val info: ConstructorMetadata = ctorInfo
 
       override def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
-        SchemaPayload
-          .decode[A](input)(inputCodec)
-          .fold(
-            err =>
-              js.Promise
-                .reject(JsAgentError.invalidInput(err.toString).asInstanceOf[Any])
-                .asInstanceOf[js.Promise[Instance]],
-            value => FutureInterop.toPromise(build(value, principal))
-          )
+        FutureInterop.toPromise(
+          SchemaPayload.withDecodedInput[A, Instance](input) {
+            case Left(err)    => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
+            case Right(value) => build(value, principal)
+          }(inputCodec)
+        )
     }
   }
 }

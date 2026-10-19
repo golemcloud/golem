@@ -405,15 +405,18 @@ What is matched:
   searches a bare term is what you want.
 
 Common terms (case-insensitive, match the entry kind):
-  create, host-call, imported-function, agent-invocation-started,
-  agent-invocation-finished, pending-agent-invocation, agent-initialization,
-  agent-method-invocation, save-snapshot, load-snapshot, manual-update,
-  process-oplog-entries, suspend, error, noop, jump, interrupted, exited,
-  begin-atomic-region, end-atomic-region, begin-remote-write, end-remote-write,
-  invoke (alias matching all invocation entries)
+  create, start (alias: imported-function; a host call starts), end (a host
+  call ends), agent-invocation-started, agent-invocation-finished,
+  pending-agent-invocation, agent-initialization, agent-method-invocation,
+  external-tool, save-snapshot, load-snapshot, process-oplog-entries,
+  pending-update, successful-update, failed-update, suspend, error,
+  recovery-succeeded, noop, jump, interrupted, exited, revert,
+  cancel-invocation, log, begin-atomic-region, end-atomic-region,
+  begin-remote-transaction, committed-remote-transaction,
+  rolled-back-remote-transaction, invoke (alias matching all invocation entries)
 
 Inner strings additionally matched (depending on entry kind):
-  function/method names, idempotency keys, error messages, host-call request
+  function/method names, idempotency keys, error messages, host call request
   and response values.
 
 Examples:
