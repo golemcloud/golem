@@ -16,19 +16,47 @@ The services are using the following storage backends:
 
 ## User and Permissions
 
-Every image runs its service as the user `golem`, uid and gid 65534, with the home directory `/home/golem`. The default configuration keeps local data below `/data`, which belongs to that user: SQLite databases in `/data` and file system blob storage in `/data/blob_storage`. The services need no Linux capability.
+Every image runs its service as the user `golem`, uid and gid 65534, with the home directory `/home/golem`. The default configuration keeps local data below `/data`, which belongs to that user: SQLite databases in `/data` and file system blob storage in `/data/blob_storage`. The `golemservices/golem` image keeps its data in `/var/lib/golem`, which also belongs to that user. The services need no Linux capability.
 
 A path that a service writes must belong to uid 65534, or be writable by it:
 
-- A new Docker named volume mounted at `/data` or `/data/blob_storage` takes the owner of that directory in the image, so it needs no change.
+- A new Docker named volume mounted at `/data`, `/data/blob_storage` or `/var/lib/golem` takes the owner of that directory in the image, so it needs no change.
 - A bind mount takes the owner of the host directory. Give the directory to the user before the first start, for example with `chown -R 65534:65534 <host directory>`.
 - In Kubernetes, set `runAsUser`, `runAsGroup` and `fsGroup` to 65534 in the pod `securityContext`. The kubelet then makes a volume that supports ownership management, such as an `emptyDir` or a persistent volume, writable by group 65534. A `hostPath` volume keeps the owner of the host directory.
 
-Run the services with no capabilities and without privilege escalation: `--cap-drop ALL --security-opt no-new-privileges` with Docker, `capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false` in Kubernetes. Only `xfs-quotad`, a separate process that `ManagedXfs` agent filesystem storage needs, holds a capability, `CAP_SYS_ADMIN`. Its image, `golemservices/golem-xfs-quotad`, also runs as uid 65534; see [Run xfs-quotad](/v1.6/operate/filesystem_snapshots#run-xfs-quotad).
+Run the services with no capabilities and without privilege escalation: `--cap-drop ALL --security-opt no-new-privileges` with Docker, `capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false` in Kubernetes. Only `xfs-quotad`, a separate process that `ManagedXfs` agent filesystem storage needs, holds a capability, `CAP_SYS_ADMIN`. Its image, `golemservices/golem-xfs-quotad`, also runs as uid 65534; see [Run xfs-quotad](/v1.6/operate/filesystem_snapshots/xfs#run-xfs-quotad).
 
 ## Golem Services
 
 The following sections provide a description of each service.
+
+### Golem
+
+The [golem](https://github.com/golemcloud/golem/tree/main/cli/golem) executable runs every service in one process with `golem server run`. The `golemservices/golem` image runs it, and serves the management API, the HTTP APIs and MCP on one port, `9881`. Configure it with a TOML file passed as `--config`, or with `GOLEM__<SECTION>__<FIELD>` environment variables; see the [configuration](https://github.com/golemcloud/golem/blob/main/cli/golem/config/golem-server.toml) and the [environment variables](https://github.com/golemcloud/golem/blob/main/cli/golem/config/golem-server.sample.env). The image sets these variables:
+
+| Variable | Value in the image |
+|----------|--------------------|
+| `GOLEM__DATA_DIR` | `/var/lib/golem`, a volume |
+| `GOLEM__ROUTER__ADDRESS` | `::`, which accepts IPv6 and IPv4 |
+| `GOLEM__ROUTER__PORT` | `9881` |
+
+Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. Requests for that host reach the management API, requests for every other host reach the HTTP API and MCP deployments, and no environment can register the host as a domain. Behind a reverse proxy, add the proxy's address to `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`, so the router takes the host from `X-Forwarded-Host`.
+
+The router listens on all interfaces, so the server refuses to start until the admin token (`GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`), the webhook keys (`GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` and `GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY`, the same value) and the invocation session token key (`GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY`) have secret values. The error lists the settings that still have their public default values.
+
+At every start, the registry service provisions the built-in plugins and tools. It reads each of them from its cache, `builtin-artifacts` in the data directory, and downloads from the [golem-builtins](https://github.com/golemcloud/golem-builtins/releases) releases on GitHub each one that the cache does not have or that does not match its checksum. The downloads take about a minute. Without outgoing HTTPS connections to GitHub, a start that must download fails. Keep `/var/lib/golem` on a persistent volume, so that only the first start downloads. Without a persistent volume, for example in a container without a volume or in a task without storage, every start downloads again.
+
+The image arguments are the arguments of `golem`; the default is `server run`. With `GOLEM_LITESTREAM=true`, [Litestream](https://litestream.io/) replicates the SQLite databases of the data directory. Use it where the volume itself can be lost, for example an ephemeral disk or a disk of one host. In this mode the worker executor keeps its key-value storage and its indexed storage in one SQLite database each, `key-value-storage.db` and `indexed-storage.db`, instead of one database per agent. The server then has a fixed set of databases: these two, `registry.db`, `shard_manager.db`, `scheduler.db` and `gateway-sessions.db`. No database file is ever deleted: deleting an agent deletes rows, and Litestream replicates that like any other write. Before the server starts, the image restores each of these databases that the data directory does not have from the replica. Turn Litestream on only for a new data directory: in this mode the server does not read the databases per agent in `kv-store`, which it writes without Litestream.
+
+| Variable | Description |
+|----------|-------------|
+| `GOLEM_LITESTREAM` | `true` to replicate the databases with Litestream; `false` by default |
+| `GOLEM_LITESTREAM_REPLICA_URL` | Replica of the data directory: `s3://<bucket>/<path>` or `file:///<path>`. The replica of `<name>.db` is `<path>/<name>.db`. The query, such as `?endpoint=http%3A%2F%2Fminio%3A9000&region=us-east-1`, applies to every database, and Litestream reads it |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Credentials of the S3 replica; `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY` work too |
+
+Litestream takes the data directory from `GOLEM__DATA_DIR`, so do not set `data_dir` in the `--config` file, and it sets the key-value storage and the indexed storage of the worker executor, so do not set them either. Litestream replicates only the SQLite databases: keep the blobs in S3, for example in one bucket with `namespace_prefixes = true`. Litestream does not replicate the cache of the built-in plugins and tools, so a restore to a new volume downloads them again. Exactly one server may write to a replica.
+
+See also: [docker image](https://hub.docker.com/r/golemservices/golem)
 
 ### Registry Service
 
@@ -38,9 +66,18 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-re
 
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/v1.6/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis or SQLite.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/v1.6/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis, SQLite, or PostgreSQL.
+
+To use PostgreSQL for gateway sessions, set `gateway_session_storage.type = "Postgres"` in the worker service configuration. Under `gateway_session_storage.config`, set `host`, `port`, `database`, `username`, `password`, `max_connections`, `pending_login_expiration`, and `cleanup_interval`. The optional `schema` defaults to `golem_worker_service_session_store`, separate from other services' migration tables. For the single executable, nest these settings under `worker_service`; supply the password through `GOLEM__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__PASSWORD` rather than checking it into a configuration file.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
+
+#### Long-lived connections
+
+See [HTTP Gateway](/v1.6/operate/http-gateway#long-lived-connections) for proxy idle
+timeouts, WebSocket Pings and Pong deadlines, MCP keep-alives, and Durable Streams
+SSE behavior. The same page covers [trusted ingress](/v1.6/operate/http-gateway#configuring-ingress)
+and [shared HTTP API and MCP ports](/v1.6/operate/http-gateway#serving-http-apis-and-mcp-on-one-port).
 
 ### Worker Executor
 
@@ -50,50 +87,105 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-wo
 
 ### Shard Manager
 
-[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) maintains the worker executors' shard assignments. It runs in one of two modes, selected by the `persistence` configuration:
+[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) assigns shards to worker executors and rebalances them when executors join or leave. Run exactly one instance with PostgreSQL or SQLite persistence. Use etcd persistence to run multiple replicas with one elected leader.
 
-- **Local mode** (`persistence.type = "Postgres"` or `"Sqlite"`) stores the shard state and the quota state in one SQL database. There is no leader election, so **exactly one instance may run**.
-- **Distributed mode** (`persistence.type = "Etcd"`) stores the shard state in etcd. Any number of replicas may run: one wins an etcd lease campaign and drives all topology decisions while the rest stand by. The quota state lives in etcd too, under `/golem/quota/`, and a newly elected leader restores it, so executors keep the quota leases they hold across a failover. Switching an existing deployment from local to distributed mode does not carry the quota state over: executors acquire their leases again, and capacity budgets start from their full limit.
-
-Every worker executor holds a **lease** on its shard assignment and renews it with the shard manager. A lease lasts `shard_lease_duration` (1m by default) and an executor renews at a third of the time it has left, so roughly every 20s. The shard manager refuses to start with a lease shorter than 30s and warns about one shorter than 1m: the deadline it allows each renewal call never drops below 10s, so a shorter lease cannot fit the three renewal attempts a lease is meant to get. Each renewal carries the epoch of every shard the executor holds; a shard's epoch is its ownership generation, advanced only when the shard moves to another executor and never by a renewal. A renewal whose claim does not match the shard manager's view is renewed all the same, and the response carries the shard manager's set, which the executor adopts exactly as it would an assignment push: pushes deliver a change at once, and renewals guarantee it arrives within a third of the lease even if the push was lost. The shard manager records a shard's new owner before it tells anybody about it, so a rebalance whose write is refused changes nothing at all, and every delivery carries the revision of the state it was read from. An executor ignores a delivery older than one it has already applied, so a push and a renewal that cross on the network cannot leave the older set in place. Revisions are only comparable within one shard manager process, so every delivery also names the process that sent it: an executor follows the process that answered its latest registration or renewal and starts its revisions over when that changes - which is how a shard manager that failed over, or came back on a wiped or restored store, gets its sets applied although its revisions start lower - and it ignores a push from any other process, renewing at once to hear from the one in charge. An executor that stops renewing loses its lease, and the shard manager reclaims and redistributes those shards on its next pass, which runs at least every third of `shard_lease_duration` even in a cluster where nothing else is happening; a crashed or unreachable executor's shards are therefore re-homed within about one lease duration plus one pass. The lease reaches the executor as the time remaining on it rather than as an absolute time, so the two machines' clocks are never compared and skew between them can neither lengthen nor shorten it. The executor anchors that time to the moment it sent the request the lease answers, so time the reply spends in flight comes off its copy of the lease and is never added to it, and its copy lapses no later than the shard manager's. An assignment push carries the shard set and its revision only: it never extends a lease. The lease is the one place the two machines' clocks must agree on a rate rather than on a value: an executor whose clock runs slow relative to the shard manager's keeps admitting for that fraction of a lease past the shard manager reclaiming it, which is milliseconds under ordinary `ntp` or `chrony` discipline and seconds while such a daemon is slewing off a large offset, so an executor should not be started until its clock is synchronised. An executor whose own copy of the lease has expired stops **admitting** new work for its shards and reports that sharding is not ready, which a worker service retries after refreshing its routing table - invocations already running are not interrupted. A graceful stop - including the `SIGTERM` an orchestrator sends to stop a pod - deregisters the executor instead of waiting for its lease to expire, so its shards move on the next pass. A shard manager restart or failover re-grants the lease of every executor that still answers the startup health check, so a restart never evicts a healthy cluster: only executors that fail that check are removed. An executor whose own copy of the lease lapsed during the outage resumes admitting work on its next successful renewal rather than on the push that follows the re-grant, and neither a re-grant nor a renewal ever moves an executor's deadline earlier, so a `shard_lease_duration` reduced across a restart takes effect only once the new length outruns the deadline each executor was last told.
-
-The lease bounds how long a lost shard keeps being served, but it cannot stop an executor that has already lost one from finishing a write it had started. That is what **oplog fencing** is for. Each agent's oplog records the shard epoch allowed to write it, and every batch of entries is checked against that record atomically with the insert - in the same database transaction, or on Redis in the same script - so a refused write leaves nothing behind. An executor whose epoch is behind is turned away at the storage rather than discovering the problem later: that one agent stops there, and the worker service resumes it on the shard's new owner. The record only ever moves forward - an executor re-granted the shard at a higher epoch takes over, and one holding a stale epoch cannot claim it back - and an absent record fences an open oplog too, because the record is written before an oplog's first entry and removed before its last. That protection covers an oplog whose record exists. Deleting an agent removes its record and forgets the epoch with it: an executor that still has the oplog open is refused, but an oplog without a record - a new agent, a deleted agent created again, or one last written before this release - is claimed by whichever epoch opens it first, so for those only the lease stops an executor that has lost the shard. The archive layers that older oplog entries move into are fenced the same way, and so are ephemeral agents' oplogs, which are written straight into them. Blob storage has no conditional write, so an archive layer in blob storage keeps a list of its chunks in the indexed storage, fenced like the rest, and reads only the chunks listed there; archive chunks written to blob storage before this release are not listed, and are no longer read. Fencing covers the oplog and nothing else. An executor that has lost a shard can still write that agent's key-value records, its status and its blob payloads, none of which carry an epoch: a stale status blob can overwrite a newer one until the agent's next status change on its new owner, while the oplog - the only record replay reads - stays correct. Nor does the fence undo what has already left the machine: an outgoing call an agent made before its first refused write has happened, and the shard's new owner, having no record of it, makes it again, which is the same at-least-once exposure a crash between the call and its oplog entry already has. A call the executor has not started yet is refused once the fence has latched, so the window is the call in flight rather than every call after the shard moved.
-
-Fencing is enforced by every indexed storage backend, for deleting an agent as much as for writing to it: a deletion that finds another executor has taken the agent over removes nothing, and fails with the answer that sends it to the new owner. A deletion under way when its shard moves may be finished by the shard's new owner instead. The shipped configuration defaults `indexed_storage` to a SQLite file of its own, which serves a single executor; executors that share shards need storage they can all reach, which means PostgreSQL or Redis, because a SQLite file is written by one process. Redis is only as durable as the last write the server kept: a failover that loses the most recent writes can lose a raised epoch with them, and the previous owner is then accepted again until the record is next raised, so prefer PostgreSQL or SQLite where that window matters. Redis Cluster is not supported. `KVStoreSqlite` and `KVStoreMultiSqlite` derive their location from the key-value storage, so they require `key_value_storage.type` to be `Sqlite` or `MultiSqlite` respectively; any other combination fails at startup.
-
-A shard epoch only means something against the shard manager state that minted it. A state that is wiped, replaced or restored from a backup mints epochs below the ones the oplogs already record, and the storage refuses every write at those, so the affected agents stay unavailable until their records are cleared. To clear them, stop every executor, run `DELETE FROM indexed_key_epoch` on the indexed storage - for `MultiSqlite` and `KVStoreMultiSqlite`, on every `*-oplog-*.db` file under the root directory; on Redis, delete the keys matching `*oplog-epoch:*` instead - and start the executors again; each oplog records its owner's epoch when it is next opened. Run the delete only while no executor is running, because an oplog without a record accepts whichever executor opens it first.
-
-Distributed mode talks to etcd over **plaintext HTTP** and without authentication. Every entry in `persistence.config.endpoints` must start with `http://`; a replica configured with anything else refuses to start. etcd therefore has to be reachable unauthenticated, either on a trusted network or through a TLS-terminating proxy running alongside the shard manager, with the endpoints pointing at that proxy.
-
-Give `persistence.config.endpoints` a **single load-balanced address** - the Kubernetes Service in front of the etcd cluster - rather than a list of members. With a member list the client keeps a member that is down in its rotation: reads retry through it and recover, but writes do not, and a leadership campaign can spend tens of seconds landing on the dead member before it gets anywhere.
-
-Every write to the shard state or the quota state is a new etcd revision, and etcd keeps every revision of a key until it is told to compact, so a leader that renewed leases forever would fill etcd's backend. The leader therefore **compacts** the history behind the state after each of its passes, keeping the newest `persistence.config.compaction_retention_revisions` revisions (1000 by default). Compaction is cluster-wide: it drops that much history for every key on the etcd cluster, not only the shard manager's. On a cluster shared with other applications set it to `0`, which disables it, and leave compaction to the cluster's operator or to etcd's own `--auto-compaction-mode`.
-
-A quota lease change is stored as one etcd transaction: the resource, the lease, and one delete for each expired lease the change reclaims. The shard manager reclaims at most 120 expired leases per change, so a transaction holds up to **122 operations**, and the etcd cluster must accept at least that many. etcd's default `--max-txn-ops` of 128 does. On a cluster configured below 122, a change that reclaims many expired leases at once is refused, and so is every later change to that resource.
-
-`persistence.config.request_timeout` must be at most half of `persistence.config.leader_lease_ttl`, and startup refuses the configuration otherwise. A lease is granted and its keepalive opened back to back, each bounded by the request timeout, so a larger value could let a lease expire before it was ever renewed.
-
-**Failover** in distributed mode costs a graceful stop almost nothing: on SIGTERM or Ctrl-C a leader releases its lease and a standby takes over within milliseconds, and a standby stopped the same way leaves the election queue at once. A leader that is killed or partitioned releases nothing, so it holds its lease until etcd expires it and a standby is elected between two thirds of `persistence.config.leader_lease_ttl` and the full value (10s by default) after that leader's last renewal. On top of that comes the new leader's own startup, whose initial executor health check is capped at 15s. A broken etcd connection is not a failover: an etcd member restart or a raft leader change ends the keepalive stream and the leader reconnects it, so only etcd declaring the lease gone, or a full lease period with no acknowledged renewal, ends a leadership.
-
-During that window the shard manager's gRPC port is closed on every replica. A worker service does not ride it out on a warm routing table cache: the first executor-level error it hits discards the cached table, and the worker service is then blocked until a leader binds its gRPC port again. A worker executor that starts inside the window retries its registration for about 10s in total with the default `shard_manager.retries` and exits when that budget runs out, so raise `shard_manager.retries.max_attempts` on the executors if their startup has to survive a shard manager failover.
-
-A registration is persisted before it is acknowledged, so an executor that receives a successful registration response holds a lease the next leader will find. A registration that could not be persisted - because the leader lost its lease part-way through the write, for instance - is answered with an error instead, and the executor retries it within its `shard_manager.retries` budget.
-
-In distributed mode a standby does **not** open its gRPC port (`grpc.port`) until it is elected, and that is what routes traffic to the leader. Configure probes accordingly: **liveness** against the HTTP port (`http_port`), **readiness** against the gRPC port. Wiring readiness to HTTP would place every standby in the Service's endpoints, and clients would get connection-refused on every request that did not land on the leader. Over HTTP a standby and a stuck replica look the same, and the metrics close that gap only partly. `shard_manager_is_leader` separates the leader from every non-leader - the sum across replicas should always be 1 - but it reads 0 for a healthy standby and for a wedged one alike. `shard_manager_campaign_attempt_failures_total` is what tells those apart: rising means the replica cannot reach etcd and is retrying, flat means it is simply waiting for the leadership.
+See [Shard Manager](/v1.6/operate/shard-manager) for configuration, failover, health probes, and storage recovery precautions.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-shard-manager)
 
 ### Component Compilation Service
 
-[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is a sidecar service responsible for compiling components. The service uses Blob storage as data storage.
+[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) warms the compiled-component cache in Blob storage. It is an optional optimisation: if precompilation is skipped or fails, the executor compiles and caches the component on first use. Pending requests are held in memory and are lost on restart. The service compiles one component at a time because Wasmtime already parallelises compilation internally.
+
+The service rejects an enqueue immediately when its request queue is full. The registry still completes the component upload. The registry's `component_compilation.config.enqueue_timeout` bounds the entire enqueue attempt, including connection establishment and retries; its default is `1s`. A timeout skips cache warming, not the component upload. A timed-out request might already have reached the compilation service and can still be compiled. Saturation is not retried inside the upload request.
+
+| Compilation service setting | Default | Meaning |
+| --- | --- | --- |
+| `compile_worker.queue_capacity` | `100` | Maximum pending compilation requests, excluding the component being processed |
+| `compile_worker.upload_queue_capacity` | `100` | Maximum compiled components waiting for upload, excluding the component being uploaded |
+
+Both capacities must be positive. Their environment variables are `GOLEM__COMPILE_WORKER__QUEUE_CAPACITY` and `GOLEM__COMPILE_WORKER__UPLOAD_QUEUE_CAPACITY`. The registry timeout is `GOLEM__COMPONENT_COMPILATION__CONFIG__ENQUEUE_TIMEOUT`.
+
+#### Choose queue capacities
+
+The defaults are starting values, not measured recommendations for golem-dev or golem-prod. Measure each environment with its actual CPU and memory limits and Blob storage backend before selecting values:
+
+1. Use representative small and large components and realistic deployment bursts. For cold-compilation measurements, confirm compiled-blob cache misses and disable or start with a cold Wasmtime filesystem cache (`engine.enable_fs_cache`). Fresh component revisions alone do not bypass the filesystem cache. Measure warm-cache workloads separately.
+2. Observe `component_compilation_time_seconds` and the pending-request queue. Measure sustained successful compilations and artifact uploads per second over wall-clock time. Download time and upload backpressure affect throughput but are outside the histogram. Choose how much cache-warming delay is useful: validate the time from admission until the artifact is available against the expected first invocation. Use measured throughput and that delay to choose the request capacity. A larger queue does not increase compilation throughput.
+3. Exercise slow Blob storage uploads. Observe `component_compilation_upload_queue_length` and process/pod peak memory with the proposed capacity. The upload queue retains compiled components, which can be much larger than request metadata. In addition to the queue, allow for one component being uploaded, one being processed or waiting for upload-queue space, compilation working memory, download buffers, artifact serialization buffers, Blob storage upload buffers, and runtime overhead. Leave headroom below the pod memory limit.
+4. Run a burst that exceeds the request capacity. Confirm that `component_compilation_enqueue_total{outcome="rejected"}` increases in the registry and that uploads remain responsive. Exercise an unavailable or unresponsive compilation service and confirm the configured enqueue budget bounds the extra upload delay.
+5. Record the component mix, resource limits, compilation durations, sustained throughput, time until artifacts are available, queue peaks, peak memory, enqueue outcomes, and upload latency with the chosen golem-dev and golem-prod settings in the deployment configuration review.
+
+Use process or container memory measurements, such as the platform's working-set/RSS metrics. Do not interpret RSS differences between compilations as precise per-component allocation measurements: allocators, shared compiler threads, and retained artifacts affect them. The compilation-duration histogram measures successful Wasmtime component-build calls. It excludes request-queue wait, component download, compiled-blob cache hits, and artifact upload, but includes Wasmtime filesystem-cache loads when that cache is enabled. The queue gauges exclude in-flight work; a flat queue does not prove progress. Check compilation logs and duration samples as well.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-compilation-service)
 
 ### Golem Router
 
-[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Nginx](https://nginx.org/) proxy for Golem APIs.
+[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Envoy](https://www.envoyproxy.io/) proxy that serves the services on one port, routed by host. Requests for the management host reach the registry service and the management API of the worker service. Requests for every other host reach the custom request port of the worker service, which serves the HTTP API and MCP deployments by domain. Point every name at the router in DNS. The image runs Envoy as uid and gid 65534.
 
-See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-services.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GOLEM_ROUTER_MANAGEMENT_HOST` | Host name of the management API | required |
+| `GOLEM_ROUTER_REGISTRY_SERVICE_HOST`, `GOLEM_ROUTER_REGISTRY_SERVICE_PORT` | Registry service HTTP API | required, `8081` |
+| `GOLEM_ROUTER_WORKER_SERVICE_HOST` | Host of the worker service | required |
+| `GOLEM_ROUTER_WORKER_SERVICE_PORT` | Worker service HTTP API (`port`) | `9005` |
+| `GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT` | Worker service `custom_request_port` | `9006` |
+| `GOLEM_ROUTER_PORT` | Port the router listens on, IPv4 and IPv6 | `8080` |
+| `GOLEM_ROUTER_TRUSTED_HOPS` | Number of proxies in front of the router whose `X-Forwarded-For` and `X-Forwarded-Proto` it trusts | `0` |
+| `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` | Longest time without data on a request or a connection, in seconds | `3600s` |
+| `GOLEM_ROUTER_DNS_REFRESH_RATE` | How often the router resolves the service host names again, in seconds | `10s` |
+| `GOLEM_ROUTER_MAX_CONNECTIONS` | Largest number of open client connections | `50000` |
+| `GOLEM_ROUTER_CONCURRENCY` | Number of Envoy worker threads (`--concurrency`) | `2` |
+| `GOLEM_ROUTER_STATS_PORT` | Port that serves the Prometheus metrics of Envoy at `/stats/prometheus`, IPv4 and IPv6 | none |
+
+The container arguments are added to the arguments of Envoy, for example `--log-level debug`. A `--concurrency` argument replaces `GOLEM_ROUTER_CONCURRENCY`.
+
+Envoy starts one worker thread for each CPU of the host, not for each CPU of the container limit, and each worker thread opens its own connections to the services. Set `GOLEM_ROUTER_CONCURRENCY` to the CPU limit of the container.
+
+With `GOLEM_ROUTER_STATS_PORT`, the router serves `/stats/prometheus` on that port and answers every other path with 404. The Envoy admin interface listens on `127.0.0.1:19000` in the container and is not reachable from outside it. Do not publish the metrics port to the internet; scrape it from inside the deployment.
+
+The router sends HTTP/2 without TLS to the services, so a request that the client cancels is also cancelled in the service. It sends the WebSockets of the management API, `/connect` and the invocation session (`/v1/agents/invoke-agent-session`), to the worker service over HTTP/1.1. HTTP API deployments do not serve WebSockets, so the router answers a WebSocket upgrade for any other host with 403. When a host name resolves to several replicas, the router sends a request to the replica with the fewest open requests. A request has no time limit, so invocations that wait for a result, server-sent events, MCP sessions and websockets stay open for as long as they send data; `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` ends a silent one. The router does not limit the size of a request body; the services apply their own limits. It accepts header names with an underscore and keeps an encoded slash in the path. It resolves the service host names again every `GOLEM_ROUTER_DNS_REFRESH_RATE`, so it follows a service that restarts with a new address, and it starts before the services are resolvable. The router answers `/metrics` on the management host with 404, so the metrics of the services do not reach the clients; scrape the services directly.
+
+The router keeps the original `Host` header, with its port, and sets `X-Forwarded-Host` to the same value. It appends the address of the client to `X-Forwarded-For`, and sets `X-Forwarded-Proto` to its own scheme, `http`. Where TLS ends at a proxy in front of the router, set `GOLEM_ROUTER_TRUSTED_HOPS` to `1`, so that the router keeps the `X-Forwarded-Proto` of that proxy.
+
+Configure worker-service to trust the router's address and reserve the management
+host in the registry. See [HTTP Gateway](/v1.6/operate/http-gateway#configuring-ingress)
+for the forwarding-header contract and
+[domain reservation](/v1.6/operate/http-gateway#serving-http-apis-and-mcp-on-one-port).
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/docker/golem-router-entrypoint.sh), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+
+## Request Limits
+
+Every path into an agent has the same payload limit of 32 MiB: the gRPC message from the worker service to the worker executor, the invocation session WebSocket message, and the REST and MCP request body.
+
+| Setting | Service | Default | Description |
+|---------|---------|---------|-------------|
+| `body_limits.api` | worker service, registry service | `33554432` (32 MiB) | Largest REST request body. A larger body gets `413 Payload Too Large` |
+| `body_limits.mcp` | worker service | `33554432` (32 MiB) | Largest MCP request body |
+| `body_limits.upload` | registry service | `2147483648` (2 GiB) | Largest `multipart/form-data` request body: component and plugin uploads with their initial file archives, and initial agent file uploads |
+| `http_server.http2_max_header_list_size` | worker service, registry service | `65536` (64 KiB) | Largest HTTP/2 header list. A larger header list gets `431 Request Header Fields Too Large` |
+| `http_server.http2_initial_stream_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each request stream |
+| `http_server.http2_initial_connection_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each connection |
+| `http_server.http2_adaptive_window` | worker service, registry service | `false` | Sizes the HTTP/2 windows from the measured bandwidth-delay product, instead of the initial window sizes |
+| `invocation_session.websocket.max_message_size`, `max_frame_size` | worker service | `33554432` (32 MiB) | Largest WebSocket message and frame of the invocation session. A larger message or frame closes the session with close code 1009 |
+| `invocation_session.websocket.max_write_buffer_size` | worker service | `67108864` (64 MiB) | Outbound bytes that may wait for the client |
+| `connect_websocket.*` | worker service | same as `invocation_session.websocket` | The same limits for the agent event stream (`connect`) |
+
+A request that declares a larger `Content-Length` gets 413 before the service reads its body. A request without `Content-Length` gets 413 when its body passes the limit.
+
+The invocation session and the agent event stream (`connect`) answer a message or frame above their limit with close code 1009. They do not read the payload of a frame whose header declares a larger size.
+
+The HTTP/2 header list limit is above the 60 KiB that Envoy accepts by default, so a gateway in front of Golem decides first. The HTTP/2 settings apply to every HTTP port of the service: for the worker service, `port`, `custom_request_port` and `mcp_port`.
+
+For environment variables, add the path to `GOLEM__`, for example `GOLEM__BODY_LIMITS__API`. For `golem server run`, nest the settings under `worker_service` or `registry_service`, for example `GOLEM__WORKER_SERVICE__BODY_LIMITS__MCP`. The HTTP/2 settings of the `golem server run` listener are `router.http_server`, for example `GOLEM__ROUTER__HTTP_SERVER__HTTP2_MAX_HEADER_LIST_SIZE`.
+
+## Network Addresses
+
+Every service binds all of its listeners to `bind_address` (`GOLEM__BIND_ADDRESS`). The default `0.0.0.0` accepts IPv4 connections only. Set it to `::` on a network that needs IPv6, such as a Fly.io private network or an IPv6-only Railway environment: the service then accepts both IPv6 and IPv4 connections, whatever the operating system's default for IPv6 sockets is. On a host whose kernel has no IPv6 support, binding `::` fails, and the service stops at startup with the address in the error.
+
+The shard manager identifies a worker executor by the address it reaches it at, and by default takes that address from the source IP of the executor's registration. Where the network translates source addresses, that IP is not one the shard manager and the worker services can dial. Set `grpc.advertised_ip` (`GOLEM__GRPC__ADVERTISED_IP`) on each executor to the IP address it is reachable at - on Fly.io, the machine's `FLY_PRIVATE_IP` - and the shard manager uses it for the shard lease and for the quota leases of that executor. Every executor needs an address of its own: two executors that advertise the same address replace each other's registration. An advertised IP address must be of a family the executor's `bind_address` accepts - an advertised IPv6 address needs an IPv6 `bind_address`, usually `::` - and an address that names no single host - unspecified, multicast, broadcast or IPv6 link-local - is refused at startup.
 
 ## Deployment Variants
 

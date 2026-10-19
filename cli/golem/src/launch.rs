@@ -91,6 +91,7 @@ pub async fn launch_golem_services(
         &config.router.address,
         config.router.port,
         config.router.management_host.as_deref(),
+        &config.router.http_server,
         startup_progress.clone(),
         &mut join_set,
     )

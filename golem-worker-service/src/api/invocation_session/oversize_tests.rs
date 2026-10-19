@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::api::agents::invocation_session_websocket_config;
+use crate::config::WebSocketTransportLimits;
 use crate::transport_test_support::server;
 use poem::web::Data;
 use poem::web::websocket::WebSocket;
@@ -94,7 +94,7 @@ async fn size_limited_session(
 ) -> impl IntoResponse {
     let blocked_setup = *blocked_setup.0;
     websocket
-        .config(invocation_session_websocket_config())
+        .config(WebSocketTransportLimits::default().websocket_config())
         .on_upgrade(move |socket| async move {
             let websocket = invocation_session_websocket(
                 socket,

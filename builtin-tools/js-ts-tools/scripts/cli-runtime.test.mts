@@ -68,6 +68,29 @@ async function isolatesProcessStateAndForwardsOutput() {
   }
 }
 
+async function restoresVariablesTheCliExports() {
+  const stdout = capture();
+  const stderr = capture();
+  process.env.GOLEM_CLI_RUNTIME_CHANGED = 'before';
+  delete process.env.GOLEM_CLI_RUNTIME_EXPORTED;
+  try {
+    const exitCode = await runCli(
+      { argv: ['npm'], cwd: '/' },
+      { stdout: stdout.stream, stderr: stderr.stream },
+      (processFacade) => {
+        processFacade.env.GOLEM_CLI_RUNTIME_EXPORTED = 'exported';
+        processFacade.env.GOLEM_CLI_RUNTIME_CHANGED = 'changed';
+      },
+    );
+
+    assert.equal(exitCode, 0, stderr.text());
+    assert.equal(Object.hasOwn(process.env, 'GOLEM_CLI_RUNTIME_EXPORTED'), false);
+    assert.equal(process.env.GOLEM_CLI_RUNTIME_CHANGED, 'before');
+  } finally {
+    delete process.env.GOLEM_CLI_RUNTIME_CHANGED;
+  }
+}
+
 async function capturesExit() {
   const stdout = capture();
   const stderr = capture();
@@ -339,6 +362,7 @@ async function normalizesStatuses() {
 
 await normalizesStatuses();
 await isolatesProcessStateAndForwardsOutput();
+await restoresVariablesTheCliExports();
 await capturesExit();
 await capturesErrors();
 await waitsForRuntimeIdleBeforeRestoringOutput();

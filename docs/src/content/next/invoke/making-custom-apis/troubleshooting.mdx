@@ -10,6 +10,16 @@ API deployment definitions conflict error: /task-agents/{name}/tasks
 
 Make sure to remove or update conflicting deployments before redeploying.
 
+## Agent type deployed to multiple domains
+
+An agent type can be listed in only one HTTP API deployment per environment, because the webhook URL of the agent type uses a single domain. If `golem.yaml` lists the same agent type under two deployments of one environment, loading the manifest fails before anything is deployed:
+
+```bash filename="Terminal" copy
+Agent type MyAgent is deployed to multiple HTTP API domains in environment local: app.localhost:9006, sandbox.localhost:9006. ...
+```
+
+List the agent type under one domain only. One domain can serve many agent types. To serve the same functionality on another domain, define a separate agent type for that domain that calls the original agent.
+
 ## Type mismatch errors
 
 When an endpoint receives input that doesn't match the expected parameter types, Golem returns a `400 Bad Request` with details about the type mismatch. This makes Golem's API gateway much more type-safe than a typical gateway where requests are always routed to the backend regardless of input validity.
@@ -24,3 +34,23 @@ If your endpoints are not accessible after deployment, verify that:
 2. The `httpApi.deployments` section in `golem.yaml` lists the agent
 3. The deployment domain matches the URL you are trying to access
 4. The component was redeployed after code changes (`golem deploy`)
+
+## Router and file requests
+
+- **Unexpected handler or 404:** check concrete code-first routes, the selected
+  mount, and declaration order. Only absent files fall through; permission,
+  initialization, and storage failures do not. See
+  [Routing precedence](/next/invoke/making-custom-apis/http-routers/semantics#request-routing-precedence).
+- **Static file returns 500:** confirm it is provisioned read-only and that
+  worker-service can read the indexed blob from
+  [shared storage](/next/operate/http-gateway#configuring-shared-storage).
+- **Live read stalls:** check agent initialization and preceding work, then test
+  cancellation through the ingress and review the
+  [exchange deadline](/next/operate/http-gateway#setting-timeouts-and-resource-budgets).
+- **OpenAPI returns 502:** check provider JSON, size limits, local references, and
+  conflicting paths, components, or operation IDs. A provider failure does not
+  disable ordinary router traffic. See
+  [OpenAPI generation](/next/invoke/making-custom-apis/http-routers/semantics#openapi-generation).
+
+Use status codes, safe error categories, and router/deployment identities in
+diagnostics. Do not log HTTP bodies, provider documents, secrets, or internal paths.

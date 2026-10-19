@@ -22,10 +22,10 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder,
     BenchmarkResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
-    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
-    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
-    DensitySharingArg, DensitySnapshottingArg, RunMetadata,
+    BenchmarkSuiteResult, ChaosAction, ChaosScenarioArg, DensityAction, DensityAgentModeArg,
+    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
+    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -41,6 +41,7 @@ use integration_tests::benchmarks::density::{
 use integration_tests::benchmarks::{
     self, cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
+use integration_tests::chaos;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -293,6 +294,33 @@ async fn main() {
                 params.json,
             )
             .await
+        }
+        BenchmarkConfig::Chaos {
+            action,
+            scenario,
+            suite,
+            prep_manifest,
+            signal_dir,
+            save_to_json,
+            save_history_to_json,
+            allow_disabled,
+            ..
+        } => {
+            run_chaos(
+                params.benchmark_config.mode(),
+                params.service_verbosity(),
+                params.otlp,
+                *action,
+                *scenario,
+                suite.clone(),
+                prep_manifest,
+                signal_dir.clone(),
+                save_to_json.clone(),
+                save_history_to_json.clone(),
+                *allow_disabled,
+            )
+            .await;
+            0
         }
     };
 
@@ -1054,4 +1082,180 @@ async fn run_density(
 
     deps.kill_all().await;
     failure_count
+}
+
+// ── Chaos subcommand handling ─────────────────────────────────────────────────
+
+/// Runs one chaos action: the one-time prep, or one scenario end to end.
+///
+/// The driver never injects the fault itself. `--signal-dir` is where the
+/// workflow tells it the fault is active and, later, cleared; see
+/// [`integration_tests::chaos::signal`] for the contract.
+#[allow(clippy::too_many_arguments)]
+async fn run_chaos(
+    mode: &TestMode,
+    verbosity: Level,
+    otlp: bool,
+    action: ChaosAction,
+    scenario: Option<ChaosScenarioArg>,
+    suite: Option<std::path::PathBuf>,
+    prep_manifest_path: &std::path::Path,
+    signal_dir: Option<std::path::PathBuf>,
+    save_to_json: Option<std::path::PathBuf>,
+    save_history_to_json: Option<std::path::PathBuf>,
+    allow_disabled: bool,
+) {
+    if !matches!(mode, TestMode::Cloud { .. }) {
+        panic!("chaos scenarios require cloud mode");
+    }
+
+    let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
+
+    match action {
+        ChaosAction::Prep => {
+            let manifest = chaos::prep::run_prep(&deps)
+                .await
+                .expect("chaos-prep failed");
+            manifest
+                .save(prep_manifest_path)
+                .expect("failed to write chaos prep manifest");
+            info!("Chaos-prep manifest written to {prep_manifest_path:?}");
+        }
+        ChaosAction::Scenario => {
+            let scenario = scenario.expect("--scenario is required for --action scenario");
+            let suite_path = suite.expect("--suite is required for --action scenario");
+            let signal_dir = signal_dir.expect("--signal-dir is required for --action scenario");
+
+            let suite = chaos::ChaosSuite::load(&suite_path).expect("failed to load chaos suite");
+            let code = match scenario {
+                ChaosScenarioArg::S1 => chaos::ScenarioCode::S1,
+                ChaosScenarioArg::S8 => chaos::ScenarioCode::S8,
+                ChaosScenarioArg::S5 => chaos::ScenarioCode::S5,
+                ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
+                ChaosScenarioArg::S13 => chaos::ScenarioCode::S13,
+                ChaosScenarioArg::S10 => chaos::ScenarioCode::S10,
+                ChaosScenarioArg::S11 => chaos::ScenarioCode::S11,
+                ChaosScenarioArg::S3 => chaos::ScenarioCode::S3,
+                ChaosScenarioArg::S2 => chaos::ScenarioCode::S2,
+                ChaosScenarioArg::S4 => chaos::ScenarioCode::S4,
+                ChaosScenarioArg::Mf2 => chaos::ScenarioCode::MF2,
+                ChaosScenarioArg::S7 => chaos::ScenarioCode::S7,
+                ChaosScenarioArg::S6 => chaos::ScenarioCode::S6,
+                ChaosScenarioArg::S9 => chaos::ScenarioCode::S9,
+                ChaosScenarioArg::S16 => chaos::ScenarioCode::S16,
+                ChaosScenarioArg::S22 => chaos::ScenarioCode::S22,
+                ChaosScenarioArg::S14 => chaos::ScenarioCode::S14,
+                ChaosScenarioArg::S18 => chaos::ScenarioCode::S18,
+                ChaosScenarioArg::S17 => chaos::ScenarioCode::S17,
+                ChaosScenarioArg::S15 => chaos::ScenarioCode::S15,
+                ChaosScenarioArg::S15A => chaos::ScenarioCode::S15A,
+                ChaosScenarioArg::S15B => chaos::ScenarioCode::S15B,
+                ChaosScenarioArg::S15C => chaos::ScenarioCode::S15C,
+                ChaosScenarioArg::S23 => chaos::ScenarioCode::S23,
+                ChaosScenarioArg::Mf1 => chaos::ScenarioCode::MF1,
+                ChaosScenarioArg::S21 => chaos::ScenarioCode::S21,
+                ChaosScenarioArg::S19 => chaos::ScenarioCode::S19,
+            };
+            let config = suite
+                .scenario(code, allow_disabled)
+                .expect("scenario is missing or disabled in the suite")
+                .clone();
+
+            let manifest = chaos::prep::ChaosPrepManifest::load(prep_manifest_path)
+                .expect("failed to load chaos prep manifest");
+            let signals =
+                chaos::signal::FaultSignals::new(&signal_dir).expect("failed to open signal dir");
+            let outputs = chaos::scenarios::OutputPaths {
+                result: save_to_json,
+                history: save_history_to_json,
+            };
+
+            let result = match code {
+                chaos::ScenarioCode::S1 => {
+                    chaos::scenarios::s1::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S8 => {
+                    chaos::scenarios::s8::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S5 => {
+                    chaos::scenarios::s5::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S12 => {
+                    chaos::scenarios::s12::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S13 => {
+                    chaos::scenarios::s13::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S10 => {
+                    chaos::scenarios::s10::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S11 => {
+                    chaos::scenarios::s11::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S3 => {
+                    chaos::scenarios::s3::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S19 => {
+                    chaos::scenarios::s19::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                code @ (chaos::ScenarioCode::S4 | chaos::ScenarioCode::MF2) => {
+                    chaos::scenarios::dns_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+                code @ (chaos::ScenarioCode::S2 | chaos::ScenarioCode::S21) => {
+                    chaos::scenarios::relay_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+                chaos::ScenarioCode::S7 => {
+                    chaos::scenarios::s7::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S6 => {
+                    chaos::scenarios::s6::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S9 => {
+                    chaos::scenarios::s9::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                code @ (chaos::ScenarioCode::S14
+                | chaos::ScenarioCode::S15
+                | chaos::ScenarioCode::S15A
+                | chaos::ScenarioCode::S15B
+                | chaos::ScenarioCode::S15C
+                | chaos::ScenarioCode::S16
+                | chaos::ScenarioCode::S17
+                | chaos::ScenarioCode::S18
+                | chaos::ScenarioCode::S22
+                | chaos::ScenarioCode::S23
+                | chaos::ScenarioCode::MF1) => {
+                    chaos::scenarios::storage_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+            };
+
+            deps.kill_all().await;
+
+            let result = result.expect("chaos scenario failed to produce a result");
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+
+            // The exit code is what the workflow branches on. Only the narrow
+            // set of unambiguous failures in `TerminationReason` gets here — a
+            // read-back finding is reported for an operator to judge, not
+            // turned into a red run.
+            if !result.completed {
+                eprintln!(
+                    "Chaos scenario {} did not complete: {:?}",
+                    result.scenario_code, result.termination_reason
+                );
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
+
+    deps.kill_all().await;
 }

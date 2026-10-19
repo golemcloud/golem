@@ -91,6 +91,7 @@ impl OplogReadError {
     pub fn of_archive(source: OplogReadSource, error: OplogArchiveError) -> Self {
         match error {
             OplogArchiveError::Unavailable(detail) => Self::source_unavailable(source, detail),
+            OplogArchiveError::Corruption(detail) => Self::corruption(source, detail),
             OplogArchiveError::Failed(detail) => Self::source_failure(source, detail),
         }
     }

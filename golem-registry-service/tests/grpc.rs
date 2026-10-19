@@ -188,6 +188,16 @@ async fn runtime_card_grpc_lifecycle_is_shared_across_executor_clients() {
     let card_repo = DbCardRepo::logged(SqlitePool::configured(&db_config).await.unwrap());
     let _ = card_repo.delete(revoked_parent_id).await.unwrap();
 
+    assert!(matches!(
+        writer
+            .create_runtime_card(
+                runtime_card(revoked_parent_id, Vec::new()),
+                runtime_card_provenance(4),
+            )
+            .await,
+        Err(RegistryServiceError::RuntimeCardRevoked(_))
+    ));
+
     let revoked_parent_card_id = CardId::new();
     assert!(matches!(
         writer

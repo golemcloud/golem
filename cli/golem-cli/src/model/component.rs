@@ -47,7 +47,8 @@ use golem_common::model::component::{
 use golem_common::model::component::{AgentFilePermissions, ComponentName};
 use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::tool::{ToolDeploymentMetadata, ToolName};
+use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
+use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{diff, tool};
 use golem_common::schema::agent::{
@@ -185,6 +186,8 @@ pub struct ComponentView {
     pub agent_types: Vec<AgentTypeSchema>,
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     pub tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+    pub tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    pub files: Vec<InitialAgentFile>,
 }
 
 impl Masked for ComponentView {
@@ -222,10 +225,19 @@ impl Masked for ComponentView {
             }
         }
 
-        for tool in self.tools.values_mut() {
-            mask_json_leaf_values(&mut tool.provision.config.0);
-            tool.provision.env = mask_sensitive_map(config, &tool.provision.env);
-            for plugin in &mut tool.provision.plugins {
+        for provision in self
+            .tools
+            .values_mut()
+            .map(|tool| &mut tool.provision)
+            .chain(
+                self.tool_middlewares
+                    .values_mut()
+                    .map(|middleware| &mut middleware.provision),
+            )
+        {
+            mask_json_leaf_values(&mut provision.config.0);
+            provision.env = mask_sensitive_map(config, &provision.env);
+            for plugin in &mut provision.plugins {
                 plugin.parameters = mask_sensitive_map(config, &plugin.parameters);
             }
         }
@@ -251,6 +263,8 @@ impl ComponentView {
             agent_types,
             agent_type_provision_configs: value.metadata.agent_type_provision_configs().clone(),
             tools: value.metadata.tools().clone(),
+            tool_middlewares: value.metadata.tool_middlewares().clone(),
+            files: value.metadata.component_provision_config().files.clone(),
         }
     }
 }
@@ -1021,7 +1035,13 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
         .fmt_field("Environment ID", &view.environment_id, format_id)
         .fmt_field("Component size", &view.component_size, format_binary_size)
         .fmt_field("Created at", &view.created_at, |d| d.to_string())
-        .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()));
+        .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()))
+        .fmt_field_optional(
+            "Initial file system",
+            view.files.as_slice(),
+            !view.files.is_empty(),
+            format_files,
+        );
 
     for (agent_type_name, provision_config) in &view.agent_type_provision_configs {
         let prefix = format!("[{}] ", agent_type_name.0);
@@ -1058,7 +1078,68 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
             );
     }
 
+    fields
+        .fmt_field_optional("Tools", &view.tools, !view.tools.is_empty(), |tools| {
+            tools
+                .iter()
+                .map(|(name, tool)| format!("{} {}", name, tool.definition.version))
+                .join("\n")
+        })
+        .fmt_field_optional(
+            "Tool middlewares",
+            &view.tool_middlewares,
+            !view.tool_middlewares.is_empty(),
+            |middlewares| {
+                middlewares
+                    .iter()
+                    .map(|(name, middleware)| format!("{} {}", name, middleware.definition.version))
+                    .join("\n")
+            },
+        );
+    for (name, tool) in &view.tools {
+        tool_provision_fields(&mut fields, &format!("[tool {name}] "), &tool.provision);
+    }
+    for (name, middleware) in &view.tool_middlewares {
+        tool_provision_fields(
+            &mut fields,
+            &format!("[tool middleware {name}] "),
+            &middleware.provision,
+        );
+    }
+
     fields.build()
+}
+
+fn tool_provision_fields(
+    fields: &mut FieldsBuilder,
+    prefix: &str,
+    provision: &ToolProvisionConfig,
+) {
+    fields
+        .fmt_field_optional(
+            &format!("{prefix}Environment"),
+            &provision.env,
+            !provision.env.is_empty(),
+            format_env,
+        )
+        .fmt_field_optional(
+            &format!("{prefix}Config"),
+            &provision.config.0,
+            provision.config.0 != serde_json::json!({}),
+            |config| config.to_string(),
+        )
+        .fmt_field_optional(
+            &format!("{prefix}Initial file system"),
+            provision.files.as_slice(),
+            !provision.files.is_empty(),
+            format_files,
+        )
+        .fmt_field_optional(
+            &format!("{prefix}Plugins"),
+            provision.plugins.as_slice(),
+            !provision.plugins.is_empty(),
+            format_plugins,
+        );
 }
 
 fn initial_permission_is_empty(card: &PolymorphicCard) -> bool {
@@ -1347,9 +1428,10 @@ fn format_files(files: &[InitialAgentFile]) -> String {
         .iter()
         .map(|file| {
             format!(
-                "{} {} {}",
+                "{} {} {} {}",
                 file.permissions.as_compact_str(),
                 file.path.as_path().as_str().log_color_highlight(),
+                format_binary_size(&file.size),
                 file.content_hash.0.to_string().black()
             )
         })

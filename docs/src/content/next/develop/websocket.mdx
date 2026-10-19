@@ -234,10 +234,12 @@ A physical WebSocket session does not survive runtime reconstruction, whether ca
 
 Both policies replay recorded outcomes unchanged, including messages, timeouts, send results, and close results. Neither changes retry behavior for an ordinary live network disconnect. Session loss is **not proof that an earlier send never reached the peer**. Use application acknowledgments, deduplication, or reconciliation before resending effects.
 
-Incomplete non-idempotent durable scopes still trap through the central recovery guard before the reconstruction policy applies. An `End` entry alone does not override an unfinished scope. An atomic-region rollback can remove the recorded connect from the replay path; executing that connect again then legitimately opens a new session under either policy.
+Recovery repairs eligible incomplete durable calls at their own recorded start and retains completed calls and their outcomes. It does not roll back an atomic region or repeat a completed connect as a new call. The reconstruction policy controls what happens when live code next accesses the reconstructed handle.
 
 ### SDK policy and error forms
 
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
 TypeScript accepts `ConnectOptions.reconstructionPolicy`:
 
 ```typescript
@@ -247,32 +249,11 @@ const ws = await connectWebsocket("wss://example.com/chat", {
 // Catch WebsocketError from send, receive, receiveWithTimeout, or close:
 // err.tag === "session-lost"
 ```
+</Tabs.Tab>
+<Tabs.Tab>
+Effect accepts the `reconstructionPolicy` option. `Websocket.isSessionLost(error)` recognizes structural tags, not class identity: a `SocketError` contains a `SocketReadError` or `SocketWriteError` in `reason`, with the plain payloadless `{ _tag: "SessionLost" }` in `reason.cause`. Explicit close through the writer propagates loss to the writer and fails the reader's deferred with the same error. The scope finalizer closes best-effort and does not surface close failures.
 
-Rust takes a third `Option<websocket::WebSocketReconstructionPolicy>` argument. Import the policy from the `websocket` module:
-
-```rust
-use golem_rust::{websocket::WebSocketReconstructionPolicy, WebsocketConnection};
-
-let ws = WebsocketConnection::connect(
-    "wss://example.com/chat",
-    None,
-    Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
-)?;
-// Match WebSocketError::SessionLost from live access.
-```
-
-Go takes the policy as a `websocket.WithReconstructionPolicy` option:
-
-```go
-conn, err := websocket.Connect("wss://example.com/chat",
-    websocket.WithReconstructionPolicy(websocket.ReportConnectionLoss))
-// A live Send, Receive, ReceiveWithTimeout or Close returns a *websocket.Error
-// whose Kind is websocket.SessionLost.
-```
-
-Effect accepts the same `reconstructionPolicy` option. `Websocket.isSessionLost(error)` recognizes structural tags, not class identity: a `SocketError` contains a `SocketReadError` or `SocketWriteError` in `reason`, with the plain payloadless `{ _tag: "SessionLost" }` in `reason.cause`. Explicit close through the writer propagates loss to the writer and fails the reader's deferred with the same error. The scope finalizer closes best-effort and does not surface close failures.
-
-### Supervise one Effect session generation at a time
+**Supervise one Effect session generation at a time**
 
 Use one scope for each connection generation. Start the reader before acquiring the initialization writer, and race reader failure against initialization and traffic writes. This example sends an application initialization message before ordinary traffic; a real protocol may also require an acknowledgment before traffic begins.
 
@@ -319,29 +300,35 @@ const supervise = Effect.gen(function* () {
 
 `raceFirst` cancels and waits for the losing branch, and `Fiber.interrupt` waits for the old reader to finish. Do not retain the old writer or automatically forward its queued traffic to the next connection. Reconciliation and the decision to start another generation belong to the guest application, not to a production callback or host configuration.
 
-## WIT interface reference
+</Tabs.Tab>
+<Tabs.Tab>
+Rust takes a third `Option<websocket::WebSocketReconstructionPolicy>` argument. Import the policy from the `websocket` module:
 
-The underlying package is `golem:websocket@1.5.0`; its `golem:websocket/client@1.5.0` interface defines the `websocket-connection` resource type with the following methods:
+```rust
+use golem_rust::{websocket::WebSocketReconstructionPolicy, WebsocketConnection};
 
-- **`connect`** — opens a WebSocket connection to the given URL, with optional headers and an optional reconstruction policy
-- **`send`** — sends a text or binary message
-- **`receive`** — asynchronously waits for the next message
-- **`receive-with-timeout`** — waits up to the given number of milliseconds and returns `none` on expiry
-- **`close`** — initiates a graceful close handshake
-
-The root WIT definition in `wit/deps/golem-websocket/websocket.wit` declares:
-
-```wit
-enum reconstruction-policy {
-  reconnect-automatically,
-  report-connection-loss,
-}
-
-connect: static func(
-  url: string,
-  headers: option<list<tuple<string, string>>>,
-  reconstruction-policy: option<reconstruction-policy>
-) -> result<websocket-connection, error>;
+let ws = WebsocketConnection::connect(
+    "wss://example.com/chat",
+    None,
+    Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
+)?;
+// Match WebSocketError::SessionLost from live access.
 ```
+</Tabs.Tab>
+<Tabs.Tab>
+See [Runtime reconstruction and session loss](#runtime-reconstruction-and-session-loss) for the shared session-loss behavior.
+</Tabs.Tab>
+<Tabs.Tab>
+See [Runtime reconstruction and session loss](#runtime-reconstruction-and-session-loss) for the shared session-loss behavior.
+</Tabs.Tab>
+<Tabs.Tab>
+Go takes the policy as a `websocket.WithReconstructionPolicy` option:
 
-The `error` variant includes the payloadless `session-lost` case. On a lost reconstructed handle, `close` reports this loss without a handshake rather than reporting a graceful close.
+```go
+conn, err := websocket.Connect("wss://example.com/chat",
+    websocket.WithReconstructionPolicy(websocket.ReportConnectionLoss))
+// A live Send, Receive, ReceiveWithTimeout or Close returns a *websocket.Error
+// whose Kind is websocket.SessionLost.
+```
+</Tabs.Tab>
+</Tabs>

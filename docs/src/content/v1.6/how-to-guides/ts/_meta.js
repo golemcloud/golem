@@ -7,7 +7,6 @@ export default {
   "golem-add-secret-ts": "Adding Secrets to TypeScript Golem Agents",
   "golem-add-config-ts": "Adding Typed Configuration to a TypeScript Agent",
   "golem-annotate-agent-ts": "Annotating Agents and Methods (TypeScript)",
-  "golem-atomic-block-ts": "Atomic Blocks and Durability Controls (TypeScript)",
   "golem-call-tool-ts": "Call a Golem tool from TypeScript",
   "golem-call-from-external-ts": "Calling Agents from External TypeScript Applications",
   "golem-agent-reflection-ts": "Calling Agents with Runtime Reflection (TypeScript)",

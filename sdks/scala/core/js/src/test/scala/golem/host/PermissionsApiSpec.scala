@@ -19,7 +19,7 @@ package golem.host
 import golem.host.PermissionsApi._
 import golem.host.js.{JsComponentId, JsPermissionCardResource, JsUuid}
 import golem.schema.{FromSchema, GuestPermissionCardHandle, IntoSchema, PermissionCardSpec, SchemaTypeBody, SchemaValue}
-import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody}
+import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueNode}
 import zio.test._
 
 import scala.concurrent.duration._
@@ -231,7 +231,7 @@ object PermissionsApiSpec extends ZIOSpecDefault {
     test("a template card derives a concrete card, and revoke, install and release move it") {
       val host = new FakeHost
       host
-        .on("derive")(_ => host.rawCard("derived"))
+        .on("derive")(_ => js.Dynamic.literal(tag = "concrete", `val` = host.rawCard("derived")))
         .on("revokeCard")(_ => throwJs(error("card-revoked", "already revoked")))
         .on("installCard")(args =>
           if (args(0).asInstanceOf[js.Dynamic].name.asInstanceOf[String] == "install-denied")
@@ -239,18 +239,19 @@ object PermissionsApiSpec extends ZIOSpecDefault {
           else js.undefined
         )
         .install()
-      def concrete(card: Either[PermissionError, PermissionCard]): Option[PermissionCard] = card.toOption
-      val parentRaw                                                                       = host.rawCard("template")
-      val parent                                                                          = template(parentRaw)
-      val derived                                                                         = concrete(parent.derive(Bounds(lowerPositive = List(inspectGrant)), Some(Lifespan(1.minute))))
-      val args                                                                            = host.args("derive")
-      val revoking                                                                        = template(host.rawCard("revoking"))
-      val revoked                                                                         = revoking.revoke()
-      val installed                                                                       = template(host.rawCard("installed"))
-      val result                                                                          = installed.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
-      val denied                                                                          = template(host.rawCard("install-denied"))
-      val refused                                                                         = denied.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
-      val released                                                                        = template(host.rawCard("released"))
+      def concrete(card: Either[PermissionError, PersistentCard]): Option[PermissionCard] =
+        card.toOption.collect { case PersistentCard.Concrete(value) => value }
+      val parentRaw = host.rawCard("template")
+      val parent    = template(parentRaw)
+      val derived   = concrete(parent.derive(Bounds(lowerPositive = List(inspectGrant)), Some(Lifespan(1.minute))))
+      val args      = host.args("derive")
+      val revoking  = template(host.rawCard("revoking"))
+      val revoked   = revoking.revoke()
+      val installed = template(host.rawCard("installed"))
+      val result    = installed.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val denied    = template(host.rawCard("install-denied"))
+      val refused   = denied.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val released  = template(host.rawCard("released"))
       released.release()
       released.release()
       assertTrue(
@@ -279,7 +280,8 @@ object PermissionsApiSpec extends ZIOSpecDefault {
       host
         .on("derive") { _ =>
           derivations += 1
-          if (derivations == 1) result else host.rawCard(s"result-$derivations")
+          js.Dynamic
+            .literal(tag = "concrete", `val` = (if (derivations == 1) result else host.rawCard(s"result-$derivations")))
         }
         .install()
       val parentCard = card(parent)
@@ -302,6 +304,58 @@ object PermissionsApiSpec extends ZIOSpecDefault {
         grantNames(args(4)) == List("agent:invoke:Target"),
         args(5).asInstanceOf[js.Dynamic].iso8601.asInstanceOf[String] == "PT90.5S",
         js.isUndefined { parentCard.derive(Bounds.empty); host.args("derive")(5) }
+      )
+    },
+    test("persistent derivation uses the host tag without inspecting or inferring from bounds") {
+      val host = new FakeHost
+      var tag  = "template"
+      host
+        .on("derive")(_ => walletEntry(tag, host.rawCard("child")))
+        .on("deriveFromWallet")(_ => walletEntry(tag, host.rawCard("wallet-child")))
+        .install()
+      val parent         = card(host.rawCard("parent"))
+      val templateChild  = parent.derive(Bounds.empty).toOption.get
+      val walletTemplate = PermissionsApi.deriveFromWallet(Bounds.empty).toOption.get
+      tag = "concrete"
+      val concreteChild  = parent.derive(Bounds(lowerPositive = List(toolGrant.copy(owner = "?agent")))).toOption.get
+      val walletConcrete = PermissionsApi.deriveFromWallet(Bounds.empty).toOption.get
+      val parentPresent  = parent.isPresent
+      val observed       = assertTrue(
+        templateChild.isInstanceOf[PersistentCard.Template],
+        walletTemplate.isInstanceOf[PersistentCard.Template],
+        concreteChild.isInstanceOf[PersistentCard.Concrete],
+        walletConcrete.isInstanceOf[PersistentCard.Concrete],
+        host.count("inspectCard") == 0,
+        parentPresent
+      )
+      List(templateChild, walletTemplate, concreteChild, walletConcrete, parent).foreach(_.release())
+      observed
+    },
+    test("persistent card codecs retain the case and the affine payload") {
+      val host   = new FakeHost
+      val codec  = implicitly[ConcreteCodec[PersistentCard]]
+      val checks = List(0, 1).map { index =>
+        val handle  = GuestPermissionCardHandle.fromRaw(host.rawCard(s"codec-$index"))
+        val decoded = codec.decode(
+          golem.schema.wire.WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.PermissionCardHandle(handle),
+              WitSchemaValueNode.VariantValue(golem.schema.wire.WitVariantValuePayload(index, Some(0)))
+            ),
+            1
+          )
+        )
+        val encoded   = implicitly[IntoSchema[PersistentCard]].toValue(decoded)
+        val duplicate = implicitly[FromSchema[PersistentCard]].fromValue(encoded)
+        val written   = codec.encodeValue(decoded)
+        val correct   = (index == 0) == decoded.isInstanceOf[PersistentCard.Concrete]
+        decoded.release()
+        correct && duplicate.isLeft && written.valueNodes.last ==
+          WitSchemaValueNode.VariantValue(golem.schema.wire.WitVariantValuePayload(index, Some(0)))
+      }
+      assertTrue(
+        checks.forall(identity),
+        implicitly[FromSchema[PersistentCard]].fromValue(SchemaValue.VariantValue(2, None)).isLeft
       )
     },
     test("an expected host error becomes Left and an unknown thrown value is rethrown") {

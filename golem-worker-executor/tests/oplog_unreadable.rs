@@ -25,28 +25,34 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{
+    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, ShardAssignment, ShardId,
+};
 use golem_common::{agent_id, data_value};
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    agent_path_segment,
 };
 use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::model::LookupResult;
 use golem_worker_executor::services::HasEvents;
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::OplogConfig;
-use golem_worker_executor::services::oplog::{CommitLevel, CompressedOplogChunk};
+use golem_worker_executor::services::oplog::CompressedOplogChunk;
+use golem_worker_executor::storage::scheduler::SchedulerStorage;
+use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
-    start_with_oplog_config, start_with_overrides, truncate_archived_oplog_chunk,
+    scheduler_sqlite_storage_config, start_with_oplog_config, start_with_overrides,
+    truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -84,8 +90,9 @@ fn assert_fails_with_the_decode_error<T: std::fmt::Debug>(
 ) {
     let error = result.expect_err("an agent whose oplog does not read must not run");
     let error = format!("{error:#}");
+    let agent = agent_id.to_string();
     assert!(
-        error.contains(&agent_id.to_string())
+        (error.contains(&agent) || error.contains(&agent.escape_debug().to_string()))
             && error.contains("archive layer 1")
             && error.contains("failed to decode compressed oplog chunk")
             && error.contains("Input ended unexpectedly"),
@@ -181,7 +188,7 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
 }
 
 /// The `Create` of the agent reads, and a later archived chunk does not: the agent is found, its
-/// start replays into the chunk and fails with the cause, and the agent is not run.
+/// cached status admits startup, whose replay scan fails with the cause, and the agent is not run.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -218,6 +225,31 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
         wait_until_archived(deps, &context, &unreadable_owned).await?;
         wait_until_archived(deps, &context, &healthy_owned).await?;
     }
+    // The primary can empty before the final archive action invalidates the cache. Count
+    // future-due and leased actions too, so none can erase the metadata warmed below.
+    let scheduler =
+        SqliteSchedulerStorage::configured(&scheduler_sqlite_storage_config(deps, &context))
+            .await
+            .map_err(anyhow::Error::msg)?;
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while scheduler
+        .count_due(chrono::DateTime::<chrono::Utc>::MAX_UTC, &assignment)
+        .await?
+        > 0
+    {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "archive actions did not finish"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    // Archival removes the status cache. Retire the shell and read metadata while the archive
+    // still reads, so the next startup reaches replay instead of failing a cold status fold.
+    assert!(executor.stop_worker_if_idle(&unreadable_owned).await?);
+    executor.retire_unloaded_worker(&unreadable_owned).await?;
+    executor.get_worker_metadata(&unreadable_id).await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
 
     let chunks = archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
@@ -238,10 +270,16 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
 
     let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
 
+    assert_eq!(
+        executor.get_worker_metadata(&unreadable_id).await?.status,
+        AgentStatus::Idle
+    );
     assert_fails_with_the_decode_error(
-        executor
-            .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
-            .await,
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            executor.invoke_and_await_agent(&component, &unreadable, "increment", data_value!()),
+        )
+        .await?,
         &unreadable_id,
     );
 
@@ -254,9 +292,11 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
     );
 
     drop(executor);
-    assert_eq!(
-        archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?,
-        corrupt
+    // Recovery may append diagnostics, but must not replace or delete the damaged history.
+    assert!(
+        archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL)
+            .await?
+            .starts_with(&corrupt)
     );
     Ok(())
 }
@@ -274,6 +314,7 @@ fn blob_archiving_config() -> OplogConfig {
 const ARCHIVE_UP: u8 = 0;
 const ARCHIVE_UNAVAILABLE: u8 = 1;
 const ARCHIVE_CORRUPT: u8 = 2;
+const ARCHIVE_UNKNOWN_VERSION: u8 = 3;
 
 /// How a [`FlakyArchiveStorage`] answers the reads of archived oplog chunks, and how many error
 /// entries it archived since the history failed.
@@ -282,6 +323,7 @@ const ARCHIVE_CORRUPT: u8 = 2;
 /// `history_end`. A status rebuild reads that history.
 #[derive(Debug, Default)]
 struct ArchiveFault {
+    agent_path: OnceLock<String>,
     mode: AtomicU8,
     history_end: AtomicU64,
     archived_errors: AtomicUsize,
@@ -322,14 +364,20 @@ impl ArchiveFault {
 
     /// The answer to a read of the object at `path` in `namespace` that replaces the stored one.
     /// An unavailable archive fails the read as a backend whose outage outlived its retries, so
-    /// the failure is transient. A corrupt archive gives bytes of the current serialization
-    /// version that do not decode.
+    /// the failure is transient. A corrupt archive gives bytes that do not decode.
     fn read(
         &self,
         namespace: &BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Option<anyhow::Result<Option<Vec<u8>>>> {
         if !matches!(namespace, BlobStorageNamespace::CompressedOplog { .. }) {
+            return None;
+        }
+        if !self
+            .agent_path
+            .get()
+            .is_some_and(|agent| path.starts_with(agent))
+        {
             return None;
         }
         // Archived chunk objects are named `<last index>-<uuid>`.
@@ -350,6 +398,7 @@ impl ArchiveFault {
                 bytes.extend_from_slice(b"not a compressed oplog chunk");
                 Some(Ok(Some(bytes)))
             }
+            ARCHIVE_UNKNOWN_VERSION => Some(Ok(Some(b"not a compressed oplog chunk".to_vec()))),
             _ => None,
         }
     }
@@ -636,6 +685,7 @@ impl ArchiveFaultAgent {
             .await?;
         let agent = agent_id!("GolemHostApi", name);
         let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
+        fault.agent_path.set(agent_path_segment(&agent_id)).unwrap();
         let this = Self {
             context,
             fault,
@@ -770,7 +820,8 @@ async fn an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent
 /// As [`an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent`], but the
 /// archived history does not decode. The owner stops the agent for good with the cause: the
 /// failure is recorded, a later invocation fails with the cause without running, and the
-/// committed invocation stays successful.
+/// committed invocation stays successful. Metadata reports the unreadable history, then the
+/// terminal failure once reads recover, without starting the agent again.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -780,55 +831,114 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let agent = Arc::new(
-        ArchiveFaultAgent::start(
-            last_unique_id,
-            deps,
-            host_api_tests,
-            "early-receipt-corrupt-archive",
-            None,
-        )
-        .await?,
-    );
+    for mode in [ARCHIVE_CORRUPT, ARCHIVE_UNKNOWN_VERSION] {
+        let agent = Arc::new(
+            ArchiveFaultAgent::start(
+                last_unique_id,
+                deps,
+                host_api_tests,
+                "early-receipt-corrupt-archive",
+                None,
+            )
+            .await?,
+        );
+        let owned_agent_id =
+            OwnedAgentId::new(agent.context.default_environment_id, &agent.agent_id);
+        let worker = agent
+            .executor
+            .active_agents()
+            .try_get(&owned_agent_id)
+            .await
+            .expect("the agent is loaded after its first invocation");
 
-    let (result, before_failure) = agent
-        .succeed_over_a_failing_rebuild(deps, ARCHIVE_CORRUPT, async |_| Ok(()))
-        .await?;
-    result.expect("an invocation whose entries were committed must stay successful");
+        let (result, before_failure) = agent
+            .succeed_over_a_failing_rebuild(deps, mode, async |_| Ok(()))
+            .await?;
+        result.expect("an invocation whose entries were committed must stay successful");
 
-    let error = agent
-        .invoke()
-        .await
-        .expect_err("an agent whose status does not rebuild must not run");
-    let error = format!("{error:#}");
-    assert!(
-        error.contains(&agent.agent_id.to_string()) && error.contains("failed to decode"),
-        "the failure does not name the agent and the decode error: {error}"
-    );
+        let error = agent
+            .invoke()
+            .await
+            .expect_err("an agent whose status does not rebuild must not run");
+        let error = format!("{error:#}");
+        assert!(
+            error.contains(&agent.agent_id.to_string()) && error.contains("failed to decode"),
+            "the failure does not name the agent and the decode error: {error}"
+        );
+        if mode == ARCHIVE_UNKNOWN_VERSION {
+            assert!(
+                error.contains("unknown serialization version: 110"),
+                "{error}"
+            );
+        }
 
-    agent.fault.restore();
-    assert!(
-        agent.records_an_error_after(before_failure).await?,
-        "the owner must record the failed rebuild"
-    );
-    let oplog = agent
-        .executor
-        .get_oplog(&agent.agent_id, before_failure.next())
-        .await?;
-    assert!(
-        !oplog
-            .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
-        "no invocation may start after the failed rebuild: {oplog:#?}"
-    );
-    assert_eq!(
-        agent
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        while worker.is_loaded().await {
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "the agent whose status does not rebuild must stop"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let error = agent
             .executor
             .get_worker_metadata(&agent.agent_id)
+            .await
+            .expect_err("metadata must not return a detached status while history is corrupt");
+        let error = format!("{error:#}");
+        assert!(
+            error.contains(&agent.agent_id.component_id.to_string())
+                && error.contains("early-receipt-corrupt-archive")
+                && error.contains("failed to decode"),
+            "the metadata failure does not name the agent and the decode error: {error}"
+        );
+        assert!(!worker.is_loaded().await);
+
+        agent.fault.restore();
+        assert_eq!(
+            agent
+                .executor
+                .get_worker_metadata(&agent.agent_id)
+                .await?
+                .status,
+            AgentStatus::Failed
+        );
+        assert!(!worker.is_loaded().await);
+        assert!(
+            agent.records_an_error_after(before_failure).await?,
+            "the owner must record the failed rebuild"
+        );
+        let oplog = agent
+            .executor
+            .get_oplog(&agent.agent_id, before_failure.next())
+            .await?;
+        assert!(
+            !oplog.iter().any(|entry| matches!(
+                entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(_)
+                    | PublicOplogEntry::RecoverySucceeded(_)
+            )),
+            "metadata observation must not restart the failed agent: {oplog:#?}"
+        );
+
+        let healthy = agent_id!("GolemHostApi", "healthy-next-to-corrupt-archive");
+        agent
+            .executor
+            .start_agent(&agent.component.id, healthy.clone())
+            .await?;
+        let healthy_result = agent
+            .executor
+            .invoke_and_await_agent(
+                &agent.component,
+                &healthy,
+                "get_self_metadata_result",
+                data_value!(),
+            )
             .await?
-            .status,
-        AgentStatus::Failed
-    );
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(healthy_result, Ok(healthy.to_string()));
+    }
     Ok(())
 }
 
@@ -932,9 +1042,14 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
     );
 
     agent.fault.restore();
-    worker
-        .commit_oplog_and_update_state(CommitLevel::Always)
-        .await?;
+    assert_eq!(
+        agent
+            .executor
+            .get_worker_metadata(&agent.agent_id)
+            .await?
+            .status,
+        AgentStatus::Failed
+    );
     let lookup = worker.lookup_invocation_result(&committed).await;
     assert!(
         matches!(lookup, LookupResult::Complete(Ok(_))),

@@ -14,17 +14,65 @@ There is no way for an agent to access files outside its own filesystem.
     For TypeScript agents, use [`node:fs`](https://nodejs.org/api/fs.html) or [`node:fs/promises`](https://nodejs.org/api/fs.html#promises-api) to work with files.
 
     In Golem 1.5, the QuickJS runtime provides a comprehensive filesystem API, so standard operations such as reading, writing, checking existence, creating directories, and listing directories are available.
+
+    ```typescript
+    import { readFile, writeFile } from 'node:fs/promises';
+
+    export async function writeAndRead(): Promise<string> {
+      await writeFile('/message.txt', 'Hello, Golem!', 'utf8');
+      return readFile('/message.txt', 'utf8');
+    }
+    ```
     </Tabs.Tab>
     <Tabs.Tab>
     Effect TypeScript agents use [`node:fs`](https://nodejs.org/api/fs.html) or [`node:fs/promises`](https://nodejs.org/api/fs.html#promises-api), just like other TypeScript agents. The Effect template's QuickJS runtime provides these filesystem implementations.
+
+    ```typescript
+    import { readFile, writeFile } from 'node:fs/promises';
+    import { Effect } from 'effect';
+
+    export const writeAndRead = Effect.gen(function* () {
+      yield* Effect.tryPromise(() =>
+        writeFile('/message.txt', 'Hello, Golem!', 'utf8'));
+      return yield* Effect.tryPromise(() => readFile('/message.txt', 'utf8'));
+    });
+    ```
     </Tabs.Tab>
     <Tabs.Tab>
     For Rust agents, use the standard [`std::fs`](https://doc.rust-lang.org/std/fs/index.html) module to work with files.
 
     Golem Rust agents compile to WASI, so standard filesystem operations such as `read_to_string`, `read`, `write`, and `read_dir` work out of the box.
+
+    ```rust
+    pub fn write_and_read() -> std::io::Result<String> {
+        std::fs::write("/message.txt", "Hello, Golem!")?;
+        std::fs::read_to_string("/message.txt")
+    }
+    ```
     </Tabs.Tab>
     <Tabs.Tab>
     For Scala agents, use [`node:fs`](https://nodejs.org/api/fs.html) via Scala.js JavaScript interop.
+
+    ```scala
+    import scala.scalajs.js
+    import scala.scalajs.js.annotation.JSImport
+
+    @js.native
+    @JSImport("node:fs", JSImport.Namespace)
+    object NodeFs extends js.Object {
+      def writeFileSync(path: String, text: String, encoding: String): Unit = js.native
+      def readFileSync(path: String, encoding: String): String = js.native
+    }
+
+    object Files {
+      private lazy val fs = NodeFs
+
+      def writeAndRead(): String = {
+        fs.writeFileSync("/message.txt", "Hello, Golem!", "utf8")
+        fs.readFileSync("/message.txt", "utf8")
+      }
+    }
+    ```
 
     Standard JVM file I/O APIs such as `java.io.File` and `java.nio.file.*` are not available in Scala.js. Define a small `@JSImport("node:fs", JSImport.Namespace)` facade and access it lazily at runtime.
     </Tabs.Tab>
@@ -32,11 +80,42 @@ There is no way for an agent to access files outside its own filesystem.
     For MoonBit agents, add `"golemcloud/golem_sdk/filesystem" @fs` to the `import` block in your component's `moon.pkg`.
 
     Its async helpers include `read_bytes`, `write_bytes`, and `list_directory`. Obtain the root directory descriptor with `@fs.get_root_dir()` and handle its optional result before passing the descriptor to these helpers.
+
+    ```moonbit
+    pub async fn write_and_read() -> Result[FixedArray[Byte], String] {
+      let root = match @fs.get_root_dir() {
+        Some(root) => root
+        None => return Err("No root directory")
+      }
+      defer root.drop()
+      match @fs.write_bytes(root, "message.txt", [72, 105]) {
+        Err(error) => return Err(repr(error))
+        Ok(_) => ()
+      }
+      @fs.read_bytes(root, "message.txt").map_err(error => repr(error))
+    }
+    ```
+
+    Paths are relative to the root descriptor. The helpers release the file descriptors they open; the caller releases the root descriptor with `defer`, including on a write or read failure.
     </Tabs.Tab>
     <Tabs.Tab>
     For Go agents, use the standard [`os`](https://pkg.go.dev/os) and [`io`](https://pkg.go.dev/io) packages to work with files.
 
     Golem Go agents compile to WASI, so standard filesystem operations such as `os.ReadFile`, `os.WriteFile`, `os.Open`, `os.MkdirAll`, and `os.ReadDir` work out of the box.
+
+    ```go
+    package example
+
+    import "os"
+
+    func WriteAndRead() (string, error) {
+        if err := os.WriteFile("/message.txt", []byte("Hello, Golem!"), 0o600); err != nil {
+            return "", err
+        }
+        data, err := os.ReadFile("/message.txt")
+        return string(data), err
+    }
+    ```
     </Tabs.Tab>
 </Tabs>
 
@@ -78,9 +157,9 @@ replay, at the update point, Golem applies the initial files of the new revision
 initial file at a path where the agent wrote, changed or deleted a file. See [Automatic update](/next/develop/updating#how-the-update-restores-the-agents-files).
 * **Manual updates**: On an executor with [filesystem snapshots](/next/develop/snapshotting#agent-files-and-snapshots), Golem saves the agent's files
 with the update snapshot and restores them in the target revision before `golem:api/load-snapshot` runs. The update fails when the target revision
-changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file. See [Manual updates](/next/develop/snapshotting#manual-updates). On other executors, a snapshot-based
+changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file. See [Manual updates](/next/develop/updating#how-the-update-restores-the-agents-files). On other executors, a snapshot-based
 update works only while the agent's files are its initial files. Otherwise the update fails, and the agent stays on its current revision.
-See [Availability](/next/develop/snapshotting#availability).
+See [Snapshot availability](/next/operate/filesystem_snapshots/recovery#without-filesystem-snapshots).
 
 ## Files after a restart
 
@@ -93,11 +172,11 @@ its files again.
 
 ## Externally accessing agent files
 
-To serve files without writing a download method, use [live filesystem mappings](/next/invoke/http-routers#serving-live-agent-files)
+To serve files without writing a download method, use [live filesystem mappings](/next/invoke/making-custom-apis/http-routers#serving-live-agent-files)
 on a durable agent's mount. They support streaming, HEAD, and single byte-range requests,
 including files created during initialization or overwritten by later invocations.
-For deployment-provisioned read-only assets, use [immutable router files](/next/invoke/http-routers#serving-static-files).
+For deployment-provisioned read-only assets, use [immutable router files](/next/invoke/making-custom-apis/http-routers#serving-static-files).
 
 If a download needs application logic rather than direct file serving, define a
 [code-first HTTP endpoint](/next/invoke/making-custom-apis) or a
-[streaming router handler](/next/invoke/http-routers#handling-streaming-requests).
+[streaming router handler](/next/invoke/making-custom-apis/http-routers#handling-streaming-requests).

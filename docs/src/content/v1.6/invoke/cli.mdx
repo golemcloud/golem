@@ -1,3 +1,5 @@
+import { Tabs } from "nextra/components"
+
 # Invoke using Golem CLI
 
 The `golem` command line interface exposes agent and native tool invocations:
@@ -26,13 +28,149 @@ The function to be invoked is selected by the second parameter. Read the [page a
 
 ## Encoding parameters
 
-The function parameters are specified as positional arguments following the function name (one for each invocation parameter), using the source language's native syntax. See the [Type Mapping](/v1.6/type-mapping) page for details on how types are represented.
+Pass one shell argument per user-supplied method parameter after the function name, using the source language's native value syntax. Parameters follow signature order in Rust, Scala, and MoonBit, the method's `input` declaration order in TypeScript and Effect, and the exported input-struct fields' declaration order in Go. Skip host-injected `Principal` fields without changing the order of the remaining inputs. Do not supply `self` or configuration parameters.
+
+Do not supply a `Principal` value or placeholder. Effect SDK clients also omit explicitly declared `PrincipalSchema` input fields; the host injects those fields into handlers. The normal `Principal.Principal` service remains available and does not add a caller-supplied input.
+
+Do not wrap all method inputs in one JSON object. A parameter whose value is an object or struct still takes just one argument. A method with no user-supplied parameters takes no arguments, not `'{}'`. Awaited, triggered, and scheduled invocations share the same CLI argument parser and input rules.
+
+The following examples show method declarations and the corresponding CLI method names and arguments. Prefix each command fragment with `golem agent invoke '<agent-id>'`.
+
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"]}>
+<Tabs.Tab>
+
+| Method | Input declaration | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: z.string() }` | `prompt '"hello"'` |
+| `submit` | `input: { request: z.object({ text: z.string() }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: z.string(), quantity: z.number() }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+Object field names must be unquoted: use `{ text: "hello" }`, not `{"text": "hello"}`. See the [TypeScript invocation guide](/v1.6/how-to-guides/ts/golem-invoke-agent-ts) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input declaration | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: Schema.String }` | `prompt '"hello"'` |
+| `submit` | `input: { request: Schema.Struct({ text: Schema.String }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: Schema.String, quantity: Schema.Number }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+Effect agents use TypeScript value syntax, including unquoted object field names. See the [Effect invocation guide](/v1.6/how-to-guides/effect/golem-invoke-agent-effect).
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input declaration | CLI method and arguments |
+|--------|-------------------|--------------------------|
+| `prompt` | `fn prompt(&self, text: String)` | `prompt '"hello"'` |
+| `submit` | `fn submit(&self, request: Request)` with `struct Request { text: String }` | `submit 'Request { text: "hello" }'` |
+| `process_order` | `fn process_order(&self, order_id: String, quantity: u32)` | `process_order '"order-456"' 42` |
+| `history` | `fn history(&self)` | `history` |
+
+See the [Rust invocation guide](/v1.6/how-to-guides/rust/golem-invoke-agent-rust) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input declaration | CLI method and arguments |
+|--------|-------------------|--------------------------|
+| `prompt` | `def prompt(text: String): Future[Unit]` | `prompt '"hello"'` |
+| `submit` | `def submit(request: Request): Future[Unit]` with `case class Request(text: String)` | `submit 'Request(text = "hello")'` |
+| `processOrder` | `def processOrder(orderId: String, quantity: Int): Future[Unit]` | `processOrder '"order-456"' 42` |
+| `history` | `def history(): Future[Unit]` | `history` |
+
+See the [Scala invocation guide](/v1.6/how-to-guides/scala/golem-invoke-agent-scala) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input declaration | CLI method and arguments |
+|--------|-------------------|--------------------------|
+| `prompt` | `pub fn MyAgent::prompt(self : Self, text : String) -> Unit` | `prompt '"hello"'` |
+| `submit` | `pub fn MyAgent::submit(self : Self, request : Request) -> Unit` with `struct Request { text : String }` | `submit 'Request::{ text: "hello" }'` |
+| `process_order` | `pub fn MyAgent::process_order(self : Self, order_id : String, quantity : UInt) -> Unit` | `process_order '"order-456"' 42` |
+| `history` | `pub fn MyAgent::history(self : Self) -> Unit` | `history` |
+
+See the [MoonBit invocation guide](/v1.6/how-to-guides/moonbit/golem-invoke-agent-moonbit) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input declaration | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `struct { Text string }` | `prompt '"hello"'` |
+| `submit` | `struct { Request struct { Text string } }` | `submit '{text: "hello"}'` |
+| `processOrder` | `struct { OrderID string; Quantity uint32 }` | `processOrder '"order-456"' 42` |
+| `history` | `golem.Unit` | `history` |
+
+Nested struct literals use the published lower-camel field names: use `{text: "hello"}`, not `{Text: "hello"}`. See the [Go invocation guide](/v1.6/how-to-guides/go/golem-invoke-agent-go) for other value types.
+
+</Tabs.Tab>
+</Tabs>
+
+Quote each native literal as one shell argument. For example, `'"hello"'` preserves the string literal's double quotes for the CLI parser. For a string parameter, if native literal parsing fails, the CLI falls back to using the argument as raw text. Passing `'{"text": "hello"}'` to a method taking a single string therefore passes the entire JSON text, not just `hello`.
+
+[Custom HTTP endpoints](/v1.6/invoke/making-custom-apis) use a different input convention: structured JSON bodies contain named body parameters. A single `request` parameter containing a `text` field needs `{"request": {"text": "hello"}}`. Path/query/header parameters are not body fields, and unstructured text and binary parameters use raw bodies. Do not reuse the HTTP body wrapper for CLI arguments.
+
+The [Type Mapping](/v1.6/type-mapping) page describes schema-directed JSON values, not CLI native literals or the raw REST wire form. `--format json` selects output formatting; it does not change input encoding.
 
 ## Getting results
 
-When using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the source language syntax of the invoked agent (for example `Invocation result in TypeScript syntax:` followed by the value).
+For methods without streams, when using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the source language syntax of the invoked agent (for example `Invocation result in TypeScript syntax:` followed by the value).
 
-This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on Type Mapping page](/v1.6/type-mapping).
+Use `--format json` or `--format yaml` for structured output. The output includes the idempotency key, the typed result in `resultJson` (its schema graph and value), and the source-language rendering in `result` with its `resultFormat`. This is a CLI output envelope, not the bare canonical value described on the [Type Mapping page](/v1.6/type-mapping). Methods with no result omit the result fields.
+
+## Streaming methods
+
+Use `-` for exactly one direct stream input. The default `value` stdin format parses one source-language value per line; `value` stdout emits a sequence of structured lifecycle documents:
+
+```shell
+# JSON/value stdin and stdout for stream<string>.
+printf '"first"\n"second"\n' |
+  golem agent invoke 'MediaAgent("studio-a")' index_words - \
+    --stdin-format value --stdout-format value --format json
+```
+
+Raw mode is restricted to one direct `stream<u8>` or `stream<binary>` input or output. It avoids JSON encoding, making it suitable for multi-megabyte audio and video:
+
+```shell
+# Raw binary stdin to a direct stream<binary> parameter.
+golem agent invoke 'MediaAgent("studio-a")' upload_video - \
+  --stdin-format raw < recording.mp4
+
+# Raw binary stdout from one direct stream<u8> or stream<binary> result.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw > soundtrack.aac
+```
+
+For `stream<binary>`, raw stdin forms fixed 64 KiB logical items except for the final shorter item. For `stream<u8>`, each byte is an item. Raw stdout contains only bytes, so diagnostics remain off stdout. These method data streams are separate from the agent's log channels described below.
+
+### Session checkpoints and resume
+
+`--save-session` atomically records the session identity, pending operation, and delivered output cursors, but not credentials or stream values:
+
+```shell
+# Start and continuously checkpoint.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --save-session render-session.json > soundtrack.aac
+
+# Resume only after the previous transport detached.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --resume-session render-session.json >> soundtrack.aac
+
+# Or explicitly fence a transport that may still be attached.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --takeover-session render-session.json >> soundtrack.aac
+```
+
+The CLI does not retry automatically. On resumed input, stdin begins after the server's durable input high-water mark; bytes that had not reached that durable point before the previous process exited cannot be recovered from the checkpoint. Keep checkpoint files private.
+
+Output delivery across a reconnect is at least once. An item written before a crash can be repeated if its cursor was not saved. Deduplicate output before applying external side effects.
+
+See the [checkpoint format](/v1.6/stream-session-public-protocol-v1#13-checkpoint-v1) for persistence details and [Operating Durable Stream Sessions](/v1.6/operate/durable_streams) for service limits and operational recovery.
 
 ## Logs
 

@@ -6,6 +6,21 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## Persistent permission derivation
+
+`@permissions.derive_from_wallet` and both typed cards' `derive_child` methods
+return `PersistentCard`. Match `Concrete(PermissionCard)` or
+`Template(PolymorphicPermissionCard)` to transfer a typed card. The host supplies
+the tag; the SDK does not infer it from request strings or call `inspect`.
+Both cases support `id`, `parents`, `expires_at`, `inspect`, `derive_child`,
+`install`, `revoke`, `drop`, and `is_moved` directly on the result.
+
+Slots in persistent bounds name the eventual holder. The host checks attenuation
+for every holder. A template parent still contributes only the authority resolved
+for the caller, and must be in the caller's wallet. Slot-bearing tool owners are
+not aliases for the caller's metadata. In contrast, `derive_scope` returns only a
+concrete `ScopeCard`; slots in scope bounds fail with `InvalidPattern`.
+
 ## Host retry evaluation
 
 `@api.next_retry_delay(policy, state, elapsed, verb, noun_uri, properties)` exposes

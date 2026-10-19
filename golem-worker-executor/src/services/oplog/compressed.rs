@@ -32,7 +32,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId; // used in scan_for_component
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -547,7 +547,7 @@ impl CompressedOplogChunk {
     pub fn decompress(&self) -> anyhow::Result<Vec<OplogEntry>> {
         let uncompressed_data = zstd::decode_all(&*self.compressed_data)
             .map_err(|err| anyhow!("failed to decompress oplog chunk: {err}"))?;
-        deserialize(&uncompressed_data)
+        golem_common::serialization::decode(&uncompressed_data)
             .map_err(|err| anyhow!("failed to deserialize oplog chunk: {err}"))
     }
 

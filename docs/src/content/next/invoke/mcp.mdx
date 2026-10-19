@@ -11,6 +11,9 @@ deployment can expose both on one port. A domain holds either an HTTP API deploy
 MCP deployment, not both.
 </Callout>
 
+For self-hosted ingress, shared ports, and SSE keep-alives, see
+[HTTP Gateway](/next/operate/http-gateway).
+
 ## Enabling MCP
 
 Add an `mcp` section to `golem.yaml` choosing which agents to deploy to which subdomains per environment:
@@ -239,9 +242,13 @@ Golem provides special data types that map naturally to MCP content types:
 
 These types allow agents to exchange rich content with MCP clients beyond simple JSON values.
 
-<Callout type="warning">
-MoonBit currently supports schema-native multimodal values through `@multimodal.Multimodal[T]` and `#derive.multimodal`, but does not yet provide user-facing `UnstructuredText`, `UnstructuredBinary`, or multipart wrappers. Use supported structured schemas or multimodal values instead; the removed `#derive.text_languages` and `#derive.mime_types` annotations are not available.
-</Callout>
+MoonBit exposes `@schema.UnstructuredText[L]` and `@schema.UnstructuredBinary[M]`
+from `golemcloud/golem_sdk/schema`, including inline and URL constructors.
+See [unstructured text and binary values](/next/type-mapping#unstructured-text-and-binary)
+for construction examples. For mixed content, MoonBit uses
+`@multimodal.Multimodal[T]` and `#derive.multimodal`; it does not expose a
+separate public `Multipart` wrapper. The removed `#derive.text_languages` and
+`#derive.mime_types` annotations are not available.
 
 ## Testing with MCP Inspector
 
@@ -259,20 +266,22 @@ The inspector provides a web UI to browse available tools and resources, invoke 
 `mcp.imports` makes an external MCP server's tools available to Golem agents through
 the ordinary tool APIs and generated tool clients.
 
-Declare imports in order for each environment:
+For example, import the page-fetching tool from the public
+[Microsoft Learn MCP server](https://learn.microsoft.com/en-us/training/support/mcp).
+This server does not require authentication. Declare the import for your environment:
 
 ```yaml
 mcp:
   imports:
     local:
-      - name: catalog
-        url: https://tools.example.com/mcp
-        prefix: catalog
-        include: ["search*"]
+      - name: microsoft-learn
+        url: https://learn.microsoft.com/api/mcp
+        prefix: learn
+        include: ["microsoft-docs-fetch"]
 ```
 
 Upstream names are sanitized to kebab-case before filtering. The prefix is joined
-with `-`, so `search_items` becomes `catalog-search-items`. Use either `include` or
+with `-`, so `microsoft_docs_fetch` becomes `learn-microsoft-docs-fetch`. Use either `include` or
 `exclude`, not both. Application tools and the selected environment's ambient native
 tools take precedence over imports; among imports, earlier entries win. Imports do
 not need top-level `tools` declarations.
@@ -286,7 +295,7 @@ The supported import protocol is currently `2026-07-28` Streamable HTTP.
 
 ### Generate typed clients
 
-Follow [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients#generate-an-mcp-imported-tool-client) for a complete TypeScript example, including generated imports, a typed call, and output collection. It also links the Rust, Effect, Scala, and MoonBit consumer workflows. Client generation selects a schema; a deployed binding and the calling agent's permissions authorize invocation.
+Follow [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients#generate-an-mcp-imported-tool-client) for the generated package setup. Client generation selects a schema; a deployed binding and the calling agent's permissions authorize invocation.
 
 Add the projected name to a component's tool dependencies, using the component's
 normal language template:
@@ -296,9 +305,9 @@ components:
   my-app:consumer:
     # Keep the component's existing dir, templates and build settings.
     dependencies:
-      tools: [catalog-search-items]
+      tools: [learn-microsoft-docs-fetch]
     tools:
-      catalog-search-items: {}
+      learn-microsoft-docs-fetch: {}
 ```
 
 The dependency automatically selects client generation in the consumer's language;
@@ -309,7 +318,7 @@ permissions separately.
 
 `golem build` resolves the current manifest's imports before automatically generating
 the dependency clients. It does not use an older deployment's declarations.
-Rust, TypeScript, Effect, Scala and MoonBit use their existing tool-client APIs.
+Rust, TypeScript, Effect, Scala, MoonBit and Go use their existing tool-client APIs.
 Unavailable metadata fails client generation rather than silently generating
 stale types. A changed projection causes regeneration on the next build.
 The generated client calls the projected canonical Golem name through `tool-rpc`;
@@ -325,6 +334,183 @@ the SDK's unstructured-binary type. Empty content and an empty stdout payload ar
 distinct cases. Use the SDK's collection helper to consume stdout and the result
 concurrently.
 
+### Call the imported tool
+
+These helpers fetch the Azure Functions overview. Call the helper from an agent
+method after `golem build` generates the client. Add the generated package to your
+language's dependencies as described in the client generation guide above.
+The empty map supplies additional input properties; this tool needs only `url`.
+Each example drains the output streams and returns the text from stdout.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+
+```typescript
+import { LearnMicrosoftDocsFetchClient } from "learn-microsoft-docs-fetch-tool-guest-client";
+
+async function fetchDocumentation(): Promise<string> {
+  const invocation = LearnMicrosoftDocsFetchClient.newClient()
+    .learn_microsoft_docs_fetch(
+      "https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview",
+      new Map(),
+    );
+  const collected = await invocation.collect();
+  if (collected.result.status === "rejected") throw collected.result.reason;
+  if (collected.stdout.status === "rejected") throw collected.stdout.reason;
+  if (collected.stderr.status === "rejected") throw collected.stderr.reason;
+  return new TextDecoder().decode(collected.stdout.value);
+}
+```
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```typescript
+import { Effect, Stream } from "effect";
+import { client as learn } from "learn-microsoft-docs-fetch-tool-guest-client";
+
+const fetchDocumentation = Effect.scoped(
+  Effect.gen(function* () {
+    const invocation = yield* learn.learn_microsoft_docs_fetch(
+      "https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview",
+      new Map(),
+    );
+    const [, chunks] = yield* Effect.all(
+      [
+        invocation.result,
+        invocation.stdout
+          ? Stream.runCollect(invocation.stdout)
+          : Effect.succeed([] as Uint8Array[]),
+        invocation.stderr ? Stream.runDrain(invocation.stderr) : Effect.void,
+      ],
+      { concurrency: "unbounded" },
+    );
+    const bytes = Uint8Array.from([...chunks].flatMap((chunk) => [...chunk]));
+    return new TextDecoder().decode(bytes);
+  }),
+);
+```
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```rust
+use learn_microsoft_docs_fetch_tool_guest_client::LearnMicrosoftDocsFetchClient;
+
+async fn fetch_documentation() -> Result<String, String> {
+    let invocation = LearnMicrosoftDocsFetchClient::new()
+        .learn_microsoft_docs_fetch(
+            "https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview".into(),
+            vec![],
+        )
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+
+    let collected = invocation.collect().await;
+    collected.result.map_err(|error| format!("{error:?}"))?;
+    collected.stderr.map_err(|error| format!("{error:?}"))?;
+    let bytes = collected.stdout.map_err(|error| format!("{error:?}"))?
+        .unwrap_or_default();
+    String::from_utf8(bytes).map_err(|error| error.to_string())
+}
+```
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```scala
+import golem.bridge.client.learn_microsoft_docs_fetch.LearnMicrosoftDocsFetchClient
+import scala.concurrent.{ExecutionContext, Future}
+
+def fetchDocumentation()(implicit ec: ExecutionContext): Future[String] =
+  LearnMicrosoftDocsFetchClient().learnMicrosoftDocsFetch(
+    "https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview",
+    Map.empty,
+  ) match {
+    case Left(error) => Future.failed(new IllegalStateException(error.toString))
+    case Right(invocation) =>
+      invocation.collect().map { collected =>
+        val text = for {
+          _ <- collected.result.left.map(_.toString)
+          _ <- collected.stderr.left.map(_.toString)
+          bytes <- collected.stdout.left.map(_.toString)
+        } yield bytes.fold("")(value => new String(value.toArray, "UTF-8"))
+        text.fold(message => throw new IllegalStateException(message), identity)
+      }
+  }
+```
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+Add these imports to the consumer's `moon.pkg`:
+
+```moonbit
+"learn-microsoft-docs-fetch-tool-guest-client/client" @learn,
+"moonbitlang/core/encoding/utf8" @utf8,
+```
+
+```moonbit
+pub async fn fetch_documentation() -> Result[String, String] {
+  let client = @learn.LearnMicrosoftDocsFetchClient::new()
+  defer client.drop()
+
+  let invocation = match client.learn_microsoft_docs_fetch(
+    "https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview",
+    {},
+  ) {
+    Ok(invocation) => invocation
+    Err(_) => return Err("Could not start the documentation tool")
+  }
+  let collected = invocation.collect()
+  match collected.result {
+    Err(_) => return Err("The documentation tool failed")
+    Ok(_) => ()
+  }
+  match collected.stderr {
+    Err(_) => return Err("Could not read stderr")
+    Ok(_) => ()
+  }
+  match collected.stdout {
+    Err(_) => Err("Could not read stdout")
+    Ok(None) => Ok("")
+    Ok(Some(bytes)) => Ok(@utf8.decode_lossy(bytes[:]))
+  }
+}
+```
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```go
+import learn "golem.local/bridge/learn-microsoft-docs-fetch-tool-guest-client"
+
+func fetchDocumentation() (string, error) {
+    invocation, err := learn.Root.Call(func(args *learn.RootArgs) {
+        args.URL = "https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview"
+        args.AdditionalProperties = map[string]string{}
+    })
+    if err != nil {
+        return "", err
+    }
+
+    collected := invocation.Collect()
+    if collected.Err != nil {
+        return "", collected.Err
+    }
+    if collected.StdoutErr != nil {
+        return "", collected.StdoutErr
+    }
+    if collected.StderrErr != nil {
+        return "", collected.StderrErr
+    }
+    return string(collected.Stdout), nil
+}
+```
+
+</Tabs.Tab>
+</Tabs>
+
 ### Authorize an import before deployment
 
 For OAuth, reference a configured security scheme using `securityScheme` on the
@@ -338,7 +524,8 @@ tokens must be refreshed, the provider's token endpoint. Discovery and refresh
 consume the environment owner's HTTP quota.
 
 OAuth-protected imports need consent before generating typed clients. The environment
-and security scheme must already exist, but the import need not be deployed:
+and security scheme must already exist, but the import need not be deployed.
+For an OAuth-protected import named `catalog` (unlike the public Microsoft Learn import above):
 
 ```shell
 golem api mcp-import authorize catalog --manifest
@@ -377,10 +564,10 @@ or select a deployed revision instead. Redeploying alone does not grant consent.
 ### Inspect and refresh deployed definitions
 
 ```shell
-golem api mcp-import tools catalog --revision 42
-golem api mcp-import refresh catalog --revision 42
+golem api mcp-import tools microsoft-learn --revision 42
+golem api mcp-import refresh microsoft-learn --revision 42
 # A name is not required for an import with a unique URL:
-golem api mcp-import tools 'https://tools.example.com/mcp' --revision 42
+golem api mcp-import tools 'https://learn.microsoft.com/api/mcp' --revision 42
 ```
 
 Deployed commands require a local manifest and permission to view the deployment

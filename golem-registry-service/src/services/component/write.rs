@@ -42,8 +42,7 @@ use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
     CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial, ClassPermissionTarget,
     ComponentResourcePattern, ComponentVerb, DelegationSurface, EnvironmentVerb, PermissionTarget,
-    PolymorphicCard, negative_permission_envelopes_for_recipient_patterns,
-    permission_envelopes_for_recipient_patterns,
+    PolymorphicCard, permission_card_envelope,
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
@@ -1739,18 +1738,18 @@ fn prepare_initial_card_for_minting(
     delegation_surface: &DelegationSurface,
 ) -> Result<PolymorphicCard, String> {
     let mut card = initial_permissions.to_polymorphic_card();
-    let lower_positive = permission_envelopes_for_recipient_patterns(&card.lower_positive)?;
-    let lower_negative =
-        negative_permission_envelopes_for_recipient_patterns(&card.lower_negative)?;
-    let upper_positive = permission_envelopes_for_recipient_patterns(&card.upper_positive)?;
-    let upper_negative =
-        negative_permission_envelopes_for_recipient_patterns(&card.upper_negative)?;
+    let envelope = permission_card_envelope(
+        &card.lower_positive,
+        &card.lower_negative,
+        &card.upper_positive,
+        &card.upper_negative,
+    )?;
     delegation_surface
         .validate_attenuation(
-            &lower_positive,
-            &lower_negative,
-            &upper_positive,
-            &upper_negative,
+            &envelope.lower_positive,
+            &envelope.lower_negative,
+            &envelope.upper_positive,
+            &envelope.upper_negative,
         )
         .map_err(|error| {
             format!("card derivation is not allowed by the creator's cards: {error:?}")
@@ -2703,6 +2702,19 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn initial_card_keeps_slot_negatives_without_using_them_as_proof() {
+        for lower in [true, false] {
+            let initial = external_owner_initial_permissions(lower, false);
+            let mut surface = external_owner_attenuation_surface(lower);
+            surface.cards[0].lower_negative.clear();
+            surface.cards[0].upper_negative.clear();
+            let card = prepare_initial_card_for_minting(&initial, &surface).unwrap();
+            assert_eq!(card.lower_negative, initial.lower_bound.negative);
+            assert_eq!(card.upper_negative, initial.upper_bound.negative);
         }
     }
 

@@ -63,6 +63,12 @@ interface types {
         invalid-recipient(string),
     }
 
+    /// A persistent derivation result, labelled with its kind.
+    variant persistent-card {
+        concrete(permission-card),
+        template(permission-card),
+    }
+
     /// A card in the caller's wallet, labelled with its kind.
     variant wallet-card {
         /// A concrete card: every grant names concrete owners and resources.

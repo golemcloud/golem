@@ -18,6 +18,7 @@ use golem_common::SafeDisplay;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples,
 };
+use golem_common::model::base64::Base64;
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
@@ -26,7 +27,7 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -214,6 +215,8 @@ impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
 ///   lease state and the quota state in one SQL database.
 /// * `Etcd` - **distributed mode**: the shard lease state and the quota state live in etcd,
 ///   each behind a compare-and-swap on a key's `mod_revision` and the leadership fence.
+// Built once per process, so the size of the etcd variant does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum PersistenceConfig {
@@ -254,10 +257,8 @@ impl SafeDisplay for PersistenceConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EtcdConfig {
-    /// Client URLs of the etcd cluster.
-    ///
-    /// TLS is not configurable, so only `http://` endpoints are accepted; the shard manager
-    /// refuses to start otherwise.
+    /// Client URLs of the etcd cluster: `https://` with `tls` set, `http://` without it. The
+    /// shard manager refuses to start on any other scheme.
     ///
     /// An environment override must be bracketed, otherwise it is read as a single string and
     /// fails to deserialize:
@@ -275,6 +276,8 @@ pub struct EtcdConfig {
     pub read_retry_timeout: Duration,
     #[serde(with = "humantime_serde", default = "default_etcd_retry_min_delay")]
     pub retry_min_delay: Duration,
+    /// The longest wait between two retries of an etcd failure. With `tls` set, also how often a
+    /// running replica checks whether etcd refuses its certificates.
     #[serde(with = "humantime_serde", default = "default_etcd_retry_max_delay")]
     pub retry_max_delay: Duration,
     /// How long etcd holds this replica's leadership lease without a renewal; renewed at TTL/3.
@@ -288,6 +291,205 @@ pub struct EtcdConfig {
     /// keep their own history.
     #[serde(default = "default_etcd_compaction_retention_revisions")]
     pub compaction_retention_revisions: u64,
+    /// TLS to etcd; see [`EtcdTlsConfig`].
+    #[serde(default)]
+    pub tls: Option<EtcdTlsConfig>,
+    /// etcd user, for an etcd with authentication enabled. Set together with `password` or
+    /// `password_file`.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// The password of `username`; usually set from a secret through
+    /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Serialized as `****`, so no configuration dump holds it.
+    /// Set this or `password_file`, not both.
+    #[serde(default)]
+    pub password: Option<EtcdPassword>,
+    /// A file that holds the password of `username`, such as a key of a Kubernetes Secret mounted
+    /// as files. Read once, at startup, as it is: only one trailing line ending is removed.
+    #[serde(default)]
+    pub password_file: Option<PathBuf>,
+}
+
+/// TLS to etcd. Set, every endpoint must be `https://`; unset, every endpoint must be `http://`.
+///
+/// Each item comes from a PEM file or from an inline value (the PEM, Base64-encoded on one line),
+/// not both.
+/// Files and values are read once, at startup, so a renewed certificate takes effect on a
+/// restart. A running replica stops by itself when etcd refuses the certificates it holds, the
+/// files have changed since startup, and etcd accepts the files as they are now.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EtcdTlsConfig {
+    /// PEM file with the certificate of the CA that signed etcd's server certificate.
+    #[serde(default)]
+    pub ca_cert_file: Option<PathBuf>,
+    /// `ca_cert_file` as an inline value.
+    #[serde(default)]
+    pub ca_cert: Option<Base64>,
+    /// PEM file with this client's certificate, for an etcd that requires client certificates
+    /// (mTLS). Set together with a client key.
+    #[serde(default)]
+    pub client_cert_file: Option<PathBuf>,
+    /// `client_cert_file` as an inline value.
+    #[serde(default)]
+    pub client_cert: Option<Base64>,
+    /// PEM file with the private key of the client certificate.
+    #[serde(default)]
+    pub client_key_file: Option<PathBuf>,
+    /// `client_key_file` as an inline value. The startup display names only its source; `Debug`
+    /// and a serialized configuration show `****`.
+    #[serde(default)]
+    pub client_key: Option<EtcdTlsKey>,
+    /// The name to check etcd's certificate against, when the endpoint host is an IP address or
+    /// an alias that the certificate does not name.
+    #[serde(default)]
+    pub server_name: Option<String>,
+}
+
+/// The password of an etcd user. Neither its `Debug` form, the configuration display, a refused
+/// configuration nor a serialized configuration shows it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EtcdPassword(String);
+
+/// An inline private key for etcd TLS: the PEM, Base64-encoded. Neither its `Debug` form, the
+/// configuration display nor a serialized configuration shows it.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct EtcdTlsKey(Base64);
+
+impl EtcdTlsKey {
+    pub fn expose(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for EtcdTlsKey {
+    fn from(pem: Vec<u8>) -> Self {
+        Self(Base64(pem))
+    }
+}
+
+impl std::fmt::Debug for EtcdTlsKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("****")
+    }
+}
+
+impl Serialize for EtcdTlsKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str("****")
+    }
+}
+
+impl Serialize for EtcdPassword {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str("****")
+    }
+}
+
+const PASSWORD_NOT_TEXT: &str = "persistence.config.password must be text, but its value was read \
+     as a number, a boolean or a list; in an environment variable, wrap the whole value in double \
+     quotes";
+
+impl<'de> Deserialize<'de> for EtcdPassword {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_string(PasswordVisitor)
+    }
+}
+
+/// Accepts text only. The environment provider types a value of digits as a number and `true` or
+/// `false` as a boolean, and serde's own message for such a value would print it, in a refusal that
+/// the service prints at startup. Every other kind of value is refused with a message that does
+/// not hold it; turning it back into text would guess (`0123` was read as `123`).
+struct PasswordVisitor;
+
+impl<'de> serde::de::Visitor<'de> for PasswordVisitor {
+    type Value = EtcdPassword;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("the etcd password as text")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<EtcdPassword, E> {
+        Ok(EtcdPassword(value.to_string()))
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<EtcdPassword, E> {
+        Ok(EtcdPassword(value))
+    }
+
+    // Every arm below refuses with the same message on purpose: serde's default for each of them
+    // builds a message that contains the value, and that message is printed at startup.
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_i128<E: serde::de::Error>(self, _: i128) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_u128<E: serde::de::Error>(self, _: u128) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_char<E: serde::de::Error>(self, _: char) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, _: &[u8]) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, _: A) -> Result<EtcdPassword, A::Error> {
+        Err(serde::de::Error::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, _: A) -> Result<EtcdPassword, A::Error> {
+        Err(serde::de::Error::custom(PASSWORD_NOT_TEXT))
+    }
+}
+
+impl EtcdPassword {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for EtcdPassword {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl std::fmt::Debug for EtcdPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("****")
+    }
+}
+
+/// An inline certificate as the configuration display shows it: the SHA-256 fingerprint of its
+/// first certificate, as the startup log also prints it.
+fn inline_certificate(pem: &Base64) -> String {
+    use rustls::pki_types::CertificateDer;
+    use rustls::pki_types::pem::PemObject;
+
+    match CertificateDer::pem_slice_iter(pem).find_map(Result::ok) {
+        Some(der) => format!(
+            "inline value, sha256 {}",
+            crate::sharding::etcd_connection::sha256_hex(&der)
+        ),
+        None => "inline value without a certificate".to_string(),
+    }
 }
 
 fn default_etcd_connect_timeout() -> Duration {
@@ -334,6 +536,10 @@ impl Default for EtcdConfig {
             retry_max_delay: default_etcd_retry_max_delay(),
             leader_lease_ttl: default_leader_lease_ttl(),
             compaction_retention_revisions: default_etcd_compaction_retention_revisions(),
+            tls: None,
+            username: None,
+            password: None,
+            password_file: None,
         }
     }
 }
@@ -349,6 +555,10 @@ impl SafeDisplay for EtcdConfig {
             retry_max_delay,
             leader_lease_ttl,
             compaction_retention_revisions,
+            tls,
+            username,
+            password,
+            password_file,
         } = self;
 
         let mut result = String::new();
@@ -363,6 +573,44 @@ impl SafeDisplay for EtcdConfig {
             &mut result,
             "compaction retention revisions: {compaction_retention_revisions}"
         );
+        if let Some(tls) = tls {
+            for (item, file, inline) in [
+                (
+                    "ca cert",
+                    &tls.ca_cert_file,
+                    tls.ca_cert.as_ref().map(inline_certificate),
+                ),
+                (
+                    "client cert",
+                    &tls.client_cert_file,
+                    tls.client_cert.as_ref().map(inline_certificate),
+                ),
+                (
+                    "client key",
+                    &tls.client_key_file,
+                    tls.client_key.as_ref().map(|_| "inline value".to_string()),
+                ),
+            ] {
+                if let Some(file) = file {
+                    let _ = writeln!(&mut result, "tls {item} file: {}", file.display());
+                }
+                if let Some(inline) = inline {
+                    let _ = writeln!(&mut result, "tls {item}: {inline}");
+                }
+            }
+            if let Some(name) = &tls.server_name {
+                let _ = writeln!(&mut result, "tls server name: {name}");
+            }
+        }
+        if let Some(username) = username {
+            let _ = writeln!(&mut result, "username: {username}");
+        }
+        if password.is_some() {
+            let _ = writeln!(&mut result, "password: ****");
+        }
+        if let Some(file) = password_file {
+            let _ = writeln!(&mut result, "password file: {}", file.display());
+        }
         result
     }
 }
@@ -635,7 +883,7 @@ pub fn reject_legacy_db_env_vars() -> Result<(), String> {
 mod tests {
     use test_r::test;
 
-    use crate::config::{legacy_db_env_vars, make_config_loader};
+    use crate::config::{EtcdConfig, EtcdPassword, legacy_db_env_vars, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
@@ -667,5 +915,61 @@ mod tests {
         );
 
         assert!(found.is_empty(), "unexpected legacy variables: {found:?}");
+    }
+
+    /// Loads an etcd configuration whose password is `raw` as the environment provider reads it:
+    /// it parses every value with `Value::from_str`, which types digits as a number and `true` or
+    /// `false` as a boolean.
+    fn with_password_from_env(raw: &str) -> Result<EtcdConfig, figment::Error> {
+        let value: figment::value::Value = raw.parse().expect("parsing a value cannot fail");
+        figment::Figment::from(figment::providers::Serialized::defaults(
+            EtcdConfig::default(),
+        ))
+        .merge(("password", value))
+        .extract::<EtcdConfig>()
+    }
+
+    #[test]
+    pub fn a_password_read_as_a_number_or_a_boolean_is_refused_without_showing_it() {
+        for (raw, shown) in [
+            ("123456", "123456"),
+            ("-42", "42"),
+            ("1.50", "1.5"),
+            ("true", "true"),
+        ] {
+            let message = with_password_from_env(raw)
+                .map(|_| ())
+                .expect_err("a password that is not text must be refused")
+                .to_string();
+            assert!(
+                message.contains("persistence.config.password must be text"),
+                "{message}"
+            );
+            assert!(!message.contains(shown), "{message}");
+        }
+    }
+
+    #[test]
+    pub fn a_serialized_configuration_shows_the_password_as_stars() {
+        let config = EtcdConfig {
+            password: Some(EtcdPassword::from("s3cr3t-value")),
+            ..EtcdConfig::default()
+        };
+        let password = figment::Figment::from(figment::providers::Serialized::defaults(&config))
+            .find_value("password")
+            .expect("a set password is serialized");
+        assert_eq!(password.as_str(), Some("****"));
+    }
+
+    #[test]
+    pub fn a_password_in_double_quotes_is_read_as_text() {
+        let config = with_password_from_env("\"123456\"").expect("a quoted value is text");
+        assert_eq!(config.password.expect("a password").expose(), "123456");
+
+        let config = with_password_from_env("s3cr3t-value").expect("text is accepted");
+        assert_eq!(
+            config.password.expect("a password").expose(),
+            "s3cr3t-value"
+        );
     }
 }

@@ -14,7 +14,7 @@ Golem supports the following OIDC provider types: **google**, **facebook**, **mi
 For Google, here is the direct link to register your app with [Google Identity Provider](https://console.cloud.google.com/apis/credentials).
 Make sure your app with a redirect URL and get the client-id and client secret.
 
-When using a locally executed Golem instance during development, the redirect URI can be `http://localhost:9006/auth/callback`. Otherwise it should be be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API in Golem.
+The redirect URI must have the same origin as the HTTP API deployment that uses the security scheme. When using a locally executed Golem instance during development, the default deployment domain is `<app>.localhost:9006`, so the redirect URI can be `http://<app>.localhost:9006/auth/callback`. HTTP redirect URIs are accepted only for `localhost`, `*.localhost` and loopback IP addresses. Otherwise it should be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API in Golem.
 
 The `/auth/callback` part is just an example and it can be anything, as far as it doesn't collide with any other existing routes.
 
@@ -219,6 +219,10 @@ The `Principal` parameter is automatically injected from the authentication cont
 
 Cookie login is convenient when the browser accesses the protected API directly. For a public frontend hosted on another origin, configure the security scheme to use the OAuth 2.0 authorization code flow with PKCE:
 
+### Configure the gateway and agent
+
+Run this command from your development machine or deployment environment. It registers the security scheme with Golem; it is not frontend or agent code. Keep the upstream client secret out of the browser application.
+
 ```shell copy
 golem api security-scheme create my-security \
   --provider-type custom \
@@ -233,25 +237,22 @@ golem api security-scheme create my-security \
   --frontend-origin "https://frontend.example.com"
 ```
 
-The upstream `--redirect-url` belongs to the identity provider. Each `--frontend-redirect-uri` is an exact URI where Golem may return the frontend after login. Each `--frontend-origin` is allowed to call the generated token endpoint through CORS. Production URIs must use HTTPS; loopback HTTP URIs are accepted for local development.
+The upstream `--redirect-url` is a gateway callback URL that you register with the identity provider. Each `--frontend-redirect-uri` is an exact URI where Golem may return the frontend after login. Each `--frontend-origin` is allowed to call the generated token endpoint through CORS. Production URIs must use HTTPS; loopback HTTP URIs (`localhost`, `*.localhost`, `127.0.0.1` and `[::1]`) are accepted for local development.
 
-The security scheme's frontend origins apply only to its generated authorization and token endpoints. Configure [CORS on the protected application routes](/v1.6/invoke/making-custom-apis#cors) separately so the browser can send its bearer-authenticated requests:
+The security scheme's frontend origins apply only to its generated authorization and token endpoints. In your **agent code**, enable authentication and allow `https://frontend.example.com` through [CORS on the protected application routes](/v1.6/invoke/making-custom-apis#cors). Use the example for your agent's SDK; this configuration is separate from the browser code below.
 
-```typescript copy
-http: http.mount("/secure/{name}", {
-  auth: true,
-  cors: ["https://frontend.example.com"],
-}),
-```
-
-Golem exposes scheme-qualified endpoints so multiple security schemes can coexist:
+Golem exposes the following endpoints on the API deployment's origin. The gateway implements them; do not add agent methods or frontend routes for them. Replace `<security-scheme-id>` with the ID of the registered security scheme:
 
 ```text
 /.golem/oidc/<security-scheme-id>/authorize
 /.golem/oidc/<security-scheme-id>/token
 ```
 
-Generate a fresh verifier for every login, derive its S256 challenge, and retain the verifier and your own state until the callback:
+### Start login in the browser frontend
+
+The next two snippets are **browser-side TypeScript**, independent of the SDK used to write your agent. They are not agent implementations. Adapt them to your frontend framework and run them in the same browser tab, where `sessionStorage` retains the verifier across the login redirects.
+
+Put this first fragment in an async login-button handler or a browser module that starts login. Replace `SECURITY_SCHEME_ID`, the API origin, and the frontend callback URI with the values from your security scheme. It generates a fresh verifier, derives its S256 challenge, stores the verifier under a random state value, and navigates to the gateway's authorization endpoint:
 
 ```typescript copy
 const bytes = crypto.getRandomValues(new Uint8Array(32))
@@ -282,7 +283,11 @@ authorize.search = new URLSearchParams({
 location.assign(authorize)
 ```
 
-After login, Golem redirects to the registered frontend URI with `code` and the original `state`. Verify the state, retrieve and remove its verifier, and exchange the code:
+### Handle the callback in the browser frontend
+
+Your frontend must serve `https://frontend.example.com/auth/callback`. After login, Golem redirects the browser there with `code` and the original `state`. Run this second fragment in that page's async initialization code. Its `state` and `verifier` variables are local to the callback; the stored verifier connects it to the login fragment.
+
+Before exchanging the code, handle an authorization error and reject a missing code, a missing state, or a state with no matching verifier in `sessionStorage`. The fragment below shows the successful path only: the TypeScript `!` assertions do not perform those checks. Remove the stored verifier once it is consumed, then exchange the code at the gateway's token endpoint:
 
 ```typescript copy
 const callback = new URL(location.href)
@@ -306,7 +311,9 @@ const response = await fetch(
 const { access_token, expires_in } = await response.json()
 ```
 
-Send the opaque Golem token—not an upstream provider token—to protected routes as `Authorization: Bearer <access_token>`. Authorization codes expire after 60 seconds and are consumed by the first exchange attempt. Bearer tokens expire after one hour. There are no refresh tokens; start authorization again after expiry or any failed exchange. PKCE mode does not establish a cookie session.
+Check `response.ok` before using the token response; the fragment omits error handling. `access_token` is the opaque Golem token and `expires_in` is its lifetime in seconds. Keep the token in frontend memory and send it—not an upstream provider token—to protected routes as `Authorization: Bearer <access_token>`. Never put it in a URL.
+
+Authorization codes expire after 60 seconds and are consumed by the first exchange attempt. Bearer tokens expire after one hour. There are no refresh tokens; start authorization again after expiry or any failed exchange. PKCE mode does not establish a cookie session.
 
 ### Redirects and Cookies
 

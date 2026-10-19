@@ -3111,7 +3111,9 @@
         "exports",
         "agentTypes",
         "agentTypeProvisionConfigs",
-        "tools"
+        "tools",
+        "toolMiddlewares",
+        "files"
       ],
       "properties": {
         "$type": {
@@ -3159,7 +3161,12 @@
         "tools": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/ToolDeploymentMetadata" }
-        }
+        },
+        "toolMiddlewares": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareDeploymentMetadata" }
+        },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } }
       },
       "additionalProperties": false
     },
@@ -4285,7 +4292,9 @@
         "exports",
         "agentTypes",
         "agentTypeProvisionConfigs",
-        "tools"
+        "tools",
+        "toolMiddlewares",
+        "files"
       ],
       "properties": {
         "componentName": { "type": "string" },
@@ -4301,9 +4310,63 @@
         "tools": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/ToolDeploymentMetadata" }
-        }
+        },
+        "toolMiddlewares": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareDeploymentMetadata" }
+        },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } }
       },
       "additionalProperties": false
+    },
+    "ToolMiddlewareDeploymentMetadata": {
+      "type": "object",
+      "required": ["definition", "provision"],
+      "properties": {
+        "definition": { "$ref": "#/definitions/ToolMiddleware" },
+        "provision": { "$ref": "#/definitions/ToolProvisionConfig" }
+      },
+      "additionalProperties": false
+    },
+    "ToolMiddleware": {
+      "type": "object",
+      "required": ["name", "version", "aliases", "doc", "scope", "parameter_schema"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "scope": { "$ref": "#/definitions/ToolMiddlewareScope" },
+        "parameter_schema": { "$ref": "#/definitions/SchemaGraph" }
+      },
+      "additionalProperties": false
+    },
+    "ToolMiddlewareScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "universal" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "monomorphic" },
+            "value": {
+              "type": "object",
+              "required": ["presented", "expected"],
+              "properties": {
+                "presented": { "$ref": "#/definitions/Tool" },
+                "expected": { "oneOf": [{ "$ref": "#/definitions/Tool" }, { "type": "null" }] }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "ToolDeploymentMetadata": {
       "type": "object",

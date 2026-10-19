@@ -25,7 +25,7 @@ import {
   carry a card.
 - `@permissions.PolymorphicPermissionCard` — a template persistent card. Its grants may contain
   slot variables (`?agent`, `?env`, ...), which the host resolves for each holder. It has the same
-  operations and rules as `PermissionCard`; its `derive_child` returns a concrete `PermissionCard`.
+  operations and rules as `PermissionCard`; its `derive_child` returns a `PersistentCard`.
 - `@permissions.ScopeCard` — an invocation-local scope card from `derive_scope`, or lent to the
   current invocation by its caller. Only scope cards attach to RPC calls, and a scope card cannot
   be revoked, installed, used as the parent of a persistent card, or passed as an agent or tool
@@ -57,19 +57,33 @@ The card rows apply to both `PermissionCard` and `PolymorphicPermissionCard`.
 
 `derive` is a MoonBit keyword, so the card method is `derive_child`.
 
-Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env` in its
-owner, for example one that `inspect` returns from a template card, raises `InvalidPattern`, so
-you cannot derive a new template card. A template card can be a parent: the host resolves its slot
-variables for this agent before it checks the request. The host accepts a template parent of
+Persistent derivation returns `PersistentCard`, with `Concrete(PermissionCard)` and
+`Template(PolymorphicPermissionCard)` cases labelled by the host. Match the case before passing
+the card through a concrete or template schema. The sum supports the common card operations.
+
+Persistent derivation accepts owner slots such as `?agent` and `?env`.
+Slots in resource IDs are not supported and raise `InvalidPattern`.
+Child slots name the eventual installed holder, not the deriving caller.
+Every possible child instantiation must narrow the
+parent resolved for the caller. The host stores the original slots; the universal envelope is
+proof only. Explicit derivation inherits the parent's exact denials and adds requested denials;
+wallet derivation takes complete bounds. Slot-bearing denials cannot prove universal attenuation,
+so the host may conservatively refuse a request; concrete inherited denials remain.
+Scope cards stay concrete: requested slots raise `InvalidPattern` with an explicit message.
+For a slot-bearing tool owner, the host does not resolve aliases against caller metadata and
+rejects metadata-dependent short flags. Use primary names.
+
+A template card can be a parent: the host resolves its slot variables for this agent before it
+checks the request. The host accepts a template parent of
 `derive_child`, and any persistent parent of `derive_scope`, only when the card is in this agent's
 wallet; a card that you derived, or received as an agent or tool value, fails there with
 `NotPermitted`.
 
 Expected failures raise `@permissions.PermissionError` (one case per WIT `permission-error` case,
-with `kind()` and `message()`). `CardRevoked` reports a card that the host knows to be revoked; a
-cached handle can still resolve after its card is revoked, so do not treat a successful call as
-proof that a card is live. Host traps stay traps: `id`, `parents` and `expires_at` trap on an
-unknown handle.
+with `kind()` and `message()`). `inspect`, `derive_child`, `derive_scope` and `install` on a card
+that is revoked or expired raise `CardRevoked` or `CardExpired`, so `inspect` detects revocation.
+Host traps stay traps: `id`, `parents` and `expires_at` trap on an unknown handle, and on a card
+that is revoked or expired.
 
 ```moonbit
 pub fn MyAgent::delegate(self : Self, target : @types.AgentId) -> Result[UInt, String] {

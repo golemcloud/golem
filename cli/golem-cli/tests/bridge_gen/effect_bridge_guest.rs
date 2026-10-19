@@ -9,7 +9,7 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::SchemaType;
-use golem_common::schema::schema_type::PermissionCardSpec;
+use golem_common::schema::schema_type::{PermissionCardSpec, ResultSpec};
 use tempfile::TempDir;
 use test_r::test;
 
@@ -84,6 +84,51 @@ import { Stream as GeneratedStream } from "./stream-guest-client.js"
 const produced = GeneratedStream.get().pipe(Effect.flatMap(client => client.produce()))
 void produced
 "#,
+    );
+}
+
+#[test]
+fn effect_guest_agent_named_result_and_effect_result_alias_compile() {
+    let outcome = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::string())),
+        err: Some(Box::new(SchemaType::u32())),
+    });
+    let schema = agent(
+        "Result",
+        "effect",
+        vec![],
+        vec![
+            method("status", vec![], Some(SchemaType::string())),
+            method(
+                "outcome",
+                vec![field("value", ref_to("EffectResult"))],
+                Some(outcome.clone()),
+            ),
+        ],
+        vec![def("EffectResult", outcome)],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "result-guest-client.ts",
+        r#"
+import { Effect, Result } from "effect"
+import { Result as GeneratedResult } from "./result-guest-client.js"
+const status = GeneratedResult.get().pipe(Effect.flatMap(client => client.status()))
+const outcome = GeneratedResult.get().pipe(
+  Effect.flatMap(client => client.outcome(Result.succeed("yes"))),
+)
+const checked: Effect.Effect<Result.Result<string, number>, unknown, unknown> = outcome
+void status
+void checked
+"#,
+    );
+    assert!(source.contains("export class Result "), "{source}");
+    assert!(
+        source.contains(
+            "import { Effect, Result as EffectResult, Stream as EffectStream } from 'effect';"
+        ),
+        "{source}"
     );
 }
 
@@ -214,6 +259,117 @@ void program
     ] {
         assert!(source.contains(symbol), "missing {symbol}:\n{source}");
     }
+}
+
+#[test]
+fn effect_guest_effect_results_and_trailing_optional_parameters_compile() {
+    let result = |ok: SchemaType, err: SchemaType| {
+        SchemaType::result(ResultSpec {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(err)),
+        })
+    };
+    let schema = agent(
+        "OptionalEffectAgent",
+        "effect",
+        vec![
+            field("name", SchemaType::string()),
+            field("nickname", SchemaType::option(SchemaType::string())),
+        ],
+        vec![
+            method(
+                "lookup",
+                vec![
+                    field("first", SchemaType::option(SchemaType::string())),
+                    field("count", SchemaType::u32()),
+                    field("last", SchemaType::option(SchemaType::string())),
+                ],
+                Some(result(SchemaType::u64(), SchemaType::string())),
+            ),
+            method(
+                "accept",
+                vec![field(
+                    "outcome",
+                    result(SchemaType::string(), SchemaType::u32()),
+                )],
+                Some(SchemaType::string()),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "optional-effect-agent-guest-client.ts",
+        r#"
+import { Effect, Result } from "effect"
+import { OptionalEffectAgent } from "./optional-effect-agent-guest-client.js"
+const program = Effect.gen(function*() {
+  const client = yield* OptionalEffectAgent.get("name")
+  yield* OptionalEffectAgent.get("name", "nick")
+  const found: Result.Result<bigint, string> = yield* client.lookup(undefined, 1)
+  const count: bigint = Result.isSuccess(found) ? found.success : 0n
+  yield* client.lookup("first", 1, "last")
+  // @ts-expect-error an optional parameter before a required one cannot be omitted
+  yield* client.lookup(1)
+  const accepted: string = yield* client.accept(Result.succeed("yes"))
+  yield* client.accept(Result.fail(1))
+  return [count, accepted] as const
+})
+void program
+"#,
+    );
+    assert!(
+        source.contains("[outcome: EffectResult.Result<string, number>]"),
+        "{source}"
+    );
+    assert!(
+        source.contains("[first: string | undefined, count: number, last?: string]"),
+        "{source}"
+    );
+    assert!(source.contains("EffectResult.succeed("), "{source}");
+    assert!(!source.contains("{ ok:"), "{source}");
+}
+
+#[test]
+fn effect_guest_parameter_named_result_does_not_shadow_effect_result() {
+    let result = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::string())),
+        err: Some(Box::new(SchemaType::u32())),
+    });
+    let schema = agent(
+        "ShadowEffectAgent",
+        "typescript",
+        vec![field("name", SchemaType::string())],
+        vec![method(
+            "check",
+            vec![
+                field("Result", result.clone()),
+                field("Effect", SchemaType::string()),
+            ],
+            Some(result),
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "shadow-effect-agent-guest-client.ts",
+        r#"
+import { Effect, Result } from "effect"
+import { ShadowEffectAgent } from "./shadow-effect-agent-guest-client.js"
+const program = Effect.gen(function*() {
+  const client = yield* ShadowEffectAgent.get("name")
+  const checked: Result.Result<string, number> = yield* client.check(Result.succeed("yes"), "effect")
+  return checked
+})
+void program
+"#,
+    );
+    assert!(
+        source.contains("const [Result, Effect1] = __args;"),
+        "{source}"
+    );
 }
 
 fn generate_and_compile(

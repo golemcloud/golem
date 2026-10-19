@@ -21,14 +21,14 @@ export interface PermissionsClientShape {
     upperPositiveToRetain: Grants,
     upperNegativeToAdd: Grants,
     lifespan: TypesHost.Duration | undefined,
-  ) => PermissionCard
+  ) => TypesHost.PersistentCard
   readonly deriveFromWallet: (
     lowerPositive: Grants,
     lowerNegative: Grants,
     upperPositive: Grants,
     upperNegative: Grants,
     lifespan: TypesHost.Duration | undefined,
-  ) => PermissionCard
+  ) => TypesHost.PersistentCard
   readonly deriveScope: (
     parents: PermissionCard[],
     lowerPositive: Grants,

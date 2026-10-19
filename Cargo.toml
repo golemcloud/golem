@@ -122,7 +122,7 @@ desert_rust = { version = "0.1.11", features = ["bigdecimal", "uuid", "chrono", 
 dir-diff = "0.3.3"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
-etcd-client = "0.19.0"
+etcd-client = { version = "0.21.0", features = ["tls"] }
 evicting_cache_map = "0.4.0"
 expectrl = "0.8.0"
 fancy-regex = "0.14.0"
@@ -353,6 +353,7 @@ wit-component = "0.251"
 wit-encoder = "0.251"
 wit-parser = "0.251"
 x509-certificate = "0.23.1"
+x509-parser = "0.18.1"
 zstd = "0.13"
 
 [patch.crates-io]

@@ -480,12 +480,16 @@ export abstract class PersistentCard {
   /**
    * Derive a narrower child card. The positive lists of `bounds` name the
    * grants of this card to retain and the negative lists name the denials to
-   * add. Requires `card:derive` authority over the card. The child is a
-   * {@link PermissionCard}. A template parent must be in this agent's wallet,
+   * add. Requires `card:derive` authority over the card. The host labels the child
+   * concrete or template. Child slots name the eventual holder and are universally
+   * validated. A template parent must be in this agent's wallet,
    * where the host resolves it for this agent; otherwise the host returns
    * `not-permitted`.
    */
-  derive(bounds: Bounds, lifespan?: Lifespan): Result<PermissionCard, PermissionError> {
+  derive(
+    bounds: Bounds,
+    lifespan?: Lifespan,
+  ): Result<PermissionCard | PolymorphicPermissionCard, PermissionError> {
     const raw = borrow(this);
     const duration = lifespanToRaw(lifespan);
     return hostCall(() =>
@@ -497,7 +501,7 @@ export abstract class PersistentCard {
         grantsToRaw(bounds.upperNegative),
         duration,
       ),
-    ).map(adopt);
+    ).map((card) => (card.tag === 'concrete' ? adopt(card.val) : adoptPolymorphic(card.val)));
   }
 
   /**
@@ -549,7 +553,8 @@ export abstract class PersistentCard {
  *
  * {@link PermissionCard.id}, {@link PermissionCard.parents} and
  * {@link PermissionCard.expiresAt} trap when the host no longer knows the card,
- * for example after it was revoked by another holder.
+ * or when the card is revoked or expired. The other operations on such a card
+ * return a `card-revoked` or `card-expired` {@link PermissionError}.
  *
  * In an agent or tool schema, declare it with
  * `s.permissionCard({ polymorphic: false })`.
@@ -566,7 +571,7 @@ export class PermissionCard extends PersistentCard {
  * holder.
  *
  * It has the operations and the move rules of {@link PermissionCard}, and
- * {@link PolymorphicPermissionCard.derive} returns a `PermissionCard`. A
+ * {@link PolymorphicPermissionCard.derive} returns the host-labelled concrete or template child. A
  * template card is a `derive` or {@link deriveScope} parent only while it is in
  * this agent's wallet. The SDK has no conversion API between the two types
  * other than encoding and decoding through a schema: a decoded card takes the
@@ -865,7 +870,7 @@ export function walletVersion(): WalletVersionToken {
 export function deriveFromWallet(
   bounds: Bounds,
   lifespan?: Lifespan,
-): Result<PermissionCard, PermissionError> {
+): Result<PermissionCard | PolymorphicPermissionCard, PermissionError> {
   const duration = lifespanToRaw(lifespan);
   return hostCall(() =>
     rawDeriveFromWallet(
@@ -875,13 +880,13 @@ export function deriveFromWallet(
       grantsToRaw(bounds.upperNegative),
       duration,
     ),
-  ).map(adopt);
+  ).map((card) => (card.tag === 'concrete' ? adopt(card.val) : adoptPolymorphic(card.val)));
 }
 
 /**
  * Derive an invocation-local {@link ScopeCard} from one or more persistent or
  * scope parents. The parents are borrowed. The lists of `bounds` are the full
- * requested lists.
+ * requested lists. Requested slots fail with `invalid-pattern`.
  */
 export function deriveScope(
   parents: readonly (PermissionCard | PolymorphicPermissionCard | ScopeCard)[],

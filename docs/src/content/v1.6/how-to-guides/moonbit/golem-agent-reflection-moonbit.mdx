@@ -34,7 +34,11 @@ for introspection, including named definitions and representable restrictions;
 capabilities, futures, and streams have no JSON value representation and project
 to an unsatisfiable reflection JSON Schema. An omitted option record field and
 an explicit `null` both decode as absent; re-encoding may emit `null`, and the
-field is omitted from JSON Schema `required`. Canonical JSON encodes `s64` and
+field is omitted from JSON Schema `required`. A tool command's `input_schema()`
+also accepts JSON that omits a scalar option, positional with a declared
+default, or flag: `pack_json` fills in the declared default, and
+`to_json_schema()` does not require the argument. A JSON failure raises
+`ReflectError::Json(message, path~)`, where `path` locates the failing value. Canonical JSON encodes `s64` and
 `u64` as decimal strings, duration as `{ "nanoseconds": "..." }`, and quantity
 mantissas as decimal strings. These strings reject `+`, leading zeroes, `-0`,
 and overflow. Discovery returns
