@@ -16,7 +16,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { method, Saga } from "@golemcloud/effect-golem";
 ```
 

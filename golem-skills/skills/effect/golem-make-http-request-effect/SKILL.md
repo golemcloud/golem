@@ -5,7 +5,7 @@ description: "Making outgoing HTTP requests from an Effect-based Golem agent wit
 
 # Making Outgoing HTTP Requests from Effect Golem Agents
 
-Use the Effect v4 HTTP client from `effect/unstable/http`. `FetchHttpClient.layer` supplies the
+Use the Effect v4 HTTP client from `effect/http`. `FetchHttpClient.layer` supplies the
 canonical `HttpClient.HttpClient` service through QuickJS's WASI-backed `globalThis.fetch`, while
 keeping request construction, failures, response decoding, and dependency provision in Effect.
 
@@ -16,7 +16,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 ```
 
 Do not wrap `globalThis.fetch` in `Effect.tryPromise` for ordinary application HTTP. Do not use
@@ -263,7 +263,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { defineAgent, method } from "@golemcloud/effect-golem";
 
 export const MessageForwarder = defineAgent({
@@ -303,7 +303,7 @@ Effect AI provider instead of hand-writing provider REST calls.
 
 ## Key Constraints
 
-- Import root Effect APIs from `effect` and HTTP APIs from `effect/unstable/http`.
+- Import root Effect APIs from `effect` and HTTP APIs from `effect/http`.
 - Use the canonical `HttpClient.HttpClient` service with `FetchHttpClient.layer`.
 - Do not use direct `globalThis.fetch`, Node networking modules, or native HTTP client packages.
 - Keep handlers as Effects; do not return raw Promises or mark handlers `async`.
@@ -316,9 +316,9 @@ Effect AI provider instead of hand-writing provider REST calls.
 
 ## Authoritative API Sources
 
-- [Effect v4 HTTP client](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClient.ts)
-- [Effect v4 HTTP request](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClientRequest.ts)
-- [Effect v4 HTTP response](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClientResponse.ts)
-- [Effect v4 fetch client layer](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/FetchHttpClient.ts)
+- [Effect v4 HTTP client](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/HttpClient.ts)
+- [Effect v4 HTTP request](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/HttpClientRequest.ts)
+- [Effect v4 HTTP response](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/HttpClientResponse.ts)
+- [Effect v4 fetch client layer](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/FetchHttpClient.ts)
 - [Effect-Golem durability modes](https://github.com/golemcloud/effect-golem/blob/HEAD/src/internal/durabilityMode.ts)
 - [GOL-325 cancellation follow-up](https://linear.app/golem-cloud/issue/GOL-325/propagate-fetch-abortsignal-cancellation-to-the-underlying-wasi-http)

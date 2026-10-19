@@ -21,7 +21,7 @@ func init() {
 	agent.Handle(task.CreateTask, func(ctx *golem.Context[state], in task.CreateTaskIn) task.Task {
 		t := task.Task{
 			Id:        ctx.State.nextID,
-			Title:     in.Title,
+			Title:     in.Request.Title,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
 		ctx.State.nextID++

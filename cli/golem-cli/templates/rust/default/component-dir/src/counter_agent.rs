@@ -7,6 +7,15 @@ pub trait CounterAgent {
 
     #[endpoint(post = "/increment")]
     fn increment(&mut self) -> u32;
+
+    #[endpoint(get = "/value")]
+    fn value(&self) -> u32;
+
+    #[endpoint(post = "/add")]
+    fn add(&mut self, by: u32) -> u32;
+
+    #[endpoint(post = "/reset")]
+    fn reset(&mut self);
 }
 
 struct CounterImpl {
@@ -26,5 +35,18 @@ impl CounterAgent for CounterImpl {
     fn increment(&mut self) -> u32 {
         self.count += 1;
         self.count
+    }
+
+    fn value(&self) -> u32 {
+        self.count
+    }
+
+    fn add(&mut self, by: u32) -> u32 {
+        self.count += by;
+        self.count
+    }
+
+    fn reset(&mut self) {
+        self.count = 0;
     }
 }

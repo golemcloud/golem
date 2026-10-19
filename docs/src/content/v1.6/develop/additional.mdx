@@ -94,14 +94,37 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     </Tabs.Tab>
     <Tabs.Tab>
-    Effect TypeScript re-exports the host `AgentMetadata` type as `Agents.AgentMetadata`. Query metadata through Effect values:
+    The SDK exports this metadata shape as `Agents.AgentMetadata`:
 
     ```typescript
-    import { Agents } from "@golemcloud/effect-golem"
+    import type { Agents } from "@golemcloud/effect-golem"
 
-    const self = Agents.getSelfMetadata
-    const other = (agentId: Agents.AgentId) => Agents.getAgentMetadata(agentId)
+    /** Metadata about an agent */
+    export type AgentMetadata = {
+      /** The agent ID, consists of the component ID, agent type and agent parameters */
+      agentId: Agents.AgentId;
+      /** Command line arguments seen by the agent */
+      args: string[];
+      /** Environment variables seen by the agent */
+      env: [string, string][];
+      /** Configuration variables seen by the agent */
+      config: [string, string][];
+      /** The current agent status */
+      status: Agents.AgentStatus;
+      /** The component revision the agent is running with */
+      componentRevision: bigint;
+      /** The agent's current retry count */
+      retryCount: bigint;
+      /** The environment the agent belongs to */
+      environmentId: Agents.EnvironmentId;
+    };
     ```
+
+    There are two exported operations to query agent metadata:
+
+    - `Agents.getSelfMetadata` is an Effect that returns the metadata for the current agent
+    - `Agents.getAgentMetadata(agentId: Agents.AgentId)` returns an Effect containing the metadata for a specific agent, or `undefined` if it does not exist
+
     </Tabs.Tab>
     <Tabs.Tab>
     ```rust
@@ -233,7 +256,7 @@ import {
   AgentAnyFilter,
   AgentMetadata,
   AgentStatusFilter,
-} from "golem:api/host@1.5.0"
+} from "@golemcloud/golem-ts-sdk"
 
 const filter: AgentAnyFilter = {
   filters: [
@@ -251,9 +274,7 @@ const filter: AgentAnyFilter = {
   ],
 }
 
-const componentId: ComponentId = {
-  /* ... */
-}
+declare const componentId: ComponentId
 const agents: AgentMetadata[] = []
 const getter = new GetAgents(componentId, filter, true)
 
@@ -398,7 +419,7 @@ import {
   updateAgent,
   type AgentId,
   type ComponentRevision,
-} from "golem:api/host@1.5.0"
+} from "@golemcloud/golem-ts-sdk"
 
 const agentId: AgentId = getSelfMetadata().agentId
 
@@ -482,52 +503,11 @@ if err := golem.UpdateAgent(agentID, targetRevision, golem.UpdateModeAutomatic);
 To learn more about updating agents, see the Agent Update section of the [agents page](/v1.6/concepts/agents).
 
 ### Oplog search and query
-The `oplog` interface in `golem:api` provides functions to search and query the agent's persisted oplog.
+Golem provides APIs to read and search an agent's persisted oplog.
 
-The interface defines a big `variant` data type called `oplog-entry`, and two **resources** for querying an agent's oplog.
+Each oplog entry describes a recorded operation or lifecycle event. You can either read all entries or supply a search expression to return only matching entries.
 
-- the `get-oplog` resource enumerates through **all entries** of the oplog
-- the `search-oplog` resource accepts a **search expression** and only returns the matching entries
-
-Both resources, once constructed, provide a `get-next` function that returns a chunk of oplog entries. Repeatedly calling this function goes through the whole data set, and eventually returns `none`.
-
-### Custom durability for library authors
-
-The low-level `golem:durability@1.6.0` interface is for SDK and library authors who need to wrap raw host effects as one durable operation. Application code should use the normal high-level SDK APIs and Golem's built-in durability instead.
-
-**TypeScript, Effect, Scala, MoonBit, and Go support sequential and properly nested custom operations only.** An async body may await host operations, but no unrelated guest work may run during those waits. This includes ordinary host calls, not just other custom operations: sibling effects can be attributed to the wrong custom operation and cause incorrect replay or invocation failure. The SDKs do not reliably detect this misuse.
-
-Await each nested operation before continuing its parent. Do not detach work or let it outlive the body, including on failure or cancellation. Stop and join outstanding work before closing the operation; fail-fast promise/future combinators do not necessarily wait for surviving siblings. Go's blocking `durability.Run` can yield to other goroutines and has the same restriction. See [custom durable operations](/v1.6/develop/durability#custom-durable-operations) for the per-SDK limits and supported use cases. These limits do not restrict ordinary built-in durability or Rust's scope integration.
-
-The durable function type has four cases: `ReadLocal`, `WriteLocal`, `ReadRemote`, and `WriteRemote` (spelled `read-local`, `write-local`, `read-remote`, and `write-remote` in WIT). The cases classify local or remote reads and writes. They carry no oplog index. The executor records nesting separately in `Start.parent_start_index`; a nested remote write is still `WriteRemote`.
-
-A library opens the operation with `begin-custom-durable-invocation`, passing a stable function name, a typed request, and a durable function type. The executor synchronously allocates a replay-stable UUID before the host call can yield. The UUID identifies the logical call; the request remains its independently recorded and validated semantic input. This separation means a unit/no-input request remains correct for generators while concurrent calls still have distinct identities. The result selects one of two paths:
-
-- `live(live-invocation)`: perform the complete operation while its execution scope is installed, then call `finish` with the typed result. Async wrappers use `finish-async` so the host records when the guest receives the completion.
-- `replayed(persisted-invocation)`: do not perform the physical body. Decode and return the recorded response.
-
-Only the live result contains a resource. Begin installs its execution scope on the current guest task. Host calls initiated in the installed scope remain available as replay-inert observational oplog entries owned by the custom operation. Holding the resource alone does not install its scope. Rust's async wrapper uses `exchange-custom-invocation-context` to install the scope only while polling the body, and async begin/replay uses the recorded completion boundary. Detached tasks do not inherit this scope automatically. Keep the resource alive until every synchronous or asynchronous host effect has completed.
-
-```text
-invocation = begin-custom-durable-invocation(name, request, function-type)
-match invocation:
-  live(live-invocation):
-    result = perform-entire-physical-operation()
-    live-invocation.finish(encode(result), forced-commit)
-    return result
-  replayed(recorded):
-    return decode(recorded.response)
-```
-
-Golem derives the UUID from the top-level idempotency key, the parent custom invocation when nested, and a deterministic ordinal in that logical parent's namespace. Child operations therefore do not shift later root identities when a completed parent is skipped during replay. The identity does not depend on the request payload.
-
-If recovery replays an unfinished live invocation, it runs the **whole operation** again. Individual physical effects are not independently resumed, so the library must make a repeated attempt safe by selecting the correct function type and, where appropriate, using external idempotency keys or transactions.
-
-The resource is affine: `finish` consumes it, and it cannot be completed twice. Dropping it unfinished removes observational ownership without recording an `End`, but does not trigger a retry. A deterministic guest trap fails the invocation without retry. Recovery repairs an eligible incomplete call at its own `Start`; completed calls retain their recorded outcomes.
-
-The request, response, operation name, and observational host calls are intended to support observability. They may appear in oplog inspection, logs, and metrics. Use useful schemas and names, but redact credentials and personal data, and avoid recording unnecessary or unbounded payloads.
-
-Use an SDK combinator instead of handling the live resource manually. Rust provides `golem_rust::durability::Durability::run`, `run_async`, `run_infallible`, and `run_infallible_async`; TypeScript provides `durable`; Effect TypeScript provides `Durability.wrap` and `wrapInfallible`; Scala provides `DurabilityApi.durable` and `durableAsync`; MoonBit provides `@api.durable` and `durable_async`. These combinators own begin/replay/finish/drop and evaluate the operation body only for a live invocation.
+Results are paginated. Read successive batches until the query returns no more entries. For CLI usage, see [Observability](/v1.6/develop/observability).
 
 ### Invocation context
 
@@ -537,54 +517,7 @@ The spans are not automatically sent to any tracing system but they can be recon
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-To get the current invocation context, use the `currentContext` host function, imported from `golem:api/context@1.5.0`:
-
-```typescript
-/**
- * Invocation context support
- */
-declare module 'golem:api/context@1.5.0' {
-  /**
-   * Gets the current invocation context
-   * The function call captures the current context; if new spans are started, the returned `invocation-context` instance will not
-   * reflect that.
-   */
-  export function currentContext(): InvocationContext;
-}
-```
-
-The `InvocationContext` itself is a **class** with various methods for querying attributes of the invocation context:
-
-| method | description |
-| ------ | ----------- |
-| `traceId` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
-| `spanId` | Returns the span ID associated with the context |
-| `parent` | Returns the parent invocation context, if any |
-| `getAttribute` | Gets an attribute from the current span by key, or searches the full parent chain when `inherited` is `true` |
-| `getAttributes` | Gets all attributes from the current span, or the merged attribute set from the full parent chain when `inherited` is `true` |
-| `getAttributeChain` | Gets all values of a given attribute from the current and parent contexts |
-| `getAttributeChains` | Get all attributes and their previous values |
-| `traceContextHeaders` | Gets the W3C Trace Context headers associated with the current invocation context |
-
-Custom attributes can only be set on **custom spans**. First start a new span using `startSpan`
-
-```typescript
-/**
- * Starts a new `span` with the given name, as a child of the current invocation context
- */
-export function startSpan(name: string): Span;
-```
-
-and then use the `Span` class's methods:
-
-| method | description |
-| ------ | ----------- |
-| `startedAt` | Returns the timestamp when the span was started |
-| `setAttribute` | Sets an attribute on the span |
-| `setAttributes` | Sets multiple attributes on the span |
-| `finish` | Ends the current span |
-
-If `finish` is not explicitly called on the span, it is going to be finished when the runtime drops the span object.
+The TypeScript SDK does not currently expose invocation-context inspection or custom span creation through its public API. See [Observability](/v1.6/develop/observability) for logs and trace export.
 
 </Tabs.Tab>
 
@@ -695,37 +628,37 @@ If `finish` is not explicitly called on the span, it is going to be finished whe
 </Tabs.Tab>
 
     <Tabs.Tab>
-To get the current invocation context, use the `current_context` host function, imported from `golemcloud/golem_sdk/interface/golem/api/context`:
+Import `golemcloud/golem_sdk/context` as `@context` and call `current_context`:
 
 ```moonbit
-/// Gets the current invocation context
-///
-/// The function call captures the current context; if new spans are started, the returned `invocation-context` instance will not
-/// reflect that.
-pub fn current_context() -> InvocationContext
+let context = @context.current_context()
+let trace_id = context.trace_id()
 ```
 
-The `InvocationContext` resource exposes various methods for querying attributes of the invocation context:
+The returned `Context` exposes these methods:
 
 | method | description |
 | ------ | ----------- |
 | `trace_id` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
 | `span_id` | Returns the span ID associated with the context |
 | `parent` | Returns the parent invocation context, if any |
-| `get_attribute` | Gets an attribute from the current span by key, or searches the full parent chain when `inherited` is `true` |
-| `get_attributes` | Gets all attributes from the current span, or the merged attribute set from the full parent chain when `inherited` is `true` |
-| `get_attribute_chain` | Gets all values of a given attribute from the current and parent contexts |
-| `get_attribute_chains` | Get all attributes and their previous values |
+| `get_attribute` | Gets an attribute by key, searching the full parent chain |
+| `get_current_attribute` | Gets an attribute from the current span only |
+| `attributes` | Gets the merged attributes from the full parent chain |
+| `current_attributes` | Gets attributes from the current span only |
+| `attribute_chain` | Gets all values of a given attribute from the current and parent contexts |
+| `attribute_chains` | Gets all attributes and their previous values |
 | `trace_context_headers` | Gets the W3C Trace Context headers associated with the current invocation context |
 
-Custom attributes can only be set on **custom spans**. First start a new span using `start_span`
+Use `with_span` to create a custom span and finish it automatically:
 
 ```moonbit
-/// Starts a new `span` with the given name, as a child of the current invocation context
-pub fn start_span(name : String) -> Span
+@context.with_span("charge", fn(span) {
+  span.set_attribute("operation", "charge")
+})
 ```
 
-and then use the `Span` resource's methods:
+For manual lifecycle management, `@context.start_span(name)` returns a `Span` with these methods:
 
 | method | description |
 | ------ | ----------- |
@@ -734,7 +667,7 @@ and then use the `Span` resource's methods:
 | `set_attributes` | Sets multiple attributes on the span |
 | `finish` | Ends the current span |
 
-If `finish` is not explicitly called on the span, it is going to be finished when the resource is dropped.
+Call `finish` when the work ends, preferably with `defer`. Do not call it inside `with_span`, which finishes the span for you.
 
 </Tabs.Tab>
 
@@ -772,499 +705,229 @@ The custom spans are pushed onto the invocation context stack, so whenever an RP
 
 To export traces, logs, and metrics to an external system, see the [Observability](/v1.6/develop/observability) page for setting up the OpenTelemetry plugin.
 
-### The WASI Key-Value store interface
+### Key-value store
 
-Although Golem agents can store their state completely in their own memory, it is possible to use the `wasi:keyvalue` interface to store key-value pairs in a Golem managed key value storage.
+Although Golem agents can store their state completely in their own memory, they can also store key-value pairs in Golem-managed storage.
 
 This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. Storage is shared across agents and components within the same environment.
 
+Use a small value for shared settings. A missing key is distinct from a storage failure; do not turn every failure into a default value. The examples below write and read one greeting. Separate calls do not form a transaction.
+
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        There are two primary modules for using the key-value store:
-        - `wasi:keyvalue/eventual@0.1.0` defines an API for an eventually consistent key-value store
-        - `wasi:keyvalue/eventual-batch@0.1.0` defines an API with batch operations working on multiple keys
+Use `openBucket` to open a bucket. Opening is asynchronous; the bucket's methods are synchronous and work with `Uint8Array` values. A missing key returns `undefined`; storage failures throw.
 
-        The primary interface to work with the key-value pairs consists of the four basic operations:
+```typescript
+import { openBucket } from "@golemcloud/golem-ts-sdk"
 
-        ```typescript
-        /**
-        * Get the value associated with the key in the bucket.
-        * The value is returned as an option. If the key-value pair exists in the
-        * bucket, it returns `Ok(value)`. If the key does not exist in the
-        * bucket, it returns `Ok(none)`.
-        * If any other error occurs, it returns an `Err(error)`.
-        * @throws Error
-        */
-        export function get(bucket: Bucket, key: Key): IncomingValue | undefined;
-        /**
-        * Set the value associated with the key in the bucket. If the key already
-        * exists in the bucket, it overwrites the value.
-        * If the key does not exist in the bucket, it creates a new key-value pair.
-        * If any other error occurs, it returns an `Err(error)`.
-        * @throws Error
-        */
-        export function set(bucket: Bucket, key: Key, outgoingValue: OutgoingValue): void;
-        /**
-        * Delete the key-value pair associated with the key in the bucket.
-        * If the key does not exist in the bucket, it does nothing.
-        * If any other error occurs, it returns an `Err(error)`.
-        * @throws Error
-        */
-        export function delete_(bucket: Bucket, key: Key): void;
-        /**
-        * Check if the key exists in the bucket.
-        * If the key exists in the bucket, it returns `Ok(true)`. If the key does
-        * not exist in the bucket, it returns `Ok(false)`.
-        * If any other error occurs, it returns an `Err(error)`.
-        * @throws Error
-        */
-        export function exists(bucket: Bucket, key: Key): boolean;
-        ```
+async function greeting(): Promise<Uint8Array | undefined> {
+  const bucket = await openBucket("shared")
+  bucket.set("greeting", new TextEncoder().encode("hello"))
+  return bucket.get("greeting")
+}
+```
 
-        The batch API defines similar functions such as `getMany` and `setMany`, but working on multiple keys at once.
+        | Method | Result |
+        | ------ | ------ |
+        | `get(key)` | The stored bytes, or `undefined` when the key does not exist |
+        | `set(key, value)` | Creates or replaces a value |
+        | `delete(key)` | Deletes a key, if present |
+        | `exists(key)` | Whether a key exists |
+        | `getMany(keys)` | One value or `undefined` for each key |
+        | `setMany(entries)` | Stores several key-value pairs |
+        | `deleteMany(keys)` | Deletes several keys |
+        | `keys()` | All keys in the bucket |
 
-        The `IncomingValue` and `OutgoingValue` types are defined as follows:
-
-        ```typescript
-        export class OutgoingValue {
-            static newOutgoingValue(): OutgoingValue;
-            outgoingValueWriteBodyAsync(data: AsyncIterable<number>): void;
-            outgoingValueWriteBodySync(value: Uint8Array): void;
-        }
-
-        export class IncomingValue {
-            incomingValueConsumeSync(): Uint8Array;
-            incomingValueConsumeAsync(): AsyncIterable<number>;
-            incomingValueSize(): bigint;
-        }
-        ```
-
-        The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
-        stream the data to the key-value store. For small values, the sync variants are more convenient, directly taking and returning
-        a `Uint8Array`.
+        `bucket.forSchema(schema)` provides the same operations with schema-validated values instead of bytes.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        Effect TypeScript provides scoped byte and schema-typed bucket APIs:
+Use `KeyValue.openBucket` inside `Effect.scoped` to open a bucket. Its methods return effects with byte values. A missing key returns `Option.none()`; storage failures use the error channel.
 
         ```typescript
-        import { Effect, Option } from "effect"
+        import { Effect } from "effect"
         import { KeyValue } from "@golemcloud/effect-golem"
 
         const program = Effect.scoped(
           Effect.gen(function* () {
             const bucket = yield* KeyValue.openBucket("shared")
             yield* bucket.set("greeting", new TextEncoder().encode("hello"))
-            const value = yield* bucket.get("greeting")
-            return Option.map(value, (bytes) => new TextDecoder().decode(bytes))
+            return yield* bucket.get("greeting")
           }),
         )
         ```
 
-        Buckets also provide batch operations, `keys`, and `forSchema`. Atomic increment/compare-and-swap and cache APIs are not currently exposed.
+| API | Result |
+| --- | ------ |
+| `get(key)` / `set(key, bytes)` | Reads or writes a value |
+| `delete(key)` / `exists(key)` | Deletes a key or checks whether it exists |
+| `getMany(keys)` | One optional value for each key |
+| `setMany(entries)` / `deleteMany(keys)` | Writes or deletes several keys |
+| `keys` | All keys in the bucket |
+
+`bucket.forSchema(schema)` provides schema-validated values instead of bytes.
     </Tabs.Tab>
 
     <Tabs.Tab>
-            There are two primary modules for using the key-value store:
-            - `golem_rust::bindings::wasi::keyvalue::eventual` defines an API for an eventually consistent key-value store
-            - `golem_rust::bindings::wasi::keyvalue::eventual_batch` defines an API with batch operations working on multiple keys
+Use `Bucket::open_bucket` to open a bucket. The `eventual` module provides single-key operations; `eventual_batch` provides batch operations. Storage failures return `Err`; a missing key returns `Ok(None)`.
 
-            The primary interface to work with the key-value pairs consists of the four basic operations:
+```rust
+use golem_rust::bindings::wasi::keyvalue::{
+    eventual,
+    types::{Bucket, OutgoingValue},
+};
 
-            ```rust
-            /**
-            * Get the value associated with the key in the bucket.
-            * The value is returned as an option. If the key-value pair exists in the
-            * bucket, it returns `Ok(value)`. If the key does not exist in the
-            * bucket, it returns `Ok(none)`.
-            * If any other error occurs, it returns an `Err(error)`.
-            * @throws Error
-            */
-            pub fn get(bucket: &Bucket, key: &str) -> Result<Option<IncomingValue>, Error>;
-            /**
-            * Set the value associated with the key in the bucket. If the key already
-            * exists in the bucket, it overwrites the value.
-            * If the key does not exist in the bucket, it creates a new key-value pair.
-            * If any other error occurs, it returns an `Err(error)`.
-            * @throws Error
-            */
-            pub fn set(bucket: &Bucket, key: &str, outgoing_value: &OutgoingValue) -> Result<(), Error>;
-            /**
-            * Delete the key-value pair associated with the key in the bucket.
-            * If the key does not exist in the bucket, it does nothing.
-            * If any other error occurs, it returns an `Err(error)`.
-            * @throws Error
-            */
-            pub fn delete(bucket: &Bucket, key: &str) -> Result<(), Error>;
-            /**
-            * Check if the key exists in the bucket.
-            * If the key exists in the bucket, it returns `Ok(true)`. If the key does
-            * not exist in the bucket, it returns `Ok(false)`.
-            * If any other error occurs, it returns an `Err(error)`.
-            * @throws Error
-            */
-            pub fn exists(bucket: &Bucket, key: &str) -> Result<bool, Error>;
-            ```
+fn greeting() -> Result<Option<Vec<u8>>, String> {
+    let bucket = Bucket::open_bucket("shared")
+        .map_err(|e| format!("{e:?}"))?;
+    let outgoing = OutgoingValue::new_outgoing_value();
+    outgoing.outgoing_value_write_body_sync(b"hello")
+        .map_err(|e| format!("{e:?}"))?;
+    eventual::set(&bucket, "greeting", &outgoing)
+        .map_err(|e| format!("{e:?}"))?;
+    let value = eventual::get(&bucket, "greeting")
+        .map_err(|e| format!("{e:?}"))?;
+    value.map(|value| {
+        value.incoming_value_consume_sync().map_err(|e| format!("{e:?}"))
+    }).transpose()
+}
+```
 
-            The batch API defines similar functions such as `get_many` and `set_many`, but working on multiple keys at once.
+| Operation | API |
+| --------- | --- |
+| Read / write | `eventual::get` / `eventual::set` |
+| Delete / check existence | `eventual::delete` / `eventual::exists` |
+| Read / write several keys | `eventual_batch::get_many` / `eventual_batch::set_many` |
+| Delete several keys / list keys | `eventual_batch::delete_many` / `eventual_batch::keys` |
 
-            The `IncomingValue` is basically a handle to a WASI resource that contains the value.
-            To actually extract the bytes, it defines two consume methods.
-
-            The `OutgoingValue` is a handle to a WASI resource that can be used to write the value.
-            It defines methods to write the bytes into the resource.
-
-            Similarly,
-
-            ```rust
-            impl OutgoingValue {
-                pub fn new_outgoing_value() -> OutgoingValue;
-                /**
-                 * Writes the value asynchronously by consuming the given `stream<u8>`:
-                 * the caller keeps the writable end and the host appends every received
-                 * byte to the outgoing value's body.
-                 * If any other error occurs, it returns an `Err(error)`.
-                 * @throws Error
-                 */
-                pub fn outgoing_value_write_body_async(&self, data: StreamReader<u8>) -> Result<(), Error>;
-                /**
-                 * Writes the value to the output-stream synchronously.
-                 * If any other error occurs, it returns an `Err(error)`.
-                 * @throws Error
-                 */
-                pub fn outgoing_value_write_body_sync(&self, value: &[u8]) -> Result<(), Error>;
-            }
-
-
-            impl IncomingValue {
-                /**
-                 * Consumes the value synchronously and returns the value as a list of bytes.
-                 * If any other error occurs, it returns an `Err(error)`.
-                 * @throws Error
-                 */
-                pub fn incoming_value_consume_sync(&self) -> Result<Vec<u8>, Error>;
-                /**
-                 * Consumes the value asynchronously and returns the value as an `input-stream`.
-                 * If any other error occurs, it returns an `Err(error)`.
-                 * @throws Error
-                 */
-                pub fn incoming_value_consume_async(&self) -> Result<StreamReader<u8>, Error>;
-                /**
-                 * The size of the value in bytes.
-                 * If the size is unknown or unavailable, this function returns an `Err(error)`.
-                 * @throws Error
-                 */
-                pub fn incoming_value_size(&self) -> Result<u64, Error>;
-            }
-
-            ```
-
-            The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
-            stream the data to the key-value store. For small values, the sync variants are more convenient, directly taking and returning
-            a `Vec<u8>`.
+For small values, use `outgoing_value_write_body_sync` and `incoming_value_consume_sync` as above. The corresponding async methods work with byte streams. Rust releases the bucket and value handles when they leave scope.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The Scala SDK exposes the underlying `wasi:keyvalue/eventual@0.1.0`, `wasi:keyvalue/eventual-batch@0.1.0`, and `wasi:keyvalue/types@0.1.0` modules through the `golem.wasi.KeyValue` wrapper.
+Use `KeyValue.Bucket.open` to open a bucket. Its synchronous methods work with `Array[Byte]`; a missing key returns `None`, while storage failures throw.
 
-        The primary interface to work with key-value pairs is the `Bucket` class:
+```scala
+import golem.wasi.KeyValue
 
-        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+def greeting(): Option[Array[Byte]] = {
+  val bucket = KeyValue.Bucket.open("shared")
+  bucket.set("greeting", "hello".getBytes("UTF-8"))
+  bucket.get("greeting")
+}
+```
 
-        ```scala
-        import golem.wasi.KeyValue
-
-        object KeyValue {
-          object Bucket {
-            def open(name: String): Bucket
-          }
-
-          final class Bucket {
-            def get(key: String): Option[Array[Byte]]
-            def set(key: String, value: Array[Byte]): Unit
-            def delete(key: String): Unit
-            def exists(key: String): Boolean
-          }
-        }
-        ```
-
-        The batch API is exposed on the same `Bucket` type through methods such as `keys`, `getMany`, and `deleteMany`:
-
-        ```scala
-        import golem.wasi.KeyValue
-
-        object KeyValue {
-          final class Bucket {
-            def keys(): List[String]
-            def getMany(keys: List[String]): List[Option[Array[Byte]]]
-            def deleteMany(keys: List[String]): Unit
-          }
-        }
-        ```
-
-        The Scala SDK also exposes low-level value wrappers when working closer to the raw WASI API:
-
-        ```scala
-        import golem.wasi.KeyValue
-
-        object KeyValue {
-          final class OutgoingValue {
-            def writeSync(data: Array[Byte]): Unit
-          }
-
-          object OutgoingValue {
-            def create(): OutgoingValue
-          }
-
-          final class IncomingValue {
-            def consumeSync(): Array[Byte]
-            def size(): Long
-          }
-
-          def eventualRaw: Any
-          def eventualBatchRaw: Any
-          def typesRaw: Any
-        }
-        ```
-
-        For most use cases, the synchronous `Array[Byte]` helpers are the most convenient way to work with key-value data from Scala.
+| Method | Result |
+| ------ | ------ |
+| `get(key)` / `set(key, bytes)` | Reads or writes a value |
+| `delete(key)` / `exists(key)` | Deletes a key or checks whether it exists |
+| `getMany(keys)` | One optional value for each key |
+| `deleteMany(keys)` | Deletes several keys |
+| `keys()` | All keys in the bucket |
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The generated `wasi:keyvalue` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/keyvalue/eventual`, `golemcloud/golem_sdk/interface/wasi/keyvalue/eventualBatch`, and `golemcloud/golem_sdk/interface/wasi/keyvalue/types` packages. Assuming they are imported as `@eventual`, `@eventualBatch`, and `@types`, with `golemcloud/golem_sdk/async-core` imported as `@async-core` and the key-value error package as `@wasiKeyvalueError`:
+Import `golemcloud/golem_sdk/interface/wasi/keyvalue/eventual`, `golemcloud/golem_sdk/interface/wasi/keyvalue/types`, and `golemcloud/golem_sdk/interface/wasi/keyvalue/wasi-keyvalue-error` as `@eventual`, `@types`, and `@wasiKeyvalueError`. Open the bucket with `@types.Bucket::open_bucket`. A missing key returns `Ok(None)`; storage failures return `Err`.
 
-        The declarations below summarize the generated API shape; they are not definitions to copy into your application.
+```moonbit
+fn greeting() -> Result[FixedArray[Byte]?, @wasiKeyvalueError.Error_] {
+  let bucket = match @types.Bucket::open_bucket("shared") {
+    Ok(bucket) => bucket
+    Err(error) => return Err(error)
+  }
+  defer bucket.drop()
+  let outgoing = @types.OutgoingValue::new_outgoing_value()
+  defer outgoing.drop()
+  match outgoing.outgoing_value_write_body_sync([104, 101, 108, 108, 111]) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  match @eventual.set(bucket, "greeting", outgoing) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  match @eventual.get(bucket, "greeting") {
+    Err(error) => Err(error)
+    Ok(None) => Ok(None)
+    Ok(Some(value)) => {
+      defer value.drop()
+      value.incoming_value_consume_sync().map(bytes => Some(bytes))
+    }
+  }
+}
+```
 
-        The primary interface to work with the key-value pairs consists of the four basic operations:
+| Operation | API |
+| --------- | --- |
+| Read / write | `@eventual.get` / `@eventual.set` |
+| Delete / check existence | `@eventual.delete` / `@eventual.exists` |
+| Read / write several keys | `get_many` / `set_many` in the `eventual-batch` package |
+| Delete several keys / list keys | `delete_many` / `keys` in the `eventual-batch` package |
 
-        ```moonbit
-        /// Get the value associated with the key in the bucket.
-        /// The value is returned as an option. If the key-value pair exists in the
-        /// bucket, it returns `Ok(value)`. If the key does not exist in the
-        /// bucket, it returns `Ok(none)`.
-        /// If any other error occurs, it returns an `Err(error)`.
-        pub fn get(
-          bucket : @types.Bucket,
-          key : String,
-        ) -> Result[@types.IncomingValue?, @wasiKeyvalueError.Error_]
-
-        /// Set the value associated with the key in the bucket. If the key already
-        /// exists in the bucket, it overwrites the value.
-        /// If the key does not exist in the bucket, it creates a new key-value pair.
-        /// If any other error occurs, it returns an `Err(error)`.
-        pub fn set(
-          bucket : @types.Bucket,
-          key : String,
-          outgoing_value : @types.OutgoingValue,
-        ) -> Result[Unit, @wasiKeyvalueError.Error_]
-
-        /// Delete the key-value pair associated with the key in the bucket.
-        /// If the key does not exist in the bucket, it does nothing.
-        /// If any other error occurs, it returns an `Err(error)`.
-        pub fn delete(
-          bucket : @types.Bucket,
-          key : String,
-        ) -> Result[Unit, @wasiKeyvalueError.Error_]
-
-        /// Check if the key exists in the bucket.
-        /// If the key exists in the bucket, it returns `Ok(true)`. If the key does
-        /// not exist in the bucket, it returns `Ok(false)`.
-        /// If any other error occurs, it returns an `Err(error)`.
-        pub fn exists(
-          bucket : @types.Bucket,
-          key : String,
-        ) -> Result[Bool, @wasiKeyvalueError.Error_]
-        ```
-
-        The batch API defines similar functions such as `get_many` and `set_many`, but working on multiple keys at once.
-
-        The low-level resource types are defined in the `golemcloud/golem_sdk/interface/wasi/keyvalue/types` package:
-
-        ```moonbit
-        pub fn Bucket::open_bucket(String) -> Result[Self, @wasiKeyvalueError.Error_]
-
-        pub(all) struct OutgoingValue(Int)
-        pub fn OutgoingValue::new_outgoing_value() -> Self
-        pub fn OutgoingValue::outgoing_value_write_body_sync(
-          Self,
-          FixedArray[Byte],
-        ) -> Result[Unit, @wasiKeyvalueError.Error_]
-        pub fn OutgoingValue::outgoing_value_write_body_async(
-          Self,
-          @async-core.Stream[Byte],
-        ) -> Result[Unit, @wasiKeyvalueError.Error_]
-
-        pub(all) struct IncomingValue(Int)
-        pub fn IncomingValue::incoming_value_consume_sync(
-          Self,
-        ) -> Result[FixedArray[Byte], @wasiKeyvalueError.Error_]
-        pub fn IncomingValue::incoming_value_consume_async(
-          Self,
-        ) -> Result[@async-core.Stream[Byte], @wasiKeyvalueError.Error_]
-        pub fn IncomingValue::incoming_value_size(
-          Self,
-        ) -> Result[UInt64, @wasiKeyvalueError.Error_]
-        ```
-
-        For most use cases, the synchronous `FixedArray[Byte]` helpers are the most convenient way to work with key-value data from MoonBit.
+Use the synchronous byte helpers for small values, as above. Release each acquired bucket and value handle with `defer`, including on failure.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The Go SDK wraps the `wasi:keyvalue` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/keyvalue` package. A missing key is not an error. The operations return no error: the host fails one only on a denied permission or on a storage failure it has already retried, and such a failure panics and fails the invocation.
-
-        The following declarations summarize the public API shape; they are not definitions to copy into your application.
-
-        ```go
-        package keyvalue
-
-        // OpenBucket opens (or creates) the named bucket.
-        func OpenBucket(name string) *Bucket
-
-        func (b *Bucket) Get(key string) (value []byte, found bool)
-        func (b *Bucket) Set(key string, value []byte)
-        func (b *Bucket) Delete(key string)
-        func (b *Bucket) Exists(key string) bool
-        ```
-
-        The batch API is exposed on the same `Bucket` type:
-
-        ```go
-        func (b *Bucket) Keys() []string
-        func (b *Bucket) GetMany(keys []string) map[string][]byte
-        func (b *Bucket) SetMany(entries map[string][]byte)
-        func (b *Bucket) DeleteMany(keys []string)
-        func (b *Bucket) Close()
-        ```
-
-        For example:
+        Use `github.com/golemcloud/golem/sdks/go/golem/keyvalue` to access the key-value store from Go. A missing key is not an error. The operations return no error: the host fails one only on a denied permission or on a storage failure it has already retried, and such a failure panics and fails the invocation.
 
         ```go
         import "github.com/golemcloud/golem/sdks/go/golem/keyvalue"
 
-        bucket := keyvalue.OpenBucket("shared")
-        bucket.Set("greeting", []byte("hello"))
-        value, found := bucket.Get("greeting")
+        func greeting() ([]byte, bool) {
+            bucket := keyvalue.OpenBucket("shared")
+            defer bucket.Close()
+            bucket.Set("greeting", []byte("hello"))
+            return bucket.Get("greeting")
+        }
         ```
 
-        `bucket.Typed[T]()` wraps a bucket in a `*keyvalue.Store[T]` with the same operations, storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string). Its `Get` returns `(T, bool, error)`, where the error reports stored data that does not decode as `T`; `MustGet` panics on that error instead. `GetMany` and `SetMany` work on several keys at once. `Close` releases the bucket's host handle; it is optional, because an unused bucket is also released when Go collects it.
+| Method | Result |
+| ------ | ------ |
+| `Get(key)` / `Set(key, bytes)` | Reads or writes a value; `Get` also returns whether it exists |
+| `Delete(key)` / `Exists(key)` | Deletes a key or checks whether it exists |
+| `GetMany(keys)` | A map containing the keys that exist |
+| `SetMany(entries)` / `DeleteMany(keys)` | Writes or deletes several keys |
+| `Keys()` | All keys in the bucket |
+
+Use `defer bucket.Close()` to release the handle. Closing the bucket does not delete its values.
     </Tabs.Tab>
 </Tabs>
 
-### The WASI Blob Store interface
+### Blob store
 
-The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. Storage is shared across agents and components within the same environment.
+The blob store provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. Storage is shared across agents and components within the same environment.
+
+Read a bounded range instead of loading a large object into memory. Each example below opens the existing `documents` container and reads the first five bytes of `hello.txt`, which must contain at least five bytes. Start and end offsets are inclusive. Releasing a handle does not delete the stored data.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        The Blob Store API organizes blobs identified by _object names_ into **containers**. The `wasi:blobstore/blobstore` module exports functions to create, get and delete these containers by name:
+Use `getContainer` to open an existing container or `getOrCreateContainer` to open or create one. Container operations return promises with `Uint8Array` values; storage failures reject the promise.
 
-        ```typescript
-        declare module 'wasi:blobstore/blobstore' {
-            /**
-             * creates a new empty container
-             * @throws Error
-             */
-            export function createContainer(name: ContainerName): Container;
-            /**
-             * retrieves a container by name
-             * @throws Error
-             */
-            export function getContainer(name: ContainerName): Container;
-            /**
-             * deletes a container and all objects within it
-             * @throws Error
-             */
-            export function deleteContainer(name: ContainerName): void;
-            /**
-             * returns true if the container exists
-             * @throws Error
-             */
-            export function containerExists(name: ContainerName): boolean;
-            /**
-             * copies (duplicates) an object, to the same or a different container.
-             * returns an error if the target container does not exist.
-             * overwrites destination object if it already existed.
-             * @throws Error
-             */
-            export function copyObject(src: ObjectId, dest: ObjectId): void;
-            /**
-             * moves or renames an object, to the same or a different container
-             * returns an error if the destination container does not exist.
-             * overwrites destination object if it already existed.
-             * @throws Error
-             */
-            export function moveObject(src: ObjectId, dest: ObjectId): void;
+```typescript
+import { getContainer } from "@golemcloud/golem-ts-sdk"
 
-            // ...
-        }
-        ```
+async function documentPrefix(): Promise<Uint8Array> {
+  const container = await getContainer("documents")
+  return await container.getData("hello.txt", 0n, 4n)
+}
+```
 
-        A `Container` is a class providing read-write access for the blobs in it:
+        | Method | Result |
+        | ------ | ------ |
+        | `getData(name, start?, end?)` | Object bytes as a `Uint8Array`; optional offsets are inclusive |
+        | `writeData(name, bytes)` | Creates or replaces an object from a `Uint8Array` |
+        | `listObjects()` | An array of object names |
+        | `has(name)` | Whether an object exists |
+        | `delete(name)` | Deletes an object, if present |
+        | `deleteMany(names)` | Deletes several objects |
+        | `objectInfo(name)` | Object metadata, including its size |
+        | `info()` | Container metadata |
+        | `clear()` | Deletes all objects in the container |
 
-        ```typescript
-        export class Container {
-            /**
-             * returns container name
-             * @throws Error
-             */
-            name(): string;
-            /**
-             * returns container metadata
-             * @throws Error
-             */
-            info(): ContainerMetadata;
-            /**
-             * retrieves an object or portion of an object, as a resource.
-             * Start and end offsets are inclusive.
-             * Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
-             * of the data-blob resource, even if the object they came from is later deleted.
-             * @throws Error
-             */
-            getData(name: ObjectName, start: bigint, end: bigint): IncomingValue;
-            /**
-             * creates or replaces an object with the data blob.
-             * @throws Error
-             */
-            writeData(name: ObjectName, data: OutgoingValue): void;
-            /**
-             * returns list of objects in the container. Order is undefined.
-             * @throws Error
-             */
-            listObjects(): AsyncIterable<ObjectName>;
-            /**
-             * deletes object.
-             * does not return error if object did not exist.
-             * @throws Error
-             */
-            deleteObject(name: ObjectName): void;
-            /**
-             * deletes multiple objects in the container
-             * @throws Error
-             */
-            deleteObjects(names: ObjectName[]): void;
-            /**
-             * returns true if the object exists in this container
-             * @throws Error
-             */
-            hasObject(name: ObjectName): boolean;
-            /**
-             * returns metadata for the object
-             * @throws Error
-             */
-            objectInfo(name: ObjectName): ObjectMetadata;
-            /**
-             * removes all objects within the container, leaving the container empty.
-             * @throws Error
-             */
-            clear(): void;
-        }
-        ```
-
-        `IncomingValue` can consume blob data either synchronously as a `Uint8Array` or asynchronously as an `AsyncIterable<number>`. To write blob data asynchronously, pass an `AsyncIterable<number>` to `outgoingValueWriteBody(data)`.
+The SDK also exports `containerExists`, `deleteContainer`, `copyObject`, and `moveObject`. Copy and move locations have the shape `{ container: string, object: string }`. Use `container.forSchema(schema)` for schema-validated object values instead of bytes.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        Effect TypeScript provides scoped containers with byte and schema-typed operations:
+Use `Blobstore.getContainer` inside `Effect.scoped` to open a container, or `getOrCreateContainer` to open or create one. Container operations return effects with byte values; failures use the error channel.
 
         ```typescript
         import { Effect } from "effect"
@@ -1272,288 +935,127 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
 
         const program = Effect.scoped(
           Effect.gen(function* () {
-            const container = yield* Blobstore.getOrCreateContainer("documents")
-            yield* container.writeData("hello.txt", new TextEncoder().encode("hello"))
-            return yield* container.getData("hello.txt")
+            const container = yield* Blobstore.getContainer("documents")
+            return yield* container.getData("hello.txt", { start: 0n, end: 4n })
           }),
         )
         ```
 
-        Containers also support listing, metadata, deletion, ranges, and `forSchema`.
+| API | Result |
+| --- | ------ |
+| `getData(name, range?)` / `writeData(name, bytes)` | Reads or writes object bytes; a range has inclusive `bigint` offsets |
+| `hasObject(name)` / `objectInfo(name)` | Object existence or metadata |
+| `listObjects` | A stream of object names |
+| `deleteObject(name)` / `deleteObjects(names)` | Deletes one or several objects |
+| `info` / `clear` | Container metadata or deletion of all its objects |
+
+Use `Effect.scoped` for the container's lifetime. `container.forSchema(schema)` provides schema-validated object values. Module functions also provide container existence checks, deletion, and object copy/move operations.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The Blob Store API organizes blobs identified by _object names_ into **containers**. The `golem_rust::bindings::wasi::blobstore::blobstore` has functions to create, get and delete these containers by name:
+Use `blobstore::get_container` to open a container or `create_container` to create one. Operations return `Result`; storage failures return `Err`.
 
-        ```rust
-           /**
-            * creates a new empty container
-            */
-           pub fn create_container(name: &str) -> Result<Container, Error>
-           /**
-            * retrieves a container by name
-            */
-           pub fn get_container(name: &str) -> Result<Container, Error>
-           /**
-            * deletes a container and all objects within it
-            */
-           pub fn delete_container(name: &str) -> Result<(), Error>
-           /**
-            * returns true if the container exists
-            */
-           pub fn container_exists(name: &str) -> Result<bool, Error>
-           /**
-            * copies (duplicates) an object, to the same or a different container.
-            * returns an error if the target container does not exist.
-            * overwrites destination object if it already existed.
-            */
-           pub fn copy_object(src: &ObjectId, dest: &ObjectId) -> Result<(), Error>
-           /**
-            * moves or renames an object, to the same or a different container
-            * returns an error if the destination container does not exist.
-            * overwrites destination object if it already existed.
-            */
-           pub fn move_object(src: &ObjectId, dest: &ObjectId) -> Result<(), Error>
-        ```
+```rust
+use golem_rust::bindings::wasi::blobstore::blobstore;
 
-        A `Container` in the Rust bindings provides read-write access for the blobs in it:
+fn document_prefix() -> Result<Vec<u8>, String> {
+    let container = blobstore::get_container("documents")?;
+    let value = container.get_data("hello.txt", 0, 4)?;
+    value.incoming_value_consume_sync()
+}
+```
 
-        ```rust
-        impl Container {
-            /**
-             * returns container name
-             */
-            pub fn name(&self) -> Result<String, Error>
-            /**
-             * returns container metadata
-             */
-            pub fn info(&self) -> Result<ContainerMetadata, Error>
-            /**
-             * retrieves an object or portion of an object, as a resource.
-             * Start and end offsets are inclusive.
-             * Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
-             * of the data-blob resource, even if the object they came from is later deleted.
-             */
-            pub fn get_data(&self, name: &str, start: u64, end: u64) -> Result<IncomingValue, Error>
-            /**
-             * creates or replaces an object with the data blob.
-             */
-            pub fn write_data(&self, name: &str, data: &OutgoingValue) -> Result<(), Error>
-            /**
-             * returns list of objects in the container. Order is undefined.
-             */
-            pub fn list_objects(&self) -> Result<StreamReader<String>, Error>
-            /**
-             * deletes object.
-             * does not return error if object did not exist.
-             */
-            pub fn delete_object(&self, name: &str) -> Result<(), Error>
-            /**
-             * deletes multiple objects in the container
-             */
-            pub fn delete_objects(&self, names: &[ObjectName]) -> Result<(), Error>
-            /**
-             * returns true if the object exists in this container
-             */
-            pub fn has_object(&self, name: &str) -> Result<bool, Error>
-            /**
-             * returns metadata for the object
-             */
-            pub fn object_info(&self, name: &str) -> Result<ObjectMetadata, Error>
-            /**
-             * removes all objects within the container, leaving the container empty.
-             */
-            pub fn clear(&self) -> Result<(), Error>
-        }
-        ```
+| Method | Result |
+| ------ | ------ |
+| `get_data(name, start, end)` | A value handle for an inclusive byte range |
+| `write_data(name, &outgoing)` | Creates or replaces an object from an `OutgoingValue` |
+| `has_object(name)` / `object_info(name)` | Object existence or metadata |
+| `list_objects()` | A stream of object names |
+| `delete_object(name)` / `delete_objects(names)` | Deletes one or several objects |
+| `info()` / `clear()` | Container metadata or deletion of all its objects |
 
-        `IncomingValue` can be consumed either synchronously as a `Vec<u8>` or asynchronously as a `StreamReader<u8>`. To write blob data asynchronously, pass a `StreamReader<u8>` to `outgoing_value_write_body` and drive the retained writer.
+Consume an incoming value synchronously as bytes, as above, or asynchronously as a byte stream. For writes, attach a byte stream with `outgoing_value_write_body` and drive its writer to completion. Rust releases the handles when they leave scope. The `blobstore` module also provides container existence checks, deletion, and object copy/move operations.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The Scala SDK exposes the underlying `wasi:blobstore` modules through the `golem.wasi.Blobstore` wrapper:
+Use `Blobstore.getContainer` to open a container or `createContainer` to create one. Reads and writes use `Array[Byte]`; storage failures throw.
 
-        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+```scala
+import golem.wasi.Blobstore
 
-        ```scala
-        import golem.wasi.Blobstore
-        import scala.concurrent.Future
+def documentPrefix(): Array[Byte] = {
+  val container = Blobstore.getContainer("documents")
+  container.getData("hello.txt", 0L, 4L)
+}
+```
 
-        object Blobstore {
-          final case class ObjectId(container: String, name: String)
+| Method | Result |
+| ------ | ------ |
+| `getData(name, start, end)` / `writeData(name, bytes)` | Reads an inclusive byte range or writes an object |
+| `hasObject(name)` / `objectInfo(name)` | Object existence or metadata |
+| `listObjects()` | A `Future[List[String]]` of object names |
+| `deleteObject(name)` / `deleteObjects(names)` | Deletes one or several objects |
+| `info()` / `clear()` | Container metadata or deletion of all its objects |
 
-          def createContainer(name: String): Container
-          def getContainer(name: String): Container
-          def deleteContainer(name: String): Unit
-          def containerExists(name: String): Boolean
-          def copyObject(src: ObjectId, dest: ObjectId): Unit
-          def moveObject(src: ObjectId, dest: ObjectId): Unit
-        }
-        ```
-
-        A `Container` provides read-write access for the blobs in it:
-
-        ```scala
-        import golem.wasi.Blobstore
-        import scala.concurrent.Future
-
-        object Blobstore {
-          final class Container {
-            def name(): String
-            def info(): ContainerMetadata
-            def getData(objectName: String, start: Long, end: Long): Array[Byte]
-            def writeData(objectName: String, data: Array[Byte]): Unit
-            def listObjects(): Future[List[String]]
-            def deleteObject(name: String): Unit
-            def deleteObjects(names: List[String]): Unit
-            def hasObject(name: String): Boolean
-            def objectInfo(name: String): ObjectMetadata
-            def clear(): Unit
-          }
-        }
-        ```
-
-        The Scala wrapper uses synchronous `Array[Byte]` helpers for reading and writing blob data. If you need direct access to the underlying WASI modules, the SDK also exposes `blobstoreRaw`, `containerRaw`, and `typesRaw`.
+The `Blobstore` object also provides container existence checks, deletion, and object copy/move operations.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The generated `wasi:blobstore` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/blobstore/blobstore`, `golemcloud/golem_sdk/interface/wasi/blobstore/container`, and `golemcloud/golem_sdk/interface/wasi/blobstore/types` packages. Assuming they are imported as `@blobstore`, `@container`, and `@types`, with `golemcloud/golem_sdk/async-core` imported as `@async-core`:
+Import `golemcloud/golem_sdk/interface/wasi/blobstore/blobstore` as `@blobstore`. Use `get_container` to open a container or `create_container` to create one. Storage failures return `Err`.
 
-        The declarations below summarize the generated API shape; they are not definitions to copy into your application.
+```moonbit
+fn document_prefix() -> Result[FixedArray[Byte], String] {
+  let container = match @blobstore.get_container("documents") {
+    Ok(container) => container
+    Err(error) => return Err(error)
+  }
+  defer container.drop()
+  let value = match container.get_data("hello.txt", 0UL, 4UL) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  defer value.drop()
+  value.incoming_value_consume_sync()
+}
+```
 
-        The Blob Store API organizes blobs identified by _object names_ into **containers**. The `@blobstore` package exports functions to create, get and delete these containers by name:
+| Method | Result |
+| ------ | ------ |
+| `get_data(name, start, end)` | A value handle for an inclusive byte range |
+| `write_data(name, outgoing)` | Creates or replaces an object from an outgoing value |
+| `has_object(name)` / `object_info(name)` | Object existence or metadata |
+| `list_objects()` | A stream of object names |
+| `delete_object(name)` / `delete_objects(names)` | Deletes one or several objects |
+| `info()` / `clear()` | Container metadata or deletion of all its objects |
 
-        ```moonbit
-        /// creates a new empty container
-        pub fn create_container(name : String) -> Result[@container.Container, String]
-
-        /// retrieves a container by name
-        pub fn get_container(name : String) -> Result[@container.Container, String]
-
-        /// deletes a container and all objects within it
-        pub fn delete_container(name : String) -> Result[Unit, String]
-
-        /// returns true if the container exists
-        pub fn container_exists(name : String) -> Result[Bool, String]
-
-        /// copies (duplicates) an object, to the same or a different container.
-        /// returns an error if the target container does not exist.
-        /// overwrites destination object if it already existed.
-        pub fn copy_object(
-          src : @types.ObjectId,
-          dest : @types.ObjectId,
-        ) -> Result[Unit, String]
-
-        /// moves or renames an object, to the same or a different container
-        /// returns an error if the destination container does not exist.
-        /// overwrites destination object if it already existed.
-        pub fn move_object(
-          src : @types.ObjectId,
-          dest : @types.ObjectId,
-        ) -> Result[Unit, String]
-
-        // ...
-        ```
-
-        A `Container` resource in the `@container` package provides read-write access for the blobs in it:
-
-        ```moonbit
-        pub(all) struct Container(Int)
-
-        /// returns container name
-        pub fn Container::name(self : Container) -> Result[String, String]
-
-        /// returns container metadata
-        pub fn Container::info(self : Container) -> Result[@types.ContainerMetadata, String]
-
-        /// retrieves an object or portion of an object, as a resource.
-        /// Start and end offsets are inclusive.
-        /// Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
-        /// of the data-blob resource, even if the object they came from is later deleted.
-        pub fn Container::get_data(
-          self : Container,
-          name : String,
-          start : UInt64,
-          end : UInt64,
-        ) -> Result[@types.IncomingValue, String]
-
-        /// creates or replaces an object with the data blob.
-        pub fn Container::write_data(
-          self : Container,
-          name : String,
-          data : @types.OutgoingValue,
-        ) -> Result[Unit, String]
-
-        /// returns list of objects in the container. Order is undefined.
-        pub fn Container::list_objects(self : Container) -> Result[@async-core.Stream[String], String]
-
-        /// deletes object.
-        /// does not return error if object did not exist.
-        pub fn Container::delete_object(self : Container, name : String) -> Result[Unit, String]
-
-        /// deletes multiple objects in the container
-        pub fn Container::delete_objects(
-          self : Container,
-          names : Array[String],
-        ) -> Result[Unit, String]
-
-        /// returns true if the object exists in this container
-        pub fn Container::has_object(self : Container, name : String) -> Result[Bool, String]
-
-        /// returns metadata for the object
-        pub fn Container::object_info(
-          self : Container,
-          name : String,
-        ) -> Result[@types.ObjectMetadata, String]
-
-        /// removes all objects within the container, leaving the container empty.
-        pub fn Container::clear(self : Container) -> Result[Unit, String]
-        ```
-
-        `IncomingValue` can be consumed either synchronously as a `FixedArray[Byte]` or asynchronously as an `@async-core.Stream[Byte]`. To write blob data, create an `OutgoingValue` with `@types.OutgoingValue::new_outgoing_value()` and pass an `@async-core.Stream[Byte]` to `outgoing_value_write_body`.
+Release container and value handles with `defer`, including on failure. Incoming values provide synchronous byte reads and asynchronous stream reads. To write, import `golemcloud/golem_sdk/interface/wasi/blobstore/types` as `@types`, create an `OutgoingValue`, and attach a byte stream with `outgoing_value_write_body`. The `@blobstore` package also provides container existence checks, deletion, and object copy/move operations.
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The Go SDK wraps the `wasi:blobstore` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/blobstore` package. Failures are returned as a `*blobstore.Error`. `MustGetOrCreateContainer`, `MustGetContainer`, `Container.MustGetData`, `Container.MustWriteData`, `Store.MustGet` and `Store.MustSet` panic on the error instead.
+Use `blobstore.GetContainer` to open a container or `GetOrCreateContainer` to open or create one. Reads and writes use `[]byte`; storage failures return an error.
 
-        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+```go
+import "github.com/golemcloud/golem/sdks/go/golem/blobstore"
 
-        ```go
-        package blobstore
+func documentPrefix() ([]byte, error) {
+    container, err := blobstore.GetContainer("documents")
+    if err != nil {
+        return nil, err
+    }
+    defer container.Close()
+    return container.GetRange("hello.txt", 0, 4)
+}
+```
 
-        type ObjectID struct {
-            Container string
-            Object    string
-        }
+| Method | Result |
+| ------ | ------ |
+| `GetData(name)` / `GetRange(name, start, end)` | Whole-object bytes with a `found` flag, or an inclusive byte range |
+| `WriteData(name, bytes)` | Creates or replaces an object |
+| `HasObject(name)` / `ObjectInfo(name)` | Object existence or metadata |
+| `ListObjects()` | An array of object names |
+| `DeleteObject(name)` / `DeleteObjects(names)` | Deletes one or several objects |
+| `Info()` / `Clear()` | Container metadata or deletion of all its objects |
 
-        func CreateContainer(name string) (*Container, error)
-        func GetContainer(name string) (*Container, error)
-        func GetOrCreateContainer(name string) (*Container, error)
-        func DeleteContainer(name string) error
-        func ContainerExists(name string) (bool, error)
-        func CopyObject(src, dest ObjectID) error
-        func MoveObject(src, dest ObjectID) error
-        ```
-
-        A `Container` provides read-write access for the blobs in it:
-
-        ```go
-        func (c *Container) Name() string
-        func (c *Container) Info() (ContainerMetadata, error)
-        // GetData reads the whole object; found is false when the object is absent.
-        func (c *Container) GetData(name string) (data []byte, found bool, err error)
-        // GetRange reads bytes [start, end] of an object; both offsets are inclusive.
-        func (c *Container) GetRange(name string, start, end uint64) ([]byte, error)
-        func (c *Container) WriteData(name string, data []byte) error
-        func (c *Container) ListObjects() ([]string, error)
-        func (c *Container) DeleteObject(name string) error
-        func (c *Container) DeleteObjects(names []string) error
-        func (c *Container) HasObject(name string) (bool, error)
-        func (c *Container) ObjectInfo(name string) (ObjectMetadata, error)
-        func (c *Container) Clear() error
-        func (c *Container) Close()
-        ```
-
-        The Go wrapper reads and writes blob data as `[]byte`. `container.Typed[T]()` wraps a container in a `*blobstore.Store[T]` storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string), with `Get`, `Set`, `Delete`, `Exists` and `Keys`. `Set` panics when the value does not encode as JSON and returns an error when the write fails; `MustSet` panics on that error too. `Close` releases the container's host handle; it is optional, because an unused container is also released when Go collects it.
+Use `defer container.Close()` to release the handle. The package also provides container existence checks, deletion, and object copy/move operations.
     </Tabs.Tab>
 </Tabs>

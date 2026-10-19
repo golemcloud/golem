@@ -2854,7 +2854,7 @@ enum ReconnectServerEvent {
     FrameSent(String),
     /// A text frame was received.
     FrameReceived(String),
-    /// A websocket close frame was received and replied to.
+    /// A websocket close frame was received.
     CloseFrameReceived,
     /// The connection closed via error or EOF.
     ConnectionClosed,
@@ -5205,7 +5205,7 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
 /// A direct `close` on a persisted handle reconstructed after an executor
 /// restart reconnects through the same coordination as the accessors, closes
 /// the reconnected connection with a websocket close frame the peer observes
-/// and replies to, and publishes a terminal outcome: a later `receive` on the
+/// and publishes a terminal outcome: a later `receive` on the
 /// same handle fails without opening any new connection — the terminalized
 /// handle does not reconnect.
 #[test]
@@ -5274,8 +5274,16 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
     );
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_single_websocket_call_completed(&oplog, WEBSOCKET_CLOSE_FUNCTION);
+    // Completing close does not wait for the peer to observe the frame.
+    ws_server
+        .wait_for_count(
+            1,
+            |event| matches!(event, ReconnectServerEvent::CloseFrameReceived),
+            "observe the close frame on the reconnected connection",
+        )
+        .await?;
     // The close reconnected on one fresh connection, and the peer observed
-    // and replied to its websocket close frame.
+    // its websocket close frame.
     assert_eq!(ws_server.accepted(), 2);
     assert_eq!(ws_server.completed_handshakes(), 2);
     assert_eq!(ws_server.close_frames_received(), 1);

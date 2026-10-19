@@ -1749,6 +1749,51 @@ fn schema_and_serde_require_explicit_mcp_tool_owner_component() {
 }
 
 #[test]
+fn schema_and_parser_reject_unsupported_wasi_config() {
+    let document = serde_json::json!({
+        "app": "test-app",
+        "componentTemplates": {"custom": {"presets": {"custom": {}}}},
+        "components": {"app:main": {"presets": {"custom": {}}}},
+        "agents": {"Counter": {"presets": {"custom": {}}}}
+    });
+    for path in [
+        "/componentTemplates/custom",
+        "/componentTemplates/custom/presets/custom",
+        "/components/app:main",
+        "/components/app:main/presets/custom",
+        "/agents/Counter",
+        "/agents/Counter/presets/custom",
+    ] {
+        let mut supported = document.clone();
+        let properties = supported
+            .pointer_mut(path)
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        properties.insert("config".into(), serde_json::json!({"key": "value"}));
+        properties.insert("env".into(), serde_json::json!({"KEY": "value"}));
+        properties.insert("envMergeMode".into(), serde_json::json!("upsert"));
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&supported), "{path}");
+        Application::from_yaml_str(&serde_yaml::to_string(&supported).unwrap()).unwrap();
+
+        for (field, value) in [
+            ("wasiConfig", serde_json::json!({"key": "value"})),
+            ("wasiConfigMergeMode", serde_json::json!("upsert")),
+        ] {
+            let mut unsupported = supported.clone();
+            unsupported.pointer_mut(path).unwrap()[field] = value;
+            assert!(
+                !JSON_SCHEMA_VALIDATOR.is_valid(&unsupported),
+                "{path}/{field}"
+            );
+            let error = Application::from_yaml_str(&serde_yaml::to_string(&unsupported).unwrap())
+                .unwrap_err();
+            assert!(error.to_string().contains(field), "{path}/{field}: {error}");
+        }
+    }
+}
+
+#[test]
 fn schema_and_serde_accept_inherited_component_config_schema() {
     let config_schema = serde_json::to_value(
         arb_component_config_schema_model()

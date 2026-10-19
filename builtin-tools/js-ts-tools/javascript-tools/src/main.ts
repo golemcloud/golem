@@ -30,7 +30,7 @@ type NpmBundle = {
 };
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
-  .version('0.1.9')
+  .version('0.1.10')
   .doc(
     "Run a JavaScript or TypeScript file (.js, .mjs, .cjs, .ts, .mts, .cts) or inline source with Golem's Node-compatible runtime. TypeScript runs without flags: types are removed and not checked; use the tsc tool to type-check.",
   )

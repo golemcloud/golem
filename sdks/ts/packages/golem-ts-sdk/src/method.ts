@@ -42,12 +42,11 @@ export type MethodHasHttpOf<M> = M extends { readonly http: readonly [] }
  *   - `'until-write'`: cache until a mutating (non-read-only) method runs — this
  *     is the policy used when `readOnly` is set to the convenience boolean `true`;
  *   - `{ ttlNanos }`: cache for the given time-to-live (nanoseconds).
- * - `usesPrincipal`: when `true`, the cache key includes the caller principal
- *   (a per-principal cache). Defaults to `false`.
+ * The cache key includes the caller principal when the method declares a direct
+ * `s.principal()` input parameter.
  */
 export type ReadOnlyOption = {
   cache?: 'no-cache' | 'until-write' | { ttlNanos: bigint };
-  usesPrincipal?: boolean;
 };
 
 /**
@@ -56,8 +55,8 @@ export type ReadOnlyOption = {
  *
  * The optional metadata fields surface on the WIT `agent-method` record:
  * `description` → `description`, `promptHint` → `prompt-hint`, and `readOnly`
- * (a convenience boolean) → `read-only` (a `no-cache` / no-principal
- * `read-only-config`) when `true`.
+ * → `read-only`. A bare `true` selects `until-write` caching; a direct
+ * `s.principal()` input enables per-principal caching.
  */
 export interface MethodSpec<
   Input extends InputRecord = InputRecord,
@@ -75,7 +74,8 @@ export interface MethodSpec<
   /**
    * Marks the method as read-only (surfaced as `agent-method.read-only`).
    * `true` uses the `until-write` cache policy; pass a {@link ReadOnlyOption}
-   * for `no-cache` / `ttl` / per-principal caching.
+   * for `no-cache` / `ttl` caching. A direct `s.principal()` input automatically
+   * enables per-principal caching.
    */
   readonly readOnly?: boolean | ReadOnlyOption;
   /**

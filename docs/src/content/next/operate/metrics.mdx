@@ -15,6 +15,8 @@ The shard lease metrics take their label values from a fixed set and never from 
 
 ## Service-specific metrics
 
+<div className="metrics-reference">
+
 ### Component Service
 
 Component service exposes the following Prometheus metrics:
@@ -127,6 +129,7 @@ Worker executors expose the following Prometheus metrics:
 | `golem_durable_stream_reconciliation_total`          | counter   | `outcome`              | Reconciler decisions and failures                                  |
 | `golem_durable_stream_cascade_total`                 | counter   | `outcome`              | Durable producer-deletion cascade outcomes                         |
 | `golem_durable_stream_limit_violation_total`         | counter   | `limit`                | Rejections by bounded protocol-v1 limit category                   |
+| `foreign_stream_fingerprint_mismatch_total`          | counter   |                        | Foreign-stream accesses rejected because the current agent fingerprint differs. This metric has no `golem_` prefix. |
 
 For configuration, recovery, and deletion diagnostics, see [Operating Durable Stream Sessions](/next/operate/durable_streams).
 
@@ -165,7 +168,7 @@ These metrics are for the XFS volume of the agent filesystems. An executor expor
 | `filesystem_snapshot_removed_bytes_total`         | counter   | `source`          | Bytes that the executor deleted from the filesystem snapshot storage             |
 | `filesystem_snapshot_released_bytes_total`        | counter   |                   | Packed bytes of deleted filesystem snapshots that a later prune can remove       |
 
-For the label values and what to watch, see [Filesystem Snapshots](/next/operate/filesystem_snapshots#metrics).
+For the label values and what to watch, see [Filesystem Snapshots](/next/operate/filesystem_snapshots/monitoring#metrics).
 
 ### Worker Service
 
@@ -194,10 +197,26 @@ Worker service exposes the following Prometheus metrics:
 | `http_session_explicit_cancellations_total` | counter |                                                                                                        | HTTP sessions that ended by cancellation                                        |
 | `http_session_terminal_total`       | counter   | `cause`                                                                                                    | HTTP sessions that ended without a completed exchange, by cause                 |
 | `http_session_cleanup_seconds`      | histogram | `outcome`                                                                                                  | Duration of the cleanup of an HTTP session that did not complete                |
-| `durable_stream_append_total`       | counter   | `outcome`                                                                                                  | Durable stream append requests by outcome                                       |
-| `durable_stream_load_rejection_total` | counter | `reason`                                                                                                   | Durable stream requests that load limiting rejected                             |
+| `durable_stream_append_total`       | counter   | `outcome`                                                                                                  | Durable stream append outcomes: `accepted`, `duplicate`, `fenced`, and `gap`. |
+| `durable_stream_load_rejection_total` | counter | `reason`                                                                                                   | Durable stream requests rejected by per-stream reader, per-node reader, catch-up-rate, or append-rate limits. `append-rate-limit` identifies append admission failures. |
 | `ephemeral_phantom_invocation_rejection_total` | counter | `reason`                                                                                          | Ephemeral invocation requests rejected for an invalid phantom ID                |
 | `openapi_cache_total`               | counter   | `outcome`                                                                                                  | OpenAPI cache lookups and stale fencing                                         |
 | `openapi_generation_seconds`        | histogram | `outcome`                                                                                                  | Duration of an OpenAPI generation                                               |
+
+### OTLP Plugin
+
+The [OTLP plugin](/next/develop/observability#setting-up-the-otlp-plugin) exports durable stream summaries separately from the service's Prometheus endpoint:
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem.durable_stream.event_count` | counter | `event`, `outcome` | Durable stream summary events. `event` distinguishes registration, aggregated items, stream end/cancellation, and session result/finish/cancellation/expiry. Terminal summaries may include `outcome` (`success` or `error`). |
+
+Item counts are aggregated into the metric value. The plugin does not create one span or label value per streamed item and does not export item payloads through this summary.
+
+`session-cancellation` counts cancellation-related journal records (request, consumer intent, and application), not unique logical cancellations. One cancellation can produce several records. A session result and its eventual stream or session terminal are separate events; an early result is not stream completion.
+
+Collector delivery is best effort even though source lifecycle state advances when a batch is accepted.
+
+</div>
 
 For application-level observability with traces, logs, and metrics exported via OpenTelemetry, see the [Observability](/next/develop/observability) page.

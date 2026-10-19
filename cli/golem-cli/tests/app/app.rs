@@ -574,11 +574,11 @@ async fn app_new_with_overlapping_layout_upgrades_leaves_app_unchanged(_tracing:
 
     // Two components in the flat layout: promoting both would move the same root files.
     let manifest_path = ctx.cwd_path_join("golem.yaml");
-    let manifest = format!(
-        "{}  {app_name}:ts-other:\n    dir: \"\"\n    templates: ts\n",
-        fs::read_to_string(&manifest_path).unwrap()
-    );
-    fs::write_str(&manifest_path, manifest).unwrap();
+    let mut manifest: JsonValue =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["components"][format!("{app_name}:ts-other")] =
+        serde_json::json!({ "dir": "", "templates": "ts" });
+    fs::write_str(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
 
     let before = snapshot_dir(ctx.cwd_path());
 

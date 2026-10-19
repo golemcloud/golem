@@ -3,7 +3,6 @@
 package impl
 
 import (
-	"crypto/rand"
 	"fmt"
 
 	"component-name/agents/human"
@@ -14,9 +13,7 @@ import (
 
 type state struct{ workflowID string }
 
-// Each workflow instance gets its own generated id; randomness is recorded, so
-// the id survives a replay unchanged.
-var agent = workflow.Agent.Implement(func(workflow.ID) *state { return &state{workflowID: rand.Text()} })
+var agent = workflow.Agent.Implement(func(id workflow.ID) *state { return &state{workflowID: id.WorkflowID} })
 
 func init() {
 	agent.Handle(workflow.Start, func(ctx *golem.Context[state], in workflow.StartIn) string {

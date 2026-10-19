@@ -1,0 +1,65 @@
+# Set up filesystem snapshots on macOS
+
+The macOS local server uses APFS and enables filesystem snapshots by default. Use it for local development and tests only. Production needs Linux 5.8 or later with XFS and reflink. See the [filesystem snapshots overview](/v1.6/operate/filesystem_snapshots) for deployment requirements.
+
+## Start the local server
+
+```shell
+golem server run --data-dir .golem/data
+```
+
+The server uses `Apfs` at `<data_dir>/agents` and file system blob storage at `<data_dir>/blobs`. It supplies the repository key. No TOML file or environment settings are needed. There is no separate destination for filesystem snapshots.
+
+APFS works on the Mac's existing volume, whether case-sensitive or case-insensitive. It needs no special volume, disk image or privilege. The executor creates the root directory if needed and refuses startup when native file cloning is unavailable. Do not run two executors with the same root.
+
+On other platforms, the local server uses `Temporary` storage and disables filesystem snapshots by default.
+
+## Override the local settings
+
+Set executor settings under `worker_executor` in the server configuration file:
+
+```toml
+[worker_executor.filesystem_storage.mode]
+type = "Apfs"
+
+[worker_executor.filesystem_storage.mode.config]
+root = ".golem/agents"
+
+[worker_executor.filesystem_snapshots]
+type = "Enabled"
+```
+
+Pass the file with `--config`:
+
+```shell
+golem server run --data-dir .golem/data --config golem-server.toml
+```
+
+The `GOLEM__WORKER_EXECUTOR__` environment variables override the file. You can use them instead:
+
+```shell
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE=Apfs
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT="$PWD/.golem/agents"
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
+golem server run --data-dir .golem/data
+```
+
+The `--agent-filesystem-root` option changes the root and overrides both the file and environment variables. When you select a storage mode in the file or environment, set `root` with `type`: the new mode does not retain the replaced mode's root.
+
+There is no second switch for local filesystem snapshots. The macOS local server sets `filesystem_snapshots` to `Enabled`. A standalone executor must configure it explicitly; see [configuration](/v1.6/operate/filesystem_snapshots/configuration).
+
+`Enabled` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. Agents still need a [snapshotting policy](/v1.6/develop/snapshotting#configuring-snapshot-based-recovery).
+
+## Keep the repository key
+
+Without a configured `repository_key`, the local server generates a 64-byte key. It stores the key as 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions `0600` on Unix. Later starts reuse this file. A configured `repository_key` takes precedence.
+
+Without a configured key, a corrupt key file makes startup fail. The server does not replace it. Keep the retained key with the local data: replacing or deleting it prevents the server from reading snapshots made with it.
+
+## Plan for APFS limits
+
+APFS does not enforce per-agent disk limits or provide filesystem usage metering. Keep `[resource_usage_metering] filesystem = false`. Agents share the volume's free space, and one agent can fill it.
+
+Free-space checks and byte targets in `[filesystem_storage.pressure]` use volume-wide observations. APFS volumes in one container share free bytes, so byte targets are approximate. APFS reports synthetic object counts, so configured object-count targets always pass. See [configuration](/v1.6/operate/filesystem_snapshots/configuration) for pressure settings.
+
+Both case-sensitive and case-insensitive APFS volumes use `Conservative` filename coordination. An entry edit waits for conflicting operations in the same parent directory; two observations can run together. APFS keeps the volume's native spelling and lookup behavior. You do not need to normalize names.

@@ -1,18 +1,26 @@
 ---
 name: golem-custom-snapshot-go
-description: "Enabling snapshot-based recovery and customizing state save/load for Go agents. Use when adding manual update support, custom state serialization, capturing unexported state — or when a long-running Go agent's oplog is growing large and recovery/replay is becoming slow (heartbeats, polling loops, recurring tasks, frequent state changes)."
+description: "Go snapshotting availability and SDK API reference. Use when asked about custom snapshots, snapshot-based updates, or slow recovery in Go agents. Snapshotting is not supported in this release."
 ---
 
 # Custom Snapshots in Go
+
+## Availability
+
+**Go snapshotting is not supported in this release.** Leave `Spec.Snapshot` disabled and use
+oplog replay for durable recovery. There is no `go/snapshotting` CLI template.
+
+The API reference below describes the SDK's snapshot interfaces. It does not describe a supported
+recovery or update workflow. Do not enable a snapshot policy or use snapshot-based updates for Go agents.
 
 ## Overview
 
 Snapshotting serializes a running Go agent's state so the host can save it and later restore it. It solves two problems:
 
-1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions. A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Automatic updates and snapshot-based recovery work.
+1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions. A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update.
 2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, frequent state changes). Without snapshotting, every recovery replays the full oplog; with periodic snapshotting, recovery starts from the latest snapshot and replays only what came after it.
 
-> **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
+> **You cannot opt out of oplog writes for a durable agent.** Do not skip persistence to reduce oplog volume or replay cost. Snapshot-based recovery is not supported for Go in this release.
 
 ## Two things to set
 

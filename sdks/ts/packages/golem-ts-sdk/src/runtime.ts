@@ -99,10 +99,11 @@ const reservedStateFields = new Set(['config', 'getId', 'getPhantomId', 'getPrin
  * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
  * `undefined` when the method is not read-only. A bare `true` uses the
  * `until-write` cache policy (matching the base SDK default); an object form
- * selects `no-cache` / `until-write` / `ttl` and per-principal caching.
+ * selects `no-cache` / `until-write` / `ttl` caching.
  */
 function resolveReadOnly(
   readOnly: boolean | ReadOnlyOption | undefined,
+  usesPrincipal: boolean,
 ): ReadOnlyConfig | undefined {
   if (!readOnly) return undefined;
   const opt: ReadOnlyOption = readOnly === true ? {} : readOnly;
@@ -115,7 +116,7 @@ function resolveReadOnly(
   } else {
     cachePolicy = { tag: 'ttl', val: cache.ttlNanos };
   }
-  return { cachePolicy, usesPrincipal: opt.usesPrincipal ?? false };
+  return { cachePolicy, usesPrincipal };
 }
 
 /** A named parameter and its compiled codec, in declaration order. */
@@ -680,9 +681,10 @@ function assembleAgentType(
       description: mc.meta.description ?? '',
       promptHint: mc.meta.promptHint,
       httpEndpoint: mc.httpEndpoints,
-      // `readOnly: true` → `until-write` caching (base default); the object form
-      // selects no-cache / ttl / per-principal; omitted/`false` → unset.
-      readOnly: resolveReadOnly(mc.meta.readOnly),
+      readOnly: resolveReadOnly(
+        mc.meta.readOnly,
+        mc.inputCodecs.some(({ codec }) => codec.autoInjected === 'principal'),
+      ),
       inputSchema: encodeInput(mc.inputCodecs),
       outputSchema,
     });

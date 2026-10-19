@@ -1,0 +1,128 @@
+# Filesystem snapshot recovery and storage
+
+This page explains capture, confirmation, retention, and clean-up behavior. For setup, start with [Filesystem Snapshots](/next/operate/filesystem_snapshots). The [configuration guide](/next/operate/filesystem_snapshots/configuration) describes the settings used below.
+
+## Restore points
+
+An application snapshot and its filesystem snapshot form one restore point. File changes are not written to the oplog: replay rebuilds them by running the agent code. Replay after a snapshot does not run the earlier code that wrote the files, so Golem must restore those files before loading the application snapshot.
+
+A record with a filesystem snapshot name becomes usable only when a confirmation follows it in the oplog. A record without a name is usable immediately: its files can be reconstructed from the component revision's initial files. See [Without filesystem snapshots](#without-filesystem-snapshots) for the exact conditions.
+
+## Captures
+
+Before running the agent's snapshot code, the executor checks admission. It skips a snapshot when the volume is under pressure, free capacity cannot be read, or a delete of all snapshots for that agent is queued or running. It also skips while an upload, confirmation, or retention operation runs for the agent.
+
+At most one upload runs per agent. A new snapshot can replace an automatic upload that is waiting to retry, including a wait for its earlier storage writes to settle. The replaced upload never confirms its record. A start can still confirm the record if it remains the agent's newest snapshot record.
+
+A manual update fails immediately on volume pressure or a queued or running delete-all operation. For an existing upload, it waits for the attempt in flight, then replaces the upload or waits for completion. All upload and slot waits end at `confirmation_wait` from the update's start; reaching that deadline fails the update.
+
+An admitted capture blocks new file calls, waits up to `capture_wait` for open calls, then makes a copy-on-write copy in `.scratch`. The copy initially shares file data blocks. Later writes allocate new blocks, and deleted files retain their blocks until the upload finishes and the capture is removed.
+
+No invocation runs at the capture boundary. For an automatic snapshot:
+
+1. The application snapshot saver returns its bytes without modifying files.
+2. The executor captures the files.
+3. It writes a snapshot record naming the filesystem snapshot.
+4. The agent continues while the executor uploads the capture in the background.
+5. A confirmation record makes the uploaded snapshot usable.
+
+The capture preserves files, directories, symbolic links, hard links, and modification times. It omits untouched read-only initial files and their times because the component revision already holds their contents. It uploads nothing when the files meet the [initial-file conditions](#without-filesystem-snapshots). If nothing changed since the last confirmed filesystem snapshot, the new record reuses its name and is confirmed immediately.
+
+A guest that returns with an unflushed write to a WASI output stream keeps a file call open until it flushes or polls the stream. Its capture times out with outcome `busy`. The default `capture_wait` is five seconds. Flush file output streams before returning.
+
+A manual update waits for the filesystem upload to complete before writing its update record. The default `confirmation_wait` is 60 seconds. A snapshot-assisted automatic update takes no new snapshot. See [Updating agents](/next/develop/updating#how-the-update-restores-the-agents-files) for update ordering and file-conflict rules.
+
+## Uploads and confirmations
+
+The executor uploads captures in the background. After a successful upload, the running agent writes a confirmation record to its oplog. Stopping an agent does not wait for the upload. If the agent is no longer running when it finishes, the executor keeps the snapshot for confirmation at the next start:
+
+1. On the executor running the upload, a start waits up to `confirmation_wait` if the upload has acquired its first upload slot. This happens before the start takes an account slot or agent memory. A terminal interrupt ends the wait.
+2. The start checks blob storage once. The check uses the remaining `confirmation_wait`, or `store_check_limit` if it did not wait. It skips the check when the local upload ended as `superseded`, or a terminal interrupt is pending.
+3. If the complete snapshot exists, the start writes its confirmation record.
+
+A start on another executor performs only the storage check and confirmation. If the upload is still running there, that start uses an older snapshot instead.
+
+Before restarting a loaded agent for an automatic update whose strategy is not yet selected, the executor waits for its newest unconfirmed snapshot's upload. It uses `confirmation_wait`, or a single `store_check_limit` storage check if no upload is running. A stop, retirement on that executor, or terminal interrupt ends the wait. This wait is outside the unload deadline.
+
+If an update or revert replaced the record during an upload, the executor discards the confirmation, deletes the uploaded snapshot, and counts a dropped confirmation.
+
+## Restores
+
+A start selects the newest usable automatic snapshot of the current component revision. It restores that record's filesystem snapshot before loading its application snapshot, so the loader can read the captured files. Then it replays the later oplog entries, including invocations after any unconfirmed snapshot. Hard links are restored as hard links.
+
+Recovery considers at most two automatic records: the newest record and the usable record before it. If one is unconfirmed, missing, fails filesystem restoration, or fails application loading, Golem tries the older restore point. If neither works, it uses the authoritative recovery baseline, or replays the full oplog when no such baseline exists.
+
+The snapshot of the last successful manual or snapshot-assisted automatic update is the authoritative recovery baseline. Golem cannot replay the history before it. If its filesystem snapshot cannot be restored, a temporary storage error causes another start attempt; a permanent error, such as a missing snapshot, fails the start with a visible cause. It must not fall back to history before that baseline. See [Updating agents](/next/develop/updating) for pending-update retries and failure codes.
+
+Restoring downloads the whole tree before agent code runs, so large trees increase cold-start time. Starts wait for a slot when `max_concurrent_restores` restores already run; each uses `restore_reader_threads` reader threads. On `ManagedXfs`, restored files count against the agent's disk quota.
+
+## Failures
+
+| Failure | Automatic snapshot | Manual update |
+| --- | --- | --- |
+| Application snapshot saver fails | No snapshot record; the agent restarts and replays from its last restore point. | The update fails; the agent stays on its source revision. |
+| File capture fails or times out | No snapshot record; the agent continues and tries again at the next scheduled snapshot. | The update fails; the agent stays on its source revision. |
+| Upload exhausts its retries | The record remains unconfirmed; recovery uses an older restore point. | The update fails; the agent stays on its source revision. |
+
+Restore failures follow the baseline rules above. See [monitoring and troubleshooting](/next/operate/filesystem_snapshots/monitoring) to diagnose upload and restore failures.
+
+## Without filesystem snapshots
+
+An executor can write a record without a filesystem snapshot name only while every initial file is read-only and untouched, with no other files, directories, or files provisioned in addition to the initial files. The agent must not have renamed or hard linked a file, even one later removed, or assigned a specific modification time to a file or directory. Setting a time to the current time does not count. A read-write initial file counts as a change even without a write.
+
+Such a record restores the initial files of its component revision. Otherwise an executor without filesystem snapshots skips automatic snapshots; recovery uses an older usable restore point or replay, which rebuilds the files without data loss. The next automatic snapshot still follows the policy, as after a completed snapshot. A snapshot-based manual update fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` and leaves the agent on its source revision.
+
+If the executor cannot check the files, automatic snapshotting writes no record and a manual update fails with the check's error. This check waits a fixed five seconds for open file calls, independent of `capture_wait`.
+
+A pending update that names a filesystem snapshot fails with `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` on an executor without the feature. A snapshot-assisted automatic update can select only a record without a filesystem snapshot name there. An authoritative recovery baseline that needs a filesystem snapshot cannot start there at all. See [update failure codes](/next/develop/updating#failure-codes).
+
+## Retention
+
+After an upload confirms an automatic snapshot, retention keeps the new snapshot and the `retained_periodic_snapshots - 1` newest older automatic snapshots. It also protects these snapshots, which do not count toward that limit:
+
+- Snapshots referenced by records that a start can currently select.
+- Snapshots required by successful or pending updates, including the authoritative recovery baseline.
+- Snapshots saved no earlier than two minutes before the new snapshot, to allow for clock differences between executors.
+
+A confirmation written at startup does not run retention. The next confirmed upload does.
+
+Writing a manual-update record applies the same rule using `retained_update_snapshots`. Successful and pending update snapshots remain protected regardless of age: a revert or fork can make one the baseline again. The limit applies only to other manual-update snapshots. Failed retention deletes are logged and retried by the next retention run.
+
+## Clean-up
+
+| Operation | Snapshot handling |
+| --- | --- |
+| Delete an agent | After deleting its oplog, stop its upload, wait for its snapshot operations, then delete that incarnation's snapshots. |
+| Revert an agent | Write the revert entry first, then delete snapshots in the reverted oplog range unless a remaining record uses them. If another executor took ownership before the entry was written, the revert fails with `OplogFenced` and deletes nothing. |
+| Fork an agent | Copy the source incarnation's snapshots to the target location before creating the target. S3 and SQLite copy within storage; file system blob storage copies files. A failed fork deletes its staged copy unless the publication outcome is unknown. |
+
+A fork checks the last successful snapshot-based manual update or snapshot-assisted automatic update in the copied oplog range. If that baseline names a missing filesystem snapshot, the fork fails. An executor with snapshots disabled cannot copy it and refuses the fork too.
+
+A fork cancels updates left pending in the copied range, including a manual update whose snapshot had not been taken at the fork point. Each gets a failed update with details `cancelled by fork`. After a revert, recovery uses the remaining snapshot records. Retention may already have removed older snapshots, so a deep revert can require an older restore point or replay; the authoritative baseline rule still applies.
+
+Clean-ups use an in-memory queue with at most `max_concurrent_uploads` operations running concurrently. Retention deletes directly and does not use this queue. The queue holds revert deletes, deleted-agent and stale-incarnation repositories, and copies from failed forks.
+
+### Queue limits and leaked snapshots
+
+Only revert deletes queue individual snapshot names. Each agent can queue at most `max_pending_deletes_per_agent` names. Already queued names keep their place. New revert requests enqueue newest snapshots first and refuse excess older snapshots as `overflow`.
+
+The queue also has fixed limits of 65,536 agents and 786,432 snapshot names. At the agent limit, deleting an entire repository first removes another agent's oldest queued revert deletes to make room. If none can be removed, the delete-all request is refused. These losses also count as `overflow`.
+
+Snapshots can remain in storage after exhausted delete retries, queue overflow, shutdown, a crash, or a fork with an unknown publication outcome. They consume space but do not change recovery correctness. `filesystem_snapshot_leaked_cleanups_total` counts observed losses; it cannot count work lost to a crash.
+
+Later retention can remove overflowed automatic snapshots after enough newer snapshots are confirmed, or overflowed manual-update snapshots after further manual updates. Deleting the agent also removes them. See [monitoring](/next/operate/filesystem_snapshots/monitoring#diagnose-symptoms) for storage-growth diagnostics.
+
+## Where the snapshots are
+
+Each agent incarnation has its own repository. Deleting and recreating an agent with the same ID creates a new incarnation and an empty repository. A fork creates a new incarnation whose repository contains a copy of the source snapshots.
+
+| Blob storage | Location |
+| --- | --- |
+| S3 | Bucket `filesystem_snapshots_bucket`, prefix `<object_prefix>/<environment id>/<agent>/<incarnation id>/`. With `namespace_prefixes = true`, insert `filesystem_snapshots/` after `<object_prefix>/`. Omit `<object_prefix>/` when unset. |
+| File system | `<root>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
+| SQLite (`Sqlite` and `KVStoreSqlite`) | Namespace `filesystem_snapshots-<environment id>-<agent>-<incarnation id>` in the `blob_storage` table |
+| In memory | Executor memory; lost when the executor stops. For tests only. |
+
+`<agent>` is the agent name with characters other than ASCII letters, digits, `-`, or `_` replaced by `_`, truncated to 32 characters (`agent` for an empty name). It is followed by `-` and the hexadecimal BLAKE3 hash of `<component id>/<agent name>`. `<incarnation id>` is a UUID. Incarnations of the same agent share the `<agent>` segment.
+
+An incarnation whose agent no longer exists contains only snapshots that no agent uses. Use these locations to investigate leftover storage; do not delete snapshots from a live agent's repository to resolve a recovery failure.

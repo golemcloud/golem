@@ -20,5 +20,5 @@ trait HumanAgent extends BaseAgent {
   @prompt("Approve or reject a workflow")
   @description("Makes a decision on a workflow approval request")
   @endpoint(method = "POST", path = "/decisions")
-  def decide(workflowId: String, decision: String): Future[String]
+  def decideApproval(workflowId: String, decision: String): Future[String]
 }
