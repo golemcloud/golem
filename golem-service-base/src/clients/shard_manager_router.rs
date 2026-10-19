@@ -489,10 +489,19 @@ impl LeaderRouter {
             }
         }
 
-        let status = match self
+        let mut sent = self
             .send_to_configured(description, attempts, failover, f)
-            .await
-        {
+            .await;
+        // A refusal before the call ran leaves nothing to repeat, and the connection that reached
+        // the refusing replica has been retired, so one more attempt dials the address again and
+        // can reach another replica. It is the only extra one in a pass, and only a call that
+        // would otherwise end here needs it: a call that may be repeated has its own passes.
+        if !attempts.replayable() && sent.as_ref().is_err_and(refused_before_running) {
+            sent = self
+                .send_to_configured(description, attempts, failover, f)
+                .await;
+        }
+        let status = match sent {
             Ok(result) => return Routed::Done(Ok(result)),
             Err(status) => status,
         };

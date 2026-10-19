@@ -1404,8 +1404,29 @@ async fn a_one_try_call_refused_by_a_stopping_known_leader_runs_once_on_the_new_
 }
 
 #[test]
+// The configured address can reach the very replica that is stopping. It refused the call before
+// running it and its connection is retired, so a call that must not be repeated gets one more
+// attempt in the same pass, which dials again and reaches a replica that serves: the call runs
+// exactly once.
+async fn a_one_try_call_refused_by_the_configured_address_gets_one_more_attempt() {
+    let replica = run_replica(Mode::Leader).await;
+    replica.script([Mode::Refuses]);
+    let client = client_for(&replica);
+
+    client
+        .deregister(Uuid::new_v4(), BTreeMap::new())
+        .await
+        .expect("the refusal did not run the call, so the next attempt runs it");
+
+    assert_eq!(replica.refusals(), 1);
+    assert_eq!(replica.calls(), 1, "the call ran exactly once");
+    replica.stop().await;
+}
+
+#[test]
 // A refusal from the configured address itself is an answer from a replica that works, as before:
-// a call that may be repeated keeps asking, and a one-try call returns it.
+// a call that may be repeated keeps asking, and a one-try call returns it, after one more attempt
+// and no more.
 async fn a_refusal_from_the_configured_address_is_returned_to_a_one_try_call() {
     let replica = run_replica(Mode::Refuses).await;
     let client = client_for(&replica);
@@ -1415,6 +1436,10 @@ async fn a_refusal_from_the_configured_address_is_returned_to_a_one_try_call() {
         .await
         .expect_err("the only replica refuses");
 
-    assert_eq!(replica.refusals(), 1, "the one try asked once");
+    assert_eq!(
+        replica.refusals(),
+        2,
+        "the one try asked, and asked once more on a new connection"
+    );
     replica.stop().await;
 }
