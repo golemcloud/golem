@@ -45,7 +45,8 @@ async function run(
   input?: Buffer,
 ) {
   return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn(git, args, {
+    // Detached repacks can remove loose objects while the fixture copies them.
+    const child = spawn(git, ["-c", "maintenance.auto=false", ...args], {
       cwd,
       env: {
         ...process.env,
