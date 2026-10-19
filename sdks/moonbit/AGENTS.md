@@ -278,8 +278,13 @@ pub(open) trait FromSchema {
 - Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64), `UInt64`
   (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`, `Option[T]`, `Array[T]`,
   `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
-  `Duration`, `Quantity[U]`, `@types.Uuid`, and `@types.Datetime`; and `UnstructuredText[L]` /
+  `Duration`, `Quantity[U]`, `Uuid`, and `@types.Datetime`; and `UnstructuredText[L]` /
   `UnstructuredBinary[M]` (see below).
+- `Uuid` is the SDK's UUID type, used by every user-facing API (phantom ids, idempotency keys,
+  permission holders). It has `parse` (hyphenated, case-insensitive), `Show` (lowercase
+  hyphenated), `Eq`/`Compare`/`Hash`, `random` (version 4 from `wasi:random/random`, which Golem
+  records durably), and `from_wit`/`to_wit`. The raw `@types.Uuid` record appears only at WIT
+  boundaries and in `@model.SchemaValue::Uuid`.
 
 **Helpers** (in `schema.mbt`):
 - `type_tag[T]() -> TypeTag[T]` — a zero-sized handle to ask for a type's schema without a value

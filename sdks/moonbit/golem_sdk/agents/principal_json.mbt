@@ -5,71 +5,15 @@ pub suberror JsonCodecError {
 } derive(Debug)
 
 ///|
-let hex_chars : FixedArray[Char] = [
-  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
-]
-
-///|
-fn uint64_hex(value : UInt64, width : Int) -> String {
-  let buf = StringBuilder()
-  for i = width - 1; i >= 0; i = i - 1 {
-    let nibble = ((value >> (i * 4)) & 0xFUL).to_int()
-    buf.write_char(hex_chars[nibble])
-  }
-  buf.to_string()
+fn uuid_to_json_string(uuid : @types.Uuid) -> String {
+  @schema.Uuid::from_wit(uuid).to_string()
 }
 
 ///|
-fn hex_code_to_uint64(c : Int) -> UInt64 raise JsonCodecError {
-  if c >= 0x30 && c <= 0x39 {
-    (c - 0x30).to_uint64()
-  } else if c >= 0x61 && c <= 0x66 {
-    (c - 0x61 + 10).to_uint64()
-  } else if c >= 0x41 && c <= 0x46 {
-    (c - 0x41 + 10).to_uint64()
-  } else {
-    raise JsonCodecError("Invalid hex character code: \{c}")
+fn uuid_from_json_string(s : String) -> @types.Uuid raise JsonCodecError {
+  @schema.Uuid::parse(s).to_wit() catch {
+    @schema.UuidParseError(message) => raise JsonCodecError(message)
   }
-}
-
-///|
-pub fn uuid_to_standard_string(uuid : @types.Uuid) -> String {
-  let hi = uuid.high_bits
-  let lo = uuid.low_bits
-  let p1 = uint64_hex((hi >> 32) & 0xFFFFFFFFUL, 8)
-  let p2 = uint64_hex((hi >> 16) & 0xFFFFUL, 4)
-  let p3 = uint64_hex(hi & 0xFFFFUL, 4)
-  let p4 = uint64_hex((lo >> 48) & 0xFFFFUL, 4)
-  let p5 = uint64_hex(lo & 0xFFFFFFFFFFFFUL, 12)
-  "\{p1}-\{p2}-\{p3}-\{p4}-\{p5}"
-}
-
-///|
-pub fn uuid_from_standard_string(
-  s : String,
-) -> @types.Uuid raise JsonCodecError {
-  let mut hi : UInt64 = 0UL
-  let mut lo : UInt64 = 0UL
-  let mut hex_count = 0
-  for i = 0; i < s.length(); i = i + 1 {
-    let c = s[i].to_int()
-    if c == 0x2D {
-      continue
-    }
-    let d = hex_code_to_uint64(c)
-    if hex_count < 16 {
-      hi = (hi << 4) | d
-    } else {
-      lo = (lo << 4) | d
-    }
-    hex_count = hex_count + 1
-  }
-  if hex_count != 32 {
-    raise JsonCodecError(
-      "Invalid UUID string: expected 32 hex digits, got \{hex_count}",
-    )
-  }
-  { high_bits: hi, low_bits: lo, }
 }
 
 ///|
@@ -218,7 +162,7 @@ pub fn principal_from_json(
         _ => raise JsonCodecError("Missing 'accountId' in golem-user principal")
       }
       @common.Principal::GolemUser({
-        account_id: { uuid: uuid_from_standard_string(account_id_str), },
+        account_id: { uuid: uuid_from_json_string(account_id_str), },
       })
     }
     other => raise JsonCodecError("Unknown principal tag: \{other}")
@@ -228,7 +172,7 @@ pub fn principal_from_json(
 ///|
 fn agent_id_to_json(id : @types.AgentId) -> Json {
   Json::object({
-    "componentId": Json::string(uuid_to_standard_string(id.component_id.uuid)),
+    "componentId": Json::string(uuid_to_json_string(id.component_id.uuid)),
     "agentId": Json::string(id.agent_id),
   })
 }
@@ -248,12 +192,12 @@ fn agent_id_from_json(json : Json) -> @types.AgentId raise JsonCodecError {
     _ => raise JsonCodecError("Missing 'agentId' in agent val")
   }
   {
-    component_id: { uuid: uuid_from_standard_string(component_id_str), },
+    component_id: { uuid: uuid_from_json_string(component_id_str), },
     agent_id,
   }
 }
 
 ///|
 fn account_id_to_json(id : @types.AccountId) -> Json {
-  Json::string(uuid_to_standard_string(id.uuid))
+  Json::string(uuid_to_json_string(id.uuid))
 }

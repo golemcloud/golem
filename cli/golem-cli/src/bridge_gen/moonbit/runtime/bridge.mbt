@@ -51,7 +51,7 @@ pub async fn create_agent(
   configuration : Configuration,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
 ) -> CreateAgentResponse raise {
   let body = render_create_agent_request(

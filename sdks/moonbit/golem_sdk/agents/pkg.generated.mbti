@@ -67,10 +67,6 @@ pub async fn restore_and_set_instance(String, SnapshotData, SnapshotRestoreConte
 
 pub fn set_agent_instance(AgentInstance) -> Unit
 
-pub fn uuid_from_standard_string(String) -> @types.Uuid raise JsonCodecError
-
-pub fn uuid_to_standard_string(@types.Uuid) -> String
-
 // Errors
 pub suberror JsonCodecError {
   JsonCodecError(String)
@@ -182,7 +178,7 @@ pub(all) struct SnapshotRestoreContext {
   agent_id : String
   agent_type : String
   identity_fields : SnapshotIdentity
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
   principal : @common.Principal
 }
 pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(Self, Int) -> T raise @common.AgentError

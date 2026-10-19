@@ -404,6 +404,93 @@ void exercise;
     install_and_build(&package_dir);
 }
 
+fn uuid_agent() -> AgentTypeSchema {
+    agent(
+        "UuidAgent",
+        "typescript",
+        vec![field("id", SchemaType::uuid())],
+        vec![
+            method(
+                "echo",
+                vec![field("value", SchemaType::uuid())],
+                Some(SchemaType::uuid()),
+            ),
+            method(
+                "nested",
+                vec![field("value", ref_to("uuid-holder"))],
+                Some(ref_to("uuid-holder")),
+            ),
+        ],
+        vec![def(
+            "uuid-holder",
+            SchemaType::record(vec![
+                named_field("id", SchemaType::uuid()),
+                named_field("maybe", SchemaType::option(SchemaType::uuid())),
+                named_field("ids", SchemaType::list(SchemaType::uuid())),
+            ]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn guest_uuid_values_use_sdk_uuid_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("uuid-agent-guest-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        uuid_agent(),
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source = std::fs::read_to_string(package_dir.join("uuid-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("base.Uuid.from(n.value)"), "{source}");
+    assert!(!source.contains("base.Uuid.parse("), "{source}");
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { bridge as base } from '@golemcloud/golem-ts-sdk';
+import { UuidAgent } from './uuid-agent-guest-client';
+async function exercise() {
+  const id: base.Uuid = base.Uuid.parse('dd00721b-3329-4621-a01d-c71f02cd78c6');
+  const client = UuidAgent.get(id);
+  const echoed: base.Uuid = await client.echo(id);
+  const nested = await client.nested({ id, maybe: undefined, ids: [id] });
+  const nestedId: base.Uuid = nested.id;
+  const maybe: base.Uuid | undefined = nested.maybe;
+  const ids: base.Uuid[] = nested.ids;
+  void echoed; void nestedId; void maybe; void ids;
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn external_uuid_values_use_bridge_uuid_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(uuid_agent(), target_dir);
+    let source = std::fs::read_to_string(
+        generated_package_dir(target_dir, "uuid-agent").join("uuid-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("base.Uuid.parse(n.value as string)"),
+        "{source}"
+    );
+    assert!(!source.contains("base.Uuid.from("), "{source}");
+    assert!(source.contains("kind: 'uuid', value: ("), "{source}");
+    assert!(source.contains("value: base.Uuid"), "{source}");
+}
+
 #[test]
 fn guest_agent_generated_names_do_not_collide_with_schema_names() {
     let dir = TempDir::new().unwrap();

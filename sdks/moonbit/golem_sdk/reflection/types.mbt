@@ -45,7 +45,7 @@ pub(all) struct ParsedAgentId {
 pub(all) struct ParsedAgentIdParts {
   type_name : String
   constructor_value : @model.SchemaValue
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
 } derive(Debug, Eq)
 
 ///|
@@ -70,7 +70,7 @@ pub(all) struct ScheduledInvocation {
 /// Both identities produced when attempting to create a durable phantom.
 pub(all) struct CreatedPhantomClient {
   agent_id : ParsedAgentId
-  phantom_id : @types.Uuid
+  phantom_id : @schema.Uuid
   client : DynamicAgentClient
 }
 
