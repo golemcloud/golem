@@ -25,8 +25,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// A request that declares a larger `Content-Length` is answered before any of its body is read.
 /// A request without `Content-Length` (chunked HTTP/1.1, or HTTP/2) has its body read up to the
-/// limit: the first byte past the limit fails the read, and the response becomes 413 whatever
-/// the endpoint answered.
+/// limit: the first byte past the limit fails the read. An overflow observed before the endpoint
+/// returns replaces its response with 413. A body read after that point still fails at the limit,
+/// but cannot change the response status. Unread bodies are not drained.
 #[derive(Clone, Copy, Debug)]
 pub struct RequestBodyLimit {
     max_size: usize,
@@ -49,6 +50,23 @@ impl RequestBodyLimit {
         }
     }
 
+    /// Limits reads of the request body. Check for rejection before dispatch and after reading.
+    pub fn apply(&self, request: &mut Request) -> RequestBodyLimitState {
+        let max_size = self.max_size_for(request);
+        let declared_too_large = request
+            .headers()
+            .typed_get::<ContentLength>()
+            .is_some_and(|ContentLength(length)| length > max_size as u64);
+        let exceeded = Arc::new(AtomicBool::new(declared_too_large));
+        if !declared_too_large {
+            let body = request.take_body();
+            if !body.is_empty() {
+                request.set_body(limited(body, max_size, exceeded.clone()));
+            }
+        }
+        RequestBodyLimitState { max_size, exceeded }
+    }
+
     fn max_size_for(&self, request: &Request) -> usize {
         let is_multipart = request
             .headers()
@@ -61,6 +79,19 @@ impl RequestBodyLimit {
         } else {
             self.max_size
         }
+    }
+}
+
+pub struct RequestBodyLimitState {
+    max_size: usize,
+    exceeded: Arc<AtomicBool>,
+}
+
+impl RequestBodyLimitState {
+    pub fn rejection(&self) -> Option<Response> {
+        self.exceeded
+            .load(Ordering::Acquire)
+            .then(|| payload_too_large(self.max_size))
     }
 }
 
@@ -84,22 +115,14 @@ impl<E: Endpoint> Endpoint for RequestBodyLimitEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, mut request: Request) -> poem::Result<Response> {
-        let max_size = self.limit.max_size_for(&request);
-        if let Some(ContentLength(length)) = request.headers().typed_get::<ContentLength>()
-            && length > max_size as u64
-        {
-            return Ok(payload_too_large(max_size));
-        }
-
-        let exceeded = Arc::new(AtomicBool::new(false));
-        let body = request.take_body();
-        if !body.is_empty() {
-            request.set_body(limited(body, max_size, exceeded.clone()));
+        let limit = self.limit.apply(&mut request);
+        if let Some(response) = limit.rejection() {
+            return Ok(response);
         }
 
         let result = self.inner.call(request).await;
-        if exceeded.load(Ordering::Acquire) {
-            return Ok(payload_too_large(max_size));
+        if let Some(response) = limit.rejection() {
+            return Ok(response);
         }
         result.map(IntoResponse::into_response)
     }

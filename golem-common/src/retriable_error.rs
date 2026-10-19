@@ -64,15 +64,21 @@ impl IsRetriableError for tonic::Status {
 /// Returns true if the given gRPC status was produced by tonic's codec because the
 /// encoded or decoded message exceeded the configured `max_(en|de)coding_message_size`.
 ///
-/// Tonic surfaces these as `Code::ResourceExhausted` with messages such as
-/// `"Error decompressing: size limit, of N bytes, exceeded while decompressing message"`
-/// or `"Error encoding: size limit, of N bytes, exceeded while encoding message"`.
+/// Tonic uses `ResourceExhausted` for the decompressed size and `OutOfRange` for
+/// the encoded or decoded message length. Other quota and range errors are not size limits.
 pub fn is_grpc_message_size_limit(status: &tonic::Status) -> bool {
-    if status.code() != tonic::Code::ResourceExhausted {
-        return false;
-    }
     let message = status.message();
-    message.contains("size limit") && message.contains("message")
+    match status.code() {
+        tonic::Code::ResourceExhausted => {
+            message.starts_with("Error decompressing: size limit, of ")
+                && message.ends_with(" bytes, exceeded while decompressing message")
+        }
+        tonic::Code::OutOfRange => {
+            message.starts_with("Error, decoded message length too large:")
+                || message.starts_with("Error, encoded message length too large:")
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -104,17 +110,36 @@ mod tests {
 
     #[test]
     fn message_size_limit_is_detected() {
-        let status = Status::new(
-            Code::ResourceExhausted,
-            "Error decompressing: size limit, of 4194304 bytes, exceeded while decompressing message",
-        );
-        assert!(is_grpc_message_size_limit(&status));
+        for (code, message) in [
+            (
+                Code::ResourceExhausted,
+                "Error decompressing: size limit, of 4194304 bytes, exceeded while decompressing message",
+            ),
+            (
+                Code::OutOfRange,
+                "Error, decoded message length too large: found 2048 bytes, the limit is: 1024 bytes",
+            ),
+            (
+                Code::OutOfRange,
+                "Error, encoded message length too large: found 2048 bytes, the limit is: 1024 bytes",
+            ),
+        ] {
+            let status = Status::new(code, message);
+            assert!(is_grpc_message_size_limit(&status), "{status}");
+            assert!(!status.is_retriable());
+        }
     }
 
     #[test]
     fn limit_exceeded_is_not_message_size_limit() {
-        let status = Status::new(Code::ResourceExhausted, "quota exceeded");
-        assert!(!is_grpc_message_size_limit(&status));
+        for (code, message) in [
+            (Code::ResourceExhausted, "quota exceeded"),
+            (Code::ResourceExhausted, "message rate size limit exceeded"),
+            (Code::OutOfRange, "stream offset is out of range"),
+        ] {
+            let status = Status::new(code, message);
+            assert!(!is_grpc_message_size_limit(&status), "{status}");
+        }
     }
 
     #[test]

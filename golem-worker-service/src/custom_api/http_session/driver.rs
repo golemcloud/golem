@@ -36,7 +36,9 @@ use super::transport::SessionTransport;
 use super::{
     HttpSessionError, HttpSessionEvent, HttpSessionLimits, INPUT_STREAM_ID, SessionOutput,
 };
-use crate::service::worker::{InvocationRequestStream, InvocationResponseStream};
+use crate::service::worker::{
+    CallWorkerExecutorError, InvocationRequestStream, InvocationResponseStream, WorkerServiceError,
+};
 
 pub(super) async fn run_session(
     start: InvocationStart,
@@ -119,6 +121,16 @@ pub(super) async fn run_session(
         };
         let mut responses = match call {
             Ok(responses) => responses,
+            Err(WorkerServiceError::InternalCallError(
+                CallWorkerExecutorError::MessageTooLarge(status),
+            )) => {
+                send_error(
+                    &events,
+                    HttpSessionError::MessageTooLarge(status.to_string()),
+                )
+                .await;
+                return;
+            }
             Err(_) if accepted.is_some() => continue,
             Err(_) => {
                 send_error(&events, HttpSessionError::TransportUnavailable).await;
@@ -157,6 +169,14 @@ pub(super) async fn run_session(
         };
         let decision = match decision {
             Ok(response) => response,
+            Err(status) if golem_common::retriable_error::is_grpc_message_size_limit(&status) => {
+                send_error(
+                    &events,
+                    HttpSessionError::MessageTooLarge(status.to_string()),
+                )
+                .await;
+                return;
+            }
             Err(_) if accepted.is_some() => continue,
             Err(_) => {
                 send_error(&events, HttpSessionError::TransportUnavailable).await;

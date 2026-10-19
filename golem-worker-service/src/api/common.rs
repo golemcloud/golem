@@ -497,6 +497,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::RawRequest(_) => {
                 Self::bad_request(api::error_code::REQUEST_VALUE_PARSING_FAILED, value)
             }
+            RequestHandlerError::RawMessageTooLarge(_) => {
+                Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, value)
+            }
             RequestHandlerError::RawBadGateway | RequestHandlerError::RawDeadline => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
@@ -529,6 +532,7 @@ mod tests {
         match api_error {
             ApiEndpointError::PayloadTooLarge(Json(body)) => {
                 assert_eq!(body.code, api::error_code::REQUEST_PAYLOAD_TOO_LARGE);
+                assert!(body.error.contains(message_too_large_status().message()));
             }
             other => panic!("expected PayloadTooLarge, got: {other:?}"),
         }
@@ -545,6 +549,7 @@ mod tests {
         match api_error {
             ApiEndpointError::PayloadTooLarge(Json(body)) => {
                 assert_eq!(body.code, api::error_code::REQUEST_PAYLOAD_TOO_LARGE);
+                assert!(body.error.contains(message_too_large_status().message()));
             }
             other => panic!("expected PayloadTooLarge, got: {other:?}"),
         }

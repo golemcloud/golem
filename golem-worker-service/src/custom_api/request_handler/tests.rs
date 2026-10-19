@@ -35,6 +35,104 @@ use test_r::test;
 mod live_files;
 
 #[test]
+async fn http_api_body_limit_rejects_before_invocation_and_keeps_cors() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use poem::Body;
+
+    const LIMIT: usize = 16;
+    for declared in [false, true] {
+        for size in [LIMIT + 1, LIMIT] {
+            let harness = InvocationHarness::new(
+                AgentInvocationOutput {
+                    result: golem_common::model::AgentInvocationResult::AgentInitialization,
+                    consumed_fuel: None,
+                    invocation_status: None,
+                    component_revision: None,
+                    agent_id: None,
+                    idempotency_key: None,
+                    oplog_index: None,
+                    agent_fingerprint: None,
+                },
+                AgentConstructorSchema {
+                    name: None,
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                vec![golem_common::schema::AgentMethodSchema {
+                    name: "run".into(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(vec![]),
+                    output_schema: OutputSchema::Unit,
+                    http_endpoint: vec![],
+                    read_only: None,
+                }],
+            );
+            let mut route = test_route(1, "/body", Some("POST"), "typed");
+            route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+            let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                unreachable!()
+            };
+            call.component_id = harness.component_id;
+            call.agent_type = AgentTypeName("mcp-agent".into());
+            call.body = RequestBodySchema::JsonBody {
+                expected: CompiledSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                },
+            };
+            let mut handler = request_handler_with_worker(
+                test_resolver(vec![route]),
+                Arc::new(InitialAgentFilesService::new(Arc::new(
+                    golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+                ))),
+                harness.worker_service.clone(),
+            );
+            handler.body_limit = RequestBodyLimit::new(LIMIT);
+            let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
+            let mut request = Request::builder()
+                .method(http::Method::POST)
+                .uri("/body".parse().unwrap())
+                .header("host", "example.com")
+                .header("origin", "https://client.example")
+                .content_type("application/json");
+            let mut body = vec![b' '; size];
+            body[..2].copy_from_slice(b"{}");
+            let body = if declared {
+                request = request.header("content-length", size.to_string());
+                Body::from(body)
+            } else {
+                Body::from_bytes_stream(futures::stream::iter(
+                    body.chunks(4)
+                        .map(|chunk| Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(chunk)))
+                        .collect::<Vec<_>>(),
+                ))
+            };
+            let response = endpoint.execute(request.body(body)).await;
+            assert_eq!(
+                response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "https://client.example"
+            );
+            if size > LIMIT {
+                assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+                let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                assert_eq!(body["code"], "REQUEST_PAYLOAD_TOO_LARGE");
+                assert!(harness.contexts.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(
+                    response.status(),
+                    StatusCode::NO_CONTENT,
+                    "{}",
+                    response.into_body().into_string().await.unwrap()
+                );
+                assert_eq!(harness.contexts.lock().unwrap().len(), 1);
+            }
+        }
+    }
+}
+
+#[test]
 async fn unavailable_security_fails_before_route_dispatch() {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use golem_common::model::security_scheme::SecuritySchemeId;
@@ -680,6 +778,7 @@ fn request_handler_with_worker(
         Default::default(),
         initial_files,
         Arc::new(OpenApiService::new(worker_service)),
+        crate::config::RequestBodyLimits::default().http_api,
     )
 }
 
