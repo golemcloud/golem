@@ -16512,7 +16512,7 @@ fs.writeFileSync(
         String::from_utf8_lossy(&install.stderr)
     );
 
-    let typed_eval = "const parts: string[] = ['typed', 'eval']; console.log(parts.join('-'))";
+    let typed_eval = "enum E { A = 'typed' } const parts: string[] = [E.A, 'eval']; console.log(parts.join('-'))";
     // (tool, cwd, args, exit code, stdout, stderr)
     type Case<'a> = (&'a str, &'a str, Vec<&'a str>, i32, &'a str, &'a str);
     let cases: Vec<Case> = vec![
@@ -16606,13 +16606,24 @@ fs.writeFileSync(
         }
     }
 
+    // A SyntaxError thrown while the program runs must not rerun the source as TypeScript.
+    let runtime_syntax_error = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace/plain",
+        vec!["-e", "console.log('once'); JSON.parse('{')"],
+    )
+    .await?;
+    if runtime_syntax_error.exit_code != 1
+        || runtime_syntax_error.stdout != b"once\n"
+        || !String::from_utf8_lossy(&runtime_syntax_error.stderr).contains("SyntaxError")
+    {
+        failures.push(format!("runtime SyntaxError: {runtime_syntax_error:?}"));
+    }
+
     let failing: Vec<(&str, Vec<&str>, i32, &str)> = vec![
-        (
-            "node",
-            vec!["-e", "throw new SyntaxError('at runtime')"],
-            1,
-            "SyntaxError: at runtime",
-        ),
         (
             "node",
             vec!["--watch", "main.ts"],

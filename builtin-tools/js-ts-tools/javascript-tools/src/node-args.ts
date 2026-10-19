@@ -7,8 +7,8 @@ export class NodeOptionError extends Error {
   readonly name = 'NodeOptionError';
 }
 
-// The runtime always removes TypeScript types and keeps source maps, so these Node options
-// only confirm the behaviour.
+// Accepted so that common Node invocations work, and ignored: the runtime always transforms
+// TypeScript and keeps source maps, and the tool does not filter warnings.
 const IGNORED_OPTIONS = new Set([
   '--experimental-strip-types',
   '--experimental-transform-types',
@@ -31,38 +31,39 @@ function inputTypeIsTypeScript(value: string): boolean {
   );
 }
 
+// Node reads its own options before the script and, with --eval, also between the source and
+// the first program argument or `--`.
 export function parseNodeArguments(args: string[]): NodeInvocation {
   let inputType: string | undefined;
-  for (let i = 0; i < args.length; i++) {
+  let source: string | undefined;
+  let i = 0;
+  const value = (option: string) => {
+    const next = args[++i];
+    if (next === undefined) throw new NodeOptionError(`node: ${option} requires an argument`);
+    return next;
+  };
+  for (; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === '--version' || arg === '-v') return { kind: 'version' };
-    if (arg === '--eval' || arg === '-e') {
-      const source = args[i + 1];
-      if (source === undefined) throw new NodeOptionError(`node: ${arg} requires an argument`);
-      const typescript = inputType === undefined ? 'detect' : inputTypeIsTypeScript(inputType);
-      return { kind: 'eval', source, typescript, argv: ['node', ...args.slice(i + 2)] };
-    }
-    if (arg === '--input-type') {
-      const value = args[i + 1];
-      if (value === undefined) throw new NodeOptionError('node: --input-type requires an argument');
-      inputType = value;
+    if (arg === '--eval' || arg === '-e') source = value(arg);
+    else if (arg.startsWith('--eval=')) source = arg.slice('--eval='.length);
+    else if (arg === '--input-type') inputType = value(arg);
+    else if (arg.startsWith('--input-type=')) inputType = arg.slice('--input-type='.length);
+    else if (IGNORED_OPTIONS.has(arg)) continue;
+    else if (arg === '--') {
       i++;
-      continue;
-    }
-    if (arg.startsWith('--input-type=')) {
-      inputType = arg.slice('--input-type='.length);
-      continue;
-    }
-    if (IGNORED_OPTIONS.has(arg)) continue;
-    if (arg === '--') {
-      const entry = args[i + 1];
-      if (entry === undefined) break;
-      return { kind: 'entry', entry, argv: ['node', ...args.slice(i + 1)] };
-    }
-    if (arg.startsWith('-')) throw new NodeOptionError(`node: bad option: ${arg}`);
-    return { kind: 'entry', entry: arg, argv: ['node', ...args.slice(i)] };
+      break;
+    } else if (arg.startsWith('-')) throw new NodeOptionError(`node: bad option: ${arg}`);
+    else break;
   }
-  throw new NodeOptionError('node: expected a script file or --eval source');
+  const rest = args.slice(i);
+  if (source !== undefined) {
+    const typescript = inputType === undefined ? 'detect' : inputTypeIsTypeScript(inputType);
+    return { kind: 'eval', source, typescript, argv: ['node', ...rest] };
+  }
+  const entry = rest[0];
+  if (entry === undefined) throw new NodeOptionError('node: expected a script file or --eval source');
+  return { kind: 'entry', entry, argv: ['node', ...rest] };
 }
 
 type AsyncFunctionConstructor = new (...args: string[]) => () => Promise<unknown>;

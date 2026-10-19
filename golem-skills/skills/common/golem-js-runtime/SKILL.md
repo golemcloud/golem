@@ -99,7 +99,10 @@ TypeScript and Scala agents. Use `startJavaScript` for live output and cancellat
 transformed at runtime, and inline TypeScript is accepted with `language: 'typescript'`. The same
 transformation applies to `import()` and `require()` of TypeScript files and to
 `stripTypeScriptTypes` from `node:module`. The transformation transpiles syntax but does not
-type-check or read `tsconfig.json`.
+type-check or read `tsconfig.json`. Scala agents use the typed `golem.host.JavaScriptExecution`
+facade: `run` and `start` take `Options(Code.Source(source, Language.TypeScript))` or
+`Options(Code.Entry(path))` with optional `cwd`, `argv`, `env`, `timeoutMs`, `maxBytes`, and
+`overflow`.
 
 Each job receives an explicit environment allowlist and fresh globals, process state, timers, and
 module caches. Jobs still share the component filesystem and host capabilities, so this is not a

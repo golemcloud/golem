@@ -18,7 +18,7 @@ transforms enums and namespaces, but it does not type-check or read `tsconfig.js
 for type checks. `node -e` source is read as JavaScript first and, when it does not parse, as
 TypeScript. `--input-type=commonjs-typescript` reads it as TypeScript directly.
 
-Before the script or `-e`, `node` accepts `--input-type=commonjs` and
+Before the script, or with `-e` before the first program argument or `--`, `node` accepts `--input-type=commonjs` and
 `--input-type=commonjs-typescript`, and accepts `--experimental-strip-types`,
 `--experimental-transform-types`, `--no-experimental-strip-types`, `--no-warnings`, and
 `--enable-source-maps` as options that change nothing. `--input-type=module` and
@@ -29,7 +29,7 @@ option fails with `node: bad option`.
 When `tsx` or `ts-node` is not installed in the working directory, an ancestor, or the npm
 global prefix, `npx tsx <file>`, `npx ts-node <file>`, and their `-e` forms run through `node`
 instead of downloading the package. `ts-node` writes one stderr line that says type checking
-is skipped. Other `tsx` and `ts-node` options, watch mode, and the REPL fail with a message
+is skipped; `ts-node -T` and `--transpile-only` are accepted. Other `tsx` and `ts-node` options, watch mode, and the REPL fail with a message
 that points at `node <file>` and at installing the real package. `npx --package`, `npx --call`,
 and an installed command always run through npm.
 

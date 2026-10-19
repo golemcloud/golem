@@ -26,6 +26,24 @@ function parsesEntriesEvalAndVersion() {
     typescript: 'detect',
     argv: ['node', 'a'],
   });
+  assert.deepEqual(parseNodeArguments(['--eval=x', 'a']), {
+    kind: 'eval',
+    source: 'x',
+    typescript: 'detect',
+    argv: ['node', 'a'],
+  });
+  assert.deepEqual(parseNodeArguments(['-e', 'x', '--no-warnings', '--', '-a', '--no-warnings']), {
+    kind: 'eval',
+    source: 'x',
+    typescript: 'detect',
+    argv: ['node', '-a', '--no-warnings'],
+  });
+  assert.deepEqual(parseNodeArguments(['-e', 'x', '--input-type=commonjs', 'a']), {
+    kind: 'eval',
+    source: 'x',
+    typescript: false,
+    argv: ['node', 'a'],
+  });
   assert.deepEqual(parseNodeArguments(['--version']), { kind: 'version' });
   assert.deepEqual(parseNodeArguments(['--', '-script.js', 'a']), {
     kind: 'entry',
@@ -36,7 +54,15 @@ function parsesEntriesEvalAndVersion() {
 
 function acceptsTypeScriptAndNoOpOptions() {
   assert.deepEqual(
-    parseNodeArguments(['--experimental-strip-types', '--no-warnings', 'main.ts', 'a']),
+    parseNodeArguments([
+      '--experimental-strip-types',
+      '--experimental-transform-types',
+      '--no-experimental-strip-types',
+      '--enable-source-maps',
+      '--no-warnings',
+      'main.ts',
+      'a',
+    ]),
     { kind: 'entry', entry: 'main.ts', argv: ['node', 'main.ts', 'a'] },
   );
   for (const args of [
@@ -61,8 +87,11 @@ function rejectsUnsupportedOptions() {
   rejects(['--watch', 'main.js'], /^node: bad option: --watch$/);
   rejects(['--input-type=module', '-e', 'x'], /not supported.*\.mjs file/);
   rejects(['--input-type=module-typescript', '-e', 'x'], /not supported.*\.mts file/);
+  rejects(['-e', 'x', '--input-type=module'], /not supported.*\.mjs file/);
   rejects(['--input-type=json', '-e', 'x'], /--input-type must be/);
   rejects(['-e'], /-e requires an argument/);
+  rejects(['--input-type'], /--input-type requires an argument/);
+  rejects(['--'], /expected a script file/);
   rejects([], /expected a script file/);
   rejects(['--no-warnings'], /expected a script file/);
 }
@@ -105,12 +134,29 @@ function npxShimsOnlyMissingTypeScriptRunners() {
     args: ['--input-type=commonjs-typescript', '--eval', 'src', 'a'],
     notice: undefined,
   });
-  const tsNode = npxTypeScriptShim(['--yes', 'ts-node', '-T', 'main.ts'], '/w', none);
-  assert.equal(tsNode?.kind, 'node');
-  assert.deepEqual((tsNode as { args: string[] }).args, ['--', 'main.ts']);
-  assert.match((tsNode as { notice: string }).notice, /type checking is skipped/);
+  for (const args of [
+    ['--yes', 'ts-node', '-T', 'main.ts'],
+    ['--no-install', 'ts-node', '--transpile-only', 'main.ts'],
+  ]) {
+    const tsNode = npxTypeScriptShim(args, '/w', none);
+    assert.equal(tsNode?.kind, 'node', args.join(' '));
+    assert.deepEqual((tsNode as { args: string[] }).args, ['--', 'main.ts']);
+    assert.match((tsNode as { notice: string }).notice, /type checking is skipped/);
+  }
+  const tsNodeEval = npxTypeScriptShim(['--no', 'ts-node', '-e', 'src'], '/w', none);
+  assert.deepEqual((tsNodeEval as { args: string[] }).args, [
+    '--input-type=commonjs-typescript',
+    '--eval',
+    'src',
+  ]);
+  assert.match((tsNodeEval as { notice: string }).notice, /type checking is skipped/);
 
-  for (const args of [['tsx', '--watch', 'main.ts'], ['tsx', 'watch', 'main.ts'], ['tsx']]) {
+  for (const args of [
+    ['tsx', '--watch', 'main.ts'],
+    ['tsx', 'watch', 'main.ts'],
+    ['tsx'],
+    ['tsx', '-e'],
+  ]) {
     const result = npxTypeScriptShim(args, '/w', none);
     assert.equal(result?.kind, 'error', args.join(' '));
     assert.match((result as { message: string }).message, /npm install -D tsx/);

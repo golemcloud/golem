@@ -45,7 +45,7 @@ const nodeTool = toolDefinition('node', { requiresFilesystem: true })
       .tail('args', z.string(), {
         separator: '--',
         verbatim: true,
-        doc: 'A script path and its arguments, or -e/--eval with JavaScript or TypeScript source, or -v/--version. Before the script or -e, --input-type=commonjs or commonjs-typescript selects how -e source is read; --input-type=module is not supported, so run a .mjs or .mts file instead. --experimental-strip-types, --experimental-transform-types, --no-experimental-strip-types, --no-warnings and --enable-source-maps are accepted and change nothing. Other Node options are rejected.',
+        doc: 'A script path and its arguments, or -e/--eval with JavaScript or TypeScript source, or -v/--version. Node options go before the script, or before the first program argument or -- when -e is used. --input-type=commonjs or commonjs-typescript selects how -e source is read; --input-type=module is not supported, so run a .mjs or .mts file instead. --experimental-strip-types, --experimental-transform-types, --no-experimental-strip-types, --no-warnings and --enable-source-maps are accepted and change nothing. Other Node options are rejected.',
       })
       .stdout({
         required: true,
