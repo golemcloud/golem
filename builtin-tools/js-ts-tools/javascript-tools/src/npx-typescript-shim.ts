@@ -71,9 +71,20 @@ export function npxTypeScriptShim(
     if (arg === '-e' || arg === '--eval') {
       const source = args[i + 1];
       if (source === undefined) return unsupported(command, `${arg} without source`);
+      // Like ts-node, read options after the source up to `--` or the first program argument.
+      let rest = i + 2;
+      for (; rest < args.length; rest++) {
+        const option = args[rest]!;
+        if (option === '--') {
+          rest++;
+          break;
+        }
+        if (!option.startsWith('-')) break;
+        if (!ignored.has(option)) return unsupported(command, `the option ${option}`);
+      }
       return {
         kind: 'node',
-        args: ['--input-type=commonjs-typescript', '--eval', source, ...args.slice(i + 2)],
+        args: ['--input-type=commonjs-typescript', '--eval', source, '--', ...args.slice(rest)],
         notice,
       };
     }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { stripTypeScriptTypes } from 'node:module';
 
 import {
   compileEvalSource,
@@ -97,7 +98,7 @@ function rejectsUnsupportedOptions() {
 }
 
 async function evalDetectsTypeScriptOnlyOnParseErrors() {
-  const strip = (source: string) => source.replace(': number', '');
+  const strip = (source: string) => stripTypeScriptTypes(source, { mode: 'transform' });
   const calls: string[] = [];
   const tracked = (source: string) => {
     calls.push(source);
@@ -120,6 +121,14 @@ async function evalDetectsTypeScriptOnlyOnParseErrors() {
     SyntaxError,
   );
   assert.equal(await compileEvalSource('const x: number = 4; return x', true, strip)(), 4);
+  assert.equal(
+    await compileEvalSource(
+      'enum E { A = 5 }\nconst x: number = await Promise.resolve(E.A); return x // done',
+      'detect',
+      strip,
+    )(),
+    5,
+  );
 }
 
 function npxShimsOnlyMissingTypeScriptRunners() {
@@ -131,9 +140,35 @@ function npxShimsOnlyMissingTypeScriptRunners() {
   });
   assert.deepEqual(npxTypeScriptShim(['-y', '--', 'tsx', '-e', 'src', 'a'], '/w', none), {
     kind: 'node',
-    args: ['--input-type=commonjs-typescript', '--eval', 'src', 'a'],
+    args: ['--input-type=commonjs-typescript', '--eval', 'src', '--', 'a'],
     notice: undefined,
   });
+  const tsxEvalArgs = npxTypeScriptShim(['tsx', '-e', 'src', '--', '--no-warnings'], '/w', none);
+  assert.deepEqual((tsxEvalArgs as { args: string[] }).args, [
+    '--input-type=commonjs-typescript',
+    '--eval',
+    'src',
+    '--',
+    '--no-warnings',
+  ]);
+  for (const option of ['-T', '--transpile-only']) {
+    const evalArgs = ['ts-node', '-e', 'src', option, 'a', '-T'];
+    const shimmed = npxTypeScriptShim(evalArgs, '/w', none) as { args: string[] };
+    assert.deepEqual(shimmed.args, [
+      '--input-type=commonjs-typescript',
+      '--eval',
+      'src',
+      '--',
+      'a',
+      '-T',
+    ]);
+    assert.deepEqual(parseNodeArguments(shimmed.args), {
+      kind: 'eval',
+      source: 'src',
+      typescript: true,
+      argv: ['node', 'a', '-T'],
+    });
+  }
   for (const args of [
     ['--yes', 'ts-node', '-T', 'main.ts'],
     ['--no-install', 'ts-node', '--transpile-only', 'main.ts'],
@@ -148,6 +183,7 @@ function npxShimsOnlyMissingTypeScriptRunners() {
     '--input-type=commonjs-typescript',
     '--eval',
     'src',
+    '--',
   ]);
   assert.match((tsNodeEval as { notice: string }).notice, /type checking is skipped/);
 
@@ -156,10 +192,11 @@ function npxShimsOnlyMissingTypeScriptRunners() {
     ['tsx', 'watch', 'main.ts'],
     ['tsx'],
     ['tsx', '-e'],
+    ['ts-node', '-e', 'src', '--project', 'tsconfig.json'],
   ]) {
     const result = npxTypeScriptShim(args, '/w', none);
     assert.equal(result?.kind, 'error', args.join(' '));
-    assert.match((result as { message: string }).message, /npm install -D tsx/);
+    assert.match((result as { message: string }).message, new RegExp(`npm install -D ${args[0]}`));
   }
 
   assert.equal(npxTypeScriptShim(['cowsay', 'hi'], '/w', none), undefined);

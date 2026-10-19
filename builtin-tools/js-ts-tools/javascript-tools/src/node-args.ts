@@ -71,6 +71,16 @@ type AsyncFunctionConstructor = new (...args: string[]) => () => Promise<unknown
 const AsyncFunction = Object.getPrototypeOf(async () => undefined)
   .constructor as AsyncFunctionConstructor;
 
+// The transform parses a whole program, where `return` is not allowed, so the source is
+// transformed as the body of an async arrow function and that function is taken from the result.
+function compileTypeScript(
+  source: string,
+  stripTypes: (source: string) => string,
+): () => Promise<unknown> {
+  const program = stripTypes(`const __golemEval = async () => {\n${source}\n};`);
+  return new Function(`${program}\nreturn __golemEval;`)() as () => Promise<unknown>;
+}
+
 // Node evaluates `--eval` source as JavaScript first and, when it does not parse, as TypeScript.
 // Only the construction of the function parses the source, so a SyntaxError thrown while the
 // program runs never causes a TypeScript retry.
@@ -79,17 +89,15 @@ export function compileEvalSource(
   typescript: boolean | 'detect',
   stripTypes: (source: string) => string,
 ): () => Promise<unknown> {
-  if (typescript === true) return new AsyncFunction(stripTypes(source));
+  if (typescript === true) return compileTypeScript(source, stripTypes);
   try {
     return new AsyncFunction(source);
   } catch (error) {
     if (typescript === false || !(error instanceof SyntaxError)) throw error;
-    let stripped: string;
     try {
-      stripped = stripTypes(source);
+      return compileTypeScript(source, stripTypes);
     } catch {
       throw error;
     }
-    return new AsyncFunction(stripped);
   }
 }

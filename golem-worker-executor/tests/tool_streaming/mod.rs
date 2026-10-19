@@ -16513,6 +16513,7 @@ fs.writeFileSync(
     );
 
     let typed_eval = "enum E { A = 'typed' } const parts: string[] = [E.A, 'eval']; console.log(parts.join('-'))";
+    let typed_eval_with_return = "const n: number = await Promise.resolve(1); if (n) { console.log('early'); return } console.log('late')";
     // (tool, cwd, args, exit code, stdout, stderr)
     type Case<'a> = (&'a str, &'a str, Vec<&'a str>, i32, &'a str, &'a str);
     let cases: Vec<Case> = vec![
@@ -16550,6 +16551,14 @@ fs.writeFileSync(
             "",
         ),
         (
+            "node",
+            "/workspace",
+            vec!["-e", typed_eval_with_return],
+            0,
+            "early\n",
+            "",
+        ),
+        (
             "npx",
             "/workspace/plain",
             vec!["tsx", "main.ts", "x"],
@@ -16571,6 +16580,14 @@ fs.writeFileSync(
             vec!["ts-node", "main.ts"],
             0,
             "red:\n",
+            "npx ts-node (golem built-in): type checking is skipped; use the tsc tool to type-check.\n",
+        ),
+        (
+            "npx",
+            "/workspace/plain",
+            vec!["ts-node", "-e", typed_eval, "--transpile-only"],
+            0,
+            "typed-eval\n",
             "npx ts-node (golem built-in): type checking is skipped; use the tsc tool to type-check.\n",
         ),
         (
