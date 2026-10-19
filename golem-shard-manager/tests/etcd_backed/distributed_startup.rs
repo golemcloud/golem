@@ -2113,14 +2113,15 @@ async fn a_client_pointed_at_a_standby_reaches_the_leader(etcd: &Arc<DockerEtcd>
 
     // The standby itself serves nothing; it names the leader, which is where the client's call
     // must end up.
-    let refusal = routing_table_status(standby_address.port)
-        .await
-        .expect_err("a standby never serves");
-    assert_eq!(
-        leader_of(&refusal).map(|address| address.port),
-        Some(leader_details.grpc_port),
-        "the standby should name the leader"
-    );
+    // Its view of the election may not be read yet when its key appears, so the answer is polled
+    // until it names a leader.
+    await_until(STARTUP_TIMEOUT, || async {
+        let refusal = routing_table_status(standby_address.port)
+            .await
+            .expect_err("a standby never serves");
+        leader_of(&refusal).map(|address| address.port) == Some(leader_details.grpc_port)
+    })
+    .await;
 
     let client = GrpcShardManager::new(&GrpcShardManagerConfig {
         host: "127.0.0.1".to_string(),
