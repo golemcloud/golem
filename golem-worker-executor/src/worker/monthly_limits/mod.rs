@@ -276,7 +276,7 @@ impl ExecutionWindow {
             let mut memory_check = MonthlyMemoryCheck::new(worker.resource_entry.clone(), memory);
             let mut health = window.subscribe_enforcement_failure();
             let task = tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(async {
+                let result = async {
                     loop {
                         let Some(worker) = weak_worker.upgrade() else {
                             break;
@@ -330,16 +330,8 @@ impl ExecutionWindow {
                         worker.owner_runtime_resources.settle_resource_usage();
                     }
                     Ok(())
-                })
-                .catch_unwind()
-                .await
-                .unwrap_or_else(|panic| {
-                    monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::Panic);
-                    let message = panic.downcast_ref::<&str>().copied()
-                        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                        .unwrap_or("unknown panic");
-                    Err(WorkerExecutorError::runtime(format!("Monthly monitor panicked: {message}")).into())
-                });
+                }
+                .await;
                 if let Err(error) = &result
                     && let Some(worker) = weak_worker.upgrade()
                 {
@@ -449,31 +441,8 @@ fn close_owned_window(
         result
     });
     // Poll by mutable pin so pending cleanup keeps its permit when moved to the task.
-    if unmonitored {
-        let ready = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            closing.as_mut().now_or_never()
-        }));
-        match ready {
-            Ok(Some(result)) => return futures::future::Either::Left(std::future::ready(result)),
-            Ok(None) => {}
-            Err(panic) => {
-                release_scope.fail(
-                    crate::metrics::resource_release::Stage::EndToEnd,
-                    crate::metrics::resource_release::Failure::Panic,
-                );
-                closed.complete();
-                let message = panic
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                    .unwrap_or("unknown panic");
-                return futures::future::Either::Left(std::future::ready(Err(
-                    WorkerExecutorError::runtime(format!(
-                        "Execution window cleanup panicked: {message}"
-                    )),
-                )));
-            }
-        }
+    if unmonitored && let Some(result) = closing.as_mut().now_or_never() {
+        return futures::future::Either::Left(std::future::ready(result));
     }
     #[cfg(test)]
     close_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

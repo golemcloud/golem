@@ -14,7 +14,6 @@
 
 use crate::services::resource_limits::AtomicResourceEntry;
 use async_trait::async_trait;
-use futures::FutureExt;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
 use golem_service_base::storage::blob::{
@@ -60,7 +59,6 @@ pub enum BlobStoreError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlobMutationFailureCause {
-    Panicked,
     TaskLost,
 }
 
@@ -317,10 +315,6 @@ impl BlobMutationOwnership {
         drop(self.guard.take());
     }
 
-    fn fail(mut self, cause: BlobMutationFailureCause) {
-        self.retain_failure(cause);
-    }
-
     fn retain_failure(&mut self, cause: BlobMutationFailureCause) {
         if let Some(guard) = self.guard.take() {
             self.environment.retain_unknown(
@@ -347,16 +341,9 @@ async fn await_owned_blob_mutation(
 ) -> Result<BlobStoreMutation, BlobStoreError> {
     let task = tokio::spawn(
         async move {
-            match std::panic::AssertUnwindSafe(work).catch_unwind().await {
-                Ok(result) => {
-                    ownership.complete();
-                    result
-                }
-                Err(panic) => {
-                    ownership.fail(BlobMutationFailureCause::Panicked);
-                    std::panic::resume_unwind(panic)
-                }
-            }
+            let result = work.await;
+            ownership.complete();
+            result
         }
         .in_current_span(),
     );
@@ -1093,7 +1080,6 @@ mod tests {
         block_next_put: AtomicBool,
         fail_next_copy: AtomicBool,
         block_next_copy: AtomicBool,
-        panic_next_mutation: AtomicBool,
         mutations_returned: AtomicUsize,
         mutations_failed: AtomicUsize,
         mutations_dropped: AtomicUsize,
@@ -1110,7 +1096,6 @@ mod tests {
                 block_next_put: AtomicBool::new(false),
                 fail_next_copy: AtomicBool::new(false),
                 block_next_copy: AtomicBool::new(false),
-                panic_next_mutation: AtomicBool::new(false),
                 mutations_returned: AtomicUsize::new(0),
                 mutations_failed: AtomicUsize::new(0),
                 mutations_dropped: AtomicUsize::new(0),
@@ -1231,10 +1216,6 @@ mod tests {
             data: &[u8],
         ) -> Result<(), Error> {
             let observation = self.begin_mutation(&self.block_next_put).await;
-            assert!(
-                !self.panic_next_mutation.swap(false, Ordering::AcqRel),
-                "injected mutation panic"
-            );
             let result = if self.fail_next_put.swap(false, Ordering::AcqRel) {
                 Err(anyhow::anyhow!("injected put failure"))
             } else {
@@ -1344,10 +1325,6 @@ mod tests {
             to: &NormalizedBlobPath<'_>,
         ) -> Result<bool, Error> {
             let observation = self.begin_mutation(&self.block_next_copy).await;
-            assert!(
-                !self.panic_next_mutation.swap(false, Ordering::AcqRel),
-                "injected mutation panic"
-            );
             let result = if self.fail_next_copy.swap(false, Ordering::AcqRel) {
                 Err(anyhow::anyhow!("injected copy failure"))
             } else {
@@ -3389,133 +3366,6 @@ mod tests {
             Err(BlobStoreError::Unavailable(failure)) => failure,
             other => panic!("expected typed unavailable admission, got {other:?}"),
         }
-    }
-
-    async fn mutation_panic_keeps_unknown_reservation(copy: bool, attached: bool) {
-        use futures::FutureExt;
-        let (storage, blob_store, environment_id, limits) = unknown_mutation_fixture().await;
-        let original = blob_store.mutation_owner(environment_id).lock.clone();
-        if copy {
-            storage.block_next_copy.store(true, Ordering::Release);
-        } else {
-            storage.block_next_put();
-        }
-        let work = async {
-            if copy {
-                blob_store
-                    .copy_object(
-                        limits.clone(),
-                        environment_id,
-                        "container".into(),
-                        "source".into(),
-                        "container".into(),
-                        "destination".into(),
-                    )
-                    .await
-            } else {
-                blob_store
-                    .write_data(
-                        limits.clone(),
-                        environment_id,
-                        "container",
-                        "destination",
-                        &[1, 3, 5, 7],
-                    )
-                    .await
-            }
-        };
-        let mut caller = Some(Box::pin(std::panic::AssertUnwindSafe(work).catch_unwind()));
-        assert!(futures::poll!(caller.as_mut().unwrap().as_mut()).is_pending());
-        storage.wait_for_blocked_put().await;
-        assert_eq!(limits.blob_storage_delta_for_test(), 8);
-        assert!(
-            blob_store.mutation_failure(environment_id).is_none(),
-            "a real pending backend is not failed health"
-        );
-        let mut queued =
-            Box::pin(blob_store.clear(limits.clone(), environment_id, "container".into()));
-        assert!(futures::poll!(&mut queued).is_pending());
-        if !attached {
-            drop(caller.take());
-            assert_eq!(storage.mutations_dropped.load(Ordering::SeqCst), 0);
-            assert!(blob_store.mutation_failure(environment_id).is_none());
-        }
-        storage.panic_next_mutation.store(true, Ordering::Release);
-        storage.release_blocked_put();
-        let queued_failure = if let Some(caller) = caller {
-            let panic = caller
-                .await
-                .expect_err("attached caller must receive the original panic");
-            let message = panic
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
-            assert_eq!(message, Some("injected mutation panic"));
-            match futures::poll!(&mut queued) {
-                std::task::Poll::Ready(result) => unavailable(result),
-                std::task::Poll::Pending => {
-                    panic!("retained failure did not notify the already-queued mutator")
-                }
-            }
-        } else {
-            unavailable(queued.as_mut().await)
-        };
-        assert_eq!(storage.mutations_returned.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            limits.blob_storage_delta_for_test(),
-            8,
-            "no unknown-effect credit on panic"
-        );
-        let failure = assert_owned_failure(
-            &blob_store,
-            environment_id,
-            &original,
-            if copy { "copy_object" } else { "write_data" },
-            BlobMutationFailureCause::Panicked,
-        );
-        assert_eq!(queued_failure, failure);
-        let mut later = Box::pin(blob_store.delete_object(
-            limits.clone(),
-            environment_id,
-            "container".into(),
-            "source".into(),
-        ));
-        match futures::poll!(&mut later) {
-            std::task::Poll::Ready(result) => assert_eq!(unavailable(result), failure),
-            std::task::Poll::Pending => panic!("later mutator silently waited on unknown work"),
-        }
-        assert_eq!(
-            require_known_blob_result::<BlobStoreMutation>(Err(BlobStoreError::Unavailable(
-                failure.clone()
-            )))
-            .unwrap_err(),
-            failure
-        );
-        assert_eq!(limits.blob_storage_delta_for_test(), 8);
-    }
-
-    #[test]
-    #[test_r::timeout("30s")]
-    async fn write_panic_retains_unknown_stock_and_environment_lock() {
-        mutation_panic_keeps_unknown_reservation(false, true).await;
-    }
-
-    #[test]
-    #[test_r::timeout("30s")]
-    async fn copy_panic_retains_unknown_stock_and_environment_lock() {
-        mutation_panic_keeps_unknown_reservation(true, true).await;
-    }
-
-    #[test]
-    #[test_r::timeout("30s")]
-    async fn detached_write_panic_notifies_queued_and_later_mutators() {
-        mutation_panic_keeps_unknown_reservation(false, false).await;
-    }
-
-    #[test]
-    #[test_r::timeout("30s")]
-    async fn detached_copy_panic_notifies_queued_and_later_mutators() {
-        mutation_panic_keeps_unknown_reservation(true, false).await;
     }
 
     async fn lost_mutation_task_retains_health(copy: bool) {

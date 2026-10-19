@@ -9,8 +9,6 @@ use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use std::path::Path;
 use test_r::test;
 
-mod unavailable;
-
 struct ReleaseMutation(Arc<MutationStorage>);
 
 impl Drop for ReleaseMutation {

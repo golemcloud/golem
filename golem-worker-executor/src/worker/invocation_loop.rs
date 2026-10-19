@@ -725,43 +725,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         deferred_wakeups: &mut deferred_wakeups,
                     };
 
-                    let result = match AssertUnwindSafe(inner_loop.run()).catch_unwind().await {
-                        Ok(result) => result,
-                        Err(panic) => {
-                            if !self.parent.state_actor.lifecycle_is_closed() {
-                                std::panic::resume_unwind(panic);
-                            }
-                            // The resident agent is still owned here. Actor loss must not drop
-                            // its filesystem before the window's retained cleanup can join it.
-                            let error = self
-                                .parent
-                                .join_interrupt_establishment()
-                                .await
-                                .err()
-                                .unwrap_or_else(|| {
-                                    let message = panic
-                                        .downcast_ref::<&str>()
-                                        .copied()
-                                        .or_else(|| {
-                                            panic.downcast_ref::<String>().map(String::as_str)
-                                        })
-                                        .unwrap_or("unknown panic");
-                                    WorkerExecutorError::runtime(format!(
-                                        "invocation loop panicked: {message}"
-                                    ))
-                                });
-                            InnerInvocationLoopResult {
-                                retry_decision: Some(RetryDecision::None),
-                                final_interrupt: None,
-                                unload_request: None,
-                                unloaded_interrupt: None,
-                                cleanup_ephemeral_worker: false,
-                                recovery_failure: None,
-                                cleanup_failure: Some(error),
-                                filesystem_limit_update: None,
-                            }
-                        }
-                    };
+                    let result = inner_loop.run().await;
                     if let Some(update) = result.filesystem_limit_update {
                         let RunningAgent {
                             runtime,

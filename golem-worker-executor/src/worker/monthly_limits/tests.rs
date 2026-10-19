@@ -815,14 +815,16 @@ async fn failed_monitor_join_retains_cleanup_failure_after_target_closure() {
     let target = target(Uuid::new_v4());
     target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
     *target.active.lock().unwrap() = false;
+    let task = tokio::spawn(std::future::pending());
+    task.abort();
     let monitor = MonthlyMonitor {
         target: target.clone(),
         cancelled: CancellationToken::new(),
-        task: tokio::spawn(async { panic!("monitor owner lost") }),
+        task,
     };
     let error = join_monitor(Some(monitor)).await.unwrap_err();
     assert!(error.to_string().contains("Monthly monitor failed:"));
-    assert!(error.to_string().contains("monitor owner lost"));
+    assert!(error.to_string().contains("cancelled"));
     assert_eq!(target.cleanup_failure(), Some(error.clone()));
     target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
     assert_eq!(target.cleanup_failure(), Some(error));

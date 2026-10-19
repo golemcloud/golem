@@ -708,11 +708,12 @@ can cancel its whole body through `await_component_entity_body`; that Start may 
 but service work still owns its quota settlement. The service task has no Worker/Store/oplog and
 writes no late End. No second lifecycle or reconstruction path is added.
 
-If the operation itself panics or is lost without a result, the environment owner retains its
-actual guard and typed Panicked/TaskLost failure. Queued mutators are notified; queued and later
+If the operation is lost without a result, the environment owner retains its
+actual guard and typed TaskLost failure. Queued mutators are notified; queued and later
 calls fail Unavailable before entering storage or quota admission. The host traps this infrastructure
-failure before retry/result serialization or End. No credit or unlock is fabricated. The attached
-caller keeps its original panic; detached failure remains observable through mutation_failure.
+failure before retry/result serialization or End. No credit or unlock is fabricated.
+Detached task loss remains observable through mutation_failure. Production uses panic=abort:
+a panic terminates the process, with no in-process recovery guarantee.
 Healthy inactive owners can be pruned; failed owners keep the explicit obligation. Unknown work
 requires operator reconciliation/service replacement. This local guard is not process-loss or
 distributed exactly-once protection, and it does not repair partial-backend-error accounting.

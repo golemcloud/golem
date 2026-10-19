@@ -12,7 +12,6 @@ use tokio::sync::{Notify, Semaphore};
 pub(super) struct MutationStorage {
     inner: InMemoryBlobStorage,
     pub armed: AtomicBool,
-    pub panic_next_mutation: AtomicBool,
     pub pending: Notify,
     pub release: Semaphore,
     pub completed: AtomicUsize,
@@ -26,7 +25,6 @@ impl Default for MutationStorage {
         Self {
             inner: InMemoryBlobStorage::new(),
             armed: AtomicBool::new(false),
-            panic_next_mutation: AtomicBool::new(false),
             pending: Notify::new(),
             release: Semaphore::new(0),
             completed: AtomicUsize::new(0),
@@ -65,10 +63,6 @@ impl MutationStorage {
         .await
         .unwrap()
         .forget();
-        assert!(
-            !self.panic_next_mutation.swap(false, Ordering::SeqCst),
-            "injected blob mutation panic"
-        );
         let result = work.await;
         wait.1 = true;
         self.completed.fetch_add(1, Ordering::SeqCst);
