@@ -111,6 +111,17 @@ Set the management host to your generated domain, and configure `PORT=9881` and 
 
 For backups of the database, see Railway's [point-in-time recovery](https://docs.railway.com/volumes/point-in-time-recovery). A server or database restart is not a backup restore test.
 
+### Test a Postgres backup restore
+
+1. Enable point-in-time recovery in the Postgres service's **Backups** tab. Railway creates a separate archive bucket and redeploys Postgres. Wait for the first base backup to finish. The restore window starts with that backup, not when the database was created.
+2. Create known agent state and record a UTC recovery time. After that time, change the state again. Keep both expected states so that the test can distinguish recovery to the selected time from recovery to the latest state.
+3. Restore to the selected time in the Backups tab. Railway creates a separate Postgres service and volume; it does not replace the source database. Wait for the restored database to finish recovery and accept connections.
+4. Stop the Golem deployment and verify that it has stopped. Prevent automatic deployments while changing its variables. Point **all six stores** at the restored Postgres service, including the shard-manager, indexed and gateway session stores. Update their host, port, database, user and password references together. Keep the Golem volume, blob bucket and secrets unchanged; do not generate new secrets for this test.
+5. Redeploy Golem and wait for its management health check. Read the agent state and compare it with the state at the recovery time. Verify that the later changes are absent, and make a new invocation that writes state. Restart the restored database and Golem, and verify that this new write is still present.
+6. For a test, stop Golem again, restore all six stores' original database references, and redeploy. Verify the source state before deleting the temporary database and its volume. For a real cutover, keep the restored database and enable PITR on it: Railway restores a database without archiving enabled.
+
+Restore the stores together so that the shard-manager epochs and indexed-storage fencing records come from the same point in time. Do not clear fencing records to make an agent writable; see [storage recovery precautions](/v1.6/operate/shard-manager#restore-shard-manager-state-carefully). Keep the blobs required by the restored database. Database recovery does not undo external side effects.
+
 ## Fixed cluster
 
 <Callout type="warning">
