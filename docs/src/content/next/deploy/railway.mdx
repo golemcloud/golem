@@ -85,9 +85,10 @@ To restore after the loss of the volume, remove the active deployment and wait u
 
 ## Managed Postgres
 
-Add **Postgres** to the project, and pass its variables to the script as well:
+For a new deployment, follow the single-node steps, but add **Postgres** to the project before connecting the Golem image. Use the following command instead of the single-node environment-file command. `Postgres.PGHOST` is the database's private host name; Golem does not need a public TCP proxy for the database.
 
 ```shell filename="Terminal" copy
+umask 077
 GOLEM_S3_BUCKET='${{Bucket.BUCKET}}' \
 GOLEM_S3_REGION='${{Bucket.REGION}}' \
 GOLEM_S3_ENDPOINT='${{Bucket.ENDPOINT}}' \
@@ -97,9 +98,18 @@ GOLEM_POSTGRES_DB='${{Postgres.PGDATABASE}}' \
 GOLEM_POSTGRES_USER='${{Postgres.PGUSER}}' \
 GOLEM_POSTGRES_PASSWORD='${{Postgres.PGPASSWORD}}' \
   ./generate-env.sh > golem.env
+cat >> golem.env <<'EOF'
+AWS_ACCESS_KEY_ID=${{Bucket.ACCESS_KEY_ID}}
+AWS_SECRET_ACCESS_KEY=${{Bucket.SECRET_ACCESS_KEY}}
+GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+EOF
 ```
 
-Leave out the Litestream variables: the state is in Postgres. **Keep the volume at `/var/lib/golem`**, with `RAILWAY_RUN_UID=0`: it makes Railway stop the old deployment before it starts the new one. For backups of the database, see Railway's [point-in-time recovery](https://docs.railway.com/volumes/point-in-time-recovery).
+Set the management host to your generated domain, and configure `PORT=9881` and `RAILWAY_RUN_UID=0` as in the single-node steps. Leave out the Litestream variables: the state is in Postgres. The script configures all six stores, including the gateway session store, so no Redis service is needed. Changing these variables on a SQLite deployment does not copy its state to Postgres.
+
+**Keep the volume at `/var/lib/golem`**: it makes Railway stop the old deployment before it starts the new one. The volume holds caches, not the authoritative state. If it is lost, stop the Golem deployment, replace the volume without an intermediate deployment, and redeploy with the same Postgres, bucket and secrets. The server downloads the built-in artifacts again and recovers the application and agent state from Postgres and the bucket. Do not replace or delete the Postgres volume during this procedure.
+
+For backups of the database, see Railway's [point-in-time recovery](https://docs.railway.com/volumes/point-in-time-recovery). A server or database restart is not a backup restore test.
 
 ## Fixed cluster
 
