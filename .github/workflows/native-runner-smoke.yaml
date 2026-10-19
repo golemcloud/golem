@@ -1,0 +1,75 @@
+name: Native runner smoke test
+
+on:
+  push:
+    branches: [ci/native-release-runner-smoke]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'golemcloud/golem'
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [golem-cli, golem]
+        cfg:
+          - rust-target: x86_64-apple-darwin
+            os: blacksmith-12vcpu-macos-26
+          - rust-target: aarch64-apple-darwin
+            os: blacksmith-12vcpu-macos-26
+          - rust-target: x86_64-pc-windows-msvc
+            os: blacksmith-16vcpu-windows-2025
+    name: Build ${{ matrix.project }} for ${{ matrix.cfg.rust-target }}
+    runs-on: ${{ matrix.cfg.os }}
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Inspect macOS runner and signing tools
+        if: runner.os == 'macOS'
+        run: |
+          sysctl hw.ncpu hw.memsize
+          xcrun --find notarytool
+          command -v codesign
+      - name: Inspect Windows runner
+        if: runner.os == 'Windows'
+        run: |
+          Get-CimInstance Win32_ComputerSystem | Select-Object NumberOfLogicalProcessors, TotalPhysicalMemory
+      - name: Use the verified RC4 manifest without draft access
+        shell: bash
+        run: |
+          cp .github/native-runner-smoke-manifest.json builtin-artifacts.release.json
+          echo 'GOLEM_BUILTIN_RELEASE=1' >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-rust
+        with:
+          fetch-tag: 'true'
+          rust-targets: ${{ matrix.cfg.rust-target }}
+          cache-shared-key: 'release-${{ matrix.cfg.rust-target }}'
+          cache-save-if: 'true'
+          install-protoc: 'true'
+      - name: Set version for all packages
+        env:
+          VERSION: 1.6.0-rc4
+        run: cargo make --profile ci set-version
+      - uses: ilammy/setup-nasm@v1
+      - run: cargo build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
+      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}.exe ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
+        if: runner.os == 'Windows'
+      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+        if: runner.os != 'Windows'
+      - name: Check macOS binary architecture
+        if: runner.os == 'macOS'
+        run: lipo -info ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+      - name: Run the native binary
+        if: matrix.cfg.rust-target != 'x86_64-apple-darwin'
+        shell: bash
+        env:
+          BINARY: ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: |
+          version=$("$BINARY" --version)
+          echo "$version"
+          [[ "$version" == *" 1.6.0-rc4" ]]
