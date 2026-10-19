@@ -13,6 +13,100 @@ fn bytes_value(bytes: &[u8]) -> ProtoValue {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn opening_size_error_returns_413_with_the_original_message() {
+    use crate::api::common::ApiEndpointError;
+    use crate::custom_api::http_session::tests::harness;
+    use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
+    use poem::IntoResponse;
+
+    for stream_error in [false, true] {
+        let h = harness(1);
+        let status = tonic::Status::out_of_range(
+            "Error, decoded message length too large: found 2048 bytes, the limit is: 1024 bytes",
+        );
+        if stream_error {
+            h.response_txs[0].send(Err(status.clone())).await.unwrap();
+        } else {
+            h.reject_start(WorkerServiceError::InternalCallError(
+                CallWorkerExecutorError::MessageTooLarge(status.clone()),
+            ))
+            .await;
+        }
+        let mut session = h.start_session();
+        let error = receive_response_head(
+            &mut session,
+            poem::Body::empty(),
+            &mut None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap_err();
+        let response = ApiEndpointError::from(error).into_response();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+        assert_eq!(body["code"], "REQUEST_PAYLOAD_TOO_LARGE");
+        assert!(body["error"].as_str().unwrap().contains(status.message()));
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn late_upload_overflow_cancels_the_session_without_buffering_the_body() {
+    use crate::custom_api::http_session::tests::{accepted, harness, stream_result};
+    use golem_service_base::body_limit::RequestBodyLimit;
+
+    let h = harness(1);
+    let mut session = h.start_session();
+    let (upload_tx, upload_rx) = tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(2);
+    let mut request = poem::Request::builder().body(poem::Body::from_bytes_stream(
+        tokio_stream::wrappers::ReceiverStream::new(upload_rx),
+    ));
+    let limit = RequestBodyLimit::new(16).apply(&mut request);
+    let mut upload = None;
+    let done = Arc::new(AtomicBool::new(false));
+    h.response_txs[0].send(Ok(accepted(1, None))).await.unwrap();
+    h.response_txs[0].send(Ok(stream_result())).await.unwrap();
+    let _head = receive_response_head(&mut session, request.take_body(), &mut upload, done.clone())
+        .await
+        .unwrap();
+    // Response headers are available while the request body has not supplied a single chunk.
+    assert!(limit.rejection().is_none());
+    let response_head = process_response_head("POST", 200, &vec![]).unwrap();
+    let guard = session.drop_guard();
+    let response =
+        poem::Response::builder()
+            .status(StatusCode::OK)
+            .body(poem::Body::from_bytes_stream(futures::stream::unfold(
+                OutputState {
+                    session,
+                    upload,
+                    guard: Some(guard),
+                    gate: BodyGate::new(&response_head),
+                    output_id: 9,
+                    terminal: false,
+                },
+                output_step,
+            )));
+    upload_tx
+        .send(Ok(Bytes::from_static(b"0123456789abcdef")))
+        .await
+        .unwrap();
+    upload_tx.send(Ok(Bytes::from_static(b"x"))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        response.into_body().into_vec(),
+    )
+    .await
+    .expect("overflow must cancel the session without waiting for upload EOF");
+    assert!(body.is_err());
+    assert!(limit.rejection().is_some());
+    assert!(!done.load(Ordering::Acquire));
+    drop(upload_tx);
+}
+
+#[test]
 fn canonical_byte_lists_are_not_packed() {
     let encoded = bytes_value(&[0, 127, 255]);
     let schema_value::Value::ListValue(list) = encoded.value.unwrap() else {

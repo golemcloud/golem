@@ -535,6 +535,9 @@ fn gate_item(state: &mut OutputState, output: GateOutput) -> Option<Result<Bytes
 fn map_session_error(error: super::http_session::HttpSessionError) -> RequestHandlerError {
     match error {
         super::http_session::HttpSessionError::Deadline => RequestHandlerError::RawDeadline,
+        super::http_session::HttpSessionError::MessageTooLarge(error) => {
+            RequestHandlerError::RawMessageTooLarge(error)
+        }
         _ => RequestHandlerError::RawBadGateway,
     }
 }
