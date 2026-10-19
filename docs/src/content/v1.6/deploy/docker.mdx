@@ -2,7 +2,7 @@ import { Callout } from "nextra/components"
 
 # Deploy using Docker
 
-To try Golem with Docker, use the [PostgreSQL example](https://github.com/golemcloud/golem/tree/main/docker-examples/published-postgres). You need Docker Engine and Docker Compose v2. The example uses the published `v1.6.0-rc3` images, including the Envoy router. All Golem images must use the same version. The release provides Linux amd64 and arm64 images; amd64 needs an x86-64-v3 CPU.
+To try Golem with Docker, use the [PostgreSQL example](https://github.com/golemcloud/golem/tree/main/docker-examples/published-postgres). You need Docker Engine and Docker Compose v2. The example uses the published `v1.6.0` images, including the Envoy router. All Golem images must use the same version. The release provides Linux amd64 and arm64 images; amd64 needs an x86-64-v3 CPU.
 
 <Callout type="warning">
   This is a development example, not a production deployment. For a production deployment, see the [production checklist](/v1.6/deploy/production-checklist) and the [fixed cluster with Docker Compose](/v1.6/deploy/vm#fixed-cluster-with-docker-compose).
@@ -10,10 +10,10 @@ To try Golem with Docker, use the [PostgreSQL example](https://github.com/golemc
 
 ## Start the published images
 
-Download the Compose file and its environment file from the same repository revision. Until these examples are included in a release, use a full commit ID from `main` that contains them:
+Download the Compose file and its environment file from the `v1.6.0` release revision:
 
 ```bash filename="Terminal" copy
-GOLEM_REVISION=YOUR_FULL_COMMIT_ID
+GOLEM_REVISION=v1.6.0
 BASE=https://raw.githubusercontent.com/golemcloud/golem
 EXAMPLE="$BASE/$GOLEM_REVISION/docker-examples/published-postgres"
 curl -fLO "$EXAMPLE/compose.yaml"
@@ -25,7 +25,7 @@ docker compose up -d --no-build
 docker compose ps
 ```
 
-The Docker image tag includes the `v`: `GOLEM_IMAGES_VERSION=v1.6.0-rc3`. The Compose file also has build definitions for development from source, but the commands above pull the release images and do not build them. Do not combine a router from another revision with these service images. For a controlled deployment, pin upstream images such as PostgreSQL and Redis to verified versions or digests too.
+The Docker image tag includes the `v`: `GOLEM_IMAGES_VERSION=v1.6.0`. The Compose file also has build definitions for development from source, but the commands above pull the release images and do not build them. Do not combine a router from another revision with these service images. For a controlled deployment, pin upstream images such as PostgreSQL and Redis to verified versions or digests too.
 
 The [`distributed-etcd` example](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd) runs the shard manager in etcd mode instead. Its README describes the leader and standby checks.
 

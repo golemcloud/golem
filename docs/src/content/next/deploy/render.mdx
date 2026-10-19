@@ -46,7 +46,7 @@ Set both variables: `GOLEM__ROUTER__PORT` sets Golem's listener, and `PORT` tell
 
 ### Create the web service
 
-The stock `golemservices/golem:v1.6.0-rc3` image starts with a new Render disk at `/var/lib/golem`; the test needed no change to the disk owner. The image runs as uid 65534. If a different disk is not writable by that user, follow [Volume ownership](/next/deploy/server#volume-ownership).
+The stock `golemservices/golem` image starts with a new Render disk at `/var/lib/golem`; the test needed no change to the disk owner. The image runs as uid 65534. If a different disk is not writable by that user, follow [Volume ownership](/next/deploy/server#volume-ownership).
 
 Create a web service from the existing image `golemservices/golem:<version>` with a paid instance type. The managed Postgres test used the `1c-2g` plan (1 CPU, 2 GB RAM) and a 1 GB disk. Before the first deploy:
 
@@ -75,7 +75,7 @@ To upgrade, change the image tag of the service. To restore after the loss of th
 </Callout>
 
 <Callout type="info">
-  The `v1.6.0-rc3` SQLite with Litestream test used the stock image, a persistent disk and an S3-compatible bucket. CLI deployment, WebSocket invocations, custom-domain HTTP API calls and MCP tool calls worked. Task state survived a service restart, and new writes worked after recovery. Litestream replica files reached the bucket. This test did not restore the databases onto an empty disk.
+  The SQLite with Litestream test used the stock image, a persistent disk and an S3-compatible bucket. CLI deployment, WebSocket invocations, custom-domain HTTP API calls and MCP tool calls worked. Task state survived a service restart, and new writes worked after recovery. Litestream replica files reached the bucket. This test did not restore the databases onto an empty disk.
 </Callout>
 
 ## Managed Postgres
@@ -102,7 +102,7 @@ This command replaces `golem.env`, so it repeats the bucket credentials, port an
 Leave out the Litestream variables: the state is in Postgres. **Keep the disk at `/var/lib/golem`**: it makes Render stop the old instance before it starts the new one. Point-in-time recovery of the database needs a paid Postgres instance.
 
 <Callout type="info">
-  The `v1.6.0-rc3` managed Postgres test used Render Postgres 18, a private database host and an S3-compatible bucket. CLI deployment and WebSocket invocations worked. Task state survived an image redeploy and a database restart, and new writes worked after recovery. The database restart temporarily made the service unavailable. Custom-domain routing with Postgres, Litestream restore onto an empty disk, point-in-time restore and fixed clusters still need live Render tests.
+  The managed Postgres test used Render Postgres 18, a private database host and an S3-compatible bucket. CLI deployment and WebSocket invocations worked. Task state survived an image redeploy and a database restart, and new writes worked after recovery. The database restart temporarily made the service unavailable. Custom-domain routing with Postgres, Litestream restore onto an empty disk, point-in-time restore and fixed clusters still need live Render tests.
 </Callout>
 
 ## Fixed cluster
