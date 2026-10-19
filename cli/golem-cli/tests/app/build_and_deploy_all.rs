@@ -428,6 +428,7 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
 #[test]
 async fn build_mixed_language_app() {
     let mut ctx = TestContext::new();
+    ctx.add_env_var("DURABLE_STREAM_TOKEN", "integration-test-capability");
 
     let app_name = "mixed-lang-templates-app";
 
@@ -439,6 +440,7 @@ async fn build_mixed_language_app() {
         "rust/json",
         "rust/snapshotting",
         "scala",
+        "effect/streaming",
     ] {
         let outputs = ctx
             .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
@@ -467,13 +469,75 @@ async fn build_mixed_language_app() {
         fs::write(&path, content.replace("CounterAgent", "MoonbitCounter")).unwrap();
     }
 
-    let outputs = ctx.cli([cmd::BUILD]).await;
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "go",
+            flag::COMPONENT_NAME,
+            "mixed-lang-templates-app:go",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    for file in &["go/agents/counter/counter.go", "golem.yaml"] {
+        let path = ctx.cwd_path_join(file);
+        let content = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            content
+                .replace("CounterAgent", "GoCounter")
+                .replace("/counters/{name}", "/go-counters/{name}"),
+        )
+        .unwrap();
+    }
+
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
 
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([cmd::AGENT_TYPE, cmd::LIST, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let views = outputs.stdout_json::<AgentTypeListView>();
+    assert_eq!(
+        views
+            .iter()
+            .flat_map(|view| &view.agent_types)
+            .map(|agent| agent.agent_type.type_name.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "CounterAgent",
+            "CounterWithSnapshotAgent",
+            "GoCounter",
+            "HumanAgent",
+            "MoonbitCounter",
+            "StreamingAgent",
+            "TaskAgent",
+            "WorkflowAgent",
+        ])
+    );
+
+    for agent_type in [
+        "CounterAgent",
+        "CounterWithSnapshotAgent",
+        "GoCounter",
+        "MoonbitCounter",
+    ] {
+        let counter = format!("{agent_type}(\"mixed-language-test\")");
+        for (method, expected) in [("increment", "1"), ("increment", "2"), ("value", "2")] {
+            let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, &counter, method]).await;
+            assert!(outputs.success_or_dump());
+            assert!(outputs.stdout_contains_ordered(["Invocation result", expected]));
+        }
+    }
 }
 
 // Verifies that Go templates can be added after the first build, whose
