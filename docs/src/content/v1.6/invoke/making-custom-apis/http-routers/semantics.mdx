@@ -7,7 +7,7 @@ headers, or streaming bodies. Use [code-first endpoints](/v1.6/invoke/making-cus
 when Golem should map HTTP inputs and outputs to typed agent methods. Both can share
 a domain. This page describes the behavior and guarantees of routers and file
 serving. For SDK examples and deployment instructions, see
-[Using HTTP routers and files](/v1.6/invoke/http-routers).
+[Using HTTP routers and files](/v1.6/invoke/making-custom-apis/http-routers).
 
 The [HTTP gateway](/v1.6/operate/architecture#the-gateway) (`golem-worker-service`) can serve
 these requests in three ways:
@@ -113,7 +113,7 @@ or automatic slash redirect**. Map `/` explicitly to serve an index file.
 ## Immutable router files
 
 Provision assets as **read-only initial files** for the router type. The manifest
-and SDK examples are in [Serving static files](/v1.6/invoke/http-routers#serving-static-files).
+and SDK examples are in [Serving static files](/v1.6/invoke/making-custom-apis/http-routers#serving-static-files).
 Read-write initial files and files created by a handler are not immutable assets.
 
 Deployment compiles an index scoped to the environment, router type, and exact
@@ -121,7 +121,7 @@ component revision, using the upload-time file size and BLAKE3 digest. The gatew
 streams a static hit directly from shared initial-file blob storage. It does not
 create a router agent or contact an executor, including for HEAD and misses.
 An absent index entry can fall through. A referenced blob that cannot be read is a
-storage failure, not a miss. See [shared storage configuration](/v1.6/invoke/http-routers#configuring-shared-storage).
+storage failure, not a miss. See [shared storage configuration](/v1.6/operate/http-gateway#configuring-shared-storage).
 
 Immutable does not mean the URL is content-addressed. The default is
 `Cache-Control: no-cache`, allowing storage with revalidation, not a long-lived
@@ -130,7 +130,7 @@ No Last-Modified header is emitted.
 
 ## Live durable-agent files
 
-Use `exposeFiles` (or the SDK's equivalent annotation) on an ordinary, durable,
+Declare file mappings on an ordinary, durable,
 non-phantom agent's HTTP mount. Every constructor parameter must occur exactly once
 as a path capture. Header, query, body, or caller identity cannot choose the agent ID.
 For example, `/documents/{owner}` can select the agent whose constructor takes `owner`.
@@ -155,11 +155,12 @@ does not automatically expand after an agent update.
 
 Live files use `Cache-Control: no-store` and emit neither ETag nor Last-Modified.
 Golem does not hash mutable files into strong validators. See the
-[timeout configuration](/v1.6/invoke/http-routers#setting-timeouts-and-resource-budgets) for the
+[timeout configuration](/v1.6/operate/http-gateway#setting-timeouts-and-resource-budgets) for the
 serving deadline and current resource-limit behavior.
 
-All SDKs let a mount configure additional `fileResponseHeaders` (or the language's
-snake_case equivalent) for both live and static file bindings. For example, a mount can set
+Mounts can configure additional file response headers for both live and static file
+bindings. See the SDK examples in [Serving live agent files](/v1.6/invoke/making-custom-apis/http-routers#serving-live-agent-files).
+For example, a mount can set
 `Content-Security-Policy: default-src 'self'` and `Referrer-Policy: no-referrer`. Golem applies
 these headers to 200, 206, and 304 file responses, including HEAD responses, but not to handler,
 missing, forbidden, precondition-failed, or unsatisfiable-range responses. Header names and values
@@ -224,7 +225,8 @@ and a streaming body.
   to the host. Do not generate transfer framing in the handler. A supplied
   Content-Length must be one valid length and match the emitted bytes.
 
-Backpressure is applied through bounded stream/session credits in both directions.
+Both upload and download apply backpressure: a slow consumer limits how far its
+producer can advance, with bounded transport buffering rather than whole-body buffering.
 Do not collect a body simply to forward it or calculate its length. A handler can
 return a response before upload EOF. Dropping unused input stops its delivery without
 cancelling the response. The host bounds abandoned uploads rather than waiting forever.
@@ -234,11 +236,10 @@ response producer without polling body items. Content-Length is removed for 204,
 forced to zero for 205, and may describe the corresponding representation for HEAD
 or 304. Disposing an unused body is not cancellation of a successful invocation.
 
-Body EOF alone is not invocation success. Golem waits for explicit session success
-before completing the public response. It withholds the terminal streaming frame,
-or the last byte of a positive Content-Length response; for HEAD/bodyless/zero-length
-responses it delays head commitment. This prevents a later invocation failure from
-appearing as a successful complete response.
+Body EOF alone is not invocation success. Golem completes the public response only
+after the handler invocation succeeds. For HEAD, bodyless statuses, and zero-length
+responses, this can delay response headers. A handler failure must not appear to the
+client as a successfully completed response.
 
 ### Cancellation and ephemeral recovery
 
@@ -247,10 +248,10 @@ Cancellation is idempotent and does **not** roll back effects already performed,
 including calls to durable agents. Request EOF, normal response completion, and
 host disposal of an unused upload are not client cancellation.
 
-After internal transport loss, Golem can reattach the **same** surviving invocation
-using its identity, execution epoch, acknowledgements, and output cursors. It
-deduplicates transport frames; it does not rerun the handler. Recovery is bounded
-by retained state and the [retry budget](/v1.6/invoke/http-routers#setting-timeouts-and-resource-budgets).
+After internal transport loss, Golem can resume the **same** surviving invocation
+without rerunning the handler or duplicating bytes in the public response. Recovery
+is possible only while the required buffered data remains available and within the
+[retry budget](/v1.6/operate/http-gateway#setting-timeouts-and-resource-budgets).
 
 Loss of the ephemeral executor or the serving gateway fails the HTTP exchange.
 Golem never transparently creates a replacement invocation, even for GET. A client
@@ -258,40 +259,10 @@ retry is a new request and may repeat effects. Cancellation is best effort if th
 executor is unavailable. Do not rely on language finalizers running after a host-level
 Wasm interruption.
 
-### TypeScript Web adapter limitations
-
-TypeScript Web Request/Response/Headers are normalized views, not a lossless replacement
-for the canonical envelope. Web APIs may normalize methods and URLs, combine fields,
-or reject methods/statuses. Use `implementRaw` for the canonical request/response,
-the Web handler's context for its original request, and `withRawHeaders` for ordered
-byte-valued response fields. See [Working with headers](/v1.6/invoke/http-routers#working-with-headers).
-
-### Effect adapter lifecycle and limitations
-
-The Effect adapter runs an application factory inside each request's scope and
-keeps that scope open through response consumption. Acquired resources are released
-on completion, failure, or local Effect interruption. HEAD and 204/205/304 do not
-start body streams, so cleanup for eagerly acquired resources must belong to the
-request scope, not only to a stream's `ensuring` finalizer.
-
-Effect's framework request uses a mount-relative URL. `HttpRouter.request` exposes
-the original canonical envelope, including the full public path and the distinction
-between absent and empty query strings. Both views share one body reader. The
-`text`, `json`, and `arrayBuffer` accessors buffer under Effect's
-`HttpIncomingMessage.MaxBodySize`; using the request stream does not collect it.
-
-Effect `Respondable` failures retain their HTTP responses, including `HttpApi`
-validation errors. Router misses and request parsing failures become 404 and 400
-responses. Other application failures remain invocation failures. The adapter
-does not support response `FormData`, non-`Uint8Array` raw bodies, or WebSocket upgrades.
-
-<Callout type="warning">
-  Local Effect interruption runs and awaits finalizers, but host-level Wasm
-  interruption does not deliver cooperative cancellation to JavaScript. The runtime
-  also cannot interrupt a response producer while its first request for a body
-  chunk is still pending. Do not assume Effect finalizers run on every client
-  disconnect or host interruption.
-</Callout>
+Framework adapters can normalize the canonical request and manage resources
+differently. See the matching SDK tab in
+[Handling streaming requests](/v1.6/invoke/making-custom-apis/http-routers#handling-streaming-requests)
+for adapter-specific behavior and limitations.
 
 ## Authentication, CORS, and failures
 
@@ -336,7 +307,7 @@ A router can contribute an OpenAPI **3.1.0** document through a parameterless,
 non-streaming provider method. Golem validates the document, prefixes its paths with
 the router mount, and merges it with code-first operations for the same domain.
 The document describes routes; it does not install them in the handler. See
-[Publishing OpenAPI](/v1.6/invoke/http-routers#publishing-openapi) for provider examples.
+[Publishing OpenAPI](/v1.6/invoke/making-custom-apis/http-routers#publishing-openapi) for provider examples.
 
 Providers run lazily when the domain description is requested, not at deployment or
 on ordinary application requests. They receive internal system authorization and
@@ -395,9 +366,8 @@ requirement. Golem combines mount requirements with each operation's alternative
 so a provider cannot weaken host authentication. The merged document has no root
 security requirement that could leak across providers.
 
-Generated operations are merged first, then providers ordered by mount, router type
-name, and component ID. There is no last-writer-wins behavior, automatic renaming,
-or partial result. These conflicts fail the entire generation:
+Golem does not overwrite conflicts, rename components, or return a partial result.
+These conflicts fail the entire generation:
 
 - Duplicate method and equivalent path, even with identical definitions.
 - Equivalent path templates with different parameter names, such as `/a/{x}` and
@@ -409,8 +379,7 @@ or partial result. These conflicts fail the entire generation:
 - Empty or duplicate `operationId` values. IDs are optional, but any present ID
   must be globally unique across generated and supplied operations. Link IDs must resolve.
 
-Object key order does not affect equality; array order does. Output object keys are
-sorted and arrays retain their semantic order.
+Object key order does not affect equality; array order does.
 
 ### Caching and limits
 
@@ -419,25 +388,14 @@ sorted and arrays retain their semantic order.
 | Provider UTF-8 JSON text | 1 MiB |
 | JSON nesting | 64 containers |
 | Merged compact JSON | 8 MiB |
-| Concurrent provider calls per generation | 8 |
-| Cached documents per gateway | 256, LRU eviction |
 
 Exactly-at-limit sizes are accepted. Invalid JSON, duplicate keys, invalid Unicode,
 non-object roots, and unsupported semantics fail validation.
 
-Concurrent JSON/YAML requests for the same input snapshot share one generation.
-The cache fingerprint includes the configured origin, deployment/environment,
-routes, relevant method/provider descriptors, and security, but not requester identity.
-Successful documents have **no time-based expiry**; failures are not cached.
-Changed route snapshots get a new key. An admitted request may finish with its old
-snapshot, and caches are process-local. Mutable secret changes alone do not provide
-a document freshness guarantee. Providers should describe the deployed schema
-rather than changing application data.
-
-There is no provider-specific or whole-generation timeout or global generation
-admission limit. A disconnected HTTP waiter detaches without cancelling the shared
-generation. The HTTP session exchange deadline does not apply to providers, and
-ingress timeouts alone do not bound their execution.
+JSON and YAML endpoints serve the same generated description. Successful documents
+are cached without time-based expiry; describe the deployed schema rather than
+changing application data. See [HTTP Gateway](/v1.6/operate/http-gateway#openapi-and-route-caches)
+for cache behavior, concurrency, and timeout caveats.
 
 Provider invocation, output, validation, size, reference, security, or merge failures
 return **502** at the description endpoint. Normal handler and file traffic does

@@ -51,7 +51,13 @@ The _Application Manifest_ has some fields which are used as templates, these fi
 
 Available template variables:
 
-- `component_name`: contains the current component name in which the template is used
+- `componentName` (alias `component_name`): the current component name.
+- `appRootDir`: the absolute application root directory.
+- `golemTempDir`: the absolute Golem temporary directory for this application.
+- `componentDir`: the absolute effective component directory, including its `dir` override.
+- `componentDirRel`: the component directory relative to the application root, with `/` separators; empty for the root or a component outside it.
+- `cargoTarget`: the Cargo target directory, resolved lazily using the application root in Cargo workspace mode, or the component directory otherwise.
+- `moonbitBuildPackagePath`: the artifact path below `_build/wasm/<profile>/build/`. For a root package it is `<application-name>.wasm` (the part of the component name before `:`); for a subpackage it is `<componentDirRel>/<last-directory-segment>.wasm`.
 
 Available naming related string transforming functions:
 
@@ -61,7 +67,6 @@ Available naming related string transforming functions:
 - `to_pascal_case`
 - `to_shouty_kebab_case`
 - `to_shouty_snake_case`
-- `to_snake_case`
 - `to_title_case`
 - `to_train_case`
 - `to_upper_camel_case`
@@ -69,14 +74,15 @@ Available naming related string transforming functions:
 <Example>
   { /* @formatter:off */ }
   ```yaml
-  build: tool-name build {{ component_name | to_snake_case }}.wasm
+  build:
+    - command: tool-name build {{ componentName | to_snake_case }}.wasm
   ```
   { /* @formatter:on */}
 </Example>
 
 ## Component-implemented tools
 
-Components that export `golem:tool/guest` declare each discovered tool by its root name in the top-level `tools` map. The declaration configures how the tool implementation is provisioned. Deployment fails if a discovered tool has no matching declaration, a declaration has no implementation, or more than one component implements the same tool.
+Declare component-implemented tools by their logical names in the top-level `tools` map. Each declaration configures how Golem provisions the implementation. Use `component` to select the implementing component when more than one component exports the same tool name, or `release` to select a published implementation.
 
 ### Tools-only component
 
@@ -358,7 +364,7 @@ Completed results and typed errors are durable and replay without another HTTP r
 
 ### Default tools
 
-`golem deploy` automatically adds the built-in `bash` tool to every deployment. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the binding does not limit the agent's config keys and secrets. The `bash` tool reads neither today: it works with the agent's files and environment variables. [`golem ssh`](/v1.6/cli/agents#shell-access-golem-ssh) connects to this tool.
+`golem deploy` automatically adds the built-in `bash` tool to every deployment. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the binding does not limit the agent's config keys and secrets. The `bash` tool reads neither today: it works with the agent's files and environment variables. [`golem ssh`](/v1.6/cli/ssh) connects to this tool.
 
 With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it. Those commands can read and change the agent's files, and they can read all environment variables of the agent, also a secret that is kept in one. A key scope of a binding does not hide an environment variable. To turn the default tools off for an environment, set `defaults` under its `tools` to an empty list:
 
@@ -503,7 +509,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "manifestVersion",
   }}>
-    ***Optional manifest schema version*** string.
+    ***Required manifest format marker***: use `manifestVersion: "1.6.0"` in every manifest document. All loaded documents must use the same marker. The CLI validates it separately from the editor's `1.6.0-dev.9` JSON schema URL; it is not the application's deployment version.
   </Field>
 
   <Field meta={{
@@ -537,6 +543,24 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   }}>
     ***Required application name*** which will be used as the deployment name for the application.
 
+  </Field>
+
+  <Field meta={{
+    path: "version",
+  }}>
+    ***Optional application deployment version source***: a nonempty static string, `{ env: VARIABLE_NAME }`, or a `git` object. An environment variable must exist and be nonempty. If neither this field nor an environment override is set, deployment uses an empty version string. This is independent of `manifestVersion` and `deployment.versionCheck`.
+
+    Git versions are computed at the application root. Choose `git: { hashOnly: true }` for a short commit hash, or `git: { tagPattern: "v*" }` for a matching tag. Tag mode also accepts `commitInfo` (default `true`, includes distance/hash information) and `hashFallback` (default `false`, uses a hash if no tag matches). Both modes accept `allowDirty` (default `false`; when enabled, dirty versions end in `-dirty`) and `staticFallback` (used when Git is unavailable, the directory is not a repository, it has no commits, or no tag matches without a hash fallback). A dirty working tree still fails when `allowDirty` is false.
+
+    ```yaml
+    version:
+      git:
+        tagPattern: "v*"
+        hashFallback: true
+    environments:
+      production:
+        version: { env: RELEASE_VERSION }
+    ```
   </Field>
 
   <Field meta={{
@@ -636,6 +660,12 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].openapiEndpoint",
+  }}>
+    ***Optional OpenAPI path prefix***, normalized with leading and trailing `/`. Defaults to `/`; the deployment serves the generated document at `<prefix>openapi.json`.
+  </Field>
+
+  <Field meta={{
     path: "httpApi.deployments.<environment-name>[*].webhookUrl",
     since: Release.R_1_5_0
   }}>
@@ -653,21 +683,21 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "httpApi.deployments.<environment-name>[*].agents.<agent-type-name>.securityScheme",
     since: Release.R_1_5_0
   }}>
-    ***Optional security scheme*** for the agent in this deployment.
+    ***Optional security scheme*** for the agent in this deployment. Mutually exclusive with `testSessionHeaderName`.
   </Field>
 
   <Field meta={{
     path: "httpApi.deployments.<environment-name>[*].agents.<agent-type-name>.testSessionHeaderName",
     since: Release.R_1_5_0
   }}>
-    ***Optional test session header name*** for the agent in this deployment.
+    ***Optional test session header name*** for the agent in this deployment. Mutually exclusive with `securityScheme`.
   </Field>
 
   <Field meta={{
     path: "mcp",
     since: Release.R_1_5_0
   }}>
-    ***Optional object*** for defining MCP deployments.
+    ***Optional object*** for defining MCP deployments and upstream imports.
   </Field>
 
   <Field meta={{
@@ -713,10 +743,110 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
+    path: "mcp.imports",
+  }}>
+    ***Optional map of upstream MCP imports*** by environment name. Each environment value is a list of import records.
+
+    ```yaml
+    mcp:
+      imports:
+        production:
+          - name: catalog
+            url: https://mcp.example.com/mcp
+            prefix: catalog
+            include: [search]
+    ```
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].url",
+  }}>
+    ***Required upstream MCP server URL*** using HTTP or HTTPS, with a host and no userinfo or fragment.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].name",
+  }}>
+    ***Optional CLI-only import name*** matching `[a-z][a-z0-9_-]*`. It identifies the import to CLI commands and is not part of the deployed import contract.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].auth",
+  }}>
+    ***Optional inline authentication***: either `{ bearer: TOKEN }` or `{ basic: { user: USER, password: PASSWORD } }`. Specify exactly one credential kind. Mutually exclusive with `securityScheme`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].securityScheme",
+  }}>
+    ***Optional security scheme name*** for upstream authentication. Mutually exclusive with `auth`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].prefix",
+  }}>
+    ***Optional lower-kebab-case prefix*** for the imported tool names.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].include",
+  }}>
+    ***Optional list of upstream tool names*** to import. Mutually exclusive with `exclude`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].exclude",
+  }}>
+    ***Optional list of upstream tool names*** to omit. Mutually exclusive with `include`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.imports.<environment-name>[*].version",
+  }}>
+    ***Optional MCP protocol version***. The supported version is `2026-07-28`; omitting it uses that default.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].tools",
+  }}>
+    ***Optional map of tools-only MCP exports*** indexed by logical tool name. These calls have a component owner rather than an agent owner.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].tools.<tool-name>.ownerComponent",
+  }}>
+    ***Required owner component name*** for calls to this tool. The component must bind the tool; an agent binding alone does not authorize these calls.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].tools.<tool-name>.securityScheme",
+  }}>
+    ***Optional security scheme*** for the tools-only export.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].tools.<tool-name>.include",
+  }}>
+    ***Optional command selection*** for the exported tool. Mutually exclusive with `exclude`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].tools.<tool-name>.exclude",
+  }}>
+    ***Optional command exclusion list*** for the exported tool. Mutually exclusive with `include`.
+  </Field>
+
+  <Field meta={{
     path: "environments",
     since: Release.R_1_4_0
   }}>
     ***Optional application environments*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.version",
+  }}>
+    ***Optional deployment version override*** for <FieldLink path="version"/>. A static string or `env` source replaces the application source. Git options merge with the application source only within the same Git mode; changing modes or sources requires a complete source. A partial tag override can omit `tagPattern` only when inheriting application tag mode.
   </Field>
 
   <Field meta={{
@@ -916,7 +1046,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   }}>
     ***Optional map of presets*** used to define preset variations for a component.
 
-    A _preset_ contains the same fields as a component. Presets can also specify a <FieldLink path="components.<component-name>.presets.<preset-name>.default"/> flag to mark it as the default preset for selection.
+    A _preset_ overrides component layer properties such as build steps, paths, configuration, tools and router mappings. It cannot contain `dir`, `templates`, or nested `presets`. Presets can also specify a <FieldLink path="components.<component-name>.presets.<preset-name>.default"/> flag to mark it as the default preset for selection.
 
     A component with custom presets always applies at least one custom preset. If no preset selected by the environment or the CLI matches this component, it applies the custom preset marked `default: true`. If none is marked, it applies the first custom preset in declaration order. The same rule applies independently to each component template and agent with custom presets.
 
@@ -1078,6 +1208,12 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
+    path: "components.<component-name>.configSchema",
+  }}>
+    ***Optional component configuration schema*** with `schema` and `declarations` fields. Templates and presets can also set it; a later layer replaces the schema rather than merging declarations.
+  </Field>
+
+  <Field meta={{
     path: "components.<component-name>.config",
     since: Release.R_1_5_0
   }}>
@@ -1085,9 +1221,15 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
+    path: "components.<component-name>.initialCard",
+  }}>
+    ***Optional initial permission card***. The `lowerBound` and `upperBound` objects each accept `positive` and `negative` lists of permission strings. Omitted bounds and lists are empty. See [Initial tool permissions](#initial-tool-permissions) for an example and validation rules.
+  </Field>
+
+  <Field meta={{
     path: "components.<component-name>.env",
   }}>
-    ***Optional string map*** of environment variables for the component.
+    ***Optional string map*** of environment variables for the component. Names must be uppercase. Names starting with `GOLEM_` are reserved and can be overridden by Golem.
   </Field>
 
   <Field meta={{
@@ -1105,6 +1247,21 @@ For registry-backed tools, the generator reads only the release's safe tool defi
       <EnumValue meta={{value: "replace"}}></EnumValue>
       <EnumValue meta={{value: "remove"}}></EnumValue>
     </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.dependencies.agents",
+  }}>
+    ***Optional list of agent dependencies***. Each entry is `component-name/AgentTypeName` or `{ component: component-name, name: AgentTypeName }`. The provider builds before the consumer, and `golem build` generates guest clients in the consumer's language. Agent names are case-sensitive. A component cannot depend on itself.
+
+    ```yaml
+    components:
+      acme:frontend:
+        templates: ts
+        dependencies:
+          agents:
+            - acme:backend/CounterAgent
+    ```
   </Field>
 
   <Field meta={{
@@ -1126,30 +1283,31 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
-    path: "components.<component-name>.wasiConfig",
-    since: Release.R_1_5_0
+    path: "components.<component-name>.nodeHttpRouters",
   }}>
-    ***Optional string map*** of WASI configuration variables for the component.
-  </Field>
+    ***Optional build-time router table*** for TypeScript components only. Each layer that specifies this field replaces the entire table; entries are not merged. Keys are canonical decimal strings from `"1"` to `"65535"` (no leading zeroes). These are logical Node HTTP listen ports, not sockets opened on the host. Router names must be unique within the component.
 
-  <Field meta={{
-    path: "components.<component-name>.wasiConfigMergeMode",
-    since: Release.R_1_5_0
-  }}>
-    ***Optional merge mode*** for <FieldLink path="components.<component-name>.wasiConfig"/>. Accepted values:
-    <EnumValues>
-      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
-      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
-      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
-    </EnumValues>
+    Each entry requires `name` (the router name) and `mount` (the HTTP mount path). Optional `auth` is a boolean, and optional `cors` is a list of allowed origin strings.
+
+    ```yaml
+    components:
+      acme:api:
+        templates: ts
+        nodeHttpRouters:
+          "3000":
+            name: api
+            mount: /api
+            auth: false
+            cors: ["https://example.com"]
+    ```
   </Field>
 
   <Field meta={{
     path: "components.<component-name>.componentWasm",
   }}>
-    ***Optional file path*** for the built _WASM_ component.
+    ***File path*** for the built _WASM_ component. It must be nonempty after templates and presets resolve.
 
-    The path is relative to the manifest document in which the field is defined.
+    The path is relative to the effective component directory, including when inherited from a template in another manifest.
 
     <Example>
       { /* @formatter:off */ }
@@ -1170,7 +1328,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   }}>
     ***Optional file path*** for the output _WASM_ component which is ready to be uploaded to Golem.
 
-    The path is relative to the manifest document in which the field is defined.
+    The path is relative to the effective component directory. Defaults to `<golemTempDir>/final-wasm/<component-name>.wasm`.
 
     <Example>
       { /* @formatter:off */ }
@@ -1211,6 +1369,40 @@ For registry-backed tools, the generator reads only the release's safe tool defi
 
   </Field>
 
+  <Field meta={{
+    path: "components.<component-name>.build[*].generateQuickjsCrate",
+  }}>
+    ***QuickJS crate output directory***. This build variant requires `wit` (the WIT directory) and `jsModules` (a map of module names to JavaScript paths); `world` optionally selects a WIT world. All paths resolve against the effective component directory.
+
+    ```yaml
+    build:
+      - generateQuickjsCrate: generated/quickjs
+        wit: wit
+        jsModules:
+          main: src/main.js
+      - generateQuickjsDts: generated/types.d.ts
+        wit: wit
+    ```
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].generateQuickjsDts",
+  }}>
+    ***TypeScript declaration output path***. Requires `wit` (the WIT directory); `world` optionally selects a WIT world. Paths resolve against the effective component directory.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].injectToPrebuiltQuickjs",
+  }}>
+    ***Prebuilt QuickJS WASM input path***. Requires `module` (the JavaScript module path) and `into` (the output WASM path). All paths resolve against the effective component directory.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].preinitializeJs",
+  }}>
+    ***WASM input path*** for JavaScript preinitialization. Requires `into` (the output WASM path). Both paths resolve against the effective component directory.
+  </Field>
+
   <Field
     meta={{
       path: "components.<component-name>.build[*].command",
@@ -1226,7 +1418,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     ***Optional directory path*** which will be used as working directory when executing
     <FieldLink path="components.<component-name>.build[*].command"></FieldLink>.
 
-    The path is relative to the manifest document, and defaults to `.`.
+    The path is relative to the effective component directory, and defaults to `.` (that directory).
 
   </Field>
 
@@ -1348,8 +1540,11 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field
     meta={{
       path: "components.<component-name>.customCommands.<command-name>[*].dir",
+      noSpecialization: true,
     }}
-  ></Field>
+  >
+    ***Optional working directory*** relative to the effective component directory, including for commands inherited from templates. Defaults to `.` (the component directory), unlike project-level custom commands, which use the declaring manifest directory.
+  </Field>
 
   <Field
     meta={{
@@ -1361,12 +1556,6 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field
     meta={{
       path: "components.<component-name>.customCommands.<command-name>[*].rmdirs",
-    }}
-  ></Field>
-
-  <Field
-    meta={{
-      path: "components.<component-name>.customCommands.<command-name>[*].mkdirs",
     }}
   ></Field>
 
@@ -1391,8 +1580,11 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field
     meta={{
       path: "components.<component-name>.clean",
+      noSpecialization: true,
     }}
-  ></Field>
+  >
+    ***Optional list of paths*** added to `golem clean`, relative to the effective component directory, including when inherited from a template. Project-level <FieldLink path="clean"/> paths remain relative to their declaring manifest.
+  </Field>
 
 
 
@@ -1451,6 +1643,12 @@ For registry-backed tools, the generator reads only the release's safe tool defi
 
     The path is relative to the manifest document, and defaults to `.`.
 
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].command",
+  }}>
+    ***Required external command*** to execute for this custom command step.
   </Field>
 
   <Field meta={{
@@ -1549,6 +1747,13 @@ For registry-backed tools, the generator reads only the release's safe tool defi
 
     A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `scala`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
 
+  </Field>
+
+  <Field meta={{
+    path: "componentTemplates.<template-name>.templates",
+    noSpecialization: true,
+  }}>
+    ***Optional template name or list of template names*** to inherit. Every template may be inherited through only one path, as for <FieldLink path="components.<component-name>.templates"/>.
   </Field>
 
   <Field
@@ -1691,15 +1896,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
 
   <Field
     meta={{
-      path: "componentTemplates.<template-name>.wasiConfig",
-      since: Release.R_1_5_0,
-    }}
-  ></Field>
-
-  <Field
-    meta={{
-      path: "componentTemplates.<template-name>.wasiConfigMergeMode",
-      since: Release.R_1_5_0,
+      path: "componentTemplates.<template-name>.nodeHttpRouters",
     }}
   ></Field>
 
@@ -1789,7 +1986,13 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "agents.<agent-type-name>.env",
     since: Release.R_1_5_0
   }}>
-    ***Optional string map*** of environment variables for the agent.
+    ***Optional string map*** of environment variables for the agent. Names must be uppercase; `GOLEM_` names are reserved.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.initialCard",
+  }}>
+    ***Optional initial permission card*** with the same shape as <FieldLink path="components.<component-name>.initialCard"/>. Agent templates and presets can also set this field.
   </Field>
 
   <Field meta={{
@@ -1809,25 +2012,6 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.env"/>. Accepted values:
-    <EnumValues>
-      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
-      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
-      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
-    </EnumValues>
-  </Field>
-
-  <Field meta={{
-    path: "agents.<agent-type-name>.wasiConfig",
-    since: Release.R_1_5_0
-  }}>
-    ***Optional string map*** of WASI configuration variables for the agent.
-  </Field>
-
-  <Field meta={{
-    path: "agents.<agent-type-name>.wasiConfigMergeMode",
-    since: Release.R_1_5_0
-  }}>
-    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.wasiConfig"/>. Accepted values:
     <EnumValues>
       <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
       <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
@@ -2004,45 +2188,66 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
-    path: "bridge.ts",
-    since: Release.R_1_5_0
+    path: "bridge.<language>",
   }}>
-    ***Optional TypeScript SDK configuration***.
+    ***Optional language configuration*** for `ts`, `effect`, `rust`, `scala`, `moonbit`, or `go`. Each language has separate `external` and `internal` target objects. An empty object selects nothing; configure `agents` or `internal.tools` explicitly. Component dependencies also generate internal clients automatically.
+
+    ```yaml
+    bridge:
+      ts:
+        external:
+          agents: "*"
+        internal:
+          agents: "*"
+    ```
   </Field>
 
   <Field meta={{
-    path: "bridge.ts.agents",
-    since: Release.R_1_5_0
+    path: "bridge.<language>.external",
   }}>
-    ***Optional list of agent type names***, component names, or `"*"` for including all agents.
+    ***Optional target object*** for clients that invoke agents from outside Golem. Supports `agents` and `outputDir`, not `tools`.
   </Field>
 
   <Field meta={{
-    path: "bridge.ts.outputDir",
-    since: Release.R_1_5_0
+    path: "bridge.<language>.internal",
   }}>
-    ***Optional custom output directory*** for the generated TypeScript SDK.
+    ***Optional target object*** for guest clients used inside Golem. Supports `agents`, `tools`, and `outputDir`.
   </Field>
 
   <Field meta={{
-    path: "bridge.rust",
-    since: Release.R_1_5_0
+    path: "bridge.<language>.external.agents",
   }}>
-    ***Optional Rust SDK configuration***.
+    ***Optional agent selection***: an agent type name, component matcher, list of these, or `"*"` for all application agents. Defaults to an empty selection.
   </Field>
 
   <Field meta={{
-    path: "bridge.rust.agents",
-    since: Release.R_1_5_0
+    path: "bridge.<language>.internal.agents",
   }}>
-    ***Optional list of agent type names***, component names, or `"*"` for including all agents.
+    ***Optional agent selection*** with the same syntax and empty default as <FieldLink path="bridge.<language>.external.agents"/>.
   </Field>
 
   <Field meta={{
-    path: "bridge.rust.outputDir",
-    since: Release.R_1_5_0
+    path: "bridge.<language>.external.outputDir",
   }}>
-    ***Optional custom output directory*** for the generated Rust SDK.
+    ***Optional output base directory***, relative to the manifest that declares `bridge`. Each client gets its own subdirectory. Defaults to `<golemTempDir>/bridge-sdk/<language>` for external clients.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.<language>.internal.outputDir",
+  }}>
+    ***Optional output base directory***, relative to the manifest that declares `bridge`. Each client gets its own subdirectory. Defaults to `<golemTempDir>/bridge-sdk/<language>/internal` for internal clients.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust.<target>.additionalDerives",
+  }}>
+    ***Optional list of Rust derive paths*** for generated agent types, independently for `external` and `internal` targets. Requires a nonempty `agents` selection.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust.<target>.additionalDependencies",
+  }}>
+    ***Optional dependency map*** for each Rust target (`external` or `internal`). Requires a nonempty `agents` selection. Each value is a version string or an object with optional `version`, `path`, `git`, `package`, `features`, `defaultFeatures`, `branch`, `tag`, `rev`, `workspace`, and `optional` fields. Use camelCase here, including `defaultFeatures`, rather than Cargo's hyphenated keys.
   </Field>
 
   <Field meta={{
@@ -2076,40 +2281,54 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "retryPolicyDefaults.<environment-name>",
     since: Release.R_1_5_0
   }}>
-    ***Optional list of retry policy default entries*** for the environment.
+    ***Optional map of retry policy records*** indexed by policy name for the environment.
+
+    ```yaml
+    retryPolicyDefaults:
+      production:
+        transient:
+          priority: 10
+          predicate:
+            propEq: { property: status-code, value: 503 }
+          policy:
+            countBox:
+              maxRetries: 3
+              inner:
+                exponential: { baseDelay: { secs: 0, nanos: 100000000 }, factor: 2.0 }
+    ```
   </Field>
 
   <Field meta={{
-    path: "retryPolicyDefaults.<environment-name>[*].name",
+    path: "retryPolicyDefaults.<environment-name>.<policy-name>",
     since: Release.R_1_5_0
   }}>
-    ***Required unique name*** for this retry policy.
+    ***Retry policy record*** with required `priority`, `predicate`, and `policy` fields. Its map key supplies the unique name; there is no `name` field.
   </Field>
 
   <Field meta={{
-    path: "retryPolicyDefaults.<environment-name>[*].priority",
+    path: "retryPolicyDefaults.<environment-name>.<policy-name>.priority",
     since: Release.R_1_5_0
   }}>
     ***Required integer*** defining selection priority — higher values are evaluated first.
   </Field>
 
   <Field meta={{
-    path: "retryPolicyDefaults.<environment-name>[*].predicate",
+    path: "retryPolicyDefaults.<environment-name>.<policy-name>.predicate",
     since: Release.R_1_5_0
   }}>
     ***Required predicate tree*** defining when this policy applies. Supports composable predicates including
     property comparisons (`propEq`, `propNeq`, `propGt`, `propGte`, `propLt`, `propLte`),
     property checks (`propExists`, `propIn`, `propMatches`, `propStartsWith`, `propContains`),
-    and logical combinators (`and`, `or`, `not`).
+    and logical combinators (`and`, `or`, `not`). Use booleans for unconditional predicates, single-key objects for operators, and two-element lists for `and` and `or`. Comparison values are plain strings, integers, or booleans, not `type`-tagged API objects.
   </Field>
 
   <Field meta={{
-    path: "retryPolicyDefaults.<environment-name>[*].policy",
+    path: "retryPolicyDefaults.<environment-name>.<policy-name>.policy",
     since: Release.R_1_5_0
   }}>
     ***Required retry policy tree*** defining the retry strategy. Supports base strategies
     (`"immediate"`, `"never"`, `periodic`, `exponential`, `fibonacci`) and composable modifiers
-    (`countBox`, `timeBox`, `clamp`, `addDelay`, `jitter`, `filteredOn`, `andThen`, `union`, `intersect`).
+    (`countBox`, `timeBox`, `clamp`, `addDelay`, `jitter`, `filteredOn`, `andThen`, `union`, `intersect`). Operator names are camelCase single-key objects, not `type` discriminators. Duration fields accept strings such as `100ms` or `1s`; for example, `periodic: 1s`.
   </Field>
 
   <Field meta={{
@@ -2123,18 +2342,28 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "resourceDefaults.<environment-name>",
     since: Release.R_1_5_0
   }}>
-    ***Optional list of resource definition entries*** for the environment.
+    ***Optional map of resource records*** indexed by resource name for the environment.
+
+    ```yaml
+    resourceDefaults:
+      production:
+        requests:
+          limit: { type: Rate, value: 10, period: second, max: 20 }
+          enforcementAction: throttle
+          unit: request
+          units: requests
+    ```
   </Field>
 
   <Field meta={{
-    path: "resourceDefaults.<environment-name>[*].name",
+    path: "resourceDefaults.<environment-name>.<resource-name>",
     since: Release.R_1_5_0
   }}>
-    ***Required name*** of the resource.
+    ***Resource record*** with required `limit`, `enforcementAction`, `unit`, and `units` fields. Its map key supplies the resource name; there is no `name` field.
   </Field>
 
   <Field meta={{
-    path: "resourceDefaults.<environment-name>[*].limit",
+    path: "resourceDefaults.<environment-name>.<resource-name>.limit",
     since: Release.R_1_5_0
   }}>
     ***Required resource limit*** definition. Can be one of:
@@ -2146,7 +2375,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
-    path: "resourceDefaults.<environment-name>[*].enforcementAction",
+    path: "resourceDefaults.<environment-name>.<resource-name>.enforcementAction",
     since: Release.R_1_5_0
   }}>
     ***Required enforcement action*** for the resource, accepted values:
@@ -2158,14 +2387,14 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
-    path: "resourceDefaults.<environment-name>[*].unit",
+    path: "resourceDefaults.<environment-name>.<resource-name>.unit",
     since: Release.R_1_5_0
   }}>
     ***Required string*** for the single unit of measurement (e.g., `token`, `request`).
   </Field>
 
   <Field meta={{
-    path: "resourceDefaults.<environment-name>[*].units",
+    path: "resourceDefaults.<environment-name>.<resource-name>.units",
     since: Release.R_1_5_0
   }}>
     ***Required string*** for the plural units of measurement (e.g., `tokens`, `requests`).

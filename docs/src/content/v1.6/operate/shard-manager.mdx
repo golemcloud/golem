@@ -1,0 +1,132 @@
+import { Callout } from "nextra/components"
+
+# Shard Manager
+
+The shard manager assigns shards to worker executors, publishes the routing table, and rebalances assignments when executors join or leave. It also manages the resource leases used by [quotas](/v1.6/develop/quotas). This page covers operating the service; see [Architecture](/v1.6/operate/architecture#shards-and-ownership) for its place in a Golem deployment.
+
+## Choose a persistence mode
+
+| Mode | `persistence.type` | State storage | Instances |
+| --- | --- | --- | --- |
+| Local | `Sqlite` or `Postgres` | Shard and quota state in SQL | Exactly one; no leader election |
+| Distributed | `Etcd` | Shard and quota state in etcd | Multiple replicas, with one elected leader |
+
+All replicas of a distributed shard manager must use the same etcd cluster and shard count. The default `number_of_shards` is `1024`. A shard manager refuses to start if its configured count differs from the stored state.
+
+Keep the persistence store across restarts. Changing from SQL to etcd does not transfer quota state: executors acquire new quota leases, and capacity budgets start from their full limit.
+
+## Configure distributed mode
+
+Set the following in the shard manager's configuration. Replace the endpoint with a private load-balanced address for your etcd cluster, such as a Kubernetes Service:
+
+```toml
+[persistence]
+type = "Etcd"
+
+[persistence.config]
+endpoints = ["http://etcd.internal:2379"]
+connect_timeout = "10s"
+request_timeout = "5s"
+leader_lease_ttl = "10s"
+compaction_retention_revisions = 0
+```
+
+Use one load-balanced endpoint rather than a list of etcd members. An unavailable member in the client's rotation can delay writes and leader election.
+
+<Callout type="warning">
+  The etcd client supports only `http://` endpoints and does not configure authentication. Keep this connection on a trusted private network, or use a local proxy that secures the connection to etcd. Do not expose an unauthenticated etcd endpoint publicly.
+</Callout>
+
+Check these settings before starting replicas:
+
+| Setting | Requirement |
+| --- | --- |
+| `leader_lease_ttl` | A whole number of seconds, at least `2s`; default `10s` |
+| `request_timeout` | At most half of `leader_lease_ttl`; default `5s` |
+| `compaction_retention_revisions` | Default `1000`. Set to `0` on a shared etcd cluster and manage compaction separately, as in the example above |
+| etcd `--max-txn-ops` | At least `122` for quota lease updates; etcd's default `128` is sufficient |
+
+Compaction removes old revisions across the **entire etcd cluster**, not just Golem's keys. Disabling Golem's compaction does not remove the need to compact: configure etcd's automatic compaction or another operator-managed policy.
+
+For all settings and their environment variable equivalents, see the [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml) and [sample environment file](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env).
+
+## Executor leases
+
+Each executor registers with the shard manager and holds a renewable lease on its shard assignment. Registration is persisted before it is acknowledged. Assignment updates are persisted before they are sent to executors.
+
+| Setting or event | Behavior |
+| --- | --- |
+| `shard_lease_duration` | Default `1m`; minimum `30s`. Values below `1m` leave less room for renewal retries and produce a startup warning |
+| Renewal | Scheduled after one third of the executor's remaining lease time, normally about `20s` |
+| Lost assignment update | The next successful renewal also returns the current assignment |
+| Executor lease expires | The executor stops admitting new work. Already-running invocations are not interrupted solely by lease expiry |
+| Executor becomes unreachable | Health checks or lease expiry cause its shards to be reassigned |
+| Executor stops gracefully | It deregisters, so reassignment need not wait for lease expiry |
+
+The shard manager checks for expired leases periodically, normally every third of `shard_lease_duration`. Persistence delays, health checks, and rebalance work can extend recovery time; this cadence is not a failover deadline.
+
+Keep executor clocks synchronized before starting them. Lease exchange does not compare absolute clocks, but clock-rate differences still affect expiry timing. An assignment push does not renew a lease.
+
+## Restarts and leader failover
+
+In distributed mode, only the elected leader serves gRPC requests. A new leader restores shard and quota state before opening that port. Existing quota leases survive a leader change because their state is in etcd.
+
+| Event | What to expect |
+| --- | --- |
+| Graceful leader shutdown | The leader attempts to release its election lease so a standby can take over promptly. If release fails, the lease must expire |
+| Leader crash or network partition | A standby can take over after the old leadership lease expires and etcd permits election |
+| New leader starts | It restores state and checks existing executors before serving requests. `initial_health_check_timeout` defaults to `15s` |
+| Temporary etcd connection loss | The leader attempts to reconnect; a disconnected keepalive stream does not by itself force immediate failover |
+
+Executors that fail the initial health check are removed. If the whole check times out, the shard manager retains the executors and leaves removal to subsequent checks. An executor whose own lease expired during the outage resumes admission after a successful renewal.
+
+There can be a period with no available shard-manager gRPC endpoint. A worker service that must refresh its routing table waits for a leader to become available. An executor starting during the outage can exhaust its registration retries and exit. Increase `shard_manager.retries.max_attempts` in the **worker executor** configuration if its startup must tolerate a longer outage.
+
+The leadership lease, etcd availability, startup checks, and retry policies all affect recovery time. Do not treat the default `10s` leadership lease as an upper bound on service interruption.
+
+## Health probes and monitoring
+
+Configure the replicas' probes separately:
+
+| Probe | Target | Reason |
+| --- | --- | --- |
+| Liveness | HTTP listener, `http_port` (`8081` by default) | Runs on leaders and standbys |
+| Readiness | gRPC listener, `grpc.port` (`9092` by default) | Opens only after the replica becomes leader and restores state |
+
+Do not use HTTP liveness as readiness. That would send clients to standbys whose gRPC port is closed.
+
+Monitor these metrics across all replicas:
+
+| Metric | Interpretation |
+| --- | --- |
+| `shard_manager_is_leader` | `1` on the elected leader and `0` on standbys. Expect one leader in steady state, not necessarily throughout a failover |
+| `shard_manager_leader_since_epoch` | Election time in Unix seconds; `0` while standing by |
+| `shard_manager_campaign_attempt_failures_total` | Rising values indicate failed, retried attempts to reach etcd during election |
+
+A flat campaign-failure counter does not prove a standby is healthy. Check liveness, logs, and etcd connectivity as well. See [Metrics](/v1.6/operate/metrics) for metrics collection.
+
+## Oplog fencing and storage
+
+Every shard has an **epoch**, an ownership generation that advances when the shard moves. Indexed storage records the epoch allowed to write an agent's oplog. Once the new owner raises that record, writes from an older owner are rejected atomically. The same protection applies to oplog deletion and archive metadata.
+
+This protection has limits:
+
+- **It needs an epoch record.** A new or recreated oplog is claimed by the first opener. Leases remain necessary to prevent stale executors from admitting work.
+- **It protects the oplog, not every agent write.** Do not infer the same guarantee for key-value data, status blobs, or arbitrary blob payloads.
+- **It cannot undo external effects.** A call that reached an external service before its oplog entry was recorded can run again after recovery, as it can after a crash.
+
+Executors that share shards need shared indexed storage, such as PostgreSQL or Redis. A local SQLite file serves one executor. Redis failover that loses recent writes can also lose fencing records; Redis Cluster is not supported. See [Persistence](/v1.6/operate/persistence) for storage configuration.
+
+## Restore shard-manager state carefully
+
+Shard epochs and indexed-storage fencing records must agree. Replacing, wiping, or restoring the shard-manager store can produce epochs lower than those already recorded in oplogs. The affected agents then cannot write.
+
+Treat this as coordinated storage recovery, not a routine restart:
+
+1. Stop every worker executor before changing fencing records, and prevent the orchestrator from restarting them.
+2. Back up the shard-manager store and indexed storage. Determine which state must be restored together before changing either store.
+3. If epoch records must be reset, account for every indexed-storage layer. SQL uses `indexed_key_epoch`; Redis uses the `oplog-epoch` keys. MultiSqlite also retains epoch snapshots in `epochs.db`, separate from the live oplog databases. Clearing only the live databases is incomplete: the saved epochs can be restored when a database reopens.
+
+<Callout type="warning">
+  Never clear fencing records while an executor is running. Without a record, an oplog accepts the epoch of its first opener, including an executor that no longer owns the shard. Do not delete oplog entries or archive data to work around an epoch mismatch.
+</Callout>

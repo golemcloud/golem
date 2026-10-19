@@ -35,7 +35,9 @@ no built-in write token. The publisher's CI guard accepts only this workflow's
 ## Authorized local recovery
 
 1. Use a clean exact release-tag checkout with full history. Push the tag and
-   create a draft Golem GitHub release first. The tag must originate on main.
+   create a draft Golem GitHub release first. The tag must identify the exact
+   head of a PR merged into public `main`, not its squash commit. Use an
+   authenticated `gh` session with pull requests read access for source validation.
 2. Run `BUILTIN_VERSION=<version> cargo make validate-builtin-release` for
    source validation. Add `BUILTIN_DRY_RUN=1` to `cargo make publish-builtin-artifacts`
    to build and review packaging without writes to GitHub. Review exports,

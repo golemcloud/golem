@@ -4,7 +4,7 @@ import { Callout, Tabs } from "nextra/components"
 
 Use an HTTP router to handle streaming requests, serve static assets, or integrate
 an HTTP framework. To publish files created by a durable agent, add live file
-mappings to that agent instead. The [router and file semantics](/next/invoke/http-router-reference)
+mappings to that agent instead. The [router and file semantics](/next/invoke/making-custom-apis/http-routers/semantics)
 page explains how these features interact with code-first endpoints, authentication,
 and durable execution.
 
@@ -32,6 +32,11 @@ The Web adapter accepts standard `Request` and `Response` objects, so a framewor
 with a Fetch-compatible handler can supply the function passed to `.implement`.
 Keep its body streaming. For the original, unnormalized HTTP envelope, use
 `.implementRaw` instead; see [Working with headers](#working-with-headers).
+
+Web `Request`, `Response`, and `Headers` are normalized views, not a lossless
+replacement for the canonical envelope. Web APIs can normalize methods and URLs,
+combine fields, or reject methods and statuses. The Web handler's context exposes
+the original request; `withRawHeaders` supplies ordered byte-valued response fields.
 </Tabs.Tab>
 <Tabs.Tab>
 ```typescript
@@ -60,9 +65,28 @@ and the same single-consumer body. Do not consume both body views.
 
 Acquire request resources with `Effect.acquireRelease` or `Effect.addFinalizer`.
 The request scope stays open through response consumption; do not rely solely on
-finalizers inside a body stream that might never start. See the
-[Effect adapter lifecycle](/next/invoke/http-router-reference#effect-adapter-lifecycle-and-limitations)
-for cancellation limits.
+finalizers inside a body stream that might never start. The application factory
+runs inside each request's scope. Resources are released on completion, failure,
+or local Effect interruption. HEAD and 204/205/304 do not start body streams, so
+cleanup for eagerly acquired resources belongs to the request scope, not only to
+a stream's `ensuring` finalizer.
+
+`HttpRouter.request` also preserves absent versus empty query strings. The `text`,
+`json`, and `arrayBuffer` accessors buffer under `HttpIncomingMessage.MaxBodySize`;
+using the request stream does not collect it.
+
+`Respondable` failures retain their HTTP responses, including `HttpApi` validation
+errors. Router misses and request parsing failures become 404 and 400. Other
+application failures remain invocation failures. The adapter does not support
+response `FormData`, non-`Uint8Array` raw bodies, or WebSocket upgrades.
+
+<Callout type="warning">
+  Local Effect interruption runs and awaits finalizers, but host-level Wasm
+  interruption does not deliver cooperative cancellation to JavaScript. The runtime
+  also cannot interrupt a response producer while its first request for a body
+  chunk is pending. Do not assume Effect finalizers run on every client disconnect
+  or host interruption.
+</Callout>
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
@@ -200,7 +224,7 @@ printf 'stream me' | curl --data-binary @- http://localhost:9006/echo
 The response is `stream me`. For a router with several routes, dispatch on the
 request's method and path, and return 404 for unknown routes. The canonical request
 uses the **full public path**; framework adapters may present mount-relative paths
-as noted in their tabs. [Routing precedence](/next/invoke/http-router-reference#request-routing-precedence)
+as noted in their tabs. [Routing precedence](/next/invoke/making-custom-apis/http-routers/semantics#request-routing-precedence)
 explains when a code-first endpoint or file mapping takes priority over the handler.
 
 ### Working with headers
@@ -318,7 +342,7 @@ EchoRouter.HandleRaw(func(ctx context.Context, req golem.HTTPRequest) golem.HTTP
 Let Golem handle transfer framing. Omit `Content-Length` unless you know the exact
 emitted byte count. Release unused input and stop producing when the output consumer
 closes. Do not turn stream errors into normal EOF. See the
-[streaming contract](/next/invoke/http-router-reference#streaming-handler-reference) for
+[streaming contract](/next/invoke/making-custom-apis/http-routers/semantics#streaming-handler-reference) for
 bodyless responses and the distinction between EOF and invocation success.
 
 ## Serving static files
@@ -455,14 +479,14 @@ curl -i -H 'Range: bytes=0-3' http://localhost:9006/static/assets/message.txt
 Use a nonempty `message.txt` for the range example. Static responses include a
 strong ETag and `Cache-Control: no-cache`. Send the returned ETag in `If-None-Match`
 to revalidate; an unchanged asset returns 304. See the
-[file HTTP reference](/next/invoke/http-router-reference#file-http-reference) for HEAD,
+[file HTTP reference](/next/invoke/making-custom-apis/http-routers/semantics#file-http-reference) for HEAD,
 preconditions, and range edge cases.
 
 You can add the same mappings to a router with a handler: matching GET/HEAD files
 are served first, and an absent file falls through to the handler. For an override
 directory, declare two `/assets/*` mappings, first to `/overrides/$1`, then to
 `/public/assets/$1`. Order matters; see
-[ordered mappings](/next/invoke/http-router-reference#ordered-file-mappings).
+[ordered mappings](/next/invoke/making-custom-apis/http-routers/semantics#ordered-file-mappings).
 
 <Callout type="warning">
   Expose only directories intended for HTTP access. There is no implicit index
@@ -676,7 +700,7 @@ curl http://localhost:9006/files/alice/value
 The first read returns `initial:alice`; the second returns `updated`. Reads use
 `Cache-Control: no-store` with no ETag. No exported method is called to serve the
 file, but the first read can initialize the agent. A slow download can delay other
-work on that agent; see [live-file lifecycle](/next/invoke/http-router-reference#live-durable-agent-files).
+work on that agent; see [live-file lifecycle](/next/invoke/making-custom-apis/http-routers/semantics#live-durable-agent-files).
 
 ### Calling an agent from a router
 
@@ -738,7 +762,7 @@ For cross-component calls, declare the dependency and generate its client as des
 in [Calling an agent in another component](/next/develop/rpc#calling-an-agent-in-another-component).
 A router's cancellation does not roll back completed agent calls. Client retries are
 new requests and can repeat effects; see
-[cancellation and recovery](/next/invoke/http-router-reference#cancellation-and-ephemeral-recovery).
+[cancellation and recovery](/next/invoke/making-custom-apis/http-routers/semantics#cancellation-and-ephemeral-recovery).
 
 ## Publishing OpenAPI
 
@@ -912,7 +936,7 @@ EchoRouter.OpenAPI(func(ctx context.Context) string {
 
 Keep providers finite and deterministic. Use unique component names and operation
 IDs across the domain, and local references that resolve within the provider's own
-document. See [OpenAPI generation](/next/invoke/http-router-reference#openapi-generation)
+document. See [OpenAPI generation](/next/invoke/making-custom-apis/http-routers/semantics#openapi-generation)
 for the supported subset, security merging, conflicts, caching, and size limits.
 
 After redeployment, retrieve both formats:
@@ -993,159 +1017,19 @@ var EchoRouter = golem.DefineHTTPRouter(golem.RouterSpec{
 Protect each child mount explicitly: it does not inherit authentication from a
 parent. Test denial before checking file existence, and test browser preflight
 separately from plain OPTIONS. See
-[authentication and failures](/next/invoke/http-router-reference#authentication-cors-and-failures)
+[authentication and failures](/next/invoke/making-custom-apis/http-routers/semantics#authentication-cors-and-failures)
 for host behavior and status codes.
 
 ## Configuring self-hosted deployments
 
-These settings are for platform operators. Applications use worker-service's
-**apps gateway** (`custom_request_port`, default 9006), not its management REST or
-gRPC port.
-
-### Configuring shared storage
-
-Static files are read directly by worker-service. Configure registry, executors,
-and every serving worker-service to share the initial-file blob store and namespace.
-For a local/shared-volume topology:
-
-```toml
-[blob_storage]
-type = "LocalFileSystem"
-
-[blob_storage.config]
-root = "/blob_storage"
-```
-
-Mount the **same volume** into all services; identical paths in isolated containers
-are not shared storage. The equivalent environment variables are
-`GOLEM__BLOB_STORAGE__TYPE=LocalFileSystem` and
-`GOLEM__BLOB_STORAGE__CONFIG__ROOT=/blob_storage`. The
-[PostgreSQL compose example](https://github.com/golemcloud/golem/blob/main/docker-examples/published-postgres/compose.yaml)
-shows the shared volume wiring.
-
-For S3, configure worker-service with the same `initial_agent_files_bucket`,
-`object_prefix`, `namespace_prefixes`, region, endpoint, and path-style settings as the
-other services.
-Use the complete service configuration for the other required buckets. Grant
-worker-service read access, including ranged reads, and supply credentials through
-your deployment's secret mechanism. InMemory storage is not shared across processes;
-worker-service does not support `KVStoreSqlite`.
-
-### Configuring ingress
-
-Use an ingress with an HTTP/2 cleartext upstream (**h2c prior knowledge**), preserve
-per-stream resets, and disable request/response buffering for streaming routes.
-The gateway also accepts HTTP/1, but does not support `Upgrade: h2c`.
-
-To accept public-origin headers from a TLS-terminating proxy, list its direct peer
-IP in worker-service configuration:
-
-```toml
-[route_resolver]
-trusted_ingress_addresses = ["10.0.0.10"]
-```
-
-The default list is empty. Configure that proxy to remove client forwarding fields
-and write exactly one valid `X-Forwarded-Proto` and one `X-Forwarded-Host`. Both are
-required; comma-separated proxy chains and `Forwarded` are not alternative origin
-sources. Keep the listener private to the intended ingress.
-
-Test disconnect/reset through the actual proxy, including while waiting for a
-response head. A client timeout alone does not prove upstream cancellation. Keep
-HTTP/2 enabled: some pending live-file requests over HTTP/1 detect disconnect only
-at the exchange deadline.
-
-### Serving HTTP APIs and MCP on one port
-
-The worker-service custom request port (`custom_request_port`, 9006 by default) chooses
-the deployment by the request's host:
-
-- a domain with an HTTP API deployment is served by its routes, for every path;
-- a domain with an MCP deployment is served by its MCP endpoints: `/mcp`, `/mcp/oauth/*`
-  and `/.well-known/oauth-*`;
-- any other host gets `404`.
-
-A domain holds either an HTTP API deployment or an MCP deployment, not both; the registry
-rejects the second one. Domains are registered in their canonical spelling: a lowercase host
-without a trailing dot (an IPv6 literal in its compressed form, such as `[::1]`), with an
-optional port without leading zeros. Requests are matched against that spelling, so
-`Host: Shop.Example.com.` reaches `shop.example.com`. The MCP port (`mcp_port`, 9007 by default) still serves MCP
-deployments only, so an ingress can keep routing MCP domains to it.
-
-To serve the management API on the same public port, put a router in front that sends the
-management host to the management API and every other host to the custom request port, and
-point every name at the same address in DNS. Reserve the management host in the registry so
-that no environment can register it:
-
-```toml
-[domain_registration]
-reserved_domains = ["api.golem.example.com"]
-```
-
-The single `golem` executable has this router built in: set `router.management_host`
-(`GOLEM__ROUTER__MANAGEMENT_HOST`) to the management host, and the main API port serves the
-management API for that host and the HTTP API and MCP deployments for every other host. It
-reserves the management host itself.
-
-A reserved domain is matched by host, ignoring case, port and a trailing dot. The registry
-checks it when a domain is registered; registrations that exist before the domain is
-reserved stay in place. The proxy in
-front of the port must not buffer server-sent events, must allow long-lived streams, and must
-pass the original host, either in `Host` (or `:authority`) or, from a trusted ingress, in
-`X-Forwarded-Host`. MCP requests use the same trusted ingress rule as HTTP API requests.
-
-### Setting timeouts and resource budgets
-
-Tune worker-service's session settings to your workload. The defaults are:
-
-```toml
-[http_session]
-exchange_timeout = "5m"
-retry_deadline = "10s"
-retry_delay = "100ms"
-max_resume_attempts = 4
-cleanup_timeout = "2s"
-retained_input_bytes = 4194304
-retained_input_frames = 32
-event_queue_frames = 2
-command_queue_frames = 16
-max_event_bytes = 17825792
-```
-
-Use `exchange_timeout` to bound the whole handler or live-file exchange, including
-initialization, queueing, and streaming. There is no separate executor file-read
-deadline. Expiry returns 504 before commitment or aborts an already-started response.
-Recovery uses the same surviving invocation, with four reattachments allowed over
-the exchange's lifetime; it cannot replace a lost executor invocation.
-
-Use ingress concurrency limits to control live-file load: there is no dedicated
-per-agent read queue cap or executor-wide outstanding-read limit. Slow readers can
-delay an agent's other work. `durable_streams.load` does not configure these reads.
-
-The byte/frame values bound encoded session buffering, **not total upload size**.
-Input encoding includes schema and frame overhead. Queued output is bounded by
-`event_queue_frames × max_event_bytes`, not all per-request allocations.
-
-OpenAPI generation uses [separate limits](/next/invoke/http-router-reference#caching-and-limits)
-and is not bounded by `exchange_timeout`. Route lookup caching
-(`route_resolver.router_cache_ttl = "10m"`, capacity 1024, eviction period 1 minute)
-is also separate from the OpenAPI document cache.
+See [HTTP Gateway](/next/operate/http-gateway) for shared storage, ingress,
+HTTP API and MCP ports, streaming timeouts, and resource budgets. These are platform
+operator settings, not application router declarations.
 
 ## Troubleshooting
 
-- **Unexpected handler or 404:** check concrete code-first routes, the selected
-  mount, and declaration order. Only absent files fall through; permission,
-  initialization, and storage failures do not.
-- **Static file returns 500:** confirm it is provisioned read-only and that
-  worker-service can read the indexed blob from shared storage.
-- **Live read stalls:** check agent initialization and preceding work, then test
-  cancellation through the ingress and review the exchange deadline.
-- **OpenAPI returns 502:** check provider JSON, size limits, local references, and
-  conflicting paths/components/operation IDs. A provider failure does not disable
-  ordinary router traffic.
-
-Use status codes, safe error categories, and router/deployment identities in
-diagnostics. Do not log HTTP bodies, provider documents, secrets, or internal paths.
+See [Troubleshooting](/next/invoke/making-custom-apis/troubleshooting#router-and-file-requests)
+for routing, file serving, and OpenAPI failures.
 
 Complete examples are available in the repository for
 [TypeScript](https://github.com/golemcloud/golem/blob/main/cli/golem-cli/tests/app/typescript_http_router.ts),

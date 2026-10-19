@@ -1,0 +1,197 @@
+import { Callout } from "nextra/components"
+
+# Exposing Durable Streams over HTTP
+
+Golem exposes an HTTP-annotated agent method in **Durable Streams mode** whenever the method has a top-level stream input or a stream-bearing result. No Durable Streams annotation is required. The method's HTTP path becomes the base of a protocol-compatible URL family; the method schema fixes the available slots and their representations.
+
+This is useful when a browser, service, or an unmodified Durable Streams client needs to drive a long-running agent invocation without holding one HTTP request open.
+
+For self-hosted proxy buffering, idle timeouts, and SSE keep-alives, see
+[HTTP Gateway](/next/operate/http-gateway#long-lived-connections).
+
+## The Durable Streams protocol
+
+[Durable Streams](https://durablestreams.com/) is an open HTTP protocol for ordered, replayable streams. Clients append data to a stream URL, read its history, and resume from an opaque offset after a disconnect. Catch-up reads, long-polling, and Server-Sent Events (SSE) use the same stream resource. See the [official protocol specification](https://github.com/durable-streams/durable-streams/blob/main/PROTOCOL.md) for the HTTP methods, headers, offsets, and closure rules.
+
+Golem implements this protocol for the input and output streams of an agent invocation. It supplies the stream URLs and validates data against the method's schema; it is not an arbitrary-path stream store. See [Compatibility and limitations](/next/invoke/making-custom-apis/durable-streams/compatibility) for supported operations, Golem extensions, and differences from a generic Durable Streams server.
+
+Durable Streams over HTTP and the [invocation-session WebSocket protocol](/next/stream-session-public-protocol-v1)
+are separate supported transports. Use this page for stream URLs, catch-up reads,
+long polling, SSE, and browser clients. [External bridge libraries](/next/invoke/bridge-libraries#streaming-methods)
+and [CLI streaming methods](/next/invoke/cli#streaming-methods) use the WebSocket
+transport instead; they do not expose Durable Streams URLs.
+
+## URL family
+
+For a method mounted at `{base}`, Golem provides:
+
+| Resource | URL | Purpose |
+| --- | --- | --- |
+| Method | `{base}` | Create a session with a server-generated session ID. |
+| Session | `{base}/invocations/{session}` | Create, inspect, or cancel one invocation session. |
+| Stream slot | `{base}/invocations/{session}/streams/{slot}` | Create, read, append to, or delete a declared stream. |
+| Direct result | `{base}/invocations/{session}/streams/$result` | Read a direct stream result or the single non-stream method result. |
+| Fork session | `{base}/forks/{fork}/invocations/{session}` | Inspect an exact-prefix agent fork. |
+| Fork stream | `{base}/forks/{fork}/invocations/{session}/streams/{slot}` | Create or use a stream on the forked agent. |
+
+Session and fork IDs contain 1–128 ASCII letters, digits, `.`, `_`, or `-`. A session identifies one invocation and all of its input, output, and result slots. A direct `stream<T>` result is `$result`; when a result record contains streams, each field is a separate output slot and there is no aggregate `$result`. A non-stream result is a single JSON value in `$result`. Unit results have no result slot.
+
+Top-level `stream<u8>` slots are opaque byte streams. They use `application/octet-stream` by default and offsets advance through bytes. All other slots are typed JSON streams using `application/json`; each array member in a read response is one logical item. A custom opaque MIME type is available only for direct byte streams. Golem has no native `text/plain` mode for `stream<string>`.
+
+See [Customizing Durable Stream Routes](/next/invoke/making-custom-apis#customizing-durable-stream-routes) for public slot aliases, byte-stream MIME types, operation switches, and per-route admission limits. There is no fork opt-out.
+
+## Official client libraries
+
+Use the [official client libraries](https://github.com/durable-streams/durable-streams#client-libraries) from a browser or external application; the client language does not need to match the agent's SDK. The project maintains clients for [TypeScript and JavaScript](https://durablestreams.com/typescript-client), [Python](https://github.com/durable-streams/durable-streams/tree/main/packages/client-py), [Go](https://github.com/durable-streams/durable-streams/tree/main/packages/client-go), [Rust](https://github.com/durable-streams/durable-streams/tree/main/packages/client-rust), and other languages listed in that catalog.
+
+The TypeScript reference package, [`@durable-streams/client`](https://github.com/durable-streams/durable-streams/tree/main/packages/client), provides:
+
+- `stream()` for reading history and following live updates.
+- `DurableStream` for read/write operations on a stream URL.
+- `IdempotentProducer` for batched writes with producer identities, sequence numbers, and retry deduplication.
+
+Create the Golem invocation session first when required, then configure the client with a concrete stream-slot URL from the family above and the route's authentication headers. Append only to input slots; read output slots, including `$result`, without trying to create or write them. Follow the [session creation rules](#start-and-drive-a-session) rather than copying an upstream example that creates an arbitrary stream URL.
+
+Client libraries can expose features that Golem does not provide, such as subscription-management resources. Check the [compatibility guide](/next/invoke/making-custom-apis/durable-streams/compatibility) when choosing client features.
+
+## Start and drive a session
+
+This example assumes an `echo` method with a JSON input slot named `input` and an output slot named `$result`.
+
+```shell
+# Create the invocation. Non-stream arguments use the endpoint's normal
+# path, query, header, and body bindings.
+curl -i -X PUT \
+  https://api.example.com/echo/invocations/demo-1 \
+  -H 'Authorization: Bearer …' \
+  -H 'Stream-TTL: 300'
+
+# Append two items and close the input atomically.
+curl -i -X POST \
+  https://api.example.com/echo/invocations/demo-1/streams/input \
+  -H 'Authorization: Bearer …' \
+  -H 'Content-Type: application/json' \
+  -H 'Producer-Id: upload-1' \
+  -H 'Producer-Epoch: 0' \
+  -H 'Producer-Seq: 0' \
+  -H 'Stream-Closed: true' \
+  --data '["first", "second"]'
+
+# Read everything produced so far. Keep the returned Stream-Next-Offset
+# opaque and pass it back unchanged when resuming.
+curl -i \
+  'https://api.example.com/echo/invocations/demo-1/streams/%24result?offset=-1'
+```
+
+Slot `PUT` and input `POST` can create a missing session only when every non-stream method argument is bound in the route path or query. Otherwise create the session first. Base and session creation consume the endpoint's normal request body; do not assume it is always a JSON argument object.
+
+## Reading
+
+`GET` accepts these query parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `offset` | `-1` for the beginning (the default), `now` for the current tail, or a returned 48-character lowercase hexadecimal offset. |
+| `live=long-poll` | Wait for data or the server's configured polling timeout. An empty timeout returns `204`. |
+| `live=sse` | Stream data and control events as `text/event-stream`. Byte data events are base64 and report `Stream-SSE-Data-Encoding: base64`. |
+| `cursor` | An opaque long-poll collapsing cursor returned in `Stream-Cursor`; it is independent of the stream offset. |
+
+Offsets are opaque `StreamOffsetV1` values. Their hexadecimal representation is a transport token, not an integer or item count. Store and echo it exactly. A read returns `Stream-Next-Offset`, `Stream-Up-To-Date`, and terminal metadata as applicable. JSON catch-up and long-poll bodies are arrays; byte bodies are exact bytes. SSE control events carry `streamNextOffset`, `upToDate`, and either `streamClosed: true` or a string `streamCursor`.
+
+`HEAD` returns the same committed stream metadata without a body. Closed pages can use `ETag` and conditional `GET`; other responses are normally `Cache-Control: no-store`.
+
+## Appending and idempotent producers
+
+Only input slots accept `POST`; output slots and `$result` return `405` with `Allow`. A JSON body may be one value or an array batch; arrays flatten exactly one level, so an array-valued item needs an outer array. An empty array is invalid. Golem validates every item against the invocation's pinned element schema before appending any item in the batch. Invalid input returns `400` with an `application/problem+json` body containing `path` and `detail`. A byte append is one opaque byte batch using the slot's configured media type.
+
+A non-empty body requires the slot's content type: missing Content-Type returns `400`, and a mismatch returns `409`. Send `Stream-Closed: true` with data to append and close atomically, or with an empty body for close-only. An empty close-only request may omit Content-Type; any supplied Content-Type is ignored. Only case-insensitive `true` sets Stream-Closed; other textual values are treated as absent.
+
+Ordinary writes return `204`. All successful writes include `Stream-Next-Offset` and include `Stream-Closed: true` only when closed. Further writes after closure return `409` with the final offset and `Stream-Closed: true`; repeating an ordinary empty close returns `204`. Reads report closure only at EOF. Session GET/HEAD report closure only when all slots are closed or deleted; the manifest's `closed` fields remain JSON booleans.
+
+### Retry-safe producers
+
+Supply `Producer-Id`, `Producer-Epoch`, and `Producer-Seq` together, or omit all three. Epoch and sequence are decimal integers from 0 through 9007199254740991. Sequence starts at zero and advances per request, not per item. A newer epoch fences older writers and starts at sequence zero. Persist the tuple and body before sending, and never replace an uncertain request with different data.
+
+A newly accepted producer write returns `200`; its duplicate retry returns `204` with the original offset without appending again. Successful producer responses echo `Producer-Epoch` and report the highest accepted `Producer-Seq`. While the stream is open, repeating a sequence is safe. After closure, only the original closing producer tuple gets this successful retry; other tuples return `409`. A stale epoch returns `403` with the current epoch; a sequence gap returns `409` with `Producer-Expected-Seq` and `Producer-Received-Seq`.
+
+Producer state and stream data commit in the same oplog batch before acknowledgment. Retry a lost response with the same tuple to avoid duplicate items. Plain appends do not have this guarantee, and the gateway does not transparently retry append calls.
+
+### HTTP and WebSocket input
+
+HTTP writes and an attached WebSocket can interleave on the same input. Shared durable offsets order all messages, but the WebSocket keeps its own continuous sequence counter, independent of HTTP producer counters. Reconnecting the WebSocket restores its counter from durable history.
+
+Closing the input over HTTP also ends input from an attached WebSocket. Frames already in flight after that close are discarded without failing the invocation or adding items to durable history. A WebSocket sender must still stop after its own End frame; sending more items after its own End is a protocol error.
+
+### Session creation and request limits
+
+Follow the [session creation rules](#start-and-drive-a-session) before appending. When non-stream arguments require body or header bindings, POST returns `404` with an instruction to create the session first. Session creation honors the endpoint's normal bindings and body format. A deleted slot returns `410` rather than recreating it.
+
+Oversized bodies and JSON batches with more than 4096 messages return `413`. Append admission runs before storage access, including for closed or deleted slots, so an exhausted budget returns `429` with `Retry-After: 1` before checking those states. Append requests do not consume the catch-up read budget. See [Operating Durable Stream Sessions](/next/operate/durable_streams#gateway-configuration) for sizing and admission controls, and [gateway metrics](/next/operate/metrics#worker-service) for monitoring.
+
+## Cancelling a session
+
+Send `DELETE {base}/invocations/{session}` to cooperatively cancel all open streams. The first and repeated requests return `204 No Content`; an unknown session returns `404`. Cancellation also fences output slots that have not materialized, so later output cannot reopen them. Already-terminal streams keep their existing outcome.
+
+Cancellation retains history. Readers consume recorded and buffered items before reaching the cancellation terminal, which reports `Stream-Closed: true` and `Stream-Cancelled: true` at EOF. Recorded guest observations replay unchanged.
+
+<Callout type="warning">
+  Session deletion does not interrupt or terminate the agent invocation or roll
+  back state or external effects. Agent code can continue computing, changing
+  state, performing I/O, and producing a result unless it stops in response to
+  cancelled stream operations. A `204` acknowledges durable stream cancellation
+  only.
+</Callout>
+
+The invocation-session URL and cooperative cancellation are Golem extensions. The upstream protocol's [stream deletion semantics](https://github.com/durable-streams/durable-streams/blob/main/PROTOCOL.md#54-delete-stream) delete a stream URL, not the producer's computation.
+
+## Deleting a stream URL
+
+Send `DELETE {base}/invocations/{session}/streams/{slot}` to atomically cancel that slot and write a durable tombstone. The successful deletion returns `204`.
+
+For an input, cancellation closes the external producer side; the agent's input reader observes EOF after already-buffered items. For an output or `$result`, it records that the consumer has gone away. A write already accepted by the guest transport can still report success without entering durable history; subsequent writes fail when the producer observes the closed consumer. Transport acceptance is not acknowledgment of durable publication.
+
+Deletion is a soft delete. After deletion, authenticated requests admitted by load limits return `410 Gone` for `GET`, `HEAD`, `POST`, and repeated `DELETE`; `PUT` returns `409 Conflict`. The tombstone and oplog history survive recovery, and the URL remains reserved for that session's lifetime. Deletion never removes durable history. See [Expiry](#expiry) for reuse of a public session ID for a new invocation, and [retained history and capacity](/next/operate/durable_streams#retained-history-and-capacity) for storage planning.
+
+## Expiry
+
+Creation `PUT`, lazy slot `PUT`, lazy input `POST`, and fork creation support one session-wide expiry policy:
+
+- `Stream-TTL: <seconds>` is a sliding idle timeout in whole seconds.
+- `Stream-Expires-At: <RFC3339 timestamp>` is an absolute future deadline.
+
+The headers are mutually exclusive; malformed, duplicated, past, or conflicting policies return `400`. The policy belongs to the entire session, not one slot. `HEAD` reports the configured value. A new origin `GET` and an accepted or duplicate `POST` refresh a sliding TTL; refresh records are coalesced until they extend the deadline by at least 10% of the TTL. `HEAD`, replayed `PUT`, subsequent activity inside an already-open live response, and agent output do not refresh it.
+
+Expiry cooperatively cancels open streams, retires the whole URL family to `404`, and—on the normal durable-agent path—allows an explicit session `PUT` or eligible slot `PUT` to create a new invocation with the same public session ID and fresh stream identities. Lazy `POST` does not recreate an expired session. Ephemeral agents cannot release their key-derived identity and require a new session ID; expired fork targets also cannot be recreated.
+
+## Authentication and browsers
+
+Every generated operation inherits the endpoint's authentication policy. Send the same bearer or configured API credentials to base, session, stream, and fork URLs. Session URLs are not bearer capabilities by themselves.
+
+CORS also inherits the route policy. Preflight supports the Durable Streams request headers, including closure, producer, fork, expiry, cache, and content headers. Successful browser responses expose the relevant `Location`, offset, terminal, producer, expiry, retry, ETag, cursor, and SSE-encoding headers. Configure the endpoint's allowed origins and credentials as described in [Making Custom APIs](/next/invoke/making-custom-apis).
+
+## Operation and status reference
+
+The deployment-specific OpenAPI document is authoritative for the concrete slots, schemas, media types, security, and operations enabled on a route. The table below summarizes the complete runtime family.
+
+| Resource and method | Success | Important failures | Main request / response headers |
+| --- | --- | --- | --- |
+| Base `PUT` | `201`; idempotent existing invocation `200` | `400` arguments/expiry; `409` identity, arguments, or policy conflict | Request expiry; response `Location` |
+| Session `PUT` | `201` / `200` | `400`; `404`; `409`; `503` | Request expiry; response `Location` when supplied by the concrete contract |
+| Session `GET` / `HEAD` | `200` manifest / bodyless metadata | `404`; `503` | `Stream-Closed`, `Cache-Control`; `HEAD` also expiry policy |
+| Session `DELETE` | First and repeated cancellation `204` | Unknown `404`; disabled `405`; `503` | `Allow`, `Retry-After` when applicable |
+| Slot `PUT` | Created `201`; existing `200` | Invalid lazy create/body `400`; unknown `404`; tombstone/type conflict `409`; `503` | Request expiry and optional matching `Content-Type`; response metadata |
+| Slot `HEAD` | `200` | Unknown `404`; tombstone `410`; `503` | Offset, closed/cancelled/up-to-date, expiry, cache, ETag |
+| Slot `GET` | Data/SSE `200`; empty long-poll `204`; conditional closed page `304` | Invalid query/offset `400`; unknown `404`; tombstone `410`; admission `429` or `503` | `If-None-Match`; response offset, closed, cancelled, up-to-date, cursor, ETag, SSE encoding, cache, `Retry-After` |
+| Input `POST` | Ordinary append/close `204`; new producer append `200`; duplicate producer request `204` | `400`; fenced `403`; output slot/disabled `405`; conflict/gap/closed `409`; tombstone `410`; body/batch `413`; rate `429`; `503` | Content type, closure, producer tuple, expiry on lazy create; response offset/closed and producer outcome |
+| Slot `DELETE` | Tombstone `204` | Unknown `404`; disabled `405`; already deleted `410`; `503` | `Allow`, `Retry-After` when applicable |
+| Fork slot `PUT` | Created `201`; identical retry `200` | Invalid source/cut `400`; read-only initial data `403`; unknown `404`; conflict/deleted source/session limit `409`; copy/body limit `413`; rate `429`; `503` | Fork source/offset/sub-offset, optional initial body/close and expiry; response `Location` and metadata |
+
+Common response metadata is `Stream-Next-Offset`, `Stream-Closed`, `Stream-Cancelled`, `Stream-Up-To-Date`, `Cache-Control`, and `ETag`. `Stream-Cancelled: true` distinguishes cooperative cancellation from normal EOF; buffered history may still be returned first. An already-terminal stream keeps its original terminal state.
+
+Producer outcomes use `Producer-Epoch` and `Producer-Seq`. A stale epoch is `403` with the current `Producer-Epoch`; a sequence gap is `409` with `Producer-Expected-Seq` and `Producer-Received-Seq`. Body and schema errors may use `application/problem+json`, but callers must accept bodyless errors too. Disabled operations return `405` with an exact `Allow`; overload returns `429` or `503` with `Retry-After`.
+
+<Callout type="info">
+  For supported features and differences from a generic Durable Streams store,
+  see [Compatibility and limitations](/next/invoke/making-custom-apis/durable-streams/compatibility).
+  For exact-prefix branches, see [Forking Durable Streams](/next/invoke/making-custom-apis/durable-streams/forks).
+</Callout>

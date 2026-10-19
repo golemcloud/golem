@@ -156,6 +156,72 @@ For exactly-once retry deduplication, the remote service must atomically retain 
 
 Golem records each completed host attempt and replays its result, but exactly-once external publication still depends on provider persistence and deduplication retention. With Golem idempotence disabled, recovery of an interrupted append can fail closed rather than risk changing the request.
 
+### Recover an uncertain append
+
+Suppose a non-closing append failed with a transient error after its retry budget was exhausted. Keep the same writer: the service may already have committed the data. After resolving the transient condition, retry the retained request before sending the next message. The following uses the same writer APIs as above, but assumes the earlier append did not request closure. Run it inside the writer's existing method or resource scope; do not recreate the writer or append the original payload again.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+// Acknowledges the retained request without allocating a new sequence.
+await writer.retryPending();
+await writer.append(['next']);
+```
+
+`retryPending()` returns `undefined` if nothing is pending. Although `append` also resolves pending work automatically, calling `append` again with the original data is not a retry: after recovery it publishes that data under a new sequence.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+if (yield* writer.hasPending) {
+  yield* writer.retryPending;
+}
+yield* writer.append(['next']);
+```
+
+Run this inside `Effect.gen` while the writer's acquisition scope is still open. Both pending checks and recovery are Effect values, not method calls.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+if writer.has_pending() {
+    writer.retry_pending().await?;
+}
+writer.append_json(&["next"], false).await?;
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+import scala.concurrent.Future
+
+val recovered =
+  if (writer.hasPending) writer.retryPending().map(_ => ())
+  else Future.successful(())
+
+recovered.flatMap(_ => writer.append(Vector("next")))
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+if writer.has_pending() {
+  ignore(writer.retry_pending())
+}
+ignore(writer.append(["next"]))
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+if writer.HasPending() {
+    if _, err := writer.RetryPending(); err != nil {
+        return err
+    }
+}
+_, err := durablestreams.AppendJSON(writer, []string{"next"}, false)
+return err
+```
+  </Tabs.Tab>
+</Tabs>
+
+If recovery fails, propagate the error and do not send new data. Do not retry producer-safety errors as transient failures or switch producer identity to bypass them. A pending append-and-close needs only recovery: once acknowledged, the stream is closed, so there is no next append. Dropping or releasing a writer does not prove that its pending data was never published.
+
 ## Append and close
 
 - A JSON append contains zero or more separately encoded complete values; an array-valued application message remains one value inside the protocol's outer batch.
@@ -201,7 +267,7 @@ Every SDK accepts an optional string-valued Golem secret handle for bearer authe
 | Progress | Provider offsets/cursors managed by the guest client | Golem session checkpoints and attachment journals |
 | Producer identity | Explicit ID, epoch, and sequence | Managed for agent-to-agent SDK streams; external session writers supply producer tuples |
 | Best for | Shared logs and ingress/egress services whose lifecycle belongs to another service | Typed agent input/output and streams owned by one invocation, including output after method return |
-| Operations | Guest SDK plus provider lifecycle | [Operator session API](/v1.6/operate/durable_streams) and method stream SDK types |
+| Operations | Guest SDK plus provider lifecycle | [HTTP session API](/v1.6/invoke/making-custom-apis/durable-streams) and method stream SDK types |
 
 Use an external stream when the URL and retention lifecycle belong to another service. Use a method stream when the producer or consumer is part of a typed Golem invocation. Bridging between them is valid, but preserve backpressure and cancellation and do not assume their offsets are interchangeable.
 

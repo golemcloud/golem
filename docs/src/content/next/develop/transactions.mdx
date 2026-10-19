@@ -232,26 +232,15 @@ It is defined with the following interface:
     </Tabs.Tab>
 
     <Tabs.Tab>
-        MoonBit has no high-level saga API. The following are application-defined illustrative types, not SDK exports:
+        The MoonBit SDK does not yet provide a high-level saga helper. Use ordinary async control flow with application callbacks for domain operations and their compensations. For example, an order workflow can reserve stock, charge a payment, and confirm the order. If a later step fails, refund the payment before releasing the stock.
+
+        This application-defined outcome keeps the original failure and any failed compensations. An empty compensation-error array means that every attempted compensation succeeded, not that the external systems provide an atomic rollback.
 
         ```moonbit
-        pub(all) struct Operation[In, Out, Err] {
-          execute : (In) -> Result[Out, Err]
-          compensate : (In, Out) -> Result[Unit, Err]
-        }
-        ```
-
-        There are two ways to define an operation:
-
-        1. Construct the `Operation` struct manually
-        2. Use the `operation` function to create an operation from a pair of closures
-
-        ```moonbit
-        pub fn[In, Out, Err] operation(
-          execute : (In) -> Result[Out, Err],
-          compensate : (In, Out) -> Result[Unit, Err],
-        ) -> Operation[In, Out, Err] {
-          { execute, compensate }
+        ///|
+        enum OrderOutcome {
+          Confirmed
+          Failed(String, Array[(String, String)])
         }
         ```
 
@@ -419,36 +408,52 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     The MoonBit SDK does not provide high-level saga helpers. Implement the saga with ordinary control flow and durable host calls.
     </Callout>
 
-    Add the API package alias to the component's `moon.pkg`; MoonBit source files do not contain import declarations:
+    The function below uses `OrderOutcome` from the previous example. The callbacks are application code, not SDK exports. Implement them with durable HTTP or RPC host calls. Each callback must return `Err` only when it knows that the requested effect did not occur; reconcile ambiguous remote outcomes before returning. Confirmation must not return `Err` after it commits the order.
 
     ```moonbit
-    import {
-      "golemcloud/golem_sdk/api" @api,
+    ///|
+    async fn place_order(
+      order_id : String,
+      reserve_stock : async (String) -> Result[String, String],
+      charge_payment : async (String) -> Result[String, String],
+      confirm_order : async (String) -> Result[Unit, String],
+      refund_payment : async (String) -> Result[Unit, String],
+      release_stock : async (String) -> Result[Unit, String],
+    ) -> OrderOutcome {
+      let reservation_id = match reserve_stock(order_id) {
+        Ok(id) => id
+        Err(error) => return Failed(error, [])
+      }
+      let mut payment_id : String? = None
+      let original_error = match charge_payment(order_id) {
+        Err(error) => error
+        Ok(id) => {
+          payment_id = Some(id)
+          match confirm_order(order_id) {
+            Ok(_) => return Confirmed
+            Err(error) => error
+          }
+        }
+      }
+      let rollback_errors : Array[(String, String)] = []
+      if payment_id is Some(id) {
+        match refund_payment(id) {
+          Ok(_) => ()
+          Err(error) => rollback_errors.push(("refund payment", error))
+        }
+      }
+      // Attempt stock release even if the refund failed.
+      match release_stock(reservation_id) {
+        Ok(_) => ()
+        Err(error) => rollback_errors.push(("release stock", error))
+      }
+      Failed(original_error, rollback_errors)
     }
     ```
 
-    The following is pseudocode for domain-error handling, not a complete SDK implementation:
+    This workflow handles returned domain errors. Raised errors propagate to the caller; they do not trigger this rollback path. It does not retry operations or failed compensations automatically. The caller must handle partial rollback explicitly, for example by recording the order for reconciliation instead of reporting that rollback completed.
 
-    ```text
-    repeat:
-      completed = []
-      for each step:
-        result = step.execute()
-        if result succeeded:
-          append the step's compensation to completed
-        else:
-          compensate completed steps in reverse order
-          preserve every compensation result
-          if a compensation failed:
-            return partial-rollback(original error, compensation error)
-          in fallible mode, return the original domain error
-          otherwise, resolve the saga policy and call next-retry-delay with continuation state
-          if exhausted or invalid, return failure preserving the original error
-          await the delay with a durable timer, then start the next attempt
-      if all steps succeeded, return success
-    ```
-
-    Keep execute and compensation calls duplicate-safe. A crash reconstructs the recorded prefix and repairs eligible incomplete calls; it does not undo external effects. A compensation failure requires explicit application handling, not a claim that rollback completed.
+    Keep execute and compensation calls duplicate-safe, with stable application idempotency keys such as the order ID and an operation name. Ordinary local callbacks are not durable by themselves. Golem records supported host calls and replays their results during recovery; a crash reconstructs the recorded prefix and repairs eligible incomplete calls. It does not undo external effects or make a remote service idempotent.
     </Tabs.Tab>
     <Tabs.Tab>
     ```go
