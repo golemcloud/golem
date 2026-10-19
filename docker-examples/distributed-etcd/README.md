@@ -96,7 +96,8 @@ etcdctl auth enable
 
 The client certificate's common name is `golem-shard-manager`, the same as the etcd user, so etcd's
 health check above still passes once authentication is on: etcd takes the user from the certificate
-when no password is sent. The deployment guide has the details of every setting.
+when no password is sent. The docs' Shard Manager page (`docs/src/content/next/operate/shard-manager.mdx`)
+has the details of every setting.
 
 ## Limitations of this example
 
