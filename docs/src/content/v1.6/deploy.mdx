@@ -2,6 +2,8 @@ import { Cards } from "nextra/components"
 
 # Deployment
 
+To run Golem in production, choose one of the [deployment modes](/v1.6/deploy/modes) and go through the [production checklist](/v1.6/deploy/production-checklist). This page describes the services that the deployments are made of.
+
 Golem Services are distributed as Docker images. They are available in [Golem Services Docker Hub](https://hub.docker.com/u/golemservices). Each Docker image is built for the following architectures:
 
 - linux/amd64
@@ -10,7 +12,7 @@ Golem Services are distributed as Docker images. They are available in [Golem Se
 The services are using the following storage backends:
 
 - Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (for running locally)
-- [Redis](https://redis.io/)
+- [Redis](https://redis.io/) - optional, for the worker executor's storage or the worker service's sessions
 - Blob storage - Shared File System or S3
 - [etcd](https://etcd.io/) - optional, only for the shard manager's distributed mode
 
@@ -192,6 +194,16 @@ The shard manager identifies a worker executor by the address it reaches it at, 
 For deployment variants, see the following sections:
 
 <Cards num={3}>
+  <Cards.Card title="Production Checklist" href="/v1.6/deploy/production-checklist" />
+  <Cards.Card title="Deployment Modes" href="/v1.6/deploy/modes" />
+  <Cards.Card title="All-in-one Server" href="/v1.6/deploy/server" />
+  <Cards.Card title="Fixed Cluster" href="/v1.6/deploy/cluster" />
+  <Cards.Card title="VM" href="/v1.6/deploy/vm" />
+  <Cards.Card title="Railway" href="/v1.6/deploy/railway" />
+  <Cards.Card title="Render" href="/v1.6/deploy/render" />
+  <Cards.Card title="Fly.io" href="/v1.6/deploy/fly" />
+  <Cards.Card title="AWS ECS" href="/v1.6/deploy/ecs" />
+  <Cards.Card title="Google Cloud Run" href="/v1.6/deploy/cloud-run" />
   <Cards.Card title="Docker" href="/v1.6/deploy/docker" />
   <Cards.Card title="Kubernetes" href="/v1.6/deploy/kubernetes" />
   <Cards.Card title="Golem Cloud" href="/v1.6/deploy/golem-cloud" />
