@@ -914,10 +914,10 @@ for interruption_test in \
   host::p2::tcp::input::ephemeral_p2_blocking_splice_managed_xfs_storage_quota \
   host::p2::tcp::input::cross_socket::durable_p2_cross_socket_splice_managed_xfs_storage_quota \
   host::p2::tcp::input::cross_socket::ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota \
-  host::p2::tcp::input::repeated_stop::durable_claimed_quota_stop_rejects_tick_and_update \
-  host::p2::tcp::input::repeated_stop::ephemeral_claimed_quota_stop_rejects_tick_and_update \
-  host::p2::tcp::input::repeated_stop::durable_claimed_user_stop_rejects_quota_monitor_tick_and_update \
-  host::p2::tcp::input::repeated_stop::ephemeral_claimed_user_stop_rejects_quota_monitor_tick_and_update \
+  host::p2::tcp::input::repeated_stop::durable_claimed_quota_stop_preserves_reason_after_policy_update \
+  host::p2::tcp::input::repeated_stop::ephemeral_claimed_quota_stop_preserves_reason_after_policy_update \
+  host::p2::tcp::input::repeated_stop::durable_claimed_user_stop_preserves_reason_after_policy_update \
+  host::p2::tcp::input::repeated_stop::ephemeral_claimed_user_stop_preserves_reason_after_policy_update \
   host::p3::udp::durable_p3_udp_receive_managed_xfs_storage_quota \
   host::p3::udp::ephemeral_p3_udp_receive_managed_xfs_storage_quota \
   host::p3::promise::durable_p3_promise_managed_xfs_storage_quota \

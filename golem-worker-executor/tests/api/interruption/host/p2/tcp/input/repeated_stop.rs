@@ -184,6 +184,10 @@ async fn repeated_stop(
         }
         allocate_storage(&owned).await?;
         if !user_stop {
+            // Storage exhaustion is sampled on the ordinary 30-second monitor cadence.
+            tokio::time::timeout(Duration::from_secs(40), worker.await_interrupt_for_test())
+                .await
+                .context("storage exhaustion must publish the first stop")?;
             receipt = Some(published_interrupt_receipt(worker.as_ref()).await?);
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;
         }
