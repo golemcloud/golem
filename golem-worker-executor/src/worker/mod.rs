@@ -5095,7 +5095,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let subscription = self.events().subscribe();
         let result = match self.lookup_invocation_result(&idempotency_key).await {
             LookupResult::Complete(result) => ResultOrSubscription::Finished(result),
-            LookupResult::Pending => ResultOrSubscription::Pending(subscription),
+            LookupResult::Pending => {
+                Worker::start_if_needed(self.clone()).await?;
+                ResultOrSubscription::Pending(subscription)
+            }
             LookupResult::Interrupted => {
                 return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
             }
@@ -5117,13 +5120,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ResultOrSubscription::Finished(Ok(output)) => Ok(output),
             ResultOrSubscription::Finished(Err(err)) => Err(err),
             ResultOrSubscription::Pending(subscription) => {
-                // Cache miss / non-read-only path: ensure the wasmtime instance is
-                // running so the queued invocation can be processed. The
-                // `ResultOrSubscription::Finished` arm above short-circuits before
-                // this, which is exactly what makes a read-only cache hit avoid
-                // any agent loading.
-                Worker::start_if_needed(self.clone()).await?;
-
+                // Admission already requested startup. Waiting for its result must not
+                // issue a newer resume request that supersedes an accepted suspend.
                 debug!("Waiting for idempotency key to complete",);
 
                 // The caller's honest share of the work: the execution runs in the
