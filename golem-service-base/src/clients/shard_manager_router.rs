@@ -43,12 +43,17 @@ use tracing::{debug, info};
 /// the configured address can name its successor.
 const LEADER_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The longest HTTP/2 ping interval, and the longest wait for its answer, on a connection to a
-/// leader. The connection is idle between lease renewals, so nothing else notices a leader whose
-/// node lost power and closed nothing: with the default 10 s and 10 s, the call would outlast the
-/// executor's renewal deadline before the router forgot that leader. The shard manager's gRPC
+/// The longest HTTP/2 ping interval on a connection to a leader or to the configured address.
+/// The connection is idle between lease renewals, so nothing else notices a replica whose node
+/// lost power and closed nothing: with the default 10 s and 10 s, a call would outlast the
+/// executor's renewal deadline before the router gave up on that replica. The shard manager's gRPC
 /// server answers every ping and enforces no minimum interval, so pinging this often is safe.
-const LEADER_KEEP_ALIVE: Duration = Duration::from_secs(2);
+const LEADER_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The longest wait for the answer to such a ping. A dead peer is found within the interval plus
+/// this, about 7 s, which is under the executor's 10 s renewal deadline; a wait as short as the
+/// interval would close a healthy connection whenever either side's runtime stalled for about 2 s.
+const LEADER_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How many leaders that an answer named one call follows in one pass. Replicas name each other
 /// only while a leadership change is being observed, so a chain is short; the limit ends a loop
@@ -123,42 +128,57 @@ fn new_client(channel: OtelGrpcService<Channel>, max_message_size: usize) -> Cli
         .max_encoding_message_size(max_message_size)
 }
 
+/// The ping settings for a connection that must notice a silent peer in time: the configured
+/// ones where they are shorter, the caps otherwise, and on even when the connection is idle.
+fn capped_keep_alive(client: &GrpcClientConfig) -> GrpcClientConfig {
+    GrpcClientConfig {
+        http2_keep_alive_interval: Some(
+            client
+                .http2_keep_alive_interval
+                .map_or(LEADER_KEEP_ALIVE_INTERVAL, |i| {
+                    i.min(LEADER_KEEP_ALIVE_INTERVAL)
+                }),
+        ),
+        http2_keep_alive_timeout: Some(
+            client
+                .http2_keep_alive_timeout
+                .map_or(LEADER_KEEP_ALIVE_TIMEOUT, |t| {
+                    t.min(LEADER_KEEP_ALIVE_TIMEOUT)
+                }),
+        ),
+        http2_keep_alive_while_idle: Some(true),
+        ..client.clone()
+    }
+}
+
 /// The configured address as the router uses it: one connection that is never replaced for its
-/// age. Only the leader serves, so a pool spreads no load; and a connection replaced on every age
-/// limit dials the Service again, which can reach a pod that is gone while the Service still lists
-/// it, and costs the whole connect timeout.
+/// age, and probed as often as a leader connection. Only the leader serves, so a pool spreads no
+/// load; a connection replaced on every age limit dials the Service again, which can reach a pod
+/// that is gone while the Service still lists it, and costs the whole connect timeout. Because the
+/// connection is kept, a replica that froze behind it would otherwise block every pass of a
+/// failover until the default keep-alive gave up.
 fn configured_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
     GrpcClientConfig {
         connection_pool_size: std::num::NonZeroUsize::MIN,
         max_connection_age: Duration::ZERO,
-        ..config.client_config.clone()
+        ..capped_keep_alive(&config.client_config)
     }
 }
 
 /// One attempt with a short connect: on any failure the client goes back to the configured
 /// address, whose replicas know the current leader. A connection that goes silent is dropped
-/// within [`LEADER_KEEP_ALIVE`] twice over, so that the failure comes in time to be acted on.
+/// within [`LEADER_KEEP_ALIVE_INTERVAL`] plus [`LEADER_KEEP_ALIVE_TIMEOUT`], so that the failure
+/// comes in time to be acted on.
 fn leader_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
     let client = &config.client_config;
     GrpcClientConfig {
         connect_timeout: client.connect_timeout.min(LEADER_CONNECT_TIMEOUT),
-        http2_keep_alive_interval: Some(
-            client
-                .http2_keep_alive_interval
-                .map_or(LEADER_KEEP_ALIVE, |i| i.min(LEADER_KEEP_ALIVE)),
-        ),
-        http2_keep_alive_timeout: Some(
-            client
-                .http2_keep_alive_timeout
-                .map_or(LEADER_KEEP_ALIVE, |t| t.min(LEADER_KEEP_ALIVE)),
-        ),
-        http2_keep_alive_while_idle: Some(true),
         retries_on_unavailable: RetryConfig {
             max_attempts: 0,
             ..client.retries_on_unavailable.clone()
         },
         tls: leader_tls(&client.tls, &config.host),
-        ..client.clone()
+        ..capped_keep_alive(client)
     }
 }
 
@@ -671,8 +691,14 @@ mod tests {
     #[test]
     fn the_leader_connection_is_probed_often_even_while_idle() {
         let config = leader_client_config(&config_with(GrpcClientConfig::default()));
-        assert_eq!(config.http2_keep_alive_interval, Some(LEADER_KEEP_ALIVE));
-        assert_eq!(config.http2_keep_alive_timeout, Some(LEADER_KEEP_ALIVE));
+        assert_eq!(
+            config.http2_keep_alive_interval,
+            Some(LEADER_KEEP_ALIVE_INTERVAL)
+        );
+        assert_eq!(
+            config.http2_keep_alive_timeout,
+            Some(LEADER_KEEP_ALIVE_TIMEOUT)
+        );
         assert_eq!(config.http2_keep_alive_while_idle, Some(true));
     }
 
@@ -702,8 +728,43 @@ mod tests {
             http2_keep_alive_timeout: None,
             ..GrpcClientConfig::default()
         }));
-        assert_eq!(config.http2_keep_alive_interval, Some(LEADER_KEEP_ALIVE));
-        assert_eq!(config.http2_keep_alive_timeout, Some(LEADER_KEEP_ALIVE));
+        assert_eq!(
+            config.http2_keep_alive_interval,
+            Some(LEADER_KEEP_ALIVE_INTERVAL)
+        );
+        assert_eq!(
+            config.http2_keep_alive_timeout,
+            Some(LEADER_KEEP_ALIVE_TIMEOUT)
+        );
+    }
+
+    #[test]
+    fn the_configured_address_is_probed_as_often_as_the_leader() {
+        for client_config in [
+            GrpcClientConfig::default(),
+            GrpcClientConfig {
+                http2_keep_alive_interval: None,
+                http2_keep_alive_timeout: None,
+                http2_keep_alive_while_idle: Some(false),
+                ..GrpcClientConfig::default()
+            },
+        ] {
+            let config = config_with(client_config);
+            for built in [
+                configured_client_config(&config),
+                once_client_config(&config),
+            ] {
+                assert_eq!(
+                    built.http2_keep_alive_interval,
+                    Some(LEADER_KEEP_ALIVE_INTERVAL)
+                );
+                assert_eq!(
+                    built.http2_keep_alive_timeout,
+                    Some(LEADER_KEEP_ALIVE_TIMEOUT)
+                );
+                assert_eq!(built.http2_keep_alive_while_idle, Some(true));
+            }
+        }
     }
 
     #[test]

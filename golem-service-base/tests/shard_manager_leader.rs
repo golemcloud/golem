@@ -1108,14 +1108,16 @@ async fn a_redirect_over_tls_checks_the_leader_against_the_configured_host() {
 async fn a_cached_leader_that_failed_starts_the_wait_when_the_configured_address_is_gone_too() {
     let first = run_replica(Mode::Leader).await;
     let standby = run_replica(Mode::Standby(Some(first.address()))).await;
-    let standby_port = standby.addr.port();
-    let client = Arc::new(client_with_default_config("127.0.0.1", standby_port));
+    // The configured address is a forwarder that can refuse every connection and keeps its port,
+    // so that no other socket can take it while the address is "gone".
+    let gate = Freezable::in_front_of(standby.addr).await;
+    let client = Arc::new(client_with_default_config("127.0.0.1", gate.addr.port()));
     client
         .get_routing_table()
         .await
         .expect("the standby names the first leader, which is now cached");
     first.stop().await;
-    standby.stop().await;
+    gate.refuse();
 
     let call = tokio::spawn({
         let client = client.clone();
@@ -1125,7 +1127,8 @@ async fn a_cached_leader_that_failed_starts_the_wait_when_the_configured_address
     // address then comes back and names a leader that serves.
     tokio::time::sleep(Duration::from_secs(4)).await;
     let second = run_replica(Mode::Leader).await;
-    let standby = run_replica_at(Mode::Standby(Some(second.address())), None, standby_port).await;
+    standby.set(Mode::Standby(Some(second.address())));
+    gate.allow();
 
     tokio::time::timeout(Duration::from_secs(30), call)
         .await
@@ -1165,32 +1168,51 @@ async fn a_named_leader_whose_host_is_no_uri_authority_is_treated_as_no_leader()
     standby.stop().await;
 }
 
-/// A TCP forwarder in front of a replica whose connections can be frozen: once frozen it reads
-/// what the peers send and forwards nothing, in either direction, and closes nothing. That is how
-/// a node that lost power looks from the other end of a connection that was open before.
+/// A TCP forwarder in front of a replica. The connections open at the time of `freeze` go silent:
+/// they read what the peers send and forward nothing, in either direction, and close nothing,
+/// which is how a node that lost power looks from the other end of a connection that was open
+/// before; connections made afterwards pass. While it `refuse`s, every connection is closed as
+/// soon as it is accepted or used, and the port stays bound, so that no other socket can take it.
 struct Freezable {
     addr: SocketAddr,
-    frozen: Arc<std::sync::atomic::AtomicBool>,
+    connections: Arc<Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>>,
+    refusing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Freezable {
     async fn in_front_of(upstream: SocketAddr) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = frozen.clone();
+        let connections: Arc<Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let refusing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (registry, refuse) = (connections.clone(), refusing.clone());
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
+                if refuse.load(Ordering::SeqCst) {
+                    continue;
+                }
                 let Ok(server) = tokio::net::TcpStream::connect(upstream).await else {
                     continue;
                 };
+                let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                registry.lock().unwrap().push(frozen.clone());
                 let (client_read, client_write) = client.into_split();
                 let (server_read, server_write) = server.into_split();
-                tokio::spawn(forward(client_read, server_write, flag.clone()));
-                tokio::spawn(forward(server_read, client_write, flag.clone()));
+                tokio::spawn(forward(
+                    client_read,
+                    server_write,
+                    frozen.clone(),
+                    refuse.clone(),
+                ));
+                tokio::spawn(forward(server_read, client_write, frozen, refuse.clone()));
             }
         });
-        Self { addr, frozen }
+        Self {
+            addr,
+            connections,
+            refusing,
+        }
     }
 
     fn address(&self) -> LeaderAddress {
@@ -1201,7 +1223,17 @@ impl Freezable {
     }
 
     fn freeze(&self) {
-        self.frozen.store(true, Ordering::SeqCst);
+        for connection in self.connections.lock().unwrap().iter() {
+            connection.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn refuse(&self) {
+        self.refusing.store(true, Ordering::SeqCst);
+    }
+
+    fn allow(&self) {
+        self.refusing.store(false, Ordering::SeqCst);
     }
 }
 
@@ -1209,11 +1241,12 @@ async fn forward(
     mut from: tokio::net::tcp::OwnedReadHalf,
     mut to: tokio::net::tcp::OwnedWriteHalf,
     frozen: Arc<std::sync::atomic::AtomicBool>,
+    refusing: Arc<std::sync::atomic::AtomicBool>,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut buffer = [0u8; 16 * 1024];
     while let Ok(read) = from.read(&mut buffer).await {
-        if read == 0 {
+        if read == 0 || refusing.load(Ordering::SeqCst) {
             break;
         }
         if frozen.load(Ordering::SeqCst) {
@@ -1228,7 +1261,8 @@ async fn forward(
 #[test]
 // The connection to a leader is idle between renewals. When the leader's node loses power, nothing
 // closes it, so the call would hang until the keep-alive gives up; the router must learn within a
-// couple of seconds, not the twenty of the default settings, and then reach the new leader.
+// seven seconds (a ping every two, five to answer), not the twenty of the default settings, and
+// then reach the new leader.
 async fn a_kept_leader_connection_that_goes_silent_fails_the_call_within_the_keep_alive_bound() {
     let old = run_replica(Mode::Leader).await;
     let proxy = Freezable::in_front_of(old.addr).await;
@@ -1250,7 +1284,7 @@ async fn a_kept_leader_connection_that_goes_silent_fails_the_call_within_the_kee
         .expect_err("the leader no longer answers");
     let failed_after = started.elapsed();
     assert!(
-        failed_after < Duration::from_secs(8),
+        failed_after < Duration::from_secs(10),
         "the call hung for {failed_after:?}"
     );
 
@@ -1264,6 +1298,43 @@ async fn a_kept_leader_connection_that_goes_silent_fails_the_call_within_the_kee
     old.server.abort();
     new.stop().await;
     standby.stop().await;
+}
+
+#[test]
+// The configured address is kept as one connection. When the replica behind it goes silent, a call
+// that the known leader refused must not hang on that connection for the twenty seconds of the
+// default settings: it fails over to a new connection within the ping bound and reaches the leader
+// that the replicas now name.
+async fn a_silent_configured_connection_fails_a_retried_call_within_the_keep_alive_bound() {
+    let old = run_replica(Mode::Leader).await;
+    let new = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(old.address()))).await;
+    let gate = Freezable::in_front_of(standby.addr).await;
+    let client = client_with_default_config("127.0.0.1", gate.addr.port());
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the old leader, which is now known");
+    old.set(Mode::Refuses);
+    standby.set(Mode::Standby(Some(new.address())));
+    gate.freeze();
+
+    let started = Instant::now();
+    client
+        .get_routing_table()
+        .await
+        .expect("a new connection to the configured address names the new leader");
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_secs(12),
+        "the call hung on the silent connection for {took:?}"
+    );
+    assert_eq!(new.calls(), 1);
+    old.stop().await;
+    new.stop().await;
+    // The forwarder keeps its frozen connection to the standby open, which a graceful stop would
+    // wait for.
+    standby.server.abort();
 }
 
 #[test]
