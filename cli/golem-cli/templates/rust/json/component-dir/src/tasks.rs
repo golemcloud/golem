@@ -16,7 +16,7 @@ pub struct CreateTaskRequest {
 
 #[agent_definition(mount = "/task-agents/{name}", cors = [ "*" ])]
 #[description("An agent managing a named set of tasks")]
-pub trait Tasks {
+pub trait TaskAgent {
     fn new(name: String) -> Self;
 
     #[prompt("Create a new task with the given title")]
@@ -40,7 +40,7 @@ struct TasksImpl {
 }
 
 #[agent_implementation]
-impl Tasks for TasksImpl {
+impl TaskAgent for TasksImpl {
     fn new(name: String) -> Self {
         Self {
             _name: name,

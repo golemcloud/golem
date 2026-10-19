@@ -5,7 +5,7 @@ import golem.BaseAgent
 
 import scala.concurrent.Future
 
-@agentDefinition(mount = "/snapshot-counters/{name}", snapshotting = "every(1)")
+@agentDefinition(mount = "/snapshot-counters/{name}", snapshotting = "every(5)")
 trait CounterWithSnapshotAgent extends BaseAgent {
 
   class Id(val name: String)
@@ -14,4 +14,7 @@ trait CounterWithSnapshotAgent extends BaseAgent {
   @description("Increases the count by one and returns the new value")
   @endpoint(method = "POST", path = "/increment")
   def increment(): Future[Int]
+
+  @endpoint(method = "GET", path = "/value")
+  def value(): Future[Int]
 }

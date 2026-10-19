@@ -62,6 +62,10 @@ fn unreachable_config() -> EtcdConfig {
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: TEST_LEASE_TTL,
         compaction_retention_revisions: 0,
+        tls: None,
+        username: None,
+        password: None,
+        password_file: None,
         test_version: None,
     }
 }

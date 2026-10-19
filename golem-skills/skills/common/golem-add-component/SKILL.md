@@ -31,29 +31,29 @@ golem new --template <TEMPLATE> --yes .
 
 Templates are specified as `<language>` (for the default template) or `<language>/<name>` (for named templates).
 
-### Rust templates
+The language IDs are `rust`, `ts` (TypeScript), `effect`, `scala`, `moonbit`, and `go`.
+All six languages provide the same core examples:
 
-| Template | Description |
-|----------|-------------|
-| `rust` | Default — a simple counter agent |
-| `rust/human-in-the-loop` | Agent using promises for human-in-the-loop workflows |
-| `rust/json` | Agent demonstrating JSON API support |
-| `rust/snapshotting` | Agent with custom state snapshotting |
+| Template | Agent types | Description |
+|----------|-------------|-------------|
+| `<language>` | `CounterAgent` | A named counter with `increment`, `value`, `add`, and `reset` methods |
+| `<language>/json` | `TaskAgent` | A task manager with JSON object input and output |
+| `<language>/human-in-the-loop` | `WorkflowAgent`, `HumanAgent` | A named workflow that waits for a human approval decision |
+| `<language>/streaming` | `StreamingAgent` | Agent streams, nested streams, and durable streams |
 
-### TypeScript templates
+For example, use `effect/json` for an Effect task manager or `go/human-in-the-loop` for a Go approval workflow.
 
-| Template | Description |
-|----------|-------------|
-| `ts` | Default — a simple counter agent |
-| `ts/human-in-the-loop` | Agent using promises for human-in-the-loop workflows |
-| `ts/json` | Agent demonstrating JSON API support |
-| `ts/snapshotting` | Agent with custom state snapshotting |
+Rust, TypeScript, Effect, Scala, and MoonBit also provide `<language>/snapshotting`.
+This template defines `CounterWithSnapshotAgent`, which snapshots its state every five invocations.
+**Go snapshotting is not supported, so there is no `go/snapshotting` template.**
 
-### Scala templates
+TypeScript also provides `ts/counter-arktype` and `ts/counter-valibot` to demonstrate alternative schema libraries.
 
-| Template | Description |
-|----------|-------------|
-| `scala` | Default — a simple counter agent |
+Agent type names are unique within an environment, including across components. If you add the same
+example in more than one language to one environment, rename the colliding agent types and their
+references in `golem.yaml`. Different component names alone do not prevent agent type name collisions.
+
+Use `golem templates` to list the available templates.
 
 ## Required Flags
 

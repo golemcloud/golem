@@ -38,8 +38,8 @@ leader and watch another replica log `Elected as the shard manager leader`.
 
 The misconfigurations described below stop a replica at startup:
 
-- `https://` endpoint → exits 1 with `Error: Internal error: etcd endpoint https://... must start
-  with http:// (TLS is not supported)`
+- `https://` endpoint without TLS settings → exits 1 with `Error: Invalid configuration: etcd endpoint
+  https://... uses https://, which needs persistence.config.tls (at least ca_cert_file or ca_cert)`
 - no `GOLEM__GRPC__ADVERTISED_HOST` → exits 1 with `grpc.advertised_host must be set in
   distributed mode`
 - unbracketed endpoint list → `Failed to load config: invalid type: found string "...", expected a
@@ -57,8 +57,55 @@ The misconfigurations described below stop a replica at startup:
 | Quota state | in Postgres | in etcd, with the shard state |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
-string and fails to deserialize. Only `http://` endpoints are accepted: TLS is not configurable and
-the shard manager refuses to start on `https://`.
+string and fails to deserialize. The etcd here is plaintext, so the endpoint is `http://`.
+
+### With TLS and an etcd user
+
+`compose.tls.yaml` switches this example's etcd to TLS with client certificates and an etcd user,
+and points the three shard manager replicas at it:
+
+```sh
+docker compose -f compose.yaml -f compose.tls.yaml up
+```
+
+It needs these files beside the compose files:
+
+- `etcd-tls/ca.pem`: the CA that signed the two certificates below.
+- `etcd-tls/server.pem` and `etcd-tls/server-key.pem`: etcd's certificate and key. The certificate
+  must name `etcd`, the endpoint host, or set `GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME` to a
+  name it holds.
+- `etcd-tls/client.pem` and `etcd-tls/client-key.pem`: the shard manager's client certificate and
+  its unencrypted key, which all three replicas use.
+- `etcd-password.txt`: the etcd user's password; one trailing line ending is removed.
+
+The shard manager's image runs as user 65534, so the client key and the password file must be
+readable by that user (for this local example, `chmod 644`). Instead of files, the certificates can
+also be given as values in `__TLS__CA_CERT`, `__TLS__CLIENT_CERT` and `__TLS__CLIENT_KEY`: the PEM
+in standard Base64 on one line, as `base64 -w0` writes it. A user without TLS is refused, so TLS and
+the user are switched on together.
+
+Create the etcd user and its role once, before the shard manager starts for the first time:
+
+```sh
+etcdctl() {
+  docker compose -f compose.yaml -f compose.tls.yaml exec -T etcd /usr/local/bin/etcdctl \
+    --endpoints=https://etcd:2379 --cacert=/etc/etcd-tls/ca.pem \
+    --cert=/etc/etcd-tls/client.pem --key=/etc/etcd-tls/client-key.pem "$@"
+}
+docker compose -f compose.yaml -f compose.tls.yaml up -d --wait etcd
+etcdctl role add golem-shard-manager
+etcdctl role grant-permission golem-shard-manager --prefix=true readwrite /golem/
+etcdctl user add "golem-shard-manager:$(cat etcd-password.txt)" --interactive=false
+etcdctl user grant-role golem-shard-manager golem-shard-manager
+etcdctl user add "root:<a root password>" --interactive=false
+etcdctl user grant-role root root
+etcdctl auth enable
+```
+
+The client certificate's common name is `golem-shard-manager`, the same as the etcd user, so etcd's
+health check above still passes once authentication is on: etcd takes the user from the certificate
+when no password is sent. The docs' Shard Manager page (`docs/src/content/next/operate/shard-manager.mdx`)
+has the details of every setting.
 
 ## Limitations of this example
 

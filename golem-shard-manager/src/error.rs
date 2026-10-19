@@ -109,6 +109,11 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 err.to_string(),
                 api::error_code::INTERNAL_DEPENDENCY_FAILURE,
             ),
+            ShardManagerError::TlsHandshakeFailed(err) => error(
+                shard_manager_error::Error::Unknown,
+                err.to_string(),
+                api::error_code::INTERNAL_DEPENDENCY_FAILURE,
+            ),
             ShardManagerError::MigrationError(err) => error(
                 shard_manager_error::Error::Unknown,
                 err.to_string(),
@@ -119,12 +124,13 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 err.to_string(),
                 api::error_code::INTERNAL_FILESYSTEM_ERROR,
             ),
-            invalid @ ShardManagerError::InvalidConfig(_) => error(
+            ShardManagerError::Internal(details) => error(
                 shard_manager_error::Error::Unknown,
-                invalid.to_string(),
+                details,
                 api::error_code::INTERNAL_UNKNOWN,
             ),
-            ShardManagerError::Internal(details) => error(
+            // Found only at startup, before any request is served.
+            ShardManagerError::InvalidConfig(details) => error(
                 shard_manager_error::Error::Unknown,
                 details,
                 api::error_code::INTERNAL_UNKNOWN,

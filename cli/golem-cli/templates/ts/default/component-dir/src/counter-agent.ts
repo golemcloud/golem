@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
 // A minimal durable counter agent in the schema-driven TypeScript SDK:
 // `defineAgent(...)` declares the contract, `.implement(...)` supplies handlers
@@ -7,11 +7,20 @@ import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 export const CounterAgent = defineAgent({
   name: 'CounterAgent',
   id: { name: z.string() },
+  http: http.mount('/counters/{name}'),
   methods: {
-    value: method({ input: {}, returns: z.number() }),
-    increment: method({ input: {}, returns: z.number() }),
-    add: method({ input: { by: z.number() }, returns: z.number() }),
-    reset: method({ input: {}, returns: z.void() }),
+    value: method({ input: {}, returns: z.number(), http: http.get('/value') }),
+    increment: method({
+      input: {},
+      returns: z.number(),
+      http: http.post('/increment'),
+    }),
+    add: method({
+      input: { by: z.number() },
+      returns: z.number(),
+      http: http.post('/add'),
+    }),
+    reset: method({ input: {}, returns: z.void(), http: http.post('/reset') }),
   },
 });
 

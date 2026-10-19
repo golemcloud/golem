@@ -34,6 +34,9 @@ no built-in write token. The publisher's CI guard accepts only this workflow's
 
 ## Authorized local recovery
 
+Use Python 3.14 as `python3` for source packaging; do not rely on the runner's
+system Python. The protected publisher installs this version explicitly.
+
 1. Use a clean exact release-tag checkout with full history. Push the tag and
    create a draft Golem GitHub release first. The tag must identify the exact
    head of a PR merged into public `main`, not its squash commit. Use an
@@ -60,3 +63,10 @@ assets, uploads only missing assets, and verifies the complete public set before
 the outer task creates the manifest. A conflicting asset stops publication.
 An existing manifest must be identical and is verified and reused. Never use
 `--clobber`, move a tag, or bypass the CI guard. Changed bytes require a new tag.
+
+Cross-host rebuilds need not produce identical WASM bytes. For explicitly
+authorized recovery that retains complete packages already verified by the
+original publisher and publishes only missing components, follow
+[recovery across build hosts](../../../BUILTIN_ARTIFACTS.md#recovery-across-build-hosts).
+Require the original verification evidence and verify every public asset before
+constructing the manifest. Do not bypass a byte mismatch in the all-entry task.
