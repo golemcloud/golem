@@ -6,6 +6,10 @@ Golem recovers agent state by **replaying the oplog** — the log of all operati
 
 Snapshotting also enables **manual agent updates** between incompatible versions — see [Updating Agents](/v1.6/develop/updating) for details.
 
+<Callout type="warning">
+    Go snapshotting is not supported in this release. Leave snapshotting disabled for Go agents and use oplog replay for recovery. There is no `go/snapshotting` template. The Go API examples below are reference material, not a supported recovery or update workflow.
+</Callout>
+
 <Callout type="info">
     Automatic snapshotting is optional. Without it, recovery starts from the authoritative recovery baseline, if one exists: the snapshot of the last successful manual update or snapshot-assisted automatic update. Otherwise it replays the full oplog.
 </Callout>

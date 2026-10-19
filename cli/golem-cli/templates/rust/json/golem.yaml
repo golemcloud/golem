@@ -5,4 +5,4 @@ httpApi:
     local:
     - subdomain: app-name  # resolves to app-name.localhost:9006 by default
       agents:
-        Tasks: {}
+        TaskAgent: {}

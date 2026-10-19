@@ -19,9 +19,9 @@ export const TaskAgent = defineAgent({
   id: { name: z.string() },
   http: http.mount('/task-agents/{name}', { cors: ['*'] }),
   methods: {
-    // Create a task from a JSON body `{ title }` and return the full Task object.
+    // Create a task from a request record and return the full Task object.
     createTask: method({
-      input: { title: z.string() },
+      input: { request: z.object({ title: z.string() }) },
       returns: Task,
       http: http.post('/tasks'),
     }),
@@ -43,10 +43,10 @@ export const TaskAgent = defineAgent({
 export const TaskAgentImpl = TaskAgent.implement({
   init: () => ({ tasks: [] as Task[], nextId: 1 }),
   methods: {
-    createTask({ title }) {
+    createTask({ request }) {
       const task: Task = {
         id: this.nextId++,
-        title,
+        title: request.title,
         completed: false,
         createdAt: new Date().toISOString(),
       };

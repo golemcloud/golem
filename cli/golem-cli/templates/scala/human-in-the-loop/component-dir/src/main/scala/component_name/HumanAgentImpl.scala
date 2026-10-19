@@ -19,7 +19,7 @@ final class HumanAgentImpl(private val username: String) extends HumanAgent {
   override def listPendingApprovals(): Future[List[String]] =
     Future.successful(pending.keys.toList)
 
-  override def decide(workflowId: String, decision: String): Future[String] =
+  override def decideApproval(workflowId: String, decision: String): Future[String] =
     Future.successful {
       if (decision != "approved" && decision != "rejected")
         s"Received invalid approval decision $decision"

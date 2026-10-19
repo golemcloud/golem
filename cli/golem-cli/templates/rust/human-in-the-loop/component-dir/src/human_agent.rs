@@ -1,7 +1,7 @@
 use crate::decision::{Decision, WorkflowId};
 use golem_rust::{
-    agent_definition, agent_implementation, complete_promise_json, description, endpoint, prompt,
-    PromiseId,
+    PromiseId, agent_definition, agent_implementation, complete_promise_json, description,
+    endpoint, prompt,
 };
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ pub trait HumanAgent {
     #[prompt("Approve or reject a workflow")]
     #[description("Makes a decision on a workflow approval request")]
     #[endpoint(post = "/decisions")]
-    async fn decide_approval(&mut self, workflow_id: WorkflowId, decision: Decision) -> String;
+    async fn decide_approval(&mut self, workflow_id: WorkflowId, decision: String) -> String;
 }
 
 struct HumanAgentImpl {
@@ -50,11 +50,16 @@ impl HumanAgent for HumanAgentImpl {
         self.pending.keys().cloned().collect()
     }
 
-    async fn decide_approval(&mut self, workflow_id: WorkflowId, decision: Decision) -> String {
+    async fn decide_approval(&mut self, workflow_id: WorkflowId, decision: String) -> String {
+        let payload = match decision.as_str() {
+            "approved" => Decision::Approved,
+            "rejected" => Decision::Rejected,
+            _ => return format!("Received invalid approval decision {decision}"),
+        };
         if let Some(promise_id) = self.pending.remove(&workflow_id) {
-            let _ = complete_promise_json(&promise_id, decision.clone());
+            let _ = complete_promise_json(&promise_id, payload);
             format!(
-                "Workflow {} was {:?} by {}",
+                "Workflow {} was {} by {}",
                 workflow_id, decision, self.username
             )
         } else {
