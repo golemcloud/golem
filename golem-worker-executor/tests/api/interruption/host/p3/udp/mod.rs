@@ -356,8 +356,8 @@ async fn pending_receive(
         }
         let refresh = if resource == Resource::Storage {
             allocate_storage(&owned).await?;
-            // Real timer delivery keeps this proposal on the original revision.
-            // The unchanged whole-test bound includes waiting for ordinary cadence.
+            // A usage flush does not prove the storage meter has run. The stop below
+            // must allow its ordinary 30-second cadence on the original revision.
             next_flush().await?;
             ensure!(!capacity_updates.as_ref().unwrap().has_changed()?);
             drop(capacity_updates.take());
@@ -372,7 +372,14 @@ async fn pending_receive(
             registry.set_policy(exhausted);
             Some(applied_refresh(&limits, &registry, context.account_id).await?)
         };
-        let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
+        let stop_timeout = if resource == Resource::Storage {
+            Duration::from_secs(40)
+        } else {
+            Duration::from_secs(10)
+        };
+        let signal = tokio::time::timeout(stop_timeout, raw.recv())
+            .await
+            .context("monthly capacity stop while UDP receive is pending")??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         if resource == Resource::Storage {
             let other = if durable {
