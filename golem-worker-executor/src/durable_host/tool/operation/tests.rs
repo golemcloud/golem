@@ -2640,6 +2640,12 @@ struct ProbedRetainedStore {
 }
 
 impl crate::worker::entity_invocation::RetainedEntityStore for ProbedRetainedStore {
+    fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+        None
+    }
+
     fn prepare_parent_end(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {

@@ -102,9 +102,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .collect()
             }
         };
-        let filesystem_generation = self
+        let (filesystem_generation, _) = self
             .owner_runtime_resources
-            .filesystem_generation_handle()?;
+            .filesystem_generation_handle()?
+            .for_invocation();
         if let Some(files) =
             Some(&activation.policy().provision().files).filter(|files| !files.is_empty())
         {

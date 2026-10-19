@@ -1295,7 +1295,7 @@ pub(crate) fn is_immutable_initial_file<Adapter: SandboxFilesystemAdapter>(
     };
     let installed = state.installed.get(path).cloned();
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
     let path: Box<Path> = path.into();
     Ok(Some(FilesystemCall::new(lease, async move {
         let sandbox = generation.sandbox.read().await;
@@ -1365,9 +1365,8 @@ pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
     files: Vec<InitialAgentFile>,
 ) -> Result<FilesystemCall<()>, Error> {
     let generation = admit(generation_handle).map_err(Error::Access)?;
-    let lease = generation
-        .registry
-        .lease_call(CallEffect::Installs)
+    let lease = generation_handle
+        .lease_call(&generation.registry, CallEffect::Installs)
         .map_err(Error::Access)?;
     Ok(FilesystemCall::new(lease, async move {
         initial_files::provision(

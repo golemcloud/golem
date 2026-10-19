@@ -1083,6 +1083,16 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         result
     }
 
+    pub(crate) fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+        self.store
+            .data()
+            .durable_ctx()
+            .filesystem_generation_handle()
+            .invocation()
+    }
+
     /// Runs one entity export with an installed invocation scope and then destroys its Store.
     /// The owned task keeps an already-launched invocation running when its caller is cancelled;
     /// every completion path settles fuel and drops the transient Store.

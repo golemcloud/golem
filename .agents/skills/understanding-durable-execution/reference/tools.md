@@ -371,12 +371,18 @@ and slot registration. Completion resources carry commands and a destruction joi
 Store. Normal preparation runs before terminal resolution; permit release precedes descendant
 settlement. Fencing cancels retained work both while idle and inside preparation or consuming
 settlement. Observer loss and executor shutdown also reclaim it. Cancellation drops the callback
-future first, then the Store/context, then the registration; registration destruction is the sole
-slot-removal event. Slot drainage therefore waits for physical destruction, not body completion.
-Explicit failure release completes the permit, requests disposal and joins destruction before
-group drainage; it never runs normal settlement on the disposed Store. This starts at the
-existing finished-body handoff and does not change body abort or pre-failure arbitration. It
-records no entity terminal or EOF and does not turn a stuck synchronous destructor into success.
+future first, then the Store/context. Retained cleanup then closes the invocation's filesystem
+admission and joins its admitted calls and descriptor closes before dropping the registration.
+Abandoned writes and late opens retain invocation leases through completion and close; draining
+one invocation does not seal its siblings. Registration destruction is the sole slot-removal event.
+Explicit failure release requests disposal and joins cleanup before completing its permit. If
+the observer drops the completion resources, retained cleanup owns that permit until drainage
+finishes. A canceled destruction join keeps its handle; a completed join removes it even on error.
+Normal settlement never runs on the disposed Store. These guarantees start at the finished-body
+handoff, not active-body cancellation, executor shutdown or a retained callback's Rust panic.
+Body abort, pre-failure arbitration, owner-fatal guest traps and retry decisions are unchanged.
+Disposal records no entity terminal or EOF and does not turn a stuck synchronous destructor into
+success.
 
 The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task.
 Destroying a healthy ancestor Store may drop its result observer but cannot drop the global

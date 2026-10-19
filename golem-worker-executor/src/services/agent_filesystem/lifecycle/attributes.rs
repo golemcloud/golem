@@ -50,7 +50,7 @@ pub(crate) fn set_attributes<Adapter: SandboxFilesystemAdapter>(
         Target::Open(_) => None,
     };
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call(CallEffect::Decides)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
         match coordinated_path {
             Some((target, follow)) => {
@@ -74,7 +74,7 @@ pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<()>, AccessError> {
     let generation = admit(generation_handle)?;
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call(CallEffect::Decides)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
         execute_set_times(generation, target, times, TimeOrigin::Replay).await
     }))

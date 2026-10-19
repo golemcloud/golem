@@ -126,6 +126,23 @@ impl Drop for FilesystemClose {
     }
 }
 
+impl FilesystemClose {
+    pub(super) fn retain_invocation(self, invocation: Option<InvocationLease>) -> Self {
+        let Some(invocation) = invocation else {
+            return self;
+        };
+        Self {
+            state: CloseState::Unstarted {
+                task: Some(Box::pin(async move {
+                    let result = self.await;
+                    drop(invocation);
+                    result
+                })),
+            },
+        }
+    }
+}
+
 impl OpenNode {
     /// Returns whether this open node is a file or directory.
     ///
@@ -168,7 +185,7 @@ impl Drop for NodeOwnership {
         ) else {
             return;
         };
-        drop(close(sandbox, node_lease));
+        drop(close(sandbox, node_lease).retain_invocation(self.invocation.take()));
     }
 }
 
@@ -214,6 +231,7 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
             generation_id,
             access,
             node_lease: Some(node_lease),
+            invocation: None,
             close: Some(Box::new(move |node, node_lease| {
                 generation.start_close(node, node_lease)
             })),

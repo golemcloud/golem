@@ -113,6 +113,7 @@ struct RetainedEntityControl {
     disposal: tokio_util::sync::CancellationToken,
     task: Option<JoinHandle<Option<()>>>,
     suspension: Arc<super::suspension::OwnerSuspension>,
+    deferred_permit: Arc<std::sync::Mutex<Option<OwnerInvocationPermit>>>,
 }
 
 impl Drop for RetainedEntityControl {
@@ -126,6 +127,7 @@ impl Drop for RetainedEntityControl {
 struct RetainedEntityOwner {
     hosted: Option<Box<dyn RetainedEntityStore>>,
     _registration: EntitySlotRegistration,
+    _deferred_permit: Arc<std::sync::Mutex<Option<OwnerInvocationPermit>>>,
 }
 
 impl RetainedEntityControl {
@@ -136,9 +138,12 @@ impl RetainedEntityControl {
         executor_tasks: &crate::services::active_agents::InvocationLoops,
     ) -> Self {
         let cancellation = registration.cancellation();
+        let filesystem = hosted.filesystem_invocation();
+        let deferred_permit = Arc::new(std::sync::Mutex::new(None));
         let owner = RetainedEntityOwner {
             hosted: Some(hosted),
             _registration: registration,
+            _deferred_permit: deferred_permit.clone(),
         };
         let disposal = tokio_util::sync::CancellationToken::new();
         let dispose = disposal.clone();
@@ -176,6 +181,11 @@ impl RetainedEntityControl {
                 _ = dispose.cancelled() => {}
                 _ = work => {}
             }
+            drop(owner.hosted.take());
+            if let Some(filesystem) = filesystem {
+                filesystem.close_and_drain().await;
+            }
+            owner._deferred_permit.lock().unwrap().take();
             drop(owner);
         });
         Self {
@@ -183,20 +193,27 @@ impl RetainedEntityControl {
             disposal,
             task: Some(task),
             suspension,
+            deferred_permit,
         }
     }
 
     async fn join(&mut self) -> Result<(), WorkerExecutorError> {
-        if let Some(task) = self.task.take() {
-            task.await.map_err(|error| {
+        if let Some(task) = self.task.as_mut() {
+            let result = task.await.map_err(|error| {
                 WorkerExecutorError::runtime(format!("Retained entity Store task failed: {error}"))
-            })?;
+            });
+            self.task.take();
+            result?;
         }
         Ok(())
     }
 }
 
 pub(crate) trait RetainedEntityStore: Send {
+    fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation>;
+
     fn prepare_parent_end(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>>;
@@ -425,6 +442,14 @@ impl<Ctx: WorkerCtx> RetainedNativeContext<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedNativeContext<Ctx> {
+    fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+        self.context
+            .shared
+            .with_ctx(|ctx| ctx.filesystem_generation_handle().invocation())
+    }
+
     fn prepare_parent_end(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
@@ -442,6 +467,12 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedNativeContext<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedHostedInstance<Ctx> {
+    fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+        self.hosted.filesystem_invocation()
+    }
+
     fn prepare_parent_end(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
@@ -465,6 +496,16 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedHostedInstance<Ctx> {
 impl<R> EntityInvocationCompletion<R> {
     pub(crate) fn into_parts(self) -> (Result<R, WorkerExecutorError>, EntityInvocationResources) {
         (self.result, self.resources)
+    }
+}
+
+impl Drop for EntityInvocationResources {
+    fn drop(&mut self) {
+        if let Some(retained) = self.retained.as_ref()
+            && let Some(permit) = self.permit.take()
+        {
+            *retained.deferred_permit.lock().unwrap() = Some(permit);
+        }
     }
 }
 
@@ -505,12 +546,13 @@ impl EntityInvocationResources {
     }
 
     pub(crate) async fn release_for_owner_failure(&mut self) -> Result<(), WorkerExecutorError> {
-        if let Some(permit) = self.permit.take() {
-            permit.complete();
-        }
-        if let Some(mut retained) = self.retained.take() {
+        if let Some(retained) = self.retained.as_mut() {
             retained.disposal.cancel();
             retained.join().await?;
+        }
+        self.retained.take();
+        if let Some(permit) = self.permit.take() {
+            permit.complete();
         }
         Ok(())
     }
@@ -1075,9 +1117,16 @@ mod tests {
 
     struct RecordingStore {
         events: Arc<Mutex<Vec<&'static str>>>,
+        filesystem: Option<crate::services::agent_filesystem::FilesystemInvocation>,
     }
 
     impl RetainedEntityStore for RecordingStore {
+        fn filesystem_invocation(
+            &self,
+        ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+            self.filesystem.clone()
+        }
+
         fn prepare_parent_end(
             &mut self,
         ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
@@ -1099,6 +1148,7 @@ mod tests {
 
     fn recording_resources(
         events: Option<Arc<Mutex<Vec<&'static str>>>>,
+        filesystem: Option<crate::services::agent_filesystem::FilesystemInvocation>,
         suspension: Arc<super::super::suspension::OwnerSuspension>,
         executor: crate::services::active_agents::InvocationLoops,
     ) -> EntityInvocationResources {
@@ -1152,8 +1202,9 @@ mod tests {
         .unwrap();
         let registration = slot.register(&scope, Default::default()).unwrap();
         EntityInvocationResources::from_finished_body(
-            events
-                .map(|events| Box::new(RecordingStore { events }) as Box<dyn RetainedEntityStore>),
+            events.map(|events| {
+                Box::new(RecordingStore { events, filesystem }) as Box<dyn RetainedEntityStore>
+            }),
             registration,
             None,
             suspension,
@@ -1169,6 +1220,7 @@ mod tests {
         );
         let mut resources = recording_resources(
             Some(events.clone()),
+            None,
             super::super::suspension::OwnerSuspension::new(),
             executor_tasks,
         );
@@ -1197,14 +1249,19 @@ mod tests {
 
         let mut preparation = recording_resources(
             Some(events.clone()),
+            None,
             suspension.clone(),
             executor_tasks.clone(),
         );
         assert!(preparation.prepare_parent_end().await.is_err());
         assert!(eligible_now(&suspension));
 
-        let settlement =
-            recording_resources(Some(events.clone()), suspension.clone(), executor_tasks);
+        let settlement = recording_resources(
+            Some(events.clone()),
+            None,
+            suspension.clone(),
+            executor_tasks,
+        );
         assert!(settlement.settle_after_parent_end().await.is_err());
         assert!(eligible_now(&suspension));
         assert!(events.lock().unwrap().is_empty());
@@ -1216,9 +1273,98 @@ mod tests {
         executor.wait_for_exit().await.unwrap();
         let resources = recording_resources(
             None,
+            None,
             super::super::suspension::OwnerSuspension::new(),
             executor,
         );
         resources.release().await.unwrap();
+    }
+
+    #[test]
+    async fn failure_settlement_after_retained_task_panic_does_not_panic() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let poison = events.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = poison.lock().unwrap();
+            panic!("simulate retained Store callback panic");
+        });
+        let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+        let mut resources = recording_resources(
+            Some(events),
+            None,
+            super::super::suspension::OwnerSuspension::new(),
+            executor,
+        );
+        assert!(resources.prepare_parent_end().await.is_err());
+        assert!(resources.release_for_owner_failure().await.is_err());
+        // Owner failure cleanup still settles resources after a disposal error.
+        let _ = resources.settle_after_parent_end().await;
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn abandoned_failure_release_holds_lane_until_filesystem_close_finishes() {
+        use crate::sandbox_filesystem::SandboxOpened;
+        use crate::services::agent_filesystem as fs;
+        use futures::FutureExt;
+
+        let (filesystem, control) = fs::resident_for_unload_test().await;
+        let (body, invocation) = fs::resident_generation_handle(&filesystem).for_invocation();
+        control.push_open(Ok(SandboxOpened::scripted_file(705)));
+        let file = fs::open(
+            &body,
+            fs::PathTarget::at_root(&body, "retained").unwrap(),
+            fs::OpenOptions::Existing {
+                expected: fs::ObjectKind::File,
+                access: fs::AccessMode::Read,
+                follow: fs::Follow::Yes,
+            },
+        )
+        .unwrap()
+        .await
+        .unwrap();
+        control.push_close(Ok(()));
+        let close_gate = control.block("close");
+        drop(file);
+        close_gate.wait_started().await;
+
+        let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "cleanup".into(),
+            },
+        ));
+        let permit = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let next = lane
+            .enter_primary(OplogIndex::from_u64(2))
+            .unwrap()
+            .acquire();
+        tokio::pin!(next);
+        let mut resources = recording_resources(
+            Some(Arc::new(Mutex::new(Vec::new()))),
+            Some(invocation),
+            super::super::suspension::OwnerSuspension::new(),
+            crate::services::active_agents::InvocationLoops::new(Default::default()),
+        );
+        resources.permit = Some(permit);
+        assert!(
+            resources
+                .release_for_owner_failure()
+                .now_or_never()
+                .is_none()
+        );
+        drop(resources);
+        assert!(next.as_mut().now_or_never().is_none());
+        close_gate.release();
+        next.await.unwrap().complete();
+
+        control.push_delete_and_verify(Ok(()));
+        fs::delete(fs::seal(filesystem)).await.unwrap();
     }
 }
