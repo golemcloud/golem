@@ -15,16 +15,13 @@ jobs:
       matrix:
         project: [golem-cli, golem]
         cfg:
-          - rust-target: x86_64-apple-darwin
-            os: blacksmith-12vcpu-macos-26
-          - rust-target: aarch64-apple-darwin
-            os: blacksmith-12vcpu-macos-26
           - rust-target: x86_64-pc-windows-msvc
-            os: blacksmith-16vcpu-windows-2025
+            os: blacksmith-32vcpu-windows-2025
+            cargo-build-jobs: 20
     name: Build ${{ matrix.project }} for ${{ matrix.cfg.rust-target }}
     runs-on: ${{ matrix.cfg.os }}
     env:
-      CARGO_BUILD_JOBS: 10
+      CARGO_BUILD_JOBS: ${{ matrix.cfg.cargo-build-jobs || 10 }}
     steps:
       - uses: actions/checkout@v5
         with:
