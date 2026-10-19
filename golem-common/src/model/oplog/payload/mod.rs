@@ -36,9 +36,10 @@ use crate::model::oplog::payload::external_durable_stream::{
     DurableStreamTransport, DurableStreamWriterOptions,
 };
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
-    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
-    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
+    FileSystemError, ObjectMetadata, PermissionCardDeriveError, PermissionCardRevokeError,
+    SecretRevealAudit, SecretRevealError, SerializableDateTime, SerializableFileTimes,
+    SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
+    SerializableP3UdpDatagram, SerializablePermissionCardLiveness, SerializablePermissionError,
     SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
     SerializableWebsocketMessage, SerializableWebsocketReconstructionPolicy,
 };
@@ -269,6 +270,14 @@ oplog_payload! {
         PermissionCardRevoke {
             card_id: Uuid,
         },
+        PermissionCardLiveness {
+            card_id: Uuid,
+        },
+        /// The ids of the cards behind the handles that a card operation decides on, in argument
+        /// order.
+        PermissionCardDecision {
+            card_ids: Vec<Uuid>,
+        },
         PermissionCardTransfer {
             transfer_id: Uuid,
             source_card: Vec<u8>,
@@ -435,6 +444,9 @@ oplog_payload! {
         SocketsTcpConnectPermissionCheck {
             /// The remote socket address of the connect.
             address: String
+        },
+        SocketsUdpPermissionCheck {
+            addresses: Vec<String>
         },
     }
 }
@@ -635,12 +647,22 @@ oplog_payload! {
             credit_after_at_ms: i64,
         },
         PermissionCardDerived {
-            card: Vec<u8>,
+            result: Result<Vec<u8>, PermissionCardDeriveError>,
+        },
+        PermissionCardLiveness {
+            liveness: SerializablePermissionCardLiveness,
+        },
+        /// The authorization decision of a card operation. `Ok` holds the serialized data that
+        /// the operation continues with, as the decision saw it.
+        PermissionCardDecision {
+            result: Result<Vec<u8>, SerializablePermissionError>,
         },
         PermissionCardsRevoked {
             result: Result<Vec<Uuid>, PermissionCardRevokeError>,
         },
-        PermissionCardTransferComplete {},
+        PermissionCardTransferComplete {
+            result: Result<(), PermissionCardDeriveError>,
+        },
         GolemRetryPolicies {
             policies: Vec<NamedRetryPolicy>
         },
@@ -868,28 +890,28 @@ pub mod host_functions {
     host_payload_pairs! {
         (RdbmsMysqlDbConnectionExecute => "rdbms::mysql::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
         (RdbmsMysqlDbConnectionQuery => "rdbms::mysql::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
-        (RdbmsMysqlDbConnectionQueryStream => "rdbms::mysql::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsMysqlDbConnectionQueryStream => "rdbms::mysql::db-connection", "query-stream", NoInput, GolemRdbmsRequest, denied = denied::rdbms::request),
         (RdbmsMysqlDbResultStreamGetColumns => "rdbms::mysql::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
         (RdbmsMysqlDbResultStreamGetNext => "rdbms::mysql::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
-        (RdbmsMysqlDbTransactionQuery => "rdbms::mysql::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
-        (RdbmsMysqlDbTransactionExecute => "rdbms::mysql::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
-        (RdbmsMysqlDbTransactionQueryStream => "rdbms::mysql::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsMysqlDbTransactionQuery => "rdbms::mysql::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
+        (RdbmsMysqlDbTransactionExecute => "rdbms::mysql::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsMysqlDbTransactionQueryStream => "rdbms::mysql::db-transaction", "query-stream", NoInput, GolemRdbmsRequest, denied = denied::rdbms::request),
         (RdbmsPostgresDbConnectionExecute => "rdbms::postgres::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
         (RdbmsPostgresDbConnectionQuery => "rdbms::postgres::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
-        (RdbmsPostgresDbConnectionQueryStream => "rdbms::postgres::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsPostgresDbConnectionQueryStream => "rdbms::postgres::db-connection", "query-stream", NoInput, GolemRdbmsRequest, denied = denied::rdbms::request),
         (RdbmsPostgresDbResultStreamGetColumns => "rdbms::postgres::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
         (RdbmsPostgresDbResultStreamGetNext => "rdbms::postgres::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
-        (RdbmsPostgresDbTransactionQuery => "rdbms::postgres::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
-        (RdbmsPostgresDbTransactionExecute => "rdbms::postgres::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
-        (RdbmsPostgresDbTransactionQueryStream => "rdbms::postgres::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsPostgresDbTransactionQuery => "rdbms::postgres::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
+        (RdbmsPostgresDbTransactionExecute => "rdbms::postgres::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsPostgresDbTransactionQueryStream => "rdbms::postgres::db-transaction", "query-stream", NoInput, GolemRdbmsRequest, denied = denied::rdbms::request),
         (RdbmsIgnite2DbConnectionExecute => "rdbms::ignite2::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
         (RdbmsIgnite2DbConnectionQuery => "rdbms::ignite2::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
-        (RdbmsIgnite2DbConnectionQueryStream => "rdbms::ignite2::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsIgnite2DbConnectionQueryStream => "rdbms::ignite2::db-connection", "query-stream", NoInput, GolemRdbmsRequest, denied = denied::rdbms::request),
         (RdbmsIgnite2DbResultStreamGetColumns => "rdbms::ignite2::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
         (RdbmsIgnite2DbResultStreamGetNext => "rdbms::ignite2::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
-        (RdbmsIgnite2DbTransactionQuery => "rdbms::ignite2::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
-        (RdbmsIgnite2DbTransactionExecute => "rdbms::ignite2::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
-        (RdbmsIgnite2DbTransactionQueryStream => "rdbms::ignite2::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsIgnite2DbTransactionQuery => "rdbms::ignite2::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
+        (RdbmsIgnite2DbTransactionExecute => "rdbms::ignite2::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsIgnite2DbTransactionQueryStream => "rdbms::ignite2::db-transaction", "query-stream", NoInput, GolemRdbmsRequest, denied = denied::rdbms::request),
         (KeyvalueEventualGet => "keyvalue::eventual", "get", KVBucketAndKey, KVGet, denied = denied::keyvalue::kv_get),
         (KeyvalueEventualSet => "keyvalue::eventual", "set", KVBucketKeyAndSize, KVUnit, denied = denied::keyvalue::kv_unit),
         (KeyvalueEventualDelete => "keyvalue::eventual", "delete", KVBucketAndKey, KVUnit, denied = denied::keyvalue::kv_unit),
@@ -1015,8 +1037,14 @@ pub mod host_functions {
         (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
         (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
+        (GolemPermissionsCardLiveness => "golem::permissions::types", "card-liveness", PermissionCardLiveness, PermissionCardLiveness),
         (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
+        (GolemPermissionsInspectDecision => "golem::permissions::inspect", "inspect-card-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveDecision => "golem::permissions::derive", "derive-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveFromWalletDecision => "golem::permissions::derive", "derive-from-wallet-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveScopeDecision => "golem::permissions::derive", "derive-scope-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsInstallDecision => "golem::permissions::wallet", "install-card-decision", PermissionCardDecision, PermissionCardDecision),
         (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),
         (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool),
         (RdbmsMysqlDbConnectionBeginTransaction => "rdbms::mysql::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
@@ -1054,6 +1082,7 @@ pub mod host_functions {
         (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
         (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }

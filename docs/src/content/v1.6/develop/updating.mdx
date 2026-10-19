@@ -1,5 +1,3 @@
-import { Callout, Tabs } from "nextra/components"
-
 # Updating agents to newer versions of components
 
 As described in the general [Agents](/v1.6/concepts/agents) page, each agent runs on a specific version of the component it is based on, but it is possible to **update** an agent to a different version of the same component.
@@ -36,7 +34,9 @@ An application snapshot does not hold the agent's files. So the update uses the 
 1. Golem restores the filesystem snapshot that the record names. A record without a filesystem snapshot name gives the initial files of the source revision, because Golem writes such a record only while the agent's files are its initial files.
 2. The target revision loads the application snapshot of the record.
 3. The target revision replays the history after the record. During this replay, the agent sees the configuration, the environment and the initial files of the source revision, as during a full replay.
-4. At the update point, Golem applies the initial files of the target revision, as a full replay does. If the target revision changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file, the update fails. The rule is the same as for a [manual update](/v1.6/develop/snapshotting#manual-updates).
+4. At the update point, Golem applies the initial files of the target revision, as a full replay does. If the target revision changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file, the update fails. The rule is the same as for a [manual update](#manual-snapshot-based-update).
+
+Deleting an initial file does not cause a conflict if the target revision no longer declares it. An agent file that blocks a directory required by a new initial file does cause a conflict. These rules also apply to manual snapshot-based updates; a conflicting update fails and leaves the agent on its source revision.
 
 After a successful update, the selected record is the authoritative recovery baseline. A later start can use a newer automatic snapshot. When the start cannot use that snapshot, it restores the files of the selected record, loads its application snapshot and replays the history after it, in the same order as the update. It never replays the history before the selected record. Golem does not delete the filesystem snapshot of the selected record while the successful update stays in the oplog.
 
@@ -54,179 +54,9 @@ While the start replays the history for a pending automatic update, the agent ke
 
 ## Manual snapshot-based update
 
-<Callout>
-Snapshots can also be used for fast recovery during normal operation, not just for updates. See [Snapshotting](/v1.6/develop/snapshotting) for details on snapshot-based recovery, default snapshotting implementations, and configuring periodic snapshots.
-</Callout>
+Use a manual snapshot-based update when the target revision cannot replay the agent's history. The source revision saves the agent's state, and the target revision loads that snapshot instead of replaying the earlier history.
 
-It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working.
-
-
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-        Put `snapshot` inside `.implement({ ... })`. This fragment assumes the complete state is `{ value: number }`. `load` is a factory that returns fresh state; it does not mutate an instance created by `init`:
-
-        ```typescript
-        snapshot: {
-          save() {
-            const bytes = new Uint8Array(8)
-            new DataView(bytes.buffer).setFloat64(0, this.value)
-            return bytes
-          },
-          load(bytes, _context) {
-            return {
-              value: new DataView(
-                bytes.buffer,
-                bytes.byteOffset,
-                bytes.byteLength,
-              ).getFloat64(0),
-            }
-          },
-        }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Select `Snapshot.custom(...)` in `defineAgent({ ... })`, then provide `save` and `restore` effects on the implementation. This fragment assumes `Ref.Ref<number>` state initialized with `Ref.make(0)`:
-
-        ```typescript
-        import { Effect, Ref } from "effect"
-        import { Snapshot } from "@golemcloud/effect-golem"
-
-        snapshotting: Snapshot.custom({
-          policy: Snapshot.policy.manual,
-        })
-
-        // In .implement({ ... }):
-        snapshot: {
-          save: (state) =>
-            Ref.get(state).pipe(
-              Effect.map((value) => {
-                const bytes = new Uint8Array(8)
-                new DataView(bytes.buffer).setFloat64(0, value)
-                return bytes
-              }),
-            ),
-          restore: (bytes, _context) =>
-            Ref.make(
-              new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-                .getFloat64(0),
-            ),
-        }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Add both methods inside the existing `#[agent_implementation] impl CounterAgent for CounterImpl` block. This fragment assumes the complete state is `value: u32`; `load_snapshot` is an associated factory that returns `Self`:
-
-        ```rust
-        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-            Ok(self.value.to_le_bytes().to_vec())
-        }
-
-        async fn load_snapshot(
-            bytes: Vec<u8>,
-            _context: golem_rust::agentic::SnapshotRestoreContext,
-        ) -> Result<Self, String> {
-            let arr: [u8; 4] = bytes
-                .try_into()
-                .map_err(|_| "Expected a 4-byte snapshot".to_string())?;
-            Ok(Self {
-                value: u32::from_le_bytes(arr),
-            })
-        }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Define `saveSnapshot()` on the annotated implementation and the restoring factory on its companion object. Identity field `0` is the counter's `String` name; ordinary agent methods are omitted:
-
-        ```scala
-        import golem.runtime.SnapshotRestoreContext
-        import golem.runtime.annotations.agentImplementation
-
-        import scala.concurrent.Future
-
-        @agentImplementation()
-        final class CounterImpl(private val name: String) extends Counter {
-          private var value: Int = 0
-
-          // Counter methods ...
-
-          def saveSnapshot(): Future[Array[Byte]] = Future.successful {
-            val buffer = java.nio.ByteBuffer.allocate(4)
-            buffer.putInt(value)
-            buffer.array()
-          }
-        }
-
-        object CounterImpl {
-          def loadSnapshot(
-            bytes: Array[Byte],
-            context: SnapshotRestoreContext
-          ): Future[CounterImpl] = Future.successful {
-            val instance = new CounterImpl(context.identity[String](0))
-            instance.value = java.nio.ByteBuffer.wrap(bytes).getInt()
-            instance
-          }
-        }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        For an existing `Counter` with `name: String`, `mut value: UInt64`, and its name at identity index `0`, implement saving with `@agents.Snapshottable` and define a separate static restoration factory:
-
-        ```moonbit
-        pub impl @agents.Snapshottable for Counter with save_snapshot(self) {
-          let arr: Array[Byte] = []
-          for i = 7; i >= 0; i = i - 1 {
-            arr.push(((self.value >> (i * 8)).to_int() & 0xff).to_byte())
-          }
-          Bytes::from_array(arr)
-        }
-
-        pub fn Counter::load_snapshot(
-          bytes: Bytes,
-          context: @agents.SnapshotRestoreContext,
-        ) -> Result[Counter, String] {
-          if bytes.length() != 8 {
-            return Err("Expected an 8-byte snapshot")
-          }
-          let mut value: UInt64 = 0
-          for i = 0; i < 8; i = i + 1 {
-            value = value | (bytes[i].to_uint64() << ((7 - i) * 8))
-          }
-          let name: String = context.identity(0) catch {
-            error => return Err(error.to_string())
-          }
-          Ok({ name, value })
-        }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the agent's state type in the implementation package. This fragment assumes the complete state is an unexported `value uint32`. On restore, the SDK does not run the `Implement` factory. It calls `Load` on the zero value of the state, then the optional `OnRestore` hook:
-
-        ```go
-        import (
-            "encoding/binary"
-            "errors"
-        )
-
-        type state struct{ value uint32 }
-
-        func (s *state) Save() ([]byte, error) {
-            return binary.LittleEndian.AppendUint32(nil, s.value), nil
-        }
-
-        func (s *state) Load(b []byte) error {
-            if len(b) != 4 {
-                return errors.New("expected a 4-byte snapshot")
-            }
-            s.value = binary.LittleEndian.Uint32(b)
-            return nil
-        }
-        ```
-
-        <Callout type="warning">
-        A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Automatic updates and snapshot-based recovery work.
-        </Callout>
-    </Tabs.Tab>
-</Tabs>
+See [Snapshotting](/v1.6/develop/snapshotting) for the default and custom snapshot implementations. Before updating, check [Evolving the state schema](/v1.6/develop/snapshotting#evolving-the-state-schema) for loading requirements and SDK-specific limitations.
 
 After making a change that requires a manual update, you need to build and deploy the updated component. Then, to update a specific agent, run the following command:
 
@@ -259,6 +89,7 @@ When an update fails, Golem writes a `FailedUpdate` entry. For the causes below,
 | `UPDATE_SNAPSHOT_UNAVAILABLE` | Manual | The store lost the filesystem snapshot of the manual update. | Request the manual update again. It takes a new snapshot. |
 | `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` | Automatic, manual | The snapshot of the update names a filesystem snapshot, and the executor that starts the update has no filesystem snapshots. | Run the update on an executor with filesystem snapshots. |
 | `UPDATE_SNAPSHOT_RESTORE_FAILED` | Automatic, manual | The filesystem snapshot of the update did not restore on this executor. When the text says that the local disk of the executor is full, the disk has no space for the files. | Request the update again. When the disk is full, request it again after the executor has space. |
+| `UPDATE_BLOB_STORAGE_REFUSED` | Automatic, manual | At the update point, the blob storage refused the executor a read of an initial file of the target revision. The text names the refusal, for example `access denied` or `the bucket does not exist`. Only an operator of the storage can fix it, for example the credentials of the executor, the bucket, or the permissions of the blob root of the filesystem backend. A storage that is unavailable for a short time does not give this code: Golem retries the update. | Fix the blob storage. Then request the update again. |
 | `UPDATE_TARGET_NOT_FOUND` | Automatic, manual | The target revision does not exist. | Request an update to a revision that exists. |
 | `UPDATE_TARGET_REFUSED` | Automatic, manual | The component service refused the target revision. The text names the kind of the refusal, for example `unauthorized` or `missing binary`. | Make sure that the executor has access to the component service and that the target revision is correct. Then request the update again. |
 

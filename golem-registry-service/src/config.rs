@@ -25,6 +25,7 @@ use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use golem_service_base::http_server::HttpServerConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -269,6 +270,11 @@ pub struct RegistryServiceConfig {
     pub mcp_oauth: golem_mcp_import::oauth::Limits,
     #[serde(default)]
     pub mcp_import: McpImportResolverConfig,
+    /// HTTP/2 settings of the API port.
+    #[serde(default)]
+    pub http_server: HttpServerConfig,
+    #[serde(default)]
+    pub body_limits: RequestBodyLimits,
 }
 
 impl RegistryServiceConfig {
@@ -284,6 +290,7 @@ impl RegistryServiceConfig {
         self.blob_storage.validate()?;
         self.mcp_oauth.validate()?;
         self.mcp_import.validate()?;
+        self.http_server.validate().map_err(anyhow::Error::msg)?;
         Ok(())
     }
 }
@@ -377,6 +384,13 @@ impl SafeDisplay for RegistryServiceConfig {
         );
         let _ = writeln!(&mut result, "MCP OAuth limits: {:?}", self.mcp_oauth);
         let _ = writeln!(&mut result, "MCP import resolver: {:?}", self.mcp_import);
+        let _ = writeln!(&mut result, "HTTP server:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.http_server.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "request body limits: {:?}", self.body_limits);
 
         result
     }
@@ -494,6 +508,33 @@ impl Default for RegistryServiceConfig {
             security_scheme: SecuritySchemeConfig::default(),
             mcp_oauth: golem_mcp_import::oauth::Limits::default(),
             mcp_import: McpImportResolverConfig::default(),
+            http_server: HttpServerConfig::default(),
+            body_limits: RequestBodyLimits::default(),
+        }
+    }
+}
+
+/// Largest request bodies, in bytes, on the API port. A larger body gets
+/// `413 Payload Too Large`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RequestBodyLimits {
+    /// Requests other than uploads.
+    pub api: usize,
+    /// `multipart/form-data` requests: component and plugin uploads, with their initial file
+    /// archives, and initial agent file uploads.
+    pub upload: usize,
+}
+
+impl Default for RequestBodyLimits {
+    fn default() -> Self {
+        Self {
+            api: 32 * 1024 * 1024,
+            // A component upload holds the WASM, which the plan limits to its component
+            // storage (500 MB in the default plan) and monthly upload (1 GB), and the initial
+            // file archive, at most `component_file_upload.max_uncompressed_archive_size`
+            // (1 GiB) plus the archive overhead.
+            upload: 2 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -710,6 +751,9 @@ impl Default for ComponentCompilationConfig {
 pub struct ComponentCompilationEnabledConfig {
     pub host: String,
     pub port: u16,
+    /// Total budget for cache-warming admission, including connection and retries.
+    #[serde(with = "humantime_serde")]
+    pub enqueue_timeout: Duration,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
 }
@@ -719,6 +763,7 @@ impl SafeDisplay for ComponentCompilationEnabledConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "enqueue timeout: {:?}", self.enqueue_timeout);
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -729,6 +774,7 @@ impl Default for ComponentCompilationEnabledConfig {
         Self {
             host: "localhost".to_string(),
             port: 9091,
+            enqueue_timeout: Duration::from_secs(1),
             client_config: GrpcClientConfig::default(),
         }
     }

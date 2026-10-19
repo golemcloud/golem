@@ -129,3 +129,59 @@ void scopeFreeStart
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn effect_tool_trailing_optional_fields_and_effect_results_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    EffectToolBridgeGenerator::new(
+        crate::bridge_gen::typescript::grep_tool_with_result_and_trailing_option(None),
+        target,
+        true,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let generated = target.join("grep-tool-guest-client.ts");
+    let source = std::fs::read_to_string(&generated).unwrap();
+    assert!(
+        source.contains("import { Effect, Result as EffectResult, Scope } from 'effect'"),
+        "{source}"
+    );
+    assert!(source.contains("max_count?: number)"), "{source}");
+    assert!(
+        source.contains("Effect.Effect<EffectResult.Result<string[], number>"),
+        "{source}"
+    );
+    assert!(source.contains("EffectResult.succeed("), "{source}");
+    let consumer = r#"import { BridgeTool as base } from "@golemcloud/effect-golem"
+import { Effect, Result } from "effect"
+import { client } from "./grep-tool-guest-client.js"
+const grep: Effect.Effect<Result.Result<string[], number>, unknown, base.ToolRequirements> =
+  client.grep(undefined, false, "needle", [])
+void grep
+"#;
+    std::fs::write(target.join("consumer.ts"), consumer).unwrap();
+    let config = target.join("tsconfig.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    json["include"]
+        .as_array_mut()
+        .unwrap()
+        .push("consumer.ts".into());
+    std::fs::write(&config, serde_json::to_string_pretty(&json).unwrap()).unwrap();
+    for args in [&["install"][..], &["run", "build"][..]] {
+        let output = std::process::Command::new("npm")
+            .args(args)
+            .current_dir(target)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "npm {} failed for {generated}\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

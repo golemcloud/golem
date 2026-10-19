@@ -116,6 +116,7 @@ pub struct RecipientMonomorphizationContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RecipientOwnerContext {
     AgentType(AgentTypeName),
     ComponentExternalToolOwner,

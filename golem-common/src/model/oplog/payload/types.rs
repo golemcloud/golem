@@ -192,6 +192,71 @@ pub enum PermissionCardRevokeError {
     NotPermitted(String),
 }
 
+/// A typed refusal of a runtime permission-card creation, returned to the guest instead of the
+/// created card or the completed install.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum PermissionCardDeriveError {
+    CardRevoked(String),
+    CardExpired(String),
+    NotPermitted(String),
+}
+
+/// A `golem:permissions` permission error that a recorded authorization decision returns to the
+/// guest.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializablePermissionError {
+    NotPermitted(String),
+    LowerBoundTooBroad(String),
+    UpperBoundTooBroad(String),
+    WalletMultiSourceRequired(String),
+    CardRevoked(String),
+    CardExpired(String),
+    InstallRecipientMismatch(String),
+    UnknownResourceClass(String),
+    InvalidPattern(String),
+    InvalidVerb(String),
+    InvalidOwner(String),
+    InvalidRecipient(String),
+}
+
+/// The liveness of the card behind a permission-card handle when an operation used the handle.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializablePermissionCardLiveness {
+    /// The card is live. The payload is the serialized `StoredCard` that the handle resolves to.
+    Live(Vec<u8>),
+    /// The card is revoked, or the registry does not know it.
+    Revoked,
+    /// The card expired.
+    Expired,
+}
+
 #[derive(
     Debug,
     Clone,

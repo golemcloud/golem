@@ -1,0 +1,124 @@
+import { Callout } from "nextra/components"
+
+# Agent Shell Access
+
+Use `golem ssh` to run shell commands on an agent through its built-in Bash tool. Each submitted command invokes the tool's `run` operation, just like `golem tool invoke --agent <AGENT> bash -- run`. This is a tool session, not an operating-system SSH login.
+
+## Open a session
+
+```shell copy
+golem ssh 'MyAgent("m1")'
+```
+
+`golem deploy` binds the Bash tool to every agent type by default, with access to the agent's files. An existing agent gets the binding on its next call, or when it is updated if the deployment also changes its component. See [Default tools](/v1.6/app-manifest#default-tools).
+
+| Option | Purpose |
+| --- | --- |
+| `--cwd DIR` | Start in `DIR` instead of the agent's starting directory. |
+| `--timeout SECONDS` | Limit how long each command can run. Without this option, the tool's limit applies. |
+| `--tool NAME` | Use a different tool binding whose `run` operation matches Bash's contract. The default is `bash`. |
+
+### Control access
+
+<Callout type="warning">
+  With default tools enabled, anyone who can invoke an agent in the environment
+  can run shell commands on it. Commands can read and change agent files and read
+  agent environment variables, including secrets stored in those variables.
+</Callout>
+
+To disable default tools for an environment, set `tools.defaults: []` in the application manifest. `golem ssh` then reports that `bash` is not bound, unless you bind it explicitly. To retain shell access without file access, bind `bash` with `filesystemAccess: denied` at the environment or agent-type level. Denying file access does not hide environment variables. See [Default tools](/v1.6/app-manifest#default-tools) for the manifest settings.
+
+## Work in the shell
+
+Each command runs in a **fresh shell**. Only its final working directory carries over to the next command. Variables, functions, aliases, shell options, and `$?` do not persist between commands. Store persistent data in agent files; for reusable shell definitions, write a file and `source` it in each command that needs it.
+
+The session does not hold an invocation open while it waits for input. Other agent methods and tools can run between commands. If the current directory is removed, the next command is refused before execution and the interactive session resets to its starting directory.
+
+Tools called from Bash are not child programs. A tool that declares a working-directory option receives the session directory: after `cd repo`, `git status` uses `repo`. A tool without such an option uses its own default directory.
+
+### Editing and history
+
+| Key or input | Action |
+| --- | --- |
+| Tab | Complete command names, bound tools, and paths on the agent. |
+| Up / Down | Recall commands from this agent's history. |
+| Ctrl+R | Search history. |
+| Ctrl+C at the prompt | Clear the current input, including unfinished multiline input. |
+| Ctrl+D, `exit`, or `exit N` | End the session. `exit N` selects its exit status. |
+
+Open quotes, here-documents, trailing operators, and unfinished shell blocks continue on another line. The continuation marker is `┃`, or `·` without colours. Input that the CLI cannot classify is sent to Bash for validation.
+
+History is stored per agent in `ssh-history/` under the CLI configuration directory, readable only by your user. Lines beginning with a space are not saved. The editor also offers history suggestions and highlights command names in red when the agent does not recognize them.
+
+In an interactive terminal, `help` describes the session and `tools` lists the agent's bound tools. `help NAME`, `builtin help`, and `command tools` are passed to Bash. With piped input, all of these commands are passed to Bash.
+
+### Prompt and command output
+
+The prompt shows the agent identity, current directory, and Git branch when the Git tool is bound. Its status indicator is a snapshot taken when the prompt is drawn:
+
+| Indicator | Agent status |
+| --- | --- |
+| Green | Idle. |
+| Yellow | Running or waiting; a submitted command will queue. |
+| Red | Failed or exited. |
+| Hollow | Status could not be read. |
+
+When space permits, the prompt also shows the last non-zero exit status, queued command count, and elapsed time. Narrow terminals shorten the display. Control characters in directory and branch names are escaped before display, for example an escape character appears as `^[`.
+
+While a command runs, a progress indicator shows elapsed time and how to stop waiting. Output appears when the command finishes; interactive sessions dim standard error. Without colours, the prompt and progress message use plain text.
+
+Completion and Git-branch lookup run short helper commands on the agent, so they appear in its invocation history. Command names are fetched when the session opens. Uncached completions can make another call; if the agent does not answer within about three seconds, completion pauses until a command returns. Git-branch lookup runs only with colours enabled, after a command changes directory or runs `git`. Branch changes made another way are not immediately reflected in the prompt.
+
+### Terminal settings
+
+| Environment variable | Effect |
+| --- | --- |
+| `GOLEM_SSH_BACKGROUND=0` | Disable the dark band behind prompts. |
+| `GOLEM_SSH_RUNES=0` | Use a plain progress symbol if the terminal font cannot display runes. |
+| `NO_COLOR` | Disable colours and animated progress. |
+| `GOLEM_CLI_AGENT_HINTS=1` | Use the plain session normally selected for AI coding agents. |
+| `GOLEM_CLI_AGENT_HINTS=0` | Use the full interactive session even in an AI coding agent's terminal. |
+
+The CLI detects AI coding agents from their environment. Plain sessions have a one-line prompt, no editor completion or history recall, and no progress display or terminal queries. They do not run completion or Git helper commands.
+
+## Run scripts
+
+Use `-c` to run one script and exit with its status:
+
+```shell copy
+golem ssh 'MyAgent("m1")' -c 'ls -l /data'
+```
+
+Standard output and standard error carry the script's output without prompt decoration. The tool returns text, not arbitrary binary data: invalid UTF-8 bytes become `�`. Use the agent's file APIs to transfer binary files.
+
+### Read commands from standard input
+
+```shell copy
+golem ssh 'MyAgent("m1")' < commands.sh
+```
+
+When standard input is not a terminal, the CLI shows no prompt. It groups multiline shell constructs, such as loops and here-documents, into complete commands. Blank lines and comments do not invoke the tool.
+
+Each command still gets a fresh shell. For example, `cd build || exit 1` ends only that command's shell on failure; later commands still run. Only a standalone `exit` or `exit N` ends the session. Use `-c` with one script when commands must share shell state.
+
+The session stops with status 255 if its current directory is refused or input cannot be read, including invalid UTF-8 input. It does not execute the remaining commands. An output-write failure is reported on standard error; remaining commands run, but the session exits with 1 instead of 0.
+
+## Interrupt commands and recover results
+
+Ctrl+C during a command **stops waiting** and requests cancellation. A queued call can be cancelled, but a call that has started continues until it finishes or reaches its time limit. The next command waits behind it.
+
+The CLI prints a `golem tool invoke --lookup` command to retrieve the result later. If the command finished before cancellation took effect, the CLI reports that and displays its result. Otherwise, an interactive session continues with status 130; `-c` and piped sessions exit with 130.
+
+If the connection fails before a result arrives, the command might already have run. Use the printed lookup command before retrying a command with side effects. The session exits with 255 because it no longer knows the working directory. If the agent itself has failed, recover or recreate it before running more commands.
+
+## Exit statuses
+
+| Status | Meaning |
+| --- | --- |
+| Command status | Normal completion returns the last command's status, or `N` after `exit N`. |
+| `1` | An output-write failure can replace an otherwise successful session status. |
+| `2` | Invalid CLI options. |
+| `130` | Interrupted while waiting for a command. |
+| `255` | The CLI or tool call failed, the command did not run, or its outcome is unknown. Check standard error and any printed lookup command. |
+
+A script can itself return these statuses, including 255. Use the accompanying diagnostics to distinguish a script exit from a session failure.

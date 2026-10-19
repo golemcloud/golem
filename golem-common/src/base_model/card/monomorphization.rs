@@ -26,6 +26,7 @@ use crate::model::environment::EnvironmentName;
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct AgentPermissionMonomorphizationContext {
     pub account: AccountEmail,
     pub application: ApplicationName,

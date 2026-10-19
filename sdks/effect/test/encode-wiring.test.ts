@@ -60,7 +60,10 @@ const layers = (calls: Array<string>) => {
   const metadata: AgentHost.InvocationMetadata = { agentId: "reader", idempotencyKey: "key" }
   let serial = 0
   const permissions: Partial<PermissionsClientShape> = {
-    deriveFromWallet: () => ({ serial: ++serial }) as unknown as CoreTypes.PermissionCard,
+    deriveFromWallet: () => ({
+      tag: "concrete",
+      val: { serial: ++serial } as unknown as CoreTypes.PermissionCard,
+    }),
     inspect: () => ({ lowerPositive: [], lowerNegative: [], upperPositive: [], upperNegative: [] }),
   }
   const connection = {
@@ -103,6 +106,7 @@ describe("wire encode wiring", () => {
     const calls: Array<string> = []
     return Effect.gen(function* () {
       const card = yield* Permissions.deriveFromWallet({})
+      if (!Schema.is(WitTypes.PermissionCard)(card)) throw new Error("expected concrete card")
       const reader = yield* Reader.client.get({ name: "a" })
       yield* interruptAfterEncode(reader.give({ card }))
       expect(calls).toEqual([])
@@ -114,6 +118,7 @@ describe("wire encode wiring", () => {
     const calls: Array<string> = []
     return Effect.gen(function* () {
       const card = yield* Permissions.deriveFromWallet({})
+      if (!Schema.is(WitTypes.PermissionCard)(card)) throw new Error("expected concrete card")
       const handle = yield* Bridge.resolveRemoteAgent(
         "WiringReader",
         { tag: "record", fields: [] },

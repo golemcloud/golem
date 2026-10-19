@@ -32,14 +32,14 @@ provider state.
 The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
 `builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
 read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
-access. The source exports `web-fetch@0.1.2`; its new immutable component release awaits
+access. The source exports `web-fetch@0.1.3`; its new immutable component release awaits
 authorized publication. The artifact lock still pins the previous release. Its timeout,
 response-size, and redirect limits are optional invocation arguments, not
 deployment configuration. HTML is returned as decoded source unless the invocation enables
 conversion to readable text.
 
-The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly, in a pinned
-container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
+The Bash tool is implemented under `builtin-tools/bash/` and built with the release preset of
+`builtin-tools/bash/golem.yaml` into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
 The Python tool source is implemented under `builtin-tools/python/` and built into
@@ -285,7 +285,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: web-fetch
-      version: 0.1.2
+      version: 0.1.3
 
 agents:
   ResearchAgent:

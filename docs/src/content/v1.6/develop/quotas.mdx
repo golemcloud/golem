@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components"
+import { Callout, Tabs } from "nextra/components"
 
 # Quotas / Resource Limits
 
@@ -35,7 +35,7 @@ Quotas are defined per environment using `resourceDefaults`:
 ```yaml
 resourceDefaults:
   local:
-    - name: api-calls
+    api-calls:
       limit:
         type: Rate
         value: 100
@@ -44,14 +44,14 @@ resourceDefaults:
       enforcementAction: reject
       unit: request
       units: requests
-    - name: storage
+    storage:
       limit:
         type: Capacity
         value: 1073741824
       enforcementAction: reject
       unit: byte
       units: bytes
-    - name: connections
+    connections:
       limit:
         type: Concurrency
         value: 50
@@ -59,6 +59,114 @@ resourceDefaults:
       unit: connection
       units: connections
 ```
+
+### Using quotas from an agent
+
+Configuring a resource defines its limit; your agent must reserve units before doing the work that uses it. Acquire a token using the resource's name, reserve the amount you expect to use, then commit the actual usage. The token's expected-use argument helps the runtime allocate credits; it does not consume units by itself.
+
+These examples use the `api-calls` rate quota above to limit a greeting endpoint. Call the helper from an agent method. Each successful reservation permits one request, and the reservation helper commits one unit after preparing the response. If the resource rejects the reservation, the handler does not prepare the response.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+import { acquireQuotaToken, withReservation } from "@golemcloud/golem-ts-sdk"
+
+export function greet(name: string): string {
+  const token = acquireQuotaToken("api-calls", 1n)
+  const result = withReservation(token, 1n, () => ({
+    used: 1n,
+    value: `Hello, ${name}`,
+  }))
+
+  if (result.isErr()) {
+    throw new Error("Request quota exceeded")
+  }
+  return result.unwrap()
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+import { Quota } from "@golemcloud/effect-golem"
+
+export const greet = (name: string) => Effect.gen(function* () {
+  const token = yield* Quota.acquireQuotaToken("api-calls", 1n)
+  return yield* Quota.withReservation(token, 1n, () =>
+    Effect.succeed({ used: 1n, value: `Hello, ${name}` }),
+  )
+})
+```
+
+Return this Effect from the agent handler. Rejection remains in the error channel as `FailedReservationError`; the helper scopes the reservation automatically.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+use golem_rust::quota::{FailedReservation, QuotaToken, with_reservation};
+
+fn greet(name: &str) -> Result<String, FailedReservation> {
+    let token = QuotaToken::new("api-calls", 1);
+    with_reservation(&token, 1, |_reservation| {
+        let response = format!("Hello, {name}");
+        (1, response)
+    })
+}
+```
+
+Handle `Err(FailedReservation)` in the agent method instead of continuing the request.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+import golem.host.QuotaApi
+import scala.concurrent.Future
+
+def greet(name: String): Future[Either[QuotaApi.FailedReservation, String]] = {
+  val token = QuotaApi.QuotaToken("api-calls", BigInt(1))
+  QuotaApi.withReservation(token, BigInt(1)) { _ =>
+    Future.successful((BigInt(1), s"Hello, $name"))
+  }
+}
+```
+
+Handle `Left(FailedReservation)` in the agent method. `Right` contains the response.
+  </Tabs.Tab>
+  <Tabs.Tab>
+Import `golemcloud/golem_sdk/quota` as `@quota` in `moon.pkg`.
+
+```moonbit
+fn greet(name : String) -> Result[String, @quota.FailedReservation] {
+  let token = @quota.QuotaToken::new("api-calls", 1UL)
+  defer token.drop()
+
+  @quota.with_reservation(token, 1UL, fn(_reservation) {
+    let response = "Hello, " + name
+    (1UL, response)
+  })
+}
+```
+
+Handle `Err(FailedReservation)` in the agent method. `Ok` contains the response.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+package example
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+func Greet(name string) (string, error) {
+    token := golem.NewQuotaToken("api-calls", 1)
+    return golem.WithReservation(token, 1, func(_ *golem.Reservation) (uint64, string) {
+        response := "Hello, " + name
+        return 1, response
+    })
+}
+```
+
+Handle the returned error in the agent method. A rejected reservation returns `*golem.FailedReservation`.
+  </Tabs.Tab>
+</Tabs>
+
+For variable usage, reserve an estimate and report the actual amount when committing: unused reserved units are returned, while usage above the reservation incurs debt. If no work consumed the resource, commit zero. For example, a rejected request must not run the protected work. With `throttle`, reservation waits instead of returning a rejection; with `terminate`, exceeding the quota terminates the agent.
 
 ### Managing quotas via REST API
 

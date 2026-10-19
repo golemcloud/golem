@@ -11,9 +11,6 @@ Use [SDK sagas](/next/develop/transactions) for workflows that need compensation
 return an error for a transient condition and use a retry schedule. Throwing after an HTTP response
 does not retry that completed request.
 
-A Rust panic is permanent, including inside code that formerly used `atomically`. It no longer
-retries the block or rewinds completed effects.
-
 ## Remote-write safety
 
 Golem treats remote writes as eligible for re-execution. An incomplete call can therefore be
@@ -26,30 +23,160 @@ must not use `is-idempotent`: the host no longer supplies that property.
 
 ## Custom durable operations
 
-The low-level `golem:durability@1.6.0` interface is for SDK and library authors. Its live resource
-groups raw observational host effects into one logical call with a typed request and response.
-Finishing the resource records the result; replay returns that result without evaluating the
-body. Dropping it unfinished does not trigger a retry. Recovery of an eligible incomplete custom
-call reruns its whole body, so the library must make repeated attempts safe.
+Custom durable operations let SDK and library authors group host effects into one logical call
+with a typed request and response. Completing the operation records the result; replay returns
+that result without evaluating the body. Leaving it unfinished does not trigger a retry.
+Recovery of an eligible incomplete custom call reruns its whole body, so the library must make
+repeated attempts safe.
 
-Use the SDK combinator rather than managing the resource manually. See
-[custom durable invocations](/next/develop/additional) for the lifecycle and SDK entry points.
+Application code should normally use the high-level SDK APIs and Golem's built-in durability instead. When writing an SDK or library, give each custom operation a stable name, a typed semantic request, and a recorded outcome. Classify it as a local or remote read or write. Use an SDK combinator to manage recording and replay rather than handling runtime resources yourself.
 
-**TypeScript, Effect, Scala, MoonBit, and Go: sequential execution only.** In these SDKs, a custom operation's execution scope remains installed while its body waits. Do not run unrelated guest work concurrently with it, including ordinary host calls or another custom operation. A sibling's effects can be attributed to the wrong operation, causing incorrect replay or invocation failure. The SDKs do not reliably detect this misuse.
+The examples below record a catalog revision read. The `readRevision` (or `read_revision`) adapter performs the physical read. The fixed catalog name is the request; the revision is the result. Each example calls one adapter without starting concurrent work.
 
-Sequential and properly nested custom operations remain supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. For example, a library can perform a sequence of remote calls and persist one typed result. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+import { durable, FunctionType } from "@golemcloud/golem-ts-sdk"
+import { z } from "zod"
 
-Do not leave detached promises, fibers, futures, tasks, goroutines, or callbacks running after the body exits. This applies to failure and cancellation as well as success. Stop and join outstanding work before closing the operation. A fail-fast combinator such as `Promise.all` does not join surviving siblings on rejection, and joining at the end does not make concurrent custom scopes supported.
+function catalogRevision(readRevision: (catalog: string) => string): string {
+  return durable({
+    iface: "catalog-library",
+    function: "read-revision",
+    functionType: FunctionType.readRemote,
+    requestSchema: z.string(),
+    success: z.string(),
+  }, "public", () => readRevision("public"))
+}
+```
 
-| SDK | Custom operation restriction |
-| --- | --- |
-| TypeScript | Use `durable` sequentially; do not overlap it with other promises or callbacks. |
-| Effect | Use `Durability.wrap` and `wrapInfallible` sequentially; do not overlap them with other fibers or concurrent effects. |
-| Scala | Use `DurabilityApi.durable` and `durableAsync` sequentially; do not overlap them with other futures or callbacks. |
-| MoonBit | Use `@api.durable` and `durable_async` sequentially; do not overlap them with other tasks. |
-| Go | Use `durability.Run` sequentially; its blocking body can yield to other goroutines, so a synchronous-looking call is not a concurrency safeguard. |
+An adapter exception leaves the operation unfinished instead of recording an error result.
 
-These restrictions concern custom durability in the five SDKs above, not ordinary built-in durable HTTP/RPC APIs or the Rust scope integration.
+Use `durable` sequentially; do not overlap it with other promises or callbacks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+
+Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+
+Do not leave detached promises or callbacks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. `Promise.all` does not join surviving siblings on rejection, and joining at the end does not make concurrent custom scopes supported.
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect, Schema } from "effect"
+import { Durability } from "@golemcloud/effect-golem"
+
+const catalogRevision = (
+  readRevision: (catalog: string) => Effect.Effect<string, string>
+) =>
+  Durability.wrap({
+    iface: "catalog-library",
+    function: "read-revision",
+    functionType: Durability.FunctionType.readRemote,
+    requestSchema: Schema.String,
+    success: Schema.String,
+    error: Schema.String,
+  }, "public", Effect.suspend(() => readRevision("public")))
+```
+
+Use `Durability.wrap` and `wrapInfallible` sequentially; do not overlap them with other fibers or concurrent effects. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+
+Sequential and properly nested custom operations are supported. A body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+
+Do not leave detached fibers running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+use golem_rust::durability::{Durability, DurableFunctionType};
+
+fn catalog_revision(
+    read_revision: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    Durability::<String, String>::new(
+        "catalog-library", "read-revision", DurableFunctionType::ReadRemote,
+        &"public".to_string(),
+    ).run(|| read_revision("public"))
+}
+```
+
+For an async adapter, use `run_async`; its execution scope follows the body's polls. Detached tasks do not inherit that scope automatically, and no task may outlive the operation body.
+
+The sequential-only restriction does not apply to Rust's scope integration. Use the SDK's custom durability combinators to manage each operation's execution scope.
+
+A Rust panic is permanent. It does not retry the block or rewind completed effects.
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.host.DurabilityApi
+import golem.host.DurabilityApi.DurableFunctionType
+
+def catalogRevision(readRevision: String => String): String =
+  DurabilityApi.durable(
+    "catalog-library",
+    "read-revision",
+    DurableFunctionType.ReadRemote,
+    "public"
+  )(readRevision("public"))
+```
+
+An adapter exception leaves the operation unfinished instead of recording an error result.
+
+Use `DurabilityApi.durable` and `durableAsync` sequentially; do not overlap them with other futures or callbacks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+
+Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+
+Do not leave detached futures or callbacks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Fail-fast combinators do not necessarily wait for surviving work, and joining at the end does not make concurrent custom scopes supported.
+</Tabs.Tab>
+<Tabs.Tab>
+Import `golemcloud/golem_sdk/api` as `@api` in the package configuration.
+
+```moonbit
+fn catalog_revision(
+  read_revision : (String) -> Result[String, String],
+) -> Result[String, String] raise {
+  @api.durable(
+    "catalog-library", "read-revision", @api.ReadRemote, "public",
+    () => read_revision("public"),
+  )
+}
+```
+
+Use `@api.durable` and `durable_async` sequentially; do not overlap them with other tasks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+
+Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+
+Do not leave detached tasks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+</Tabs.Tab>
+<Tabs.Tab>
+```go
+import (
+    "github.com/golemcloud/golem/sdks/go/golem"
+    "github.com/golemcloud/golem/sdks/go/golem/durability"
+)
+
+func catalogRevision(
+    readRevision func(string) golem.Result[string, string],
+) golem.Result[string, string] {
+    return durability.Run(durability.Spec{
+        Interface: "catalog-library",
+        Function: "read-revision",
+        Type: durability.ReadRemote,
+    }, "public", func() golem.Result[string, string] {
+        return readRevision("public")
+    })
+}
+```
+
+Use `durability.Run` sequentially; do not overlap it with other goroutines. Its blocking body can yield to other goroutines, so a synchronous-looking call is not a concurrency safeguard. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+
+Sequential and properly nested custom operations are supported. Complete one custom operation before starting the next; complete each nested operation before continuing its parent. No unrelated guest work may run while the body waits for host operations.
+
+Do not leave goroutines running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+</Tabs.Tab>
+</Tabs>
+
+The combinators serialize recorded outcomes, including declared error results. A completed operation replays its outcome without calling the adapter. This does not make arbitrary external side effects exactly once: recovery can repeat an unfinished body, so writes still need an external idempotency key or a transaction.
+
+Keep requests and outcomes bounded. The request, response, operation name, and observational host calls may appear in oplog inspection, logs, and metrics. Use useful schemas and names, but redact credentials and personal data.
+
+The custom-operation restrictions do not apply to ordinary built-in durable HTTP and RPC APIs.
 
 ## Nonresumable handles
 
@@ -100,9 +227,3 @@ not a transaction commit for external services, and it does not undo any effect.
         ```
     </Tabs.Tab>
 </Tabs>
-
-## Operator recovery
-
-External operators can [revert or fork an agent](/next/cli/agents) at validated oplog cuts.
-These are management operations, not guest-code retry primitives. They do not undo effects
-already applied by an external service. Reconcile those effects before repeating business work.

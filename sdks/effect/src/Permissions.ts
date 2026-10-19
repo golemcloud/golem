@@ -69,8 +69,8 @@ export type PermissionCard = GuestPermissionCardHandle<"concrete">
  * An owned, opaque template permission card: its grants may contain slot variables (`?agent`,
  * `?env`, ...), which resolve for each holder. It is the same value that
  * `WitTypes.PolymorphicPermissionCard` schemas (`polymorphic: true`) decode and encode. It
- * supports the same operations as a {@link PermissionCard}; {@link derive} from it returns a
- * {@link PermissionCard}, because the host resolves the template for the holder.
+ * supports the same operations as a {@link PermissionCard}. The host labels derived children
+ * concrete or template independently of the parent kind.
  *
  * @since 1.6.0
  * @category models
@@ -474,6 +474,15 @@ const wrap = <K extends PermissionCardKind>(
 ): GuestPermissionCardHandle<K> =>
   createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw, kind)
 
+const wrapPersistent = (entry: TypesHost.PersistentCard): PersistentCard => {
+  switch (entry.tag) {
+    case "concrete":
+      return wrap(entry.val, "concrete")
+    case "template":
+      return wrap(entry.val, "template")
+  }
+}
+
 const wrapWalletCard = (entry: TypesHost.WalletCard): WalletCard => {
   switch (entry.tag) {
     case "concrete":
@@ -613,7 +622,8 @@ export const inspect = (
 /**
  * Derive a narrower child card from `card`, which stays usable. The positive bounds name the
  * parent grants to retain; the negative bounds name the denials to add. A template parent is
- * resolved against the caller, so the result is always a concrete {@link PermissionCard}.
+ * resolved against the caller. Child slots name the eventual holder and are universally
+ * validated. The host labels the result concrete or template.
  * Requires `card:derive` authority.
  *
  * @since 1.6.0
@@ -623,12 +633,12 @@ export const derive = (
   card: PersistentCard,
   bounds: Bounds,
   lifespan?: Lifespan,
-): Effect.Effect<PermissionCard, PermissionError | PermissionsHostError, PermissionsClient> =>
+): Effect.Effect<PersistentCard, PermissionError | PermissionsHostError, PermissionsClient> =>
   Effect.gen(function* () {
     const host = yield* PermissionsClient
     return yield* Effect.try({
       try: () =>
-        wrap(
+        wrapPersistent(
           host.derive(
             borrow(card),
             toWitGrants(bounds.lowerPositive),
@@ -637,7 +647,6 @@ export const derive = (
             toWitGrants(bounds.upperNegative),
             toWitLifespan(lifespan),
           ),
-          "concrete",
         ),
       catch: failure("derive"),
     })
@@ -653,12 +662,12 @@ export const derive = (
 export const deriveFromWallet = (
   bounds: Bounds,
   lifespan?: Lifespan,
-): Effect.Effect<PermissionCard, PermissionError | PermissionsHostError, PermissionsClient> =>
+): Effect.Effect<PersistentCard, PermissionError | PermissionsHostError, PermissionsClient> =>
   Effect.gen(function* () {
     const host = yield* PermissionsClient
     return yield* Effect.try({
       try: () =>
-        wrap(
+        wrapPersistent(
           host.deriveFromWallet(
             toWitGrants(bounds.lowerPositive),
             toWitGrants(bounds.lowerNegative),
@@ -666,7 +675,6 @@ export const deriveFromWallet = (
             toWitGrants(bounds.upperNegative),
             toWitLifespan(lifespan),
           ),
-          "concrete",
         ),
       catch: failure("deriveFromWallet"),
     })
@@ -676,7 +684,7 @@ export const deriveFromWallet = (
  * Derive an invocation-local {@link ScopeCard} from one or more persistent or scope parents,
  * which stay usable. The bounds are the complete requested lattice. Attach the result to an
  * awaited agent call with `withScopeCard` or the client's `scopeCard` option. The scope card is
- * valid only during the current invocation.
+ * valid only during the current invocation. Requested slots fail with `invalid-pattern`.
  *
  * @since 1.6.0
  * @category constructors

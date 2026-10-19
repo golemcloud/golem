@@ -35,10 +35,9 @@ impl UploadWorker {
 
         tokio::spawn(
             async move {
-                loop {
-                    while let Some(request) = recv.recv().await {
-                        worker.upload_component(request).await
-                    }
+                while let Some(request) = recv.recv().await {
+                    crate::metrics::decrement_upload_queue_length();
+                    worker.upload_component(request).await
                 }
             }
             .in_current_span(),

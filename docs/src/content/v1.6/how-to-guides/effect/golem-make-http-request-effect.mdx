@@ -1,6 +1,6 @@
 # Making Outgoing HTTP Requests from Effect Golem Agents
 
-Use the Effect v4 HTTP client from `effect/unstable/http`. `FetchHttpClient.layer` supplies the
+Use the Effect v4 HTTP client from `effect/http`. `FetchHttpClient.layer` supplies the
 canonical `HttpClient.HttpClient` service through QuickJS's WASI-backed `globalThis.fetch`, while
 keeping request construction, failures, response decoding, and dependency provision in Effect.
 
@@ -11,7 +11,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 ```
 
 Do not wrap `globalThis.fetch` in `Effect.tryPromise` for ordinary application HTTP. Do not use
@@ -175,13 +175,13 @@ consumed and verified.
 ## Durability, Retries, and Duplicate Requests
 
 Outgoing WASI HTTP calls are recorded by Golem. During replay of the **same agent invocation**,
-Golem normally reuses the recorded response rather than sending the request again unless a
-durability boundary explicitly requires re-execution. Using `FetchHttpClient.layer` preserves that
+Golem reuses a completed call's recorded response rather than sending the request again.
+Using `FetchHttpClient.layer` preserves that
 host behavior because it still executes through the same WASI-backed fetch implementation.
 
 This is not cross-invocation deduplication. Two calls to the same agent method are independent and
-can send two requests. `Durability.atomically` controls recovery within one invocation; it is not a
-distributed transaction with the remote HTTP server.
+can send two requests. Recovery repairs an eligible incomplete call at its own `Start`; it is
+not a distributed transaction with the remote HTTP server.
 
 For state-changing requests that callers may retry:
 
@@ -215,31 +215,21 @@ http-5xx-retry:
 A retry can repeat a state-changing operation. Use it only when the operation is naturally
 idempotent or the remote server deduplicates a stable key.
 
-### Atomic application-level validation
+### Application-level validation
 
-When retry depends on decoded content or several side effects, include request execution, complete
-body consumption, and validation in the atomic region:
-
-```typescript
-import { Durability } from "@golemcloud/effect-golem";
-
-const validatedCall = Durability.atomically(
-  HttpClient.get("https://api.example.com/users/1").pipe(
-    Effect.flatMap(HttpClientResponse.filterStatusOk),
-    Effect.flatMap(HttpClientResponse.schemaBodyJson(ApiUser)),
-    Effect.provide(FetchHttpClient.layer),
-  ),
-);
-```
-
-A failed atomic region can re-execute the complete region and repeat a remote side effect. Do not
-use it as an exactly-once wrapper or merely for status-code retries. Load [`golem-atomic-block-effect`](/v1.6/how-to-guides/effect/golem-atomic-block-effect)
-for the full replay constraints.
+When retry depends on decoded content or several side effects, use explicit guest control flow
+or an SDK saga. Compensate successful steps before the next attempt. New attempts append new
+calls without deleting earlier responses or compensations. A defect after a response fails the
+invocation; it does not retry that completed request. Host transport and body-resumption retries
+remain host responsibilities.
 
 ## Calling a Golem HTTP Endpoint
 
-For an incoming Golem endpoint, unbound method parameters come from a JSON object whose keys match
-the method's camelCase `input` keys. Even one body parameter requires an object.
+For ordinary structured bodies on an incoming Golem endpoint, user-supplied parameters not bound
+to path/query/header values come from a JSON object whose keys match the method's `input` keys.
+Even one body parameter requires an object. A single object input named `request` needs
+`{ "request": { "text": "hello" } }`, not the bare inner object. Unstructured text and binary
+inputs instead consume raw bodies.
 
 Given an incoming method:
 
@@ -253,6 +243,10 @@ record: method({
 
 send `{ "message": "..." }`, not a raw string.
 
+CLI invocation does not use this HTTP wrapper: pass one native TypeScript literal per user-supplied input in
+declaration order. Load [`golem-http-params-effect`](/v1.6/how-to-guides/effect/golem-http-params-effect) for HTTP mapping and
+[`golem-invoke-agent-effect`](/v1.6/how-to-guides/effect/golem-invoke-agent-effect) for CLI examples and caller-only input rules.
+
 ## Complete Agent Method
 
 This durable agent performs the POST through one shared `HttpClient` service:
@@ -264,7 +258,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { defineAgent, method } from "@golemcloud/effect-golem";
 
 export const MessageForwarder = defineAgent({
@@ -304,7 +298,7 @@ Effect AI provider instead of hand-writing provider REST calls.
 
 ## Key Constraints
 
-- Import root Effect APIs from `effect` and HTTP APIs from `effect/unstable/http`.
+- Import root Effect APIs from `effect` and HTTP APIs from `effect/http`.
 - Use the canonical `HttpClient.HttpClient` service with `FetchHttpClient.layer`.
 - Do not use direct `globalThis.fetch`, Node networking modules, or native HTTP client packages.
 - Keep handlers as Effects; do not return raw Promises or mark handlers `async`.
@@ -317,9 +311,9 @@ Effect AI provider instead of hand-writing provider REST calls.
 
 ## Authoritative API Sources
 
-- [Effect v4 HTTP client](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClient.ts)
-- [Effect v4 HTTP request](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClientRequest.ts)
-- [Effect v4 HTTP response](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClientResponse.ts)
-- [Effect v4 fetch client layer](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/FetchHttpClient.ts)
+- [Effect v4 HTTP client](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/HttpClient.ts)
+- [Effect v4 HTTP request](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/HttpClientRequest.ts)
+- [Effect v4 HTTP response](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/HttpClientResponse.ts)
+- [Effect v4 fetch client layer](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/FetchHttpClient.ts)
 - [Effect-Golem durability modes](https://github.com/golemcloud/effect-golem/blob/HEAD/src/internal/durabilityMode.ts)
 - [GOL-325 cancellation follow-up](https://linear.app/golem-cloud/issue/GOL-325/propagate-fetch-abortsignal-cancellation-to-the-underlying-wasi-http)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{SessionStoreConfig, WorkerServiceConfig};
+use crate::config::{SessionStoreConfig, WebSocketTransportLimits, WorkerServiceConfig};
 use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
@@ -55,6 +55,7 @@ pub struct Services {
     pub limit_service: Arc<dyn LimitService>,
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
+    pub connect_websocket: WebSocketTransportLimits,
     pub request_handler: Arc<RequestHandler>,
     pub openapi_service: Arc<crate::custom_api::openapi::OpenApiService>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
@@ -228,6 +229,7 @@ impl Services {
             limit_service,
             component_service,
             worker_service,
+            connect_websocket: config.connect_websocket.clone(),
             request_handler,
             openapi_service,
             mcp_capability_lookup,

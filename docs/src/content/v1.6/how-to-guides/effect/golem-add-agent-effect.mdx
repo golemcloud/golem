@@ -138,8 +138,9 @@ getItem: method({
 Effect.fail({ _tag: "ItemNotFound" as const, id });
 ```
 
-Use defects such as `Effect.dieMessage(...)` only for unexpected failures that should fail and
-retry the invocation. Do not use defects to represent normal business outcomes.
+Use defects such as `Effect.dieMessage(...)` only for unexpected failures. An unhandled defect
+fails the invocation without retry and does not repeat completed effects. Do not use defects to
+represent normal business outcomes.
 
 ## Key Constraints
 

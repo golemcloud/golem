@@ -667,6 +667,28 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(result)
     }
 
+    async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+
+        let response = client
+            .get_oplog(
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
+                Some(OplogIndex::INITIAL.as_u64()),
+                1,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
+
+        Ok(response.last_index)
+    }
+
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
@@ -1144,8 +1166,13 @@ struct HttpWorkerLogEventStream {
 /// Gives the URL of the WebSocket that streams the events of the agent. The agent name is one
 /// segment of the path, so the function percent-encodes it.
 fn worker_connect_url(base_url: &url::Url, agent_id: &AgentId) -> String {
+    let scheme = if base_url.scheme() == "https" {
+        "wss"
+    } else {
+        "ws"
+    };
     format!(
-        "ws://{}:{}/v1/components/{}/workers/{}/connect",
+        "{scheme}://{}:{}/v1/components/{}/workers/{}/connect",
         base_url.host().unwrap(),
         base_url.port_or_known_default().unwrap(),
         agent_id.component_id.0,
@@ -1158,6 +1185,7 @@ impl HttpWorkerLogEventStream {
         let url = worker_connect_url(&client.context.base_url, agent_id);
 
         let mut connection_request = url
+            .as_str()
             .into_client_request()
             .context("Failed to create request")?;
 
@@ -1173,7 +1201,11 @@ impl HttpWorkerLogEventStream {
             connection_request,
             None,
             false,
-            Some(Connector::Plain),
+            if url.starts_with("ws://") {
+                Some(Connector::Plain)
+            } else {
+                None
+            },
         )
         .await?;
         let (mut write, read) = stream.split();
@@ -1283,6 +1315,25 @@ mod tests {
             ),
             format!(
                 "ws://localhost:9005/v1/components/{}/workers/counter%28%22a%2Fb%3Fc%23d%25e%22%29/connect",
+                Uuid::nil()
+            )
+        );
+    }
+
+    #[test]
+    fn the_connect_url_uses_wss_for_an_https_gateway() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: "counter".to_string(),
+        };
+
+        assert_eq!(
+            worker_connect_url(
+                &url::Url::parse("https://release.dev-api.golem.cloud").unwrap(),
+                &agent_id
+            ),
+            format!(
+                "wss://release.dev-api.golem.cloud:443/v1/components/{}/workers/counter/connect",
                 Uuid::nil()
             )
         );

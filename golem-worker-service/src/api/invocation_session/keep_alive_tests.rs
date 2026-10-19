@@ -130,6 +130,7 @@ async fn pong_timeout_cancels_pending_setup_and_closes_the_socket() {
     let (state, mut client, _server) = pending_setup_connection(InvocationSessionConfig {
         keep_alive_interval: INTERVAL,
         max_pong_timeout: INTERVAL,
+        ..Default::default()
     })
     .await;
     // Do not read the Ping until the server's Pong deadline has passed.
@@ -153,6 +154,7 @@ async fn client_close_cancels_pending_setup() {
     let (state, mut client, _server) = pending_setup_connection(InvocationSessionConfig {
         keep_alive_interval: INTERVAL,
         max_pong_timeout: INTERVAL,
+        ..Default::default()
     })
     .await;
     client.close(None).await.unwrap();
@@ -243,6 +245,7 @@ async fn pong_timeout_after_setup_waits_for_the_established_session_to_drain() {
         config: InvocationSessionConfig {
             keep_alive_interval: INTERVAL,
             max_pong_timeout: INTERVAL,
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -370,6 +373,7 @@ async fn silent_invocation(websocket: WebSocket, enabled: Data<&bool>) -> impl I
                     Duration::from_secs(60)
                 },
                 max_pong_timeout: IDLE_TIMEOUT,
+                ..Default::default()
             };
             let (mut sink, stream) = invocation_session_websocket(socket, config).split();
             let (incoming, _messages) = mpsc::channel(CHANNEL_CAPACITY);
@@ -440,6 +444,7 @@ async fn missing_pong(
             InvocationSessionConfig {
                 keep_alive_interval: INTERVAL,
                 max_pong_timeout: INTERVAL,
+                ..Default::default()
             },
         );
         while let Some(message) = socket.next().await {

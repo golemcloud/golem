@@ -92,6 +92,7 @@ impl<'a> DurableCallAdmission<'a> {
                 | HostFunctionName::P3RandomInsecureGetInsecureRandomBytes
                 | HostFunctionName::P3RandomInsecureGetInsecureRandomU64
                 | HostFunctionName::P3RandomInsecureSeedGetInsecureSeed
+                | HostFunctionName::GolemPermissionsCardLiveness
         )
     }
 }
@@ -149,8 +150,9 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
             self.ctx.state.durable_call_is_live(),
             self.ctx.state.automatic_update_unsettled,
         ) {
-            // A fresh clock/random value needs no authority. Waiting for an accessor's wallet
-            // reconciliation here can deadlock: this call owns the Store that accessor needs.
+            // A fresh clock/random value or a card's registry liveness needs no authority.
+            // Waiting for an accessor's wallet reconciliation here can deadlock: this call owns
+            // the Store that accessor needs.
             // Automatic updates still fence target-only history until success is committed.
             WalletAdmission::Independent => {}
             WalletAdmission::FinalizeUpdate => {

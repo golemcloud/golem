@@ -120,6 +120,18 @@ declare module 'golem:permissions/types@0.1.0' {
     val: string
   };
   /**
+   * A persistent derivation result, labelled with its kind.
+   */
+  export type PersistentCard =
+  {
+    tag: 'concrete'
+    val: PermissionCard
+  } |
+  {
+    tag: 'template'
+    val: PermissionCard
+  };
+  /**
    * A card in the caller's wallet, labelled with its kind.
    */
   export type WalletCard =

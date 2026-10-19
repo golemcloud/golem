@@ -22,7 +22,7 @@ use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::{AgentEvent, AgentId};
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
-use poem::web::websocket::Message;
+use poem::web::websocket::{CloseCode, Message};
 use tonic::Status;
 use tracing::{Instrument, Level, error, info};
 
@@ -77,6 +77,18 @@ pub async fn proxy_worker_connection(
                             );
                             break Ok(());
                         }
+                        Some(Err(keep_alive::KeepAliveError::Stream(error)))
+                            if is_websocket_capacity_error(&error) =>
+                        {
+                            info!(error=error.to_string(), "Received WebSocket message above the size limit");
+                            let _ = websocket
+                                .send(Message::close_with(
+                                    CloseCode::Size,
+                                    "message exceeds the size limit",
+                                ))
+                                .await;
+                            break Err(error.into());
+                        }
                         Some(Err(error)) => {
                             let error: ConnectProxyError = error.into();
                             info!(error=error.to_string(), "Received WebSocket Error");
@@ -120,6 +132,16 @@ pub async fn proxy_worker_connection(
     }
     .instrument(span)
     .await
+}
+
+/// Whether `error` is the error that poem gives for an inbound WebSocket message or frame above
+/// the configured limit. Poem turns the tungstenite capacity error into `io::Error::other` with
+/// the tungstenite diagnostic.
+pub(crate) fn is_websocket_capacity_error(error: &IoError) -> bool {
+    error.kind() == std::io::ErrorKind::Other
+        && error
+            .to_string()
+            .starts_with("Space limit exceeded: Message too long: ")
 }
 
 async fn forward_worker_message<E>(
@@ -166,6 +188,9 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod size_limit_tests;
 
 pub(crate) mod keep_alive {
     use std::{

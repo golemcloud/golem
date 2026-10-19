@@ -2154,7 +2154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         let _retired_lifecycle =
             if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-                if let Some(status) = worker.state_actor.observe_status().await? {
+                if let Some(status) = worker.state_actor.observe_repaired_status().await? {
                     let mut metadata = worker.get_initial_worker_metadata();
                     metadata.last_known_status = status.as_ref().clone();
                     return Ok(Some(metadata));
@@ -12487,6 +12487,7 @@ impl RunningWorker {
         }
         .await;
         if let Err(error) = install_wallet {
+            drop(filesystem_context);
             return Err(
                 cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
             );
@@ -12569,6 +12570,7 @@ impl RunningWorker {
         ) {
             Ok(instance_host) => instance_host,
             Err(error) => {
+                drop(context);
                 return Err(
                     cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
                 );
