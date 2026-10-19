@@ -5192,8 +5192,8 @@ const DEFAULT_PLAN_DISK_SPACE: u64 = 1024 * 1024 * 1024;
 /// `reflink_xfs_root`, that takes a snapshot after each invocation, with the filesystem snapshot
 /// settings `filesystem_snapshots`.
 ///
-/// The plan gives each agent the finite disk limit of the default plan. The storage has no
-/// per-agent accounting, so the executor enforces no disk limit. It meters no filesystem usage.
+/// The fixture leaves per-agent disk space unlimited because this storage cannot enforce a
+/// finite limit. It meters no filesystem usage.
 #[cfg(target_os = "linux")]
 pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
     deps: &WorkerExecutorTestDependencies,
@@ -5214,7 +5214,8 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
 }
 
 /// Starts an executor on APFS development storage that takes a snapshot after each invocation.
-/// The plan has a finite disk limit, but the storage has no per-agent accounting or metering.
+/// The fixture leaves per-agent disk space unlimited because this storage has no accounting or
+/// quota enforcement. It meters no filesystem usage.
 #[cfg(target_os = "macos")]
 pub async fn start_with_filesystem_snapshots_on_apfs(
     deps: &WorkerExecutorTestDependencies,
@@ -5244,7 +5245,7 @@ async fn start_with_filesystem_snapshots_on_unaccounted_storage(
         deps,
         context,
         Arc::new(FixedFilesystemStorageQuotaResourceLimits {
-            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+            max_disk_space_bytes: u64::MAX,
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {

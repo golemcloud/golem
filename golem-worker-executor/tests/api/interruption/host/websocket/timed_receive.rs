@@ -541,10 +541,11 @@ async fn pending_timed_receive(
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
 
             // Reconstruct completed history with an invocation that performs no network work.
+            let creations_before_completed_replay = worker.observed_creation_count();
             let noop_key = IdempotencyKey::fresh();
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
-            ensure!(worker.current_monthly_proposal_for_test().resident_generation > reconstructed.resident_generation);
+            ensure!(worker.observed_creation_count() > creations_before_completed_replay);
             peer.assert_counts(2, 1)?;
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&replayed, 1)? == receive_start);

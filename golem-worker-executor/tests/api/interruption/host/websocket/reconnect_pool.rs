@@ -109,7 +109,9 @@ pub(super) fn operation_start(
     entries: &[PublicOplogEntryWithIndex],
     path: Path,
     terminals: usize,
+    deliveries: usize,
 ) -> anyhow::Result<OplogIndex> {
+    ensure!(deliveries <= terminals && terminals <= 1);
     let connect = starts_named(entries, CONNECT);
     let first_receive = starts_named(entries, RECEIVE);
     let operations = starts_named(
@@ -131,6 +133,15 @@ pub(super) fn operation_start(
         "fresh operation missing/duplicated: {entries:#?}"
     );
     let start = *operations.last().unwrap();
+    if entries.iter().any(|entry| {
+        entry.oplog_index > start
+            && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+    }) {
+        ensure!(
+            terminals == 1 && deliveries == 1,
+            "finished invocation requires an End and its delivery"
+        );
+    }
     ensure!(
         terminal_count(entries, connect[0]) == 1,
         "historical Connect must remain completed"
@@ -153,10 +164,18 @@ pub(super) fn operation_start(
             _ => {}
         }
     }
-    let delivered = entries.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)).count();
-    ensure!(delivered == terminals, "operation marker count {delivered}");
+    let delivered: Vec<_> = entries.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)).collect();
+    ensure!(
+        delivered.len() == deliveries,
+        "operation marker count {}",
+        delivered.len()
+    );
     if terminals == 1 {
-        ensure!(entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)), "operation must end, not cancel");
+        let end = entries.iter().find(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)).context("operation must end, not cancel")?;
+        ensure!(start < end.oplog_index);
+        if deliveries == 1 {
+            ensure!(end.oplog_index < delivered[0].oplog_index);
+        }
     }
     Ok(start)
 }
@@ -334,7 +353,7 @@ async fn pending_reconnect(
         let pending = tokio::time::timeout(Duration::from_secs(15), native.recv()).await?.context("target native reconnect pool acquire did not poll Pending")?;
         executor.commit_oplog(&id).await?;
         let open = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let start = operation_start(&open, path, 0)?;
+        let start = operation_start(&open, path, 0, 0)?;
         assert_invocation(&open, &key, 0)?;
         assert_invocation(&open, &first_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&open, OplogIndex::INITIAL) == (3, 2));
@@ -363,7 +382,7 @@ async fn pending_reconnect(
             if path == Path::Direct { peer.closed(3).await?; }
             ensure!(pending.state() == WaitState::Returned);
             let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(operation_start(&completed, path, 1)? == start);
+            ensure!(operation_start(&completed, path, 1, 1)? == start);
             if path == Path::Accessor {
                 assert_receive_terminal(&completed, start, 1)?;
             }
@@ -425,7 +444,7 @@ async fn pending_reconnect(
         }
         peer.assert_counts(2, 2)?;
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(operation_start(&stopped, path, 0)? == start);
+        ensure!(operation_start(&stopped, path, 0, 0)? == start);
         assert_invocation(&stopped, &key, 0)?;
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         ensure!(entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 1);
@@ -458,7 +477,8 @@ async fn pending_reconnect(
         executor.commit_oplog(&id).await?;
         let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
-        ensure!(intermediate_terminals <= 1 && operation_start(&repairing, path, intermediate_terminals)? == start);
+        let intermediate_deliveries = usize::from(repairing.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)));
+        ensure!(intermediate_terminals <= 1 && operation_start(&repairing, path, intermediate_terminals, intermediate_deliveries)? == start);
         if path == Path::Accessor { assert_invocation(&repairing, &key, 0)?; }
         peer.assert_effects(3, 3, 2)?;
         if path == Path::Accessor { third.send.send("repaired".into()).map_err(|_| anyhow::anyhow!("repair frame gate closed"))?; }
@@ -468,7 +488,7 @@ async fn pending_reconnect(
         else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
         if path == Path::Direct { peer.closed(3).await?; }
         let repaired = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(operation_start(&repaired, path, 1)? == start);
+        ensure!(operation_start(&repaired, path, 1, 1)? == start);
         if path == Path::Accessor {
             assert_receive_terminal(&repaired, start, 1)?;
         }
@@ -490,7 +510,7 @@ async fn pending_reconnect(
         ensure!(noop.into_typed::<String>()? == "ok");
         peer.assert_effects(3, 3, if path == Path::Accessor { 3 } else { 2 })?;
         let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(operation_start(&replayed, path, 1)? == start);
+        ensure!(operation_start(&replayed, path, 1, 1)? == start);
         assert_invocation(&replayed, &key, 1)?;
         assert_invocation(&replayed, &noop_key, 1)?;
         assert_settled_history(&replayed)?;

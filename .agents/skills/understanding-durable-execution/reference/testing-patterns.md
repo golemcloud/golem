@@ -136,6 +136,17 @@ a call, and retain the separate result and history checks. Missing or ambiguous 
 must still fail. Snapshot collector fields under the mutex, then validate outside it so one assertion
 cannot poison unrelated tests.
 
+The initial-pool, handshake and timed-receive cases use that same completed-replay observation.
+Reconnect history checks count End and CompletionDelivered separately. A live repair snapshot may
+contain one End and no delivery yet; a Finished invocation still requires exactly one of each, in
+that order. The completion-first controls validate a read-only prefix ending before delivery and
+reject that prefix when a completed-history check requires the marker.
+
+Snapshot fixtures on reflink XFS without quotas or APFS use an explicit unlimited per-agent disk
+policy. They exercise snapshot recovery, not quota enforcement. A finite limit on unaccounted
+storage must still fail production validation; turning filesystem metering off does not disable
+that independent safety requirement.
+
 P3 `wait-for` records its outer Start before the host-internal clock Start and End. A live history
 snapshot can end at either Start. The sleep-history helper waits for the clock input before checking
 the original deadline; it still rejects duplicate calls and malformed completed history. Its prefix

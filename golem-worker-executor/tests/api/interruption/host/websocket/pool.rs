@@ -465,10 +465,11 @@ async fn pending_pool_acquire(
             }).await?;
             tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
+            let creations_before_completed_replay = worker.observed_creation_count();
             let noop_key = IdempotencyKey::fresh();
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
-            ensure!(worker.current_monthly_proposal_for_test().resident_generation > reconstructed.resident_generation);
+            ensure!(worker.observed_creation_count() > creations_before_completed_replay);
             peer.assert_counts(2, 2)?;
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(connect_start(&replayed, 1, 1)? == connect);
