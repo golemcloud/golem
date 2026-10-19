@@ -38,7 +38,7 @@ fn is_result_wait(metadata: &tracing::Metadata<'_>) -> bool {
 pub fn layer() -> Box<dyn Layer<Registry> + Send + Sync> {
     collector()
         .clone()
-        .with_filter(tracing_subscriber::filter::filter_fn(is_result_wait))
+        .with_filter(crate::test_observer_filter(is_result_wait))
         .boxed()
 }
 

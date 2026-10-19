@@ -128,6 +128,25 @@ and original Started/Finished/results. Compare the complete raw prefix after eac
 reconstruction. A repeated-key result is not enough; the next fresh Counter result must also prove
 that completed replay did not repeat its effect.
 
+### Live observations and incomplete history
+
+Query an execution window only while its permit-held span is live. A successful idle `noop` may
+already have closed that span. Use the existing creation count to prove reconstruction across such
+a call, and retain the separate result and history checks. Missing or ambiguous live-window evidence
+must still fail. Snapshot collector fields under the mutex, then validate outside it so one assertion
+cannot poison unrelated tests.
+
+P3 `wait-for` records its outer Start before the host-internal clock Start and End. A live history
+snapshot can end at either Start. The sleep-history helper waits for the clock input before checking
+the original deadline; it still rejects duplicate calls and malformed completed history. Its prefix
+regression uses read-only slices of real history, not a replay-cursor change or an injected runtime
+pause.
+
+Test observers use `test_observer_filter` at DEBUG with an accurate maximum-level hint. An unbounded
+hint enables expensive dependency TRACE argument construction even when output filters discard it.
+Keep the exact observer-stack bound and DEBUG-evidence regression; production output filters remain
+independent.
+
 ## Pattern 5: completed replay performs no new effect
 
 Mistake caught: re-executing a recorded call during replay.

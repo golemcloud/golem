@@ -26,7 +26,7 @@ fn collector() -> &'static Collector {
 pub fn layer() -> Box<dyn Layer<Registry> + Send + Sync> {
     collector()
         .clone()
-        .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+        .with_filter(crate::test_observer_filter(|metadata| {
             metadata.is_event()
                 && metadata.target() == TARGET
                 && metadata.fields().field("live_usage_flushers").is_some()

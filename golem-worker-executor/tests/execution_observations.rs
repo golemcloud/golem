@@ -40,6 +40,31 @@ struct Collector(
     Arc<Mutex<HashMap<tracing::span::Id, Fields>>>,
 );
 
+impl Collector {
+    fn window_identity(&self, fingerprint: uuid::Uuid, shell: u64) -> (u64, uuid::Uuid, u64) {
+        // A failed observation must not poison the collector used by other tests.
+        let windows = {
+            let windows = self.1.lock().unwrap();
+            windows.values().cloned().collect::<Vec<_>>()
+        };
+        let mut matching = windows.iter().filter(|fields| {
+            fields.span_name == Some("execution_window")
+                && fields.worker_shell == Some(shell)
+                && fields.uuid("fingerprint_high", "fingerprint_low") == fingerprint
+        });
+        let window = matching.next().expect("an observed live execution window");
+        assert!(
+            matching.next().is_none(),
+            "ambiguous live execution windows"
+        );
+        (
+            window.integers["window_id"],
+            window.uuid("start_attempt_high", "start_attempt_low"),
+            window.integers["resident_generation"],
+        )
+    }
+}
+
 fn collector() -> &'static Collector {
     static COLLECTOR: OnceLock<Collector> = OnceLock::new();
     COLLECTOR.get_or_init(Collector::default)
@@ -48,7 +73,7 @@ fn collector() -> &'static Collector {
 pub fn layer() -> Box<dyn Layer<Registry> + Send + Sync> {
     collector()
         .clone()
-        .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+        .with_filter(crate::test_observer_filter(|metadata| {
             (metadata.is_span()
                 && metadata.target() == NATIVE_WAIT
                 && matches!(
@@ -248,24 +273,7 @@ impl<Ctx: WorkerCtx> WorkerObservations for Worker<Ctx> {
 
     fn current_monthly_proposal_for_test(&self) -> WindowReceipt {
         let fingerprint = self.get_initial_worker_metadata().fingerprint;
-        let identity = {
-            let windows = collector().1.lock().unwrap();
-            let mut matching = windows.values().filter(|fields| {
-                fields.span_name == Some("execution_window")
-                    && fields.worker_shell == Some(self as *const Self as u64)
-                    && fields.uuid("fingerprint_high", "fingerprint_low") == fingerprint.0
-            });
-            let window = matching.next().expect("an observed live execution window");
-            assert!(
-                matching.next().is_none(),
-                "ambiguous live execution windows"
-            );
-            (
-                window.integers["window_id"],
-                window.uuid("start_attempt_high", "start_attempt_low"),
-                window.integers["resident_generation"],
-            )
-        };
+        let identity = collector().window_identity(fingerprint.0, self as *const Self as u64);
         self.owner_runtime_resources()
             .with_monthly_capacity(self.agent_mode(), |capacity| WindowReceipt {
                 diagnostic_window_id: identity.0,
@@ -359,7 +367,7 @@ impl<Ctx: WorkerCtx> WorkerObservations for Worker<Ctx> {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Fields {
     span_name: Option<&'static str>,
     fingerprint: Option<String>,
@@ -661,6 +669,20 @@ fn observations_separate_shells_and_keep_the_last_unload_outcome() {
 }
 
 #[test]
+fn observer_layers_keep_debug_evidence_without_enabling_trace_work() {
+    let subscriber = tracing_subscriber::registry().with(crate::test_observer_layers());
+    // Other tests can install scoped subscribers, so inspect this stack's own bound.
+    assert_eq!(
+        tracing::Subscriber::max_level_hint(&subscriber),
+        Some(tracing::level_filters::LevelFilter::DEBUG),
+        "test observers must not enable dependency trace argument construction"
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(tracing::enabled!(target: NATIVE_WAIT, tracing::Level::DEBUG));
+    });
+}
+
+#[test]
 fn window_evidence_exists_only_for_the_exact_live_span() {
     let observed = Collector::default();
     let subscriber = tracing_subscriber::registry().with(observed.clone());
@@ -694,7 +716,26 @@ fn window_evidence_exists_only_for_the_exact_live_span() {
                 129_127_208_515_966_861_323
             );
         }
+        let fingerprint = uuid::Uuid::from_u128(55_340_232_221_128_654_853);
+        assert_eq!(
+            observed.window_identity(fingerprint, 19),
+            (17, uuid::Uuid::from_u128(129_127_208_515_966_861_323), 13)
+        );
+        let duplicate = tracing::debug_span!(target: NATIVE_WAIT, parent: None,
+            "execution_window", window_id = 43u64, worker_shell = 19u64,
+            fingerprint_high = 3u64, fingerprint_low = 5u64,
+            start_attempt_high = 47u64, start_attempt_low = 53u64,
+            resident_generation = 59u64);
+        assert!(std::panic::catch_unwind(|| observed.window_identity(fingerprint, 19)).is_err());
+        assert!(!observed.1.is_poisoned());
+        drop(duplicate);
         drop(first);
+        assert!(std::panic::catch_unwind(|| observed.window_identity(fingerprint, 19)).is_err());
+        assert!(!observed.1.is_poisoned());
+        assert_eq!(
+            observed.window_identity(fingerprint, 29),
+            (23, uuid::Uuid::from_u128((31u128 << 64) | 37), 41)
+        );
         {
             let windows = observed.1.lock().unwrap();
             assert_eq!(windows.len(), 1);

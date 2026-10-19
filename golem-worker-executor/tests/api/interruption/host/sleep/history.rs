@@ -105,6 +105,15 @@ pub(super) fn sleep_record(
     );
     let invocation = invocation(entries, key, usize::from(finished))?;
     let clocks: Vec<_> = entries.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == clock_name)).collect();
+    if abi == Abi::P3
+        && !finished
+        && clocks.is_empty()
+        && terminals(entries, waits[0].oplog_index) == 0
+        && deliveries(entries, waits[0].oplog_index).is_empty()
+    {
+        // The outer wait Start precedes its host-internal clock input.
+        return Ok(None);
+    }
     ensure!(
         clocks.len() == 1,
         "recorded clock input must not be read again: {clocks:?}"
@@ -168,6 +177,15 @@ pub(super) fn sleep_record(
             _ => None,
         })
         .collect();
+    if abi == Abi::P3
+        && !finished
+        && clock_ends.is_empty()
+        && terminals(entries, clock) == 0
+        && terminals(entries, wait) == 0
+        && deliveries(entries, wait).is_empty()
+    {
+        return Ok(None);
+    }
     ensure!(terminals(entries, clock) == 1 && clock_ends.len() == 1);
     let (clock_end, end) = clock_ends[0];
     let response = host_response_from_typed_schema_value(
@@ -296,4 +314,97 @@ pub(super) fn settled(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_test_framework::dsl::TestDsl;
+    use golem_worker_executor_test_utils::start;
+    use test_r::test;
+
+    #[test]
+    #[timeout("60s")]
+    async fn p3_sleep_history_waits_for_its_recorded_clock_input(
+        last_unique_id: &LastUniqueId,
+        deps: &WorkerExecutorTestDependencies,
+        #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+        _tracing: &Tracing,
+    ) -> anyhow::Result<()> {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let name = agent_id!("Clock", "p3-clock-input-prefix");
+        let id = executor.start_agent(&component.id, name.clone()).await?;
+        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+        let key = IdempotencyKey::fresh();
+        let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+            let executor = executor.clone();
+            let component = component.clone();
+            let name = name.clone();
+            let key = key.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &name,
+                        &key,
+                        "sleep_p3",
+                        data_value!(GUEST_SLEEP.as_secs()),
+                    )
+                    .await
+            }
+        }));
+        let (record, entries) = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                executor.commit_oplog(&id).await?;
+                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let clock = entries.iter().find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start) if start.function_name == names(Abi::P3).0 => {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                });
+                if clock.is_some_and(|clock| {
+                    entries.iter().any(|entry| {
+                        matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock)
+                    })
+                }) {
+                    let record = sleep_record(&entries, &key, Abi::P3, false)?
+                        .context("complete recorded clock input")?;
+                    return Ok::<_, anyhow::Error>((record, entries));
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("clock input End did not become visible")??;
+        // These are read-only prefixes of the real history, not oplog mutations.
+        let parent_prefix: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.oplog_index <= record.wait)
+            .cloned()
+            .collect();
+        let clock_start_prefix: Vec<_> = entries
+            .into_iter()
+            .filter(|entry| entry.oplog_index <= record.clock)
+            .collect();
+        let before_clock = sleep_record(&parent_prefix, &key, Abi::P3, false);
+        let before_clock_end = sleep_record(&clock_start_prefix, &key, Abi::P3, false);
+        executor.interrupt(&id).await?;
+        ensure!(
+            tokio::time::timeout(Duration::from_secs(10), invocation)
+                .await??
+                .is_err()
+        );
+        ensure!(before_clock?.is_none(), "outer Start needs its clock input");
+        ensure!(
+            before_clock_end?.is_none(),
+            "clock Start still needs its recorded End"
+        );
+        Ok(())
+    }
 }

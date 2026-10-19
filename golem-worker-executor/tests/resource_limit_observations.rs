@@ -30,7 +30,7 @@ fn collector() -> &'static Collector {
 pub fn layer() -> Box<dyn Layer<Registry> + Send + Sync> {
     collector()
         .clone()
-        .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+        .with_filter(crate::test_observer_filter(|metadata| {
             metadata.is_event()
                 && metadata.target() == "golem_worker_executor::services::resource_limits"
                 && metadata.fields().field("resource_event").is_some()

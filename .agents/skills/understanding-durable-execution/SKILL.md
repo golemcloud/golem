@@ -464,8 +464,10 @@ may already have signalled Restart. There is no frozen elected cause or shared p
 The invocation loop takes the exact queued request and waits for its establishment. At an idle permit
 wait it drops acquisition before that wait. It keeps deferred commands and filesystem-limit replies. A taken
 no-body stop retains its unwritten lifecycle marker through disposal, and the unloaded-stop handler
-writes it once. This does not replace a completed invocation's result or invent a result for queued
-work that has not started. A Restart can leave the same loop waiting without a loaded Store.
+writes it once. It preserves completed results. If a terminal Interrupt stops a live ephemeral owner
+after constructor success but before its accepted method starts, it notifies that pending key through
+`store_invocation_failure`. It records no method Started or Finished and leaves constructor success
+unchanged. A Restart can leave the same loop waiting without a loaded Store.
 
 Startup uses main's establishment-tail/current-pointer and idle-queue check before reopening entity
 admission. The wallet installer remains the sole owner-generation reset. The resident counter records
