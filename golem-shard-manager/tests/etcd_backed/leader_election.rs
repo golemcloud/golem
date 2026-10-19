@@ -1992,6 +1992,11 @@ async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtc
     await_established_watch(etcd, &mut watch, &election_name).await;
     assert!(watch.answered_within(TEST_LEASE_TTL));
 
+    // A campaigner is in the view before the hole opens, so that "keeps its last value" is checked
+    // against a value that a reset would visibly lose.
+    let held = add_campaigner_directly(etcd, &election_name, 30).await;
+    await_view(&mut watch, |view| view.campaigners.len() == 1).await;
+
     let restarts_before = watch.restarts();
     proxy.black_hole();
     // Nothing but the quiet limit can fail while the connection is silent: it yields neither an
@@ -2006,21 +2011,26 @@ async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtc
     .expect("The watcher should restart on its own while etcd is silent");
     assert!(!watch.answered_within(TEST_LEASE_TTL));
 
-    let lease = add_campaigner_directly(etcd, &election_name, 10).await;
-    assert!(
-        watch.view().is_some_and(|view| view.campaigners.is_empty()),
+    let lease = add_campaigner_directly(etcd, &election_name, 30).await;
+    assert_eq!(
+        watch
+            .view()
+            .and_then(|view| view.leader().map(|leader| leader.lease)),
+        Some(held),
         "The view must keep its last value while etcd is silent"
     );
 
     proxy.restore();
-    let view = await_view(&mut watch, |view| view.campaigners.len() == 1).await;
-    assert_eq!(view.leader().map(|leader| leader.lease), Some(lease));
+    let view = await_view(&mut watch, |view| view.campaigners.len() == 2).await;
+    assert_eq!(view.leader().map(|leader| leader.lease), Some(held));
+    assert!(view.campaigners.iter().any(|c| c.lease == lease));
     assert!(watch.answered_within(TEST_LEASE_TTL));
 
     // Cleanup only, after every assertion: under the load of the whole suite etcd can take longer
     // than the short request timeout of the inspection client to answer, and the lease expires on
     // its own after its ten seconds.
     let _ = inspection_client(etcd).await.lease_revoke(lease).await;
+    let _ = inspection_client(etcd).await.lease_revoke(held).await;
     watcher.abort();
 }
 

@@ -2163,6 +2163,18 @@ async fn a_standby_cut_off_from_etcd_stops_being_ready_but_still_names_the_leade
         !readyz(standby_config.http_port).await
     })
     .await;
+    // Not ready means the watch has been quiet for its whole limit; one more limit later it has
+    // given up that stream and restarted into the hole at least once, so this is the answer after
+    // a failed restart, not the old view by construction.
+    tokio::time::sleep(LEASE_TTL + Duration::from_secs(1)).await;
+    let refusal = routing_table_status(standby_address.port)
+        .await
+        .expect_err("a standby never serves");
+    assert_eq!(
+        leader_of(&refusal).map(|address| address.port),
+        Some(leader_details.grpc_port),
+        "the standby still names the leader after its watch failed"
+    );
 
     proxy.restore();
     await_until(STARTUP_TIMEOUT, || readyz(standby_config.http_port)).await;
