@@ -91,16 +91,16 @@ export const coreVm = {
   caption: "You don't write save or checkpoint code, design state tables or run a workflow engine.",
   explanations: [
     {
-      title: "WebAssembly, not a Linux VM",
-      body: "Each agent has private memory, files and environment, without a guest OS. Compiled code can be as small as tens of kilobytes. Agent cold start takes about 2 ms; starts can be under 1 ms in the best cases.",
+      title: "Lightweight",
+      body: "WebAssembly, not Linux: each VM has private memory, files and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in about 2 ms, or under 1 ms at best.",
     },
     {
-      title: "Exactly-once tool and agent calls",
-      body: "Rebuilding a VM re-runs code using recorded results, without repeating completed calls. Interrupted external requests retry with idempotency keys Golem adds, taking effect once if the service honors them, as Stripe does.",
+      title: "Durable",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's rebuilt at the exact instruction, without repeating completed calls.",
     },
     {
-      title: "No way around the checks",
-      body: "A VM can't access files, the network, secrets or other agents directly. Golem runs your policy checks on every tool call, including calls that run AI-generated code.",
+      title: "Secure",
+      body: "A VM can't reach files, the network, secrets or other VMs directly. Every call out goes through Golem's permission checks, which no code, including AI-generated code, can bypass.",
     },
   ],
 };
@@ -125,7 +125,12 @@ export const metricBar = {
 export interface ChapterItem {
   title: string;
   body: string;
-  examples?: { label: string; value: string }[];
+}
+
+export interface ChapterCode {
+  filename: string;
+  code: string;
+  highlight: number[];
 }
 
 export const agentsChapter = {
@@ -134,33 +139,35 @@ export const agentsChapter = {
   lead: "Each agent's VM keeps its whole execution durable.",
   figure: {
     filename: "support-agent.ts",
-    highlightLine: 11,
+    highlight: [11, 12],
     code: `export const SupportImpl = Support.implement({
   init: () => ({ history: [] as Message[] }),
   methods: {
     async handle({ message, orderId }) {
       this.history.push({ role: 'user', content: message })
-      // lookupOrder can reach only the orders API; Golem checks each call
-      const reply = await llm.run({ history: this.history, tools: [lookupOrder] })
+      // Golem lets lookupOrder reach only the orders API:
+      const reply = await llm.run(this.history, [lookupOrder])
       if (reply.refundRequested) {
         const approval = createWebhook()
         await notifyReviewer(approval.getUrl(), reply)
-        const { approved } = (await approval).json<Approval>() // waits here for days if needed, using no CPU or memory
-        if (approved) await refundOrder(orderId, reply.amount) // refunded once if the payment API honors idempotency keys
+        // waits here for days if needed, using no CPU or memory:
+        const { approved } = (await approval).json<Approval>()
+        // refunded once if the payment API honors idempotency keys:
+        if (approved) await refundOrder(orderId, reply.amount)
       }
       return reply.text
     },
   },
 })`,
-  },
+  } as ChapterCode,
   items: [
     {
       title: "Your language",
-      body: "Write agents in TypeScript, Effect, Rust, Scala, MoonBit or Go, with the same guarantees in each.",
+      body: "Write agents as ordinary, typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, with the same guarantees and primitives in each.",
     },
     {
       title: "Awaitable webhooks, timers and schedules",
-      body: "Incoming events, like a human approval or a payment callback, become promises your code awaits. Durable sleeps, timers and scheduled calls that fire on time across restarts, with no idle cost.",
+      body: "Approvals and payment callbacks become promises your code awaits. Sleeps, timers and scheduled calls fire on time across restarts, with no idle cost.",
     },
     {
       title: "Agents working together",
@@ -172,7 +179,7 @@ export const agentsChapter = {
     },
     {
       title: "Embedded SQLite",
-      body: "TypeScript, Effect and Rust agents can each have their own SQLite database, with no server to run.",
+      body: "TypeScript, Effect and Rust agents can each have their own SQLite database, embedded in the agent, with no database server to run or connect to.",
     },
   ] as ChapterItem[],
 };
@@ -180,38 +187,52 @@ export const agentsChapter = {
 export const toolsChapter = {
   eyebrow: "Tools",
   heading: "Every tool call in its own VM, exactly once",
-  lead: "After a node restart or crash, rebuilding a tool call's VM re-runs its code using recorded results, without repeating completed calls.",
+  lead: "After a node restart or crash, rebuilding a tool call's VM re‑runs its code using recorded results, without repeating completed calls.",
   figure: {
-    title: "Sandboxed tools and AI-generated code",
-    terminal: [
-      { cmd: "git status", result: "clean" },
-      { cmd: "npm test", result: "42 passed" },
-      { cmd: "node fix.js", result: "AI-generated code ran in a fresh VM" },
-    ],
-    caption:
-      "Bundled tools include shell, Git, Node.js and npm. Build tools with any Golem SDK; no separate sandbox service needed.",
+    filename: "refund-tool.ts",
+    highlight: [13, 14, 15],
+    code: `export const refund = toolDefinition('refund')
+  .version('1.0.0')
+  .body((body) =>
+    body
+      .positional('charge', z.string())
+      .positional('amount', z.number().int())
+      .returns(z.object({ id: z.string(), status: z.string() })),
+  )
+
+refund.implement({
+  // each call runs in a fresh WebAssembly VM:
+  refund: async ({ charge, amount }) => {
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    const res = await fetch('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      body: new URLSearchParams({ charge, amount: String(amount) }),
+    })
+    return ok(await res.json())
   },
+})`,
+  } as ChapterCode,
   items: [
+    {
+      title: "Bundled and custom tools",
+      body: "Shell, Git, Node.js, npm and TypeScript come bundled. Build your own tools with any Golem SDK; no separate sandbox service needed.",
+    },
     {
       title: "External requests",
       body: "Interrupted external requests retry with idempotency keys Golem adds, taking effect once if the service honors them, as Stripe does.",
     },
     {
       title: "Permissions you can scope and share",
-      body: "Give agents or tools narrower permissions. Set expiries; revoking a permission revokes every permission delegated from it.",
-      examples: [
-        { label: "Share", value: "Orders API only" },
-        { label: "Expire", value: "After one hour" },
-        { label: "Revoke", value: "Delegated access revoked too" },
-      ],
+      body: "Give agents or tools narrower permissions, such as the orders API only, for one hour. Revoking a permission revokes every permission delegated from it.",
     },
     {
       title: "Secrets",
-      body: "Agents use API keys without seeing them. Values are revealed only where granted, and logged.",
+      body: "Agents pass API keys to tools as opaque handles. Revealing a value takes a grant and is recorded, and a binding can stop a tool from revealing any.",
     },
     {
       title: "Tool publishing, plus MCP",
-      body: "Publish a tool as an immutable, versioned release and grant it to other environments and accounts. Expose agents and tools as MCP servers, and call external MCP servers with the same guarantees as other tool calls.",
+      body: "Publish tools as immutable, versioned releases for other accounts. Expose agents and tools over MCP, and call MCP servers with the same guarantees.",
     },
   ] as ChapterItem[],
 };
@@ -221,24 +242,44 @@ export const artifactsChapter = {
   heading: "Artifacts your agents deploy",
   lead: "Pages, files and live output, with each artifact in its own WebAssembly VM.",
   figure: {
-    title: "Durable streaming",
-    before: "agent output",
-    seam: "client reloads",
-    payoff:
-      "Clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
+    filename: "site-agent.ts",
+    highlight: [4, 5, 6, 7],
+    code: `export const SiteAgent = defineAgent({
+  name: 'SiteAgent',
+  id: { project: z.string() },
+  // serve this agent's /public directory at /sites/{project}/:
+  http: http.mount('/sites/{project}', {
+    exposeFiles: [{ route: '/*', path: '/public/$1' }],
+  }),
+  methods: { publish: method({ input: {}, returns: z.void() }) },
+})
+
+export const SiteAgentImpl = SiteAgent.implement({
+  init: () => ({}),
+  methods: {
+    publish() {
+      // copy in the site the agent built; its URLs serve it at once:
+      fs.cpSync('/workspace/dist', '/public', { recursive: true })
+    },
   },
+})`,
+  } as ChapterCode,
   items: [
     {
       title: "Routes and files",
       body: "Agents deploy front-ends and back ends under the permissions you grant. HTTP routes are declared in agent code; static files are served directly from storage.",
     },
     {
+      title: "Durable streaming",
+      body: "Streaming methods become resumable streams: clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
+    },
+    {
       title: "Front-end login",
-      body: "Single-page front-ends sign users in with OAuth2 and PKCE, using short-lived tokens Golem issues.",
+      body: "Single-page front-ends sign users in with OAuth2 and PKCE, using short-lived tokens Golem issues. A mount can turn away callers without a valid login.",
     },
     {
       title: "Read-only methods",
-      body: "Methods marked read-only can't change state. The runtime enforces it, and responses can be cached.",
+      body: "Methods marked read-only can't change state; the runtime enforces it. Responses are cached until the agent next writes, served without waking it.",
     },
   ] as ChapterItem[],
 };
@@ -329,12 +370,12 @@ export const deployment = {
     {
       visual: "selfhost",
       title: "Self-hosted",
-      body: "Run the open source platform on your own Docker or Kubernetes infrastructure, in production.",
+      body: "Run the full open source platform in production, on your own Docker or Kubernetes infrastructure.",
     },
     {
       visual: "cloud",
       title: "Golem Cloud",
-      body: "Deploy to the managed service and let us run it. Free during the Developer Preview.",
+      body: "Deploy to the managed service and let us run it, with no servers of your own. Free during the Developer Preview.",
     },
   ],
   sharedLabel: "In every deployment",
@@ -345,11 +386,11 @@ export const deployment = {
     },
     {
       title: "Live updates and rollback",
-      body: "Update running agents after a compatibility check. Roll an agent back to an earlier point, or clone it to try a different approach.",
+      body: "Update running agents after a compatibility check. Roll an agent back to an earlier point, or clone it to try another approach.",
     },
     {
       title: "Quotas",
-      body: "Rate, capacity and concurrency limits that throttle, reject or stop runaway agents and tools.",
+      body: "Rate, capacity and concurrency limits throttle, reject or stop runaway agents and tools, and can change without a redeploy.",
     },
   ],
 };
