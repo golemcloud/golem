@@ -560,7 +560,15 @@ mod own_address_tests {
         let error = reach_own_address(&other, false, &own_probe)
             .await
             .expect_err("a shard manager that serves another name is not this process");
-        let _ = error;
+        let message = format!("{error:#}");
+        assert!(
+            !message.contains("  "),
+            "the message has a run of spaces from a joined line: {message}"
+        );
+        assert!(
+            message.contains("Another process, perhaps another replica"),
+            "the message should say that another process answers there: {message}"
+        );
         stop.cancel();
     }
 
@@ -1266,7 +1274,9 @@ async fn reach_resolved_address(
         .map_err(|status| {
             if status.code() == tonic::Code::NotFound {
                 anyhow::anyhow!(
-                    "a gRPC server answers at the address, but it is not this process: it does                      not know this process's health entry"
+                    "a gRPC server answers at the address, but it is not this process: it does \
+                     not know this process's health entry. Another process, perhaps another \
+                     replica, answers at this address"
                 )
             } else {
                 anyhow::Error::new(status)
@@ -1286,6 +1296,11 @@ async fn reach_resolved_address(
 ///
 /// A replica whose network does not route a pod's own traffic to its externally advertised address
 /// stays unready as well.
+///
+/// Reaching the address once is the whole check. A load-balanced name (a Service address, a
+/// round-robin DNS name) can pass by chance, when the probe lands on this very process, and the
+/// replica then stays confirmed. The rule against two replicas advertising one address still
+/// covers that case.
 async fn confirm_own_address(
     own: LeaderAddress,
     tls: bool,
@@ -1304,7 +1319,9 @@ async fn confirm_own_address(
                         advertised_address = %own,
                         error = format!("{error:#}"),
                         "This replica cannot reach its own advertised address, so it stays not \
-                         ready. Check grpc.advertised_host and grpc.advertised_port"
+                         ready and does not join the leader election: if every replica fails \
+                         this check, no replica leads. Check grpc.advertised_host and \
+                         grpc.advertised_port"
                     );
                 }
             }
