@@ -2102,7 +2102,7 @@ async fn a_client_pointed_at_a_standby_reaches_the_leader(etcd: &Arc<DockerEtcd>
     wipe_state(etcd).await;
     let config = distributed_config(etcd);
     let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
-    timeout(STARTUP_TIMEOUT, leader_ports)
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
         .await
         .expect("The first replica should finish starting")
         .expect("The leader's startup should report its ports");
@@ -2110,6 +2110,17 @@ async fn a_client_pointed_at_a_standby_reaches_the_leader(etcd: &Arc<DockerEtcd>
     let before = campaigner_keys(etcd).await;
     let (standby, _standby_ports) = spawn_replica(config, CancellationToken::new());
     let standby_address = await_new_campaigner(etcd, &before).await;
+
+    // The standby itself serves nothing; it names the leader, which is where the client's call
+    // must end up.
+    let refusal = routing_table_status(standby_address.port)
+        .await
+        .expect_err("a standby never serves");
+    assert_eq!(
+        leader_of(&refusal).map(|address| address.port),
+        Some(leader_details.grpc_port),
+        "the standby should name the leader"
+    );
 
     let client = GrpcShardManager::new(&GrpcShardManagerConfig {
         host: "127.0.0.1".to_string(),
