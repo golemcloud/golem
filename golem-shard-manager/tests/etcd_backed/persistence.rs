@@ -32,7 +32,7 @@ use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use url::Url;
@@ -1518,6 +1518,10 @@ async fn compaction_survives_a_dead_member_in_the_endpoint_list(etcd: &Arc<Docke
     }
 }
 
+/// Far more than the sends again that a dead member in the endpoint list costs a write, and far
+/// less than the ten seconds that the retry deadline of a write that was refused again would take.
+pub(crate) const REFUSAL_BOUND: Duration = Duration::from_secs(3);
+
 #[test]
 #[tracing::instrument(skip_all)]
 // Sending a write again must not turn a refusal into something that is tried repeatedly: etcd
@@ -1531,9 +1535,18 @@ async fn a_refused_write_is_not_sent_again_through_a_dead_member(etcd: &Arc<Dock
         .expect("The first write should succeed");
 
     for _ in 0..10 {
+        let started = Instant::now();
         let result = persistence
             .write(&replacement_shard_state(NUMBER_OF_SHARDS), revision + 1000)
             .await;
+        // A write that never reached etcd because of the dead member is sent again after the
+        // retry delay, which is fine; a refusal that is sent again too would be asked for until
+        // the read retry deadline of ten seconds.
+        assert!(
+            started.elapsed() < REFUSAL_BOUND,
+            "A refused write took {:?}: it was sent again after etcd had answered it",
+            started.elapsed()
+        );
         assert!(
             matches!(result, Err(ShardManagerError::ConcurrentModification)),
             "A write with a revision etcd does not hold must be refused as a conflict, once. \

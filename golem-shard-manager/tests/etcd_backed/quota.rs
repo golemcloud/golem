@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -1094,6 +1094,7 @@ async fn quota_writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<Dock
     .expect("A release through the endpoint list should succeed");
 
     for _ in 0..10 {
+        let started = Instant::now();
         assert!(
             is_conflict(
                 &repo
@@ -1101,6 +1102,11 @@ async fn quota_writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<Dock
                     .await
             ),
             "A write guarded by a revision etcd does not hold must be refused as a conflict"
+        );
+        assert!(
+            started.elapsed() < crate::etcd_backed::persistence::REFUSAL_BOUND,
+            "A refused write took {:?}: it was sent again after etcd had answered it",
+            started.elapsed()
         );
     }
 }
