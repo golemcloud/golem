@@ -49,7 +49,7 @@ Each returned card is an owned handle. Drop the cards you do not keep; dropping 
 handle only, it does not revoke the card or remove it from the wallet.
 
 A `PolymorphicPermissionCard` has the same operations and rules as a `PermissionCard`. Its `derive`
-resolves the template for the agent and returns a concrete `PermissionCard`. Its `install` resolves
+resolves the parent template for the agent and returns a `PersistentCard`. Its `install` resolves
 the template for the target and installs the resolved card; the template stays in the wallet.
 
 ## Deriving cards
@@ -73,10 +73,22 @@ let child = card.derive(
 )?;
 ```
 
-Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env` in its
-owner, for example one read with `inspect` from a template card, is rejected with
-`PermissionError::InvalidPattern`. Deriving a new template card, with slot variables in its grants,
-is not supported yet. A child derived from a template parent is a concrete card.
+Persistent derivation returns `PersistentCard::Concrete(PermissionCard)` or
+`PersistentCard::Template(PolymorphicPermissionCard)`, labelled by the host. Match the case before
+passing a card to a concrete or template schema. The sum supports the common card operations.
+
+Persistent derivation accepts owner slot variables such as `?agent` and `?env`.
+Slots in resource IDs are not supported and fail with `PermissionError::InvalidPattern`.
+Child slots name the eventual installed holder, not the deriving caller.
+A template parent is still resolved for the
+caller in whose wallet it is installed. Every possible child instantiation must narrow that
+resolved parent. The host stores the original slots; the universal envelope is proof only.
+Explicit derivation inherits the parent's exact denials and adds the requested denials; wallet
+derivation takes complete bounds. Slot-bearing denials cannot prove universal attenuation, so
+the host may conservatively refuse a request; concrete inherited denials remain.
+Scope cards stay concrete: requested slots fail with `PermissionError::InvalidPattern` and an
+explicit message. For a slot-bearing tool owner, the host does not resolve aliases against caller
+metadata and rejects metadata-dependent short flags. Use primary names.
 
 A lifespan has the form `PnDTnHnMnS` (days, hours, minutes, seconds); `Lifespan::iso8601`
 rejects years, months and weeks. `Lifespan::try_from(duration)` converts a positive
@@ -92,8 +104,9 @@ let expiry = child.expires_at();     // Option<Timestamp>
 ```
 
 `id`, `parents` and `expires_at` need no verb, but the host traps (fails the invocation) if the
-handle is unknown. A handle the agent already holds may keep reporting its cached view after its
-card is revoked, so do not use these accessors to detect revocation.
+handle is unknown or its card is revoked or expired. `inspect`, `derive`, `derive_scope` and
+`install` on a handle whose card is revoked or expired return `PermissionError::CardRevoked` or
+`PermissionError::CardExpired`; use `inspect` to detect revocation.
 
 ## Lending authority for one call: scope cards
 

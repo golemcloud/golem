@@ -89,6 +89,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [http_session]
 cleanup_timeout = "2s"
@@ -124,10 +126,12 @@ sse_keep_alive_interval = "15s"
 
 [registry_service]
 connect_timeout = "10s"
+connection_pool_size = 4
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 52428800
 port = 8080
 
@@ -158,10 +162,12 @@ invalidation_min_delay = "500ms"
 
 [shard_manager]
 connect_timeout = "10s"
+connection_pool_size = 4
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 port = 9002
 
@@ -240,10 +246,12 @@ hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 
 [worker_executor]
 connect_timeout = "10s"
+connection_pool_size = 4
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
 max_concurrent_oplog_entry_reads = 4
+max_connection_age = "1m"
 max_message_size = 33554432
 
 [worker_executor.retries]

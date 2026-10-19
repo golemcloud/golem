@@ -75,7 +75,7 @@ With `namespace_prefixes = true`, the keys have these prefixes:
 | Components | `<object_prefix>/component_store/<environment id>/` |
 | Filesystem snapshots | `<object_prefix>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
 
-Without `object_prefix`, each prefix starts at the segment of its kind. `<agent mode>` is `durable` or `ephemeral`, and `<layer>` is the index of the archive layer in the blob storage, from 0. `<agent>` is the agent part of the location of [filesystem snapshots](/next/operate/filesystem_snapshots#where-the-snapshots-are). The same segments make the directories of the file system blob storage below its `root`.
+Without `object_prefix`, each prefix starts at the segment of its kind. `<agent mode>` is `durable` or `ephemeral`, and `<layer>` is the index of the archive layer in the blob storage, from 0. `<agent>` is the agent part of the location of [filesystem snapshots](/next/operate/filesystem_snapshots/recovery#where-the-snapshots-are). The same segments make the directories of the file system blob storage below its `root`.
 
 To give a service access to one kind of blob only, use a policy on its key prefix. For example, without `object_prefix`, grant the object permissions on `arn:aws:s3:::golem/initial_agent_files/*`, and grant `s3:ListBucket` on `arn:aws:s3:::golem` with the condition that `s3:prefix` starts with `initial_agent_files/`. The services list objects to read and delete directories.
 
@@ -135,7 +135,7 @@ The **oplog** is the primary source of truth for agent state, but the **key-valu
 
 ## Filesystem snapshots
 
-When [filesystem snapshots](/next/operate/filesystem_snapshots) are enabled, the worker executor keeps copies of the files of durable agents that take snapshots in the **blob storage**. With S3, it uses the bucket that `filesystem_snapshots_bucket` names. Each incarnation of an agent has its own location. See [Where the snapshots are](/next/operate/filesystem_snapshots#where-the-snapshots-are).
+When [filesystem snapshots](/next/operate/filesystem_snapshots) are enabled, the worker executor keeps copies of the files of durable agents that take snapshots in the **blob storage**. With S3, it uses the bucket that `filesystem_snapshots_bucket` names. Each incarnation of an agent has its own location. See [Where the snapshots are](/next/operate/filesystem_snapshots/recovery#where-the-snapshots-are).
 
 ## Promises and schedules
 

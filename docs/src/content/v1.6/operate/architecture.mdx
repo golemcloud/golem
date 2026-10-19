@@ -31,7 +31,7 @@ The gateway, deployed as `golem-worker-service`, keeps no agent state and scales
 
 1. **Route invocations.** The gateway maps the agent's identity to a shard, looks up the executor that owns that shard in the routing table published by the shard manager, and forwards the call to that executor.
 2. **Handle executor failure.** When an executor is unreachable or reports that it no longer owns the shard, the gateway refreshes its routing table, waits for the agent to be recovered on the shard's new owner, and retries the invocation.
-3. **Serve application surfaces.** The gateway serves the agent operations of the REST API, the [HTTP endpoints](/v1.6/invoke/making-custom-apis) and [routers](/v1.6/invoke/http-routers) an application defines, including the [files they serve](/v1.6/invoke/http-router-reference), and the application's [MCP servers](/v1.6/invoke/mcp).
+3. **Serve application surfaces.** The gateway serves the agent operations of the REST API, the [HTTP endpoints](/v1.6/invoke/making-custom-apis) and [routers](/v1.6/invoke/making-custom-apis/http-routers) an application defines, including the [files they serve](/v1.6/invoke/making-custom-apis/http-routers/semantics), and the application's [MCP servers](/v1.6/invoke/mcp).
 
 Agent-to-agent calls use the same routing. An executor delivers a call directly when it owns the target agent and otherwise sends it through the gateway.
 
@@ -49,7 +49,7 @@ Every agent identity hashes to one of a fixed number of shards (1024 by default)
 
 Ownership is fenced. Each executor holds a lease on its assignment and renews it periodically. An executor whose lease lapses stops admitting new work for those shards, and the shard manager reassigns the shards of an executor that stops renewing. Each shard also carries an epoch that advances whenever it moves. An agent's oplog records the epoch allowed to write to it, and indexed storage checks every write against that record atomically, so an executor that has lost a shard cannot append to the oplogs of its agents. The new owner recovers those agents by replaying their oplogs.
 
-The shard manager runs in local mode (state in PostgreSQL or SQLite, exactly one instance) or distributed mode (state in etcd, any number of replicas with one elected leader). See [Shard Manager](/v1.6/deploy#shard-manager) for lease timing and failover behavior.
+The shard manager runs in local mode (state in PostgreSQL or SQLite, exactly one instance) or distributed mode (state in etcd, any number of replicas with one elected leader). See [Shard Manager](/v1.6/operate/shard-manager) for lease timing and failover behavior.
 
 ## The component compilation service
 

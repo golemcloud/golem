@@ -8,7 +8,7 @@ but also provides a way to expose agent methods as HTTP APIs.
 In Golem 1.5, HTTP endpoints are defined **directly in agent code** using language-native decorators and macros — no YAML route definitions or scripting languages needed.
 
 For raw streaming request/response handling, framework-owned routing, or static and
-live file mappings, see [HTTP routers and file serving](/v1.6/invoke/http-routers).
+live file mappings, see [HTTP routers and file serving](/v1.6/invoke/making-custom-apis/http-routers).
 Complete code-first endpoints take precedence over those mounted fallback behaviors.
 
 ## Mount Points
@@ -398,46 +398,43 @@ content, and `500` with the JSON error.
 
 ### Binary Request Bodies
 
-Use the `UnstructuredBinary` type to receive raw binary data in the request body:
+Use the `UnstructuredBinary` type to receive raw binary data in the request body. Each example below declares a `POST /echo` endpoint that accepts any MIME type and returns a binary body. Endpoint paths are relative to the agent's HTTP mount.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
-upload: method({
+echo: method({
   input: { file: s.unstructuredBinary() },
-  returns: z.number(),
-  http: http.post('/upload'),
+  returns: s.unstructuredBinary(),
+  http: http.post('/echo'),
 }),
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 ```typescript
-upload: method({
-  input: {
-    file: Unstructured.UnstructuredBinary({
-      restrictions: [{ mimeType: "application/octet-stream" }],
-    }),
-  },
-  success: Schema.Number,
-  http: [Http.post("/upload")],
+echo: method({
+  input: { file: Unstructured.UnstructuredBinary() },
+  success: Unstructured.UnstructuredBinary(),
+  http: [Http.post("/echo")],
 }),
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
-#[endpoint(post = "/upload")]
-fn upload(&mut self, file: UnstructuredBinary<String>) -> u64;
+// In the agent definition trait; import golem_rust::agentic::UnstructuredBinary.
+#[endpoint(post = "/echo")]
+fn echo(&mut self, file: UnstructuredBinary<String>) -> UnstructuredBinary<String>;
 ```
 
 `String` implements `AllowedMimeTypes` and accepts any MIME type. Use an enum deriving `AllowedMimeTypes` to restrict accepted values.
 </Tabs.Tab>
 <Tabs.Tab>
-Use `golem.schema.UnstructuredBinary[M]` for raw binary bodies. Use `String` as the type argument for unrestricted MIME types, or a string-literal union such as `"image/png" | "image/jpeg"` to restrict them. `golem.schema.UnstructuredText[L]` provides the corresponding raw-text mapping. See the [Scala HTTP parameter guide](/v1.6/how-to-guides/scala/golem-http-params-scala) for examples.
+Use `String` as the type argument for unrestricted MIME types, or a string-literal union such as `"image/png" | "image/jpeg"` to restrict them. See the [Scala HTTP parameter guide](/v1.6/how-to-guides/scala/golem-http-params-scala) for more examples.
 
 ```scala
 import golem.BaseAgent
 import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint}
-import golem.schema.{UnstructuredBinary, UnstructuredText}
+import golem.schema.UnstructuredBinary
 import scala.concurrent.Future
 
 @agentDefinition(mount = "/files")
@@ -446,26 +443,19 @@ trait Files extends BaseAgent {
 
   @endpoint(method = "POST", path = "/echo")
   def echo(file: UnstructuredBinary[String]): Future[UnstructuredBinary[String]]
-
-  @endpoint(method = "GET", path = "/hello")
-  def hello(): Future[UnstructuredText[String]]
 }
 
 @agentImplementation()
 final class FilesImpl() extends Files {
   override def echo(file: UnstructuredBinary[String]): Future[UnstructuredBinary[String]] =
     Future.successful(file)
-
-  override def hello(): Future[UnstructuredText[String]] =
-    Future.successful(UnstructuredText.fromInline("Hello", "en"))
 }
 ```
 
-`POST /files/echo` accepts the raw request body and returns it with its MIME type.
-`GET /files/hello` returns raw text, not a JSON object.
+The handler returns the received bytes and MIME type unchanged.
 </Tabs.Tab>
 <Tabs.Tab>
-Use `@schema.UnstructuredBinary[M]` for raw binary bodies and `@schema.UnstructuredText[L]` for raw text, from `golemcloud/golem_sdk/schema`. The type arguments implement `AllowedMimeTypes` or `AllowedLanguages`; use `AnyMimeType` or `AnyLanguage` for unrestricted values. A bare `Bytes` parameter also accepts a raw binary body when it is the only body parameter. Use `UnstructuredBinary[M]` for MIME restrictions and inline-or-URL values. See the [MoonBit HTTP parameter guide](/v1.6/how-to-guides/moonbit/golem-http-params-moonbit) for examples.
+Use `AnyMimeType` for unrestricted MIME types, or a type implementing `AllowedMimeTypes` to restrict them. See the [MoonBit HTTP parameter guide](/v1.6/how-to-guides/moonbit/golem-http-params-moonbit) for more examples.
 
 Import `golemcloud/golem_sdk/schema` as `@schema` in `moon.pkg`.
 
@@ -485,23 +475,17 @@ pub fn Files::echo(
 ) -> @schema.UnstructuredBinary[@schema.AnyMimeType] {
   file
 }
-
-#derive.endpoint(get = "/hello")
-pub fn Files::hello(self : Self) -> @schema.UnstructuredText[@schema.AnyLanguage] {
-  @schema.UnstructuredText::inline("Hello", language="en")
-}
 ```
 
-`POST /files/echo` accepts and returns the raw binary body. `GET /files/hello`
-returns raw text. Returning a URL value instead redirects the HTTP caller.
+The handler returns the received bytes and MIME type unchanged.
 </Tabs.Tab>
 <Tabs.Tab>
 ```go
-type UploadIn struct {
+type EchoIn struct {
 	File golem.UnstructuredBinary[golem.AnyMimeType]
 }
 
-var Upload = Agent.Method[UploadIn, uint64]("upload", golem.HTTP(golem.POST("/upload")))
+var Echo = Agent.Method[EchoIn, golem.UnstructuredBinary[golem.AnyMimeType]]("echo", golem.HTTP(golem.POST("/echo")))
 ```
 
 The handler reads the body from `in.File.Data` and its media type from `in.File.MimeType`. `golem.AnyMimeType` accepts any MIME type; use a marker type whose `MimeTypes()` method returns the allowed types to restrict accepted values.
@@ -637,7 +621,7 @@ export const SecureAgent = defineAgent({
   http: Http.mount("/secure/{name}", { auth: true }),
   methods: {
     adminOnly: method({
-      input: {},
+      input: { principal: Principal.PrincipalSchema },
       success: AdminData,
       http: [Http.get("/admin", { auth: true })],
     }),
@@ -645,7 +629,9 @@ export const SecureAgent = defineAgent({
 })
 ```
 
-The handler can read the authenticated caller with `yield* Principal.Principal`; it does not need to be part of the method input.
+The handler receives `{ principal }` with the authenticated caller's identity. Golem injects this input; clients do not send it. Import `Principal` from `@golemcloud/effect-golem`.
+
+Non-read-only handlers can alternatively read `yield* Principal.Principal` as an Effect service. Read-only methods must declare the principal input, which also makes their cache principal-dependent.
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
@@ -787,7 +773,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 A mount can declare a path or query selector to address an exact phantom instead of choosing a fresh one. For example, `/decisions/d7/state?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782` addresses that phantom of `DecisionAgent("d7")`. The UUID is scoped to the component and constructor parameters: using the same UUID with `d8` selects a different agent.
 
-Selection is **not cloning**. If the selected UUID has not been used, Golem follows normal agent creation. To copy existing state, fork through the SDK or [Durable Streams fork operation](/v1.6/develop/durable-stream-forks), then select the resulting phantom UUID. Subsequent requests with the same constructor parameters and UUID reconnect to that instance.
+Selection is **not cloning**. If the selected UUID has not been used, Golem follows normal agent creation. To copy existing state, fork through the SDK or [Durable Streams fork operation](/v1.6/invoke/making-custom-apis/durable-streams/forks), then select the resulting phantom UUID. Subsequent requests with the same constructor parameters and UUID reconnect to that instance.
 
 The following mount fragments declare an optional query selector. Omit the optional flag to make it required:
 
@@ -855,7 +841,7 @@ Authentication and authorization run before selection; a UUID is an address, not
 
 ## Customizing Durable Stream Routes
 
-An endpoint with stream inputs or outputs is exposed as a [Durable Streams](/v1.6/invoke/durable-streams) URL family. By default, each URL uses the canonical method parameter name (and `$result` for a direct stream result), JSON streams use `application/json`, byte streams use `application/octet-stream`, external writes and both deletion operations are enabled, and the worker-service defaults control admission.
+An endpoint with stream inputs or outputs is exposed as a [Durable Streams](/v1.6/invoke/making-custom-apis/durable-streams) URL family. By default, each URL uses the canonical method parameter name (and `$result` for a direct stream result), JSON streams use `application/json`, byte streams use `application/octet-stream`, external writes and both deletion operations are enabled, and the worker-service defaults control admission.
 
 Route metadata can customize that HTTP surface without changing the agent method or the durable stream itself:
 
@@ -869,7 +855,11 @@ Route metadata can customize that HTTP surface without changing the agent method
 | Reader limit | Caps concurrent admitted live readers (long-poll and SSE) per stream for this route. |
 | Append limit | Caps admitted append requests per second per stream for this route. |
 
-Disabled operations return `405 Method Not Allowed` with an `Allow` header that lists only the enabled methods. Admission exhaustion returns `429 Too Many Requests` with `Retry-After: 1`. Limits are maintained independently for each deployed route and worker-service node; they do not replace executor protocol limits or form a cluster-wide quota.
+Disabled operations return `405 Method Not Allowed` with an `Allow` header that lists only the enabled methods, without mutating stream or invocation state. Fork creation is always available; there is no route-level fork opt-out.
+
+The live-reader limit must be from 1 through 16. The append limit must be positive and requires external writes. These values override the worker-service defaults only for that deployed route. Reader and append accounting is independent for each route and worker-service node, even when routes resolve to the same canonical stream. Catch-up reads instead share that canonical stream's separate rate budget, and the node-wide live-reader ceiling remains shared across routes.
+
+These controls provide admission protection, not cluster-wide quotas, and do not replace executor protocol limits. Admission exhaustion returns `429 Too Many Requests` with `Retry-After: 1`; routing, connectivity, or shard unavailability returns `503 Service Unavailable`. See [Gateway configuration](/v1.6/operate/durable_streams#gateway-configuration) for service-wide controls and [Metrics](/v1.6/operate/metrics#worker-service) for monitoring.
 
 <Callout type="info">
   These options preserve the official Durable Streams wire protocol: they choose
@@ -882,7 +872,7 @@ Disabled operations return `405 Method Not Allowed` with an `Allow` header that 
   value.
 </Callout>
 
-Only `$result` has an implicit canonical name. Other slot selectors must identify an existing top-level input or output slot. Public names must be unique across the route, and canonical selectors must remain valid and unique even when a public name is supplied.
+Only `$result` has an implicit canonical name. Other slot selectors must identify an existing top-level input or output slot. Public names must be unique across the route, and canonical selectors must remain valid and unique even when a public name is supplied. Public names change the URL and OpenAPI surface only; the worker and oplog retain the canonical slot identity. Custom byte-stream media types likewise leave offsets byte-based and content opaque.
 
 The same route customization looks like this in each SDK:
 

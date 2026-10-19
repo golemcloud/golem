@@ -1,0 +1,194 @@
+# HTTP Gateway
+
+The HTTP gateway runs in worker-service. It serves deployed HTTP APIs, custom
+routers, files, MCP, and Durable Streams. This page covers operator configuration;
+see [Using HTTP routers and files](/next/invoke/making-custom-apis/http-routers)
+for application examples and [Deployment](/next/deploy) for service topology.
+
+## Configuring shared storage
+
+Static files are read directly by worker-service. Registry, executors, and every
+serving worker-service must share the initial-file blob store and namespace.
+See [Persistence](/next/operate/persistence) for general blob storage configuration.
+
+For local filesystem storage, mount the **same volume** into all services. Identical
+paths in isolated containers are not shared storage:
+
+```toml
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "/blob_storage"
+```
+
+The environment variables are `GOLEM__BLOB_STORAGE__TYPE=LocalFileSystem` and
+`GOLEM__BLOB_STORAGE__CONFIG__ROOT=/blob_storage`. The
+[PostgreSQL compose example](https://github.com/golemcloud/golem/blob/main/docker-examples/published-postgres/compose.yaml)
+shows shared volume wiring.
+
+For S3, use the same `initial_agent_files_bucket`, `object_prefix`,
+`namespace_prefixes`, region, endpoint, and path-style settings as the other services.
+Use the complete service configuration for the other required buckets. Grant
+worker-service read access, including ranged reads, and supply credentials through
+your deployment's secret mechanism. InMemory storage is not shared across processes;
+worker-service does not support `KVStoreSqlite`.
+
+## Configuring ingress
+
+Applications use worker-service's **apps gateway** (`custom_request_port`, default
+9006), not its management REST or gRPC port. Use an ingress with an HTTP/2 cleartext
+upstream (**h2c prior knowledge**), preserve per-stream resets, and disable request
+and response buffering for streaming routes. The gateway also accepts HTTP/1, but
+does not support `Upgrade: h2c`.
+
+To accept public-origin headers from a TLS-terminating proxy, list its direct peer
+IP in worker-service configuration:
+
+```toml
+[route_resolver]
+trusted_ingress_addresses = ["10.0.0.10"]
+```
+
+The default list is empty. Configure that proxy to remove client forwarding fields
+and write exactly one valid `X-Forwarded-Proto` and one `X-Forwarded-Host`. Both are
+required; comma-separated proxy chains and `Forwarded` are not alternative origin
+sources. Keep the listener private to the intended ingress.
+
+Test disconnect/reset through the actual proxy, including while waiting for a
+response head. A client timeout alone does not prove upstream cancellation. Keep
+HTTP/2 enabled: some pending live-file requests over HTTP/1 detect disconnect only
+at the exchange deadline.
+
+## Serving HTTP APIs and MCP on one port
+
+The custom request port selects the deployment by the request's host:
+
+- A domain with an HTTP API deployment is served by its routes, for every path.
+- A domain with an MCP deployment serves `/mcp`, `/mcp/oauth/*`, and
+  `/.well-known/oauth-*`.
+- Any other host gets 404.
+
+A domain holds either an HTTP API deployment or an MCP deployment, not both; the
+registry rejects the second one. Registered domains use a lowercase host without a
+trailing dot, compressed IPv6 literals such as `[::1]`, and an optional port without
+leading zeros. Requests are matched against that spelling, so `Host: Shop.Example.com.`
+reaches `shop.example.com`. The dedicated `mcp_port` (default 9007) still serves MCP
+deployments only.
+
+To expose the management API on the same public port, route its host to the
+management API and every other host to the custom request port. Point every name
+at the same address in DNS. Reserve the management host in the registry:
+
+```toml
+[domain_registration]
+reserved_domains = ["api.golem.example.com"]
+```
+
+Reserved domains match by host, ignoring case, port, and a trailing dot. Reservation
+checks apply to new registrations; existing registrations remain in place.
+
+The single `golem` executable has this router built in. Set `router.management_host`
+(`GOLEM__ROUTER__MANAGEMENT_HOST`); it reserves that host itself. For the separate
+Envoy image, see [Golem Router](/next/deploy#golem-router).
+
+Pass the original host in `Host` (or `:authority`), or in `X-Forwarded-Host` from a
+trusted ingress. MCP uses the same trusted ingress rule as HTTP APIs.
+
+## Long-lived connections
+
+Set every proxy idle timeout longer than the keep-alive interval, with margin for
+network delay. Disable response buffering for SSE. Enable WebSocket upgrades for
+management API routes that use them, not custom routers. A proxy with a fixed
+maximum connection lifetime can still close a connection that has traffic.
+
+Worker-service defaults are:
+
+```toml
+[invocation_session]
+keep_alive_interval = "30s"
+max_pong_timeout = "0s"
+
+[mcp]
+sse_keep_alive_interval = "15s"
+
+[durable_streams]
+long_poll_timeout = "30s"
+```
+
+The invocation-session WebSocket sends Pings at the non-zero `keep_alive_interval`.
+The default `max_pong_timeout = "0s"` disables the Pong deadline, not Pings. A positive
+duration requires a Pong within that duration after the Ping is flushed.
+
+The `golem-client` socket task answers Pings even when the caller does not poll for
+output. When bounded output buffers fill, it pauses socket reads and answers Pings
+when reading resumes. It does not send separate client Pings.
+
+A positive Pong deadline is a strict responsiveness limit, not a reliable dead-peer
+test. Backpressure in either direction can delay Pong processing. Enable it only
+when neither endpoint can remain backpressured longer than the timeout; otherwise
+keep `"0s"`.
+
+MCP sends SSE comment keep-alives on open GET and POST streams;
+`sse_keep_alive_interval` must be non-zero. Durable Streams SSE emits a `control`
+event after each read, including empty reads. An idle read waits at most
+`long_poll_timeout`, capped at 30 seconds by the executor, so it needs no separate
+SSE heartbeat.
+
+Environment variables are `GOLEM__INVOCATION_SESSION__KEEP_ALIVE_INTERVAL`,
+`GOLEM__INVOCATION_SESSION__MAX_PONG_TIMEOUT`, `GOLEM__MCP__SSE_KEEP_ALIVE_INTERVAL`,
+and `GOLEM__DURABLE_STREAMS__LONG_POLL_TIMEOUT`.
+
+## Setting timeouts and resource budgets
+
+Worker-service defaults are:
+
+```toml
+[http_session]
+exchange_timeout = "5m"
+retry_deadline = "10s"
+retry_delay = "100ms"
+max_resume_attempts = 4
+cleanup_timeout = "2s"
+retained_input_bytes = 4194304
+retained_input_frames = 32
+event_queue_frames = 2
+command_queue_frames = 16
+max_event_bytes = 17825792
+```
+
+`exchange_timeout` bounds the whole handler or live-file exchange, including
+initialization, queueing, and streaming. There is no separate executor file-read
+deadline. Expiry returns 504 before response commitment or aborts a started response.
+Recovery resumes the same surviving invocation, with four reattachments allowed
+over the exchange's lifetime; it cannot replace a lost executor invocation.
+
+Use ingress concurrency limits for live-file load. There is no dedicated per-agent
+read queue cap or executor-wide outstanding-read limit. Slow readers can delay an
+agent's other work. `durable_streams.load` does not configure these reads.
+
+Byte and frame settings bound encoded session buffering, **not total upload size**.
+Input encoding includes schema and frame overhead. Queued output is bounded by
+`event_queue_frames × max_event_bytes`, not all per-request allocations.
+
+For `golem server run`, nest worker-service sections under `worker_service`, for
+example `[worker_service.http_session]`. Environment variable paths also include
+`WORKER_SERVICE`, for example `GOLEM__WORKER_SERVICE__HTTP_SESSION__EXCHANGE_TIMEOUT`.
+
+## OpenAPI and route caches
+
+OpenAPI generation uses [separate document limits](/next/invoke/making-custom-apis/http-routers/semantics#caching-and-limits)
+and is not bounded by `exchange_timeout`. There is no provider-specific or whole-generation
+timeout or global generation admission limit. An HTTP disconnect does not cancel a
+shared generation; ingress timeouts alone do not bound provider execution.
+
+Each gateway caches up to 256 successful documents with LRU eviction and no
+time-based expiry. Each generation invokes at most eight providers concurrently.
+Concurrent requests for the same deployment and route snapshot
+share a generation; failures are not cached. A changed snapshot selects a new entry,
+but a request already admitted may finish with the previous snapshot. Mutable secret
+changes alone do not guarantee freshness. Providers should describe the deployed
+schema, not changing application data. Caches are process-local.
+
+Route lookup caching is separate: `route_resolver.router_cache_ttl = "10m"`,
+capacity 1024, with eviction every minute.

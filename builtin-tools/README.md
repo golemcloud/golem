@@ -32,7 +32,7 @@ provider state.
 The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
 `builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
 read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
-access. The source exports `web-fetch@0.1.2`; its new immutable component release awaits
+access. The source exports `web-fetch@0.1.3`; its new immutable component release awaits
 authorized publication. The artifact lock still pins the previous release. Its timeout,
 response-size, and redirect limits are optional invocation arguments, not
 deployment configuration. HTML is returned as decoded source unless the invocation enables
@@ -285,7 +285,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: web-fetch
-      version: 0.1.2
+      version: 0.1.3
 
 agents:
   ResearchAgent:

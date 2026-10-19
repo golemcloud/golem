@@ -1,13 +1,13 @@
 ---
 name: golem-add-llm-effect
-description: "Adding provider-backed LLM text generation to an Effect-based Golem agent with effect/unstable/ai and an Effect AI provider. Use when an @golemcloud/effect-golem project needs a non-streaming language-model request or OpenAI-compatible provider integration."
+description: "Adding provider-backed LLM text generation to an Effect-based Golem agent with effect/ai and an Effect AI provider. Use when an @golemcloud/effect-golem project needs a non-streaming language-model request or OpenAI-compatible provider integration."
 ---
 
 # Adding LLM Capabilities to an Effect Golem Agent
 
-Use the provider-independent `LanguageModel` service from `effect/unstable/ai`, an exactly
+Use the provider-independent `LanguageModel` service from `effect/ai`, an exactly
 version-aligned Effect AI provider package, and `FetchHttpClient.layer` from
-`effect/unstable/http`. For OpenAI or an OpenAI-compatible endpoint, use `@effect/ai-openai`.
+`effect/http`. For OpenAI or an OpenAI-compatible endpoint, use `@effect/ai-openai`.
 
 ```diagram
 ┌────────────────────┐    provides     ┌───────────────────────────┐
@@ -33,7 +33,7 @@ Effect packages use matching versions. Inspect the exact installed `effect` vers
 the same `@effect/ai-openai` version. For the current template:
 
 ```shell
-npm install --save-exact @effect/ai-openai@4.0.0-beta.98
+npm install --save-exact @effect/ai-openai@4.0.0
 ```
 
 Do not add the provider to `@golemcloud/effect-golem` or the common project template. Install it only
@@ -45,8 +45,8 @@ identities or types.
 ```typescript
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Schema } from "effect";
-import { LanguageModel } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { LanguageModel } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem";
 ```
 
@@ -227,8 +227,8 @@ layers from the resolved values, and keeps the handler provider-independent:
 ```typescript
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Schema } from "effect";
-import { LanguageModel } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { LanguageModel } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem";
 
 export class LlmConfig extends defineConfig("Llm.Config", {
@@ -309,7 +309,7 @@ and returned text. Also verify that replay does not unexpectedly resend a record
 ## Key Constraints
 
 - Pin `@effect/ai-openai` exactly to the installed `effect` version.
-- Import `LanguageModel` from `effect/unstable/ai`.
+- Import `LanguageModel` from `effect/ai`.
 - Provide `FetchHttpClient.layer` to `OpenAiClient.layer`.
 - Provide the client layer to `OpenAiLanguageModel.layer`.
 - Keep application logic provider-independent and return `response.text`.
@@ -320,8 +320,8 @@ and returned text. Also verify that replay does not unexpectedly resend a record
 
 ## Authoritative API Sources
 
-- [Effect v4 `LanguageModel`](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/ai/LanguageModel.ts)
-- [Effect v4 fetch client](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/FetchHttpClient.ts)
-- [`@effect/ai-openai` client](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/ai/openai/src/OpenAiClient.ts)
-- [`@effect/ai-openai` language model](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/ai/openai/src/OpenAiLanguageModel.ts)
+- [Effect v4 `LanguageModel`](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/ai/LanguageModel.ts)
+- [Effect v4 fetch client](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/effect/src/http/FetchHttpClient.ts)
+- [`@effect/ai-openai` client](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/ai/openai/src/OpenAiClient.ts)
+- [`@effect/ai-openai` language model](https://github.com/Effect-TS/effect/blob/effect@4.0.0/packages/ai/openai/src/OpenAiLanguageModel.ts)
 - [Effect-Golem typed config](https://github.com/golemcloud/effect-golem/blob/HEAD/src/Config.ts)

@@ -28,11 +28,13 @@ type = "Enabled"
 
 [component_compilation.config]
 connect_timeout = "10s"
+connection_pool_size = 4
 enqueue_timeout = "1s"
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_connection_age = "1m"
 max_message_size = 33554432
 port = 9091
 
@@ -86,6 +88,8 @@ http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
 http2_max_header_list_size = 65536
+http2_max_local_error_reset_streams = 1024
+http2_max_pending_accept_reset_streams = 20
 
 [initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
