@@ -17,7 +17,7 @@ Go through the [production checklist](/next/deploy/production-checklist) too.
 - **Deploys.** A service with a volume stops its old deployment before it starts the new one. That is what the [one shard manager](/next/deploy/modes#one-shard-manager) rule needs. Without a volume, Railway starts the new deployment and stops the old one only after the new one is active, and two servers then run on the same database for a while. **Attach a volume in both modes**, also in mode 2, where it holds only caches.
 - **Replicas.** A service with a volume cannot have replicas. Run one server; it scales vertically.
 - **Volume size.** Volumes are limited by the plan: 0.5 GB on the free and trial plans, 5 GB on Hobby and 50 GB on Pro. The trial volume is too small for real use.
-- **Backups.** Railway backs up volumes once a day, so a lost volume can lose up to a day of the SQLite state. Turn on [Litestream](/next/deploy/server#litestream) in mode 1, or use mode 2.
+- **Backups.** Enable a [volume backup schedule](https://docs.railway.com/volumes/backups) in the service's Backups tab; do not assume that daily backups are enabled. A daily schedule can lose up to a day of the SQLite state. Turn on [Litestream](/next/deploy/server#litestream) in mode 1, or use mode 2.
 - **Streams.** Railway's edge closes an HTTP request after 15 minutes even while data flows, and after 5 minutes without data. Server-sent event streams, such as MCP streams, therefore end after at most 15 minutes, and clients reconnect. WebSocket connections have no limit.
 - **Forwarded headers.** Railway's edge sets `X-Forwarded-Proto` and `X-Forwarded-Host`, but it does not document the addresses it connects from, so the server cannot trust them. The server routes by the `Host` header and sees `http` as the scheme. This affects the URLs it builds from the request, such as the address an OIDC login returns to.
 
@@ -54,26 +54,33 @@ EOF
 
 ### Create the service
 
-Add a service from the Docker image `golemservices/golem:<version>`. Before the first deploy:
+Add an empty service named `golem`. Before connecting the image, configure:
 
 - **Variables.** Open the Raw Editor and paste `golem.env`.
 - **Volume.** Attach a volume with the mount path `/var/lib/golem`, and add the variable `RAILWAY_RUN_UID=0`. Railway documents that images that run as a non-root user, as this image does with uid 65534, have permission problems on volumes, and that `RAILWAY_RUN_UID=0` fixes them. The server then runs as root. See [Volume ownership](/next/deploy/server#volume-ownership).
-- **Health check.** Set the healthcheck path to `/healthcheck`. The first start on a new volume downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), which takes about a minute.
+- **Port.** Set `PORT=9881`, and leave the start command empty to use the image's entrypoint.
+- **Health check.** Leave Railway's healthcheck path unset for this image. Railway sends its probes with the host `healthcheck.railway.app`, which does not match `GOLEM__ROUTER__MANAGEMENT_HOST`. The router sends these requests to the application endpoints, not the management health check. Check `/healthcheck` through the management domain instead. Railway can send traffic before Golem is ready; during startup, the server answers requests with 503. The first start on a new volume downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), which takes about a minute.
 
 ### Add the domains
 
-In the service's networking settings, add the management host (`golem.example.com`) as a custom domain, with the target port `9881`. Add each domain of an HTTP API or MCP deployment the same way. Railway shows the DNS records to create and gets the certificates.
+In the service's networking settings, generate a Railway-provided domain or add a custom domain for the management API, with the target port `9881`. Set `GOLEM__ROUTER__MANAGEMENT_HOST` to that host name, without `https://`. Add a separate domain for each HTTP API or MCP deployment, also targeting port `9881`. For custom domains, Railway shows the DNS records to create and gets the certificates.
 
 ### Deploy an application
 
-Deploy the service, check `https://golem.example.com/healthcheck`, and deploy an application with the admin token. See [Connect the CLI](/next/deploy/server#connect-the-cli).
+Connect the service to the Docker image `golemservices/golem:v1.6.0-rc3`. This starts the deployment. Wait for `/healthcheck` on your management domain to return 200, then deploy an application with the admin token. See [Connect the CLI](/next/deploy/server#connect-the-cli).
 
 </Steps>
 
-To upgrade, change the image tag of the service. To restore after the loss of the volume, attach a new volume at the same path and redeploy: the image restores the databases from the Litestream replica before the server starts. The new volume has no cache of the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), so that start downloads them again from GitHub.
+To upgrade, change the image tag of the service.
+
+To restore after the loss of the volume, remove the active deployment and wait until it has stopped. Replace the volume at `/var/lib/golem` without starting an intermediate deployment, then redeploy. The image restores the databases from the Litestream replica before the server starts. The new volume has no cache of the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), so that start downloads them again from GitHub.
 
 <Callout type="warning">
-  Litestream is off by default; turn it on from the first start of a new volume. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. It does not replicate the cache of the built-in plugins and tools either, so a restore onto a new volume downloads them again and needs HTTPS connections to GitHub. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
+  The CLI's volume attach and detach commands can start deployments automatically, even after the image source is disconnected. Do not detach and attach volumes as separate live changes: an intermediate container can write to the replica without the intended volume. For CLI automation, commit the volume swap in one `environmentPatchCommit` API call with `skipDeploys: true`, verify that no deployment has started, then redeploy explicitly. Set the old volume's `mountPath` to `null` and the replacement's `mountPath` to `/var/lib/golem` under the service's `volumeMounts` in that patch.
+</Callout>
+
+<Callout type="warning">
+  Litestream is off by default; turn it on from the first start of a new volume. This guide turns it on because the platform's volumes belong to one host and a daily backup can lose up to a day of state; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. It does not replicate the cache of the built-in plugins and tools either, so a restore onto a new volume downloads them again and needs HTTPS connections to GitHub. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
 </Callout>
 
 ## Managed Postgres
