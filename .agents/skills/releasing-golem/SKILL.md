@@ -17,6 +17,10 @@ decision; preparation never publishes the Golem draft. Commands below are a
 runbook, not authorization. Substitute approved versions and commit IDs.
 Release authorization does not authorize direct pushes or merges to `main`.
 
+Run `cargo make check-release-start` from clean committed source first. This
+read-only check verifies GitHub authentication and the protected environment's
+App configuration names. It does not validate secret values or registry access.
+
 At release start, record the current public `main` commit and create a preparation
 branch from it. Keep that baseline throughout the release. Commit release fixes
 and version pins on the preparation branch; do not merge or rebase later `main`
@@ -128,7 +132,6 @@ its first-parent shared snapshot; validation proves that this exact source was m
 Obtain explicit approval before merging. With authorization:
 
 ```shell
-BUILTIN_VERSION=1.6.0 python3 scripts/golem-release.py check-start
 git tag v1.6.0 <approved-golem-commit>
 git push origin v1.6.0
 gh workflow run prepare-golem-release.yaml --repo golemcloud/golem --ref v1.6.0
@@ -136,60 +139,43 @@ gh run list --repo golemcloud/golem --workflow prepare-golem-release.yaml
 gh run watch <run-id> --repo golemcloud/golem --exit-status
 ```
 
-Run `check-start` before tags. It is a fast read-only check of prerequisites,
-environment settings, and secret names. It does not validate the actual private
-key or guarantee registry readiness.
-
 `.github/workflows/prepare-golem-release.yaml` validates source and tag, then runs
-one full exact-tag CI preparation. An arbitrary earlier green PR run cannot replace
-it. Pushes to `release/*` do not start automatic CI; PRs still do. Preparation
-checks published shared crates and all six published SDKs without local overrides,
-including streaming template walkthroughs.
-Read-only jobs package and validate all eight built-ins, including Python sources,
-before publication. They preserve the complete Actions bundle and small runtime
-manifest. They use the local manifest to compile ten native binaries and four
-Docker payload tars. Sign Apple binaries and wait for notarization status
-`Accepted` before bundle upload.
-
-The protected `golem-release` App-token job only collects and verifies exact
-artifact IDs and digests. It compares all existing destinations before its first
-write, then publishes only missing built-in packages and uploads the ten native
-binaries and `builtin-artifacts.release.json` to the draft. It does not build,
-package, or execute downloaded code after it obtains the write token. It uploads
-an attempt-qualified Actions readiness receipt bound to source, full ref, run,
-attempt, release ID, and exact artifacts and hashes. It never publishes the draft.
-The publisher guard permits only this workflow's `workflow_dispatch` on the
-matching Golem tag in `golemcloud/golem`.
+full reusable CI preflight. It checks published shared crates and all six published
+SDKs, without local SDK overrides, including streaming template walkthroughs.
+Only after preflight does the protected `golem-release` job create or resume the
+draft, rebuild and package all eight inventory entries before any built-in upload,
+then publish them and upload the verified `builtin-artifacts.release.json`.
+The existing native matrix then builds, signs, notarizes, and attaches all ten
+Golem and CLI binaries to the draft. Wait for the entire preparation to succeed.
+The publisher guard permits only this workflow's
+`workflow_dispatch` on the matching Golem tag in `golemcloud/golem`.
 
 ## 4. Human review and final publication
 
 ```shell
 gh release view v1.6.0 --repo golemcloud/golem
 gh release view v1.6.0 --repo golemcloud/golem --web
-BUILTIN_VERSION=1.6.0 python3 scripts/golem-release.py readiness --tag v1.6.0 --directory target/release-review
 ```
 
-Review the successful preflight, release notes, draft state, all eight public
+Review the successful preparation, native binaries, release notes, draft state, all eight public
 built-in asset sets, provenance, licenses, applicable SBOMs, checksums, and the
-uploaded manifest, ten native binaries, and readiness receipt. The readiness
-command is read-only. Follow [publishing-builtin-artifacts](../publishing-builtin-artifacts/SKILL.md)
+uploaded manifest. Follow [publishing-builtin-artifacts](../publishing-builtin-artifacts/SKILL.md)
 for packaging details. Do not commit the generated manifest. A human publishes
-the reviewed draft in GitHub. `publish-golem-release.yaml` validates that successful
-tagged preparation completed before publication and promotes only the saved Docker
-payloads. It runs no full CI or native compilation. Actions artifacts have 30-day
-retention. Review and publish within that period or stop. Missing, expired, or
-ambiguous evidence fails closed; never rebuild automatically to replace it.
+the reviewed draft in GitHub. That event starts `publish-golem-release.yaml`,
+which checks successful preparation of the exact tag before running the existing
+Docker jobs. It does not repeat full CI or native builds. Preparation itself never
+publishes the Golem draft. Release branches do not also start push CI; PR CI and
+the tagged preparation remain in place.
 
 ## Recovery
 
 Inspect the run and public assets before retrying any action with an uncertain
 outcome. Fix infrastructure or permissions without changing tagged source, then
-rerun failed consumer jobs in the same preparation run, not all jobs. Reuse saved
-producer artifact IDs and exact bytes:
+rerun the same preparation run:
 
 ```shell
 gh run view <run-id> --repo golemcloud/golem --log-failed
-gh run rerun <run-id> --repo golemcloud/golem --failed
+gh run rerun <run-id> --repo golemcloud/golem
 ```
 
 Partial publication is not transactional. Reruns verify existing packages and
@@ -218,20 +204,13 @@ clean tag, full history, and authenticated write access to both repositories:
 
 ```shell
 BUILTIN_VERSION=1.6.0 cargo make validate-builtin-release
-BUILTIN_VERSION=1.6.0 cargo make package-builtin-artifacts
 BUILTIN_VERSION=1.6.0 BUILTIN_DRY_RUN=1 cargo make publish-builtin-artifacts
 # External writes: requires separate publication authorization.
 BUILTIN_VERSION=1.6.0 cargo make publish-builtin-artifacts
 ```
 
-Validation still requires a draft and clean exact-tag source. It fetches refs but
-does not build. The no-write packaging task creates
-`target/builtin-artifact-release/bundle` with all eight validated packages,
-including Python sources, the local manifest, and package metadata. Dry run
-preserves the bundle and manifest without public writes. Explicit local publication
-uses an existing complete bundle instead of rebuilding. Inspect an incomplete
-bundle; never blindly reuse it or rebuild over a completed bundle.
-Local recovery keeps all immutability and
+Validation fetches refs but does not build; dry run builds/packages without
+publication or manifest creation. Local recovery keeps all immutability and
 provenance checks. Never bypass the CI guard or give normal CI write credentials.
 Builds on different hosts can produce different WASM bytes from the same source.
 Do not replace a package when a rebuild differs. To retain a complete package

@@ -612,10 +612,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
-      - uses: actions/setup-python@v6
-        if: matrix.group.shard == 'core'
-        with:
-          python-version: '3.14'
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'

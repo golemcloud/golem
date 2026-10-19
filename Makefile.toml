@@ -2535,6 +2535,53 @@ if not ${merged}
 end
 '''
 
+[tasks.check-release-start]
+description = "Checks local tools, clean source, GitHub access, and the protected release environment without publication"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error git --version
+exec --fail-on-error gh --version
+exec --fail-on-error gh auth status
+status = exec --fail-on-error git status --porcelain --untracked-files=all
+status = trim ${status.stdout}
+if not is_empty ${status}
+    trigger_error "Start a release from clean committed source"
+end
+exec --fail-on-error gh api repos/golemcloud/golem/environments/golem-release
+app = exec --fail-on-error gh api repos/golemcloud/golem/environments/golem-release/variables/RELEASE_APP_ID --jq .value
+app = trim ${app.stdout}
+if is_empty ${app}
+    trigger_error "golem-release requires RELEASE_APP_ID"
+end
+key = exec --fail-on-error gh api repos/golemcloud/golem/environments/golem-release/secrets --jq ".secrets[] | select(.name == \"RELEASE_APP_PRIVATE_KEY\") | .name"
+key = trim ${key.stdout}
+if is_empty ${key}
+    trigger_error "golem-release requires RELEASE_APP_PRIVATE_KEY"
+end
+echo "Release prerequisites found; this does not validate the private key or publish anything"
+'''
+
+[tasks.check-golem-release-preparation]
+description = "Requires successful preparation of this exact tag before final Docker publication"
+script_runner = "@duckscript"
+script = '''
+version = get_env BUILTIN_VERSION
+published_at = get_env RELEASE_PUBLISHED_AT
+if is_empty ${version}
+    trigger_error "BUILTIN_VERSION is required"
+end
+if is_empty ${published_at}
+    trigger_error "RELEASE_PUBLISHED_AT is required"
+end
+head = exec --fail-on-error git rev-parse HEAD
+head = trim ${head.stdout}
+runs = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/actions/workflows/prepare-golem-release.yaml/runs?event=workflow_dispatch&status=success&head_sha=${head}&per_page=100" --jq ".workflow_runs[] | select(.head_sha == \"${head}\" and .head_branch == \"v${version}\" and .event == \"workflow_dispatch\" and .status == \"completed\" and .conclusion == \"success\" and .updated_at < \"${published_at}\") | .id"
+runs = trim ${runs.stdout}
+if is_empty ${runs}
+    trigger_error "No successful preparation of this exact tag completed before publication"
+end
+'''
+
 [tasks.validate-builtin-release]
 description = "Checks the clean tagged source and draft before built-in release preparation"
 dependencies = ["validate-golem-release-source"]
@@ -2549,15 +2596,16 @@ if not equals ${draft} true
 end
 '''
 
-[tasks.package-builtin-artifacts]
-description = "Builds and packages the complete built-in inventory without release writes"
-dependencies = ["validate-golem-release-source"]
+[tasks.publish-builtin-artifacts]
+description = "Publishes every built-in and uploads the immutable tagged release manifest"
+dependencies = ["validate-builtin-release"]
 script_runner = "@duckscript"
 script = '''
-bundle = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/bundle"
-if is_path_exists ${bundle}
-    trigger_error "Preserve the existing package bundle; inspect incomplete packaging before retrying"
+if is_path_exists builtin-artifacts.release.json
+    trigger_error "The release manifest already exists; do not replace immutable release assets"
 end
+version = get_env BUILTIN_VERSION
+dry_run = get_env BUILTIN_DRY_RUN
 inventory = readfile builtin-artifacts.json
 artifacts = json_parse --collection ${inventory}
 ids = map_keys ${artifacts}
@@ -2572,26 +2620,82 @@ end
 unset_env GOLEM_BUILTIN_ARTIFACTS_PREBUILT
 unset_env GOLEM_BUILTIN_RELEASE
 cm_run_task ensure-builtin-artifacts
-cm_run_task validate-golem-release-source
-exec --fail-on-error python3 scripts/golem-release.py package-builtins --directory "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/bundle" --target ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
-'''
-
-[tasks.publish-builtin-artifacts]
-description = "Publishes the complete packaged built-in inventory without replacing assets"
-dependencies = ["check-builtin-publication-context"]
-script_runner = "@duckscript"
-script = '''
-bundle = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/bundle"
-if not is_path_exists "${bundle}/bundle.json"
-    cm_run_task package-builtin-artifacts
-end
 cm_run_task validate-builtin-release
-dry_run = get_env BUILTIN_DRY_RUN
+set_env BUILTIN_SKIP_BUILD 1
+# Finish every package, including corresponding source, before any upload.
+set_env BUILTIN_DRY_RUN 1
+for id in ${ids}
+    entry = map_get ${artifacts} ${id}
+    component = map_get ${entry} component
+    set_env BUILTIN_COMPONENT ${component}
+    cm_run_task publish-builtin-artifact
+end
+set_env BUILTIN_DRY_RUN ${dry_run}
 if equals ${dry_run} 1
-    echo "Dry run complete; the local bundle and manifest are preserved, no releases created"
+    echo "Dry run complete; no manifest or releases created"
     exit 0
 end
-exec --fail-on-error python3 scripts/golem-release.py publish-builtins --directory ${bundle}
+manifest_entries = set ""
+separator = set ""
+for id in ${ids}
+    entry = map_get ${artifacts} ${id}
+    component = map_get ${entry} component
+    output = map_get ${entry} path
+    set_env BUILTIN_COMPONENT ${component}
+    cm_run_task publish-packaged-builtin-artifact
+    sha = sha256sum ${output}
+    if not equals ${dry_run} 1
+        url = set "https://github.com/golemcloud/golem-builtins/releases/download/${component}-v${version}/${component}.wasm"
+        verified = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/verify.wasm"
+        mkdir "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release"
+        exec --fail-on-error curl --fail --location --max-time 120 --output ${verified} ${url}
+        public_sha = sha256sum ${verified}
+        exec --fail-on-error curl --fail --location --max-time 120 --output "${verified}.sha256" "${url}.sha256"
+        checksum = readfile "${verified}.sha256"
+        rm ${verified}
+        rm "${verified}.sha256"
+        if not equals ${sha} ${public_sha}
+            trigger_error "Public bytes differ for ${component}; never overwrite an immutable release"
+        end
+        if not starts_with ${checksum} ${sha}
+            trigger_error "Public checksum differs for ${component}"
+        end
+    end
+    manifest_entries = concat ${manifest_entries} ${separator} "\n    \"${id}\": {\"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha}\"}"
+    separator = set ","
+end
+if equals ${dry_run} 1
+    echo "Dry run complete; no manifest or releases created"
+    exit 0
+end
+manifest = set "{\n  \"schemaVersion\": 1,\n  \"repository\": \"golemcloud/golem-builtins\",\n  \"artifacts\": {${manifest_entries}\n  }\n}\n"
+writefile builtin-artifacts.release.json ${manifest}
+release = exec --fail-on-error gh release view "v${version}" --repo golemcloud/golem --json assets
+release = json_parse --collection ${release.stdout}
+assets = map_get ${release} assets
+found = set false
+for asset in ${assets}
+    name = map_get ${asset} name
+    if equals ${name} builtin-artifacts.release.json
+        found = set true
+    end
+end
+if ${found}
+    staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/manifest"
+    mkdir ${staging}
+    remote_manifest = set "${staging}/builtin-artifacts.release.json"
+    if is_path_exists ${remote_manifest}
+        rm ${remote_manifest}
+    end
+    exec --fail-on-error gh release download "v${version}" --repo golemcloud/golem --pattern builtin-artifacts.release.json --dir ${staging}
+    expected = sha256sum builtin-artifacts.release.json
+    actual = sha256sum "${staging}/builtin-artifacts.release.json"
+    if not equals ${expected} ${actual}
+        trigger_error "Conflicting immutable release manifest; no assets were replaced"
+    end
+else
+    exec --fail-on-error gh release upload "v${version}" builtin-artifacts.release.json --repo golemcloud/golem
+end
 '''
 
 [tasks.publish-builtin-artifact]
@@ -2733,24 +2837,39 @@ if equals ${component} python
 end
 notes_path = set "${staging}/release-notes.md"
 writefile ${notes_path} ${notes}
-exec --fail-on-error python3 scripts/golem-release.py seal-component --directory ${staging}
-
 dry_run = get_env BUILTIN_DRY_RUN
 if equals ${dry_run} 1
     echo "dry run: release was not published"
     exit 0
 end
+cm_run_task publish-packaged-builtin-artifact
+'''
+
+[tasks.publish-packaged-builtin-artifact]
+private = true
+dependencies = ["check-builtin-publication-context"]
+script_runner = "@duckscript"
+script = '''
+repository = set "golemcloud/golem-builtins"
+component = get_env BUILTIN_COMPONENT
+version = get_env BUILTIN_VERSION
+tag = set "${component}-v${version}"
+staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/${tag}"
+staged_wasm = set "${staging}/${component}.wasm"
+notes_path = set "${staging}/release-notes.md"
+source_status = exec --fail-on-error git status --porcelain
+source_status = trim ${source_status.stdout}
 if not is_empty ${source_status}
     trigger_error "refusing to publish from a dirty source tree; commit the exact source first"
 end
-existing = exec gh release view ${tag} --repo ${repository}
 assets = array ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
 if equals ${component} python
     array_push ${assets} "${staging}/python-source.tar.gz"
     array_push ${assets} "${staging}/python-source.tar.gz.sha256"
-elif not is_empty ${sbom}
+elif is_path_exists "${staging}/${component}.spdx.json"
     array_push ${assets} "${staging}/${component}.spdx.json"
 end
+existing = exec gh release view ${tag} --repo ${repository}
 if not equals ${existing.code} 0
     exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path}
 end

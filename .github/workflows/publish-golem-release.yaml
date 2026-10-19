@@ -4,52 +4,197 @@ on:
   release:
     types: [published]
 
-concurrency:
-  group: golem-release-refs/tags/${{ github.event.release.tag_name }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
   actions: read
 
 jobs:
-  promote:
-    if: github.repository == 'golemcloud/golem' && startsWith(github.event.release.tag_name, 'v')
+  preparation:
+    if: github.repository == 'golemcloud/golem' && startsWith(github.ref, 'refs/tags/v')
     runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+      - name: Require successful tagged preparation before Docker publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISHED_AT: ${{ github.event.release.published_at }}
+        run: BUILTIN_VERSION="${GITHUB_REF_NAME#v}" cargo make --profile ci check-golem-release-preparation
+
+  docker-targets-build:
+    needs: preparation
     env:
-      GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-      RELEASE_EVENT_ID: ${{ github.event.release.id }}
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - platform: linux/amd64
+            name: linux/amd64
+            target: x86_64-unknown-linux-gnu
+            rustflags_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-cpu=x86-64-v3"
+          - platform: linux/arm64
+            name: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            rustflags_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-feature=+neon,+crc,+lse,+aes,+sha2,+dotprod"
+    name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.release.tag_name }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@v6
+          fetch-depth: 1
+      - uses: ./.github/actions/prepare-builtin-release
+      - uses: ./.github/actions/setup-rust
         with:
-          python-version: '3.14'
-      - name: Set built-in artifact version
-        run: echo "BUILTIN_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
-      - name: Verify published release readiness
-        run: python scripts/golem-release.py readiness --tag "$RELEASE_TAG" --directory target/release-ready --published
-      - name: Restore verified Docker payloads
-        run: python scripts/golem-release.py docker-payloads --directory target/release-ready
+          fetch-tag: 'true'
+          rust-targets: ${{ matrix.platform.target }}
+          install-protoc: 'true'
+
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          # Target-scoped rustflags pin the instruction-set baseline for the
+          # published images: x86-64-v3 on amd64 and Neoverse N1's stable
+          # optional target features on arm64. The per-target
+          # CARGO_TARGET_*_RUSTFLAGS form is used because plain RUSTFLAGS is
+          # ignored when cross-compiling; CARGO_-prefixed vars are also passed
+          # through into the cross container automatically.
+          echo "${{ matrix.platform.rustflags_env }}=${{ matrix.platform.rustflags }}" >> $GITHUB_ENV
+
+      - run: cargo install cross
+        if: ${{ matrix.platform.cross }}
+      - name: Build executables
+        run: cargo make --profile ci build-release
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
+
+      - name: Prepare Targets
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
+        run: cargo make --profile ci package-release
+      - uses: actions/upload-artifact@v6
+        name: Upload Targets
+        with:
+          name: docker-targets-build-${{ env.PLATFORM_PAIR }}
+          path: target/${{ matrix.platform.target }}.tar
+
+  docker-golem-build:
+    needs: preparation
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - platform: linux/amd64
+            target: x86_64-unknown-linux-gnu
+            rustflags_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-cpu=x86-64-v3"
+          - platform: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            rustflags_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-feature=+neon,+crc,+lse,+aes,+sha2,+dotprod"
+    name: docker-golem-build (${{ matrix.platform.platform }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/prepare-builtin-release
+      - uses: ./.github/actions/setup-rust
+        with:
+          fetch-tag: 'true'
+          rust-targets: ${{ matrix.platform.target }}
+          install-protoc: 'true'
+
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          # The same instruction-set baseline as the images of the services.
+          echo "${{ matrix.platform.rustflags_env }}=${{ matrix.platform.rustflags }}" >> $GITHUB_ENV
+
+      - id: get_version
+        uses: battila7/get-version-action@v2
+      - name: Set version for all packages
+        env:
+          VERSION: ${{ steps.get_version.outputs.version-without-v }}
+        run: cargo make --profile ci set-version
+
+      - run: cargo install cross
+        if: ${{ matrix.platform.cross }}
+      - name: Build the golem executable
+        if: ${{ ! matrix.platform.cross }}
+        run: cargo build -p golem --release --target ${{ matrix.platform.target }}
+      - name: Build the golem executable
+        if: ${{ matrix.platform.cross }}
+        run: cross build -p golem --release --target ${{ matrix.platform.target }}
+
+      - name: Package the golem executable
+        run: tar -cvf target/golem-${{ matrix.platform.target }}.tar -C target ${{ matrix.platform.target }}/release/golem
+      - uses: actions/upload-artifact@v6
+        name: Upload the golem executable
+        with:
+          name: docker-golem-build-${{ env.PLATFORM_PAIR }}
+          path: target/golem-${{ matrix.platform.target }}.tar
+
+  docker-publish-golem:
+    runs-on: blacksmith
+    needs: docker-golem-build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/docker-publish-setup
         with:
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
-          artifact-pattern: ''
+          artifact-pattern: docker-golem-build-*
+
       - uses: ./.github/actions/docker-build-push-service
         with:
           image-name: golemservices/golem
           dockerfile: ./cli/golem/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
+
+  docker-publish-router:
+    runs-on: blacksmith
+    needs: preparation
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/docker-publish-setup
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          artifact-pattern: ''
+
       - uses: ./.github/actions/docker-build-push-service
         with:
           image-name: golemservices/golem-router
           dockerfile: ./golem-router/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
+
+  docker-publish-1:
+    runs-on: blacksmith
+    needs: docker-targets-build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/docker-publish-setup
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
       - uses: ./.github/actions/docker-build-push-service
         with:
           image-name: golemservices/golem-worker-executor
@@ -65,6 +210,19 @@ jobs:
           image-name: golemservices/golem-xfs-quotad
           dockerfile: ./golem-xfs-quotad/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
+
+  docker-publish-2:
+    runs-on: blacksmith
+    needs: docker-targets-build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/docker-publish-setup
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
       - uses: ./.github/actions/docker-build-push-service
         with:
           image-name: golemservices/registry-service
@@ -81,17 +239,17 @@ jobs:
           dockerfile: ./golem-component-compilation-service/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
 
-  notify:
-    needs: promote
-    if: always() && github.repository == 'golemcloud/golem' && startsWith(github.event.release.tag_name, 'v')
+  publish-slack-notification:
+    needs: [preparation, docker-publish-1, docker-publish-2]
+    if: always() && github.repository == 'golemcloud/golem' && startsWith(github.ref, 'refs/tags/v')
     runs-on: blacksmith
     steps:
-      - name: Publish Slack notification
+      - name: Publish Slack Notification
         uses: rtCamp/action-slack-notify@v2
         env:
-          SLACK_COLOR: ${{ needs.promote.result }}
+          SLACK_COLOR: ${{ needs.preparation.result }}
           SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
-          SLACK_TITLE: Release Notification
-          SLACK_MESSAGE: 'Docker promotion for ${{ github.event.release.tag_name }}: ${{ needs.promote.result }}'
+          SLACK_TITLE: "Release Notification"
+          SLACK_MESSAGE: "Release preparation: `${{ needs.preparation.result }}`, docker-1 result: `${{ needs.docker-publish-1.result }}`, docker-2 result: `${{ needs.docker-publish-2.result }}`"
           SLACK_USERNAME: CI
           SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}

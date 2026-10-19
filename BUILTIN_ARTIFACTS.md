@@ -73,38 +73,13 @@ the manifest has exactly the inventory IDs and the correct component mapping.
 The normal path is `prepare-golem-release.yaml`, dispatched on the exact public
 Golem tag with `gh workflow run prepare-golem-release.yaml --ref v1.6.0
 --repo golemcloud/golem` (one command). There is no separate tag input. It checks
-clean source and the merged preparation PR. It runs one full exact-tag CI
-preparation with published six-SDK and shared-crate checks. An earlier green PR
-run does not replace it. Pushes to `release/*` do not start automatic CI; PRs still do.
-Read-only jobs package and validate all eight inventory entries, including Python
-sources, before publication. They retain the complete Actions bundle and the
-small runtime manifest. Native and Docker jobs use the local manifest before
-compiling ten native binaries and four Docker payload tars. Apple signing and
-notarization must finish with `Accepted` before bundle upload.
-
-The protected App-token job only collects and verifies exact artifact IDs and
-digests. It compares all existing destinations before its first write. It then
-publishes only missing built-in packages and uploads the ten native binaries and
-`builtin-artifacts.release.json` to the draft. It does not build, package, or
-execute downloaded code after it obtains the write token. It uploads an
-attempt-qualified Actions readiness receipt bound to source, full ref, run,
-attempt, release ID, and the exact artifacts and hashes. It never publishes the draft.
-
-Before tags, run `BUILTIN_VERSION=1.6.0 python3 scripts/golem-release.py check-start`.
-This fast read-only check covers prerequisites, environment settings, and secret
-names. It does not validate the actual private key or guarantee registry readiness.
-Before a human publishes the draft, review its assets and run the read-only check:
-
-```shell
-BUILTIN_VERSION=1.6.0 python3 scripts/golem-release.py readiness --tag v1.6.0 --directory target/release-review
-```
-
-`publish-golem-release.yaml` validates that successful tagged preparation completed
-before publication and promotes only saved Docker payloads. It runs no full CI or
-native compilation. Actions artifacts have 30-day retention. Review and publish
-within that period or stop. Missing, expired, or ambiguous evidence fails closed;
-it never causes an automatic rebuild. For a normal partial consumer failure,
-rerun failed jobs, not all jobs. Reuse the saved producer IDs and exact bytes.
+clean source and the merged preparation PR. It runs the full reusable CI preflight
+with published six-SDK and shared-crate checks before publication. The protected
+`golem-release` job creates or resumes a draft, builds and publishes all eight
+inventory entries, and uploads the verified manifest. It never publishes the
+Golem draft. The existing native matrix attaches signed and notarized binaries
+before human review. A human publishes the draft to start Docker publication,
+which checks successful preparation of that exact tag without repeating full CI.
 
 Configure the `golem-release` GitHub Environment for release tags only, preferably
 with required reviewers. Its variable `RELEASE_APP_ID` and secret
@@ -128,7 +103,7 @@ obtain authorization before running it. Do not bypass the CI guard.
 Ensure `python3` selects Python 3.14. The Python source packager uses
 `tarfile.extractall(filter="data")` and `hashlib.file_digest`. The runner's
 system Python 3.10 rejects a valid symlink in the source archive and lacks
-`hashlib.file_digest`. Use Python 3.14 in the read-only packaging job.
+`hashlib.file_digest`. The protected publisher installs Python 3.14 explicitly.
 
 1. Finish release preparation through a PR merged into `main`. When an
    implementation changes, bump its exported tool version in source, registry
@@ -147,38 +122,34 @@ system Python 3.10 rejects a valid symlink in the source archive and lacks
 
    ```shell
    BUILTIN_VERSION=1.6.0 cargo make validate-builtin-release
-   BUILTIN_VERSION=1.6.0 cargo make package-builtin-artifacts
    BUILTIN_VERSION=1.6.0 BUILTIN_DRY_RUN=1 cargo make publish-builtin-artifacts
    ```
 
-   Validation still requires the draft, clean source, and exact tag. It fetches
-   Git refs but does not build. The no-write packaging task builds and validates
-   all eight packages, including Python sources. It creates
-   `target/builtin-artifact-release/bundle` with the local manifest and package
-   metadata. Dry run preserves this bundle and manifest without public writes.
-   Inspect an incomplete bundle before proceeding; do not blindly reuse it.
-   Never rebuild over a completed bundle.
+   Validation fetches Git refs but does not build. Dry run ensures all local
+   outputs once, then runs the existing single-component publisher in dry-run
+   mode for each inventory entry. Neither mode publishes, uploads, or creates
+   `builtin-artifacts.release.json`.
 4. Publish all components manually:
 
    ```shell
    BUILTIN_VERSION=1.6.0 cargo make publish-builtin-artifacts
    ```
 
-The explicit local publisher uses an existing complete bundle instead of rebuilding
-it. If no bundle exists, package all entries before any public write. Preserve
-validation, provenance, licenses, source archives, and applicable SPDX SBOMs.
-The single-component `cargo make publish-builtin-artifact` remains a manual entry
-point with `BUILTIN_COMPONENT`, `BUILTIN_VERSION`, `BUILTIN_SKIP_BUILD=1`, and
-`BUILTIN_DRY_RUN=1` for inspection. Component releases use immutable
+The task deletes the generated outputs and rebuilds them so development WASM
+replacements cannot enter a release. It invokes `cargo make publish-builtin-artifact`
+with `BUILTIN_COMPONENT`, `BUILTIN_VERSION`, and `BUILTIN_SKIP_BUILD=1`.
+It packages all entries with `BUILTIN_DRY_RUN=1` before uploading any built-in.
+The upload pass uses those same packages without rebuilding or repackaging.
+The existing publisher retains validation, provenance, licenses, source archives,
+and applicable SPDX SBOM packaging. Component releases use immutable
 `<component>-v<version>` tags. Never replace assets or move tags.
 
-The task compares all existing destinations against the complete local bundle
-before its first write. It publishes only missing assets, then verifies every
-component's full public asset set. It uploads the schema-version-1
-`builtin-artifacts.release.json` without `--clobber`. Native compilation uses the
-local manifest before publication; it does not wait for a public release.
-Publish the draft only after the normal readiness review succeeds. Manual built-in
-recovery alone does not replace native, Docker, or readiness evidence.
+The task verifies every component's full public asset set against the local package
+before it writes the schema-version-1 `builtin-artifacts.release.json`. It uploads
+that manifest to the Golem release with `gh release upload`, without `--clobber`.
+Release CI must download this manifest before compilation and use its pinned
+public assets. Publish the draft Golem release only after preparation succeeds,
+including native binaries; the publication event starts Docker publication.
 Main CI builds current sources.
 There is no checked-in main lock. For a local release binary build, download the
 manifest beside `builtin-artifacts.json` and set `GOLEM_BUILTIN_RELEASE=1`.
@@ -229,8 +200,6 @@ and publish only the missing components:
    bytes. If a manifest already exists, verify that it is identical instead of
    uploading it again. Keep the verification evidence for human draft review.
 
-This is exceptional manual recovery, not a mode of `publish-builtin-artifacts`.
-It does not guarantee automated source reproducibility. The all-entry task
-requires each public package to match its saved local package. Do not rebuild over
-a completed bundle, bypass a byte mismatch, or weaken the CI guard to resume
-publication. Manual recovery does not replace the tagged readiness evidence.
+This is manual recovery, not a mode of `publish-builtin-artifacts`. The all-entry
+task rebuilds every component and requires each public package to match its local
+package. Do not bypass that check or weaken the CI guard to resume publication.
