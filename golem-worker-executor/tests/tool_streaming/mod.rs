@@ -18,7 +18,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
 use axum::response::Response;
 use axum::routing::{get, post};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use golem_common::agent_id;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
@@ -21345,6 +21345,240 @@ async fn native_tool_secret_permissions_and_completed_replay(
     Ok(())
 }
 
+fn print_tool_attachment_history(label: &str, entries: &[PublicOplogEntryWithIndex]) {
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentControl, ToolAttachmentId, ToolAttachmentReadObservation,
+    };
+    use golem_common::model::oplog::{
+        HostRequestToolAttachmentFinish, HostRequestToolAttachmentWrite,
+        HostResponseToolAttachmentTerminalResult, HostResponseToolAttachmentWrite,
+    };
+
+    eprintln!("tool attachment history: {label}");
+    let mut functions = BTreeMap::new();
+    for entry in entries {
+        let index = entry.oplog_index;
+        match &entry.entry {
+            PublicOplogEntry::Start(start) => {
+                functions.insert(index, start.function_name.as_str());
+                eprintln!("  {index}: {}", describe_public_entry(&entry.entry));
+                if start.function_name.ends_with("tool-output-writer::write") {
+                    eprintln!(
+                        "    write request: {:?}",
+                        start.request.as_ref().map(|request| {
+                            HostRequestToolAttachmentWrite::from_value(request.value())
+                        })
+                    );
+                } else if start.function_name.ends_with("tool-output-writer::finish") {
+                    eprintln!(
+                        "    finish request: {:?}",
+                        start.request.as_ref().map(|request| {
+                            HostRequestToolAttachmentFinish::from_value(request.value())
+                        })
+                    );
+                }
+            }
+            PublicOplogEntry::End(end) => {
+                eprintln!("  {index}: End start={}", end.start_index);
+                match functions.get(&end.start_index) {
+                    Some(function) if function.ends_with("tool-output-writer::finish") => {
+                        eprintln!(
+                            "    finish response: {:?}",
+                            end.response.as_ref().map(|response| {
+                                HostResponseToolAttachmentTerminalResult::from_value(
+                                    response.value(),
+                                )
+                            })
+                        );
+                    }
+                    Some(function) if function.ends_with("tool-output-writer::write") => {
+                        eprintln!(
+                            "    write response: {:?}",
+                            end.response.as_ref().map(|response| {
+                                HostResponseToolAttachmentWrite::from_value(response.value())
+                            })
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            PublicOplogEntry::ToolAttachmentControl(control) => {
+                eprintln!(
+                    "  {index}: control attachment={:?}, transition={:?}",
+                    ToolAttachmentId::from_value(control.attachment.value()),
+                    ToolAttachmentControl::from_value(control.transition.value())
+                );
+            }
+            PublicOplogEntry::ToolAttachmentRead(read) => {
+                eprintln!(
+                    "  {index}: read {:?}, payload bytes={:?}",
+                    ToolAttachmentReadObservation::from_value(read.observation.value()),
+                    read.payload.as_ref().map(|payload| payload.len())
+                );
+            }
+            PublicOplogEntry::CompletionDelivered(marker) => {
+                eprintln!(
+                    "  {index}: CompletionDelivered start={}",
+                    marker.start_index
+                );
+            }
+            PublicOplogEntry::CompletionDiscarded(marker) => {
+                eprintln!(
+                    "  {index}: CompletionDiscarded start={}",
+                    marker.start_index
+                );
+            }
+            _ => eprintln!("  {index}: {}", describe_public_entry(&entry.entry)),
+        }
+    }
+}
+
+#[test]
+#[tracing::instrument]
+#[ignore = "probabilistic cancellation stress reproducer"]
+#[timeout("10m")]
+async fn accepted_unread_tool_output_cancellation_stress(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.retry.max_attempts = 0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let result = async {
+        for trial in 0..256 {
+            let agent = agent_id!("ToolStreamingCaller", format!("cancel-output-{trial}"));
+            let worker = executor
+                .start_agent_with(
+                    &caller_component.id,
+                    agent.clone(),
+                    HashMap::from([(
+                        "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                        port.to_string(),
+                    )]),
+                    Vec::new(),
+                )
+                .await?;
+            let invocation = executor.invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "recover_accepted_unread_output",
+                data_value!(false),
+            );
+            tokio::pin!(invocation);
+            let synchronize = async {
+                let before =
+                    next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+                tokio::time::timeout(Duration::from_secs(30), async {
+                    loop {
+                        executor.commit_oplog(&worker).await?;
+                        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                        if entries.iter().any(|entry| matches!(
+                            &entry.entry,
+                            PublicOplogEntry::Log(log)
+                                if log.message.contains("accepted-unread-marker")
+                        )) {
+                            return Ok::<(), anyhow::Error>(());
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await??;
+                executor
+                    .complete_promise(
+                        &PromiseId {
+                            agent_id: worker.clone(),
+                            oplog_idx: before.oplog_idx,
+                        },
+                        Vec::new(),
+                    )
+                    .await?;
+                let after =
+                    next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker, &after).await?;
+                executor
+                    .complete_promise(
+                        &PromiseId {
+                            agent_id: worker.clone(),
+                            oplog_idx: after.oplog_idx,
+                        },
+                        Vec::new(),
+                    )
+                    .await?;
+                Ok::<(), anyhow::Error>(())
+            };
+            let result = tokio::select! {
+                biased;
+                checkpoint = synchronize => {
+                    match checkpoint {
+                        Ok(()) => tokio::time::timeout(Duration::from_secs(30), invocation.as_mut()).await?,
+                        Err(error) => Err(error),
+                    }
+                }
+                result = invocation.as_mut() => result,
+            };
+            match result {
+                Ok(result) => assert_eq!(result.into_typed::<Vec<u8>>()?, b"marker:"),
+                Err(error) => {
+                    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    print_tool_attachment_history(&format!("cancellation trial {trial}"), &entries);
+                    anyhow::bail!("cancellation trial {trial} failed: {error:?}");
+                }
+            }
+            eprintln!("cancellation trial {trial}: accepted marker followed by cancellation");
+            executor.delete_worker(&worker).await?;
+        }
+        Ok(())
+    }
+    .await;
+    server.abort();
+    result
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -21399,66 +21633,73 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         )),
     );
     let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
-    for (acknowledged, crash, markerless_crash, storage_failure) in [
-        (true, false, false, false),
-        (true, true, false, false),
-        (false, false, false, false),
-        (false, true, false, false),
-        (false, true, true, false),
-        (false, false, false, true),
-    ] {
-        let agent = agent_id!(
-            "ToolStreamingCaller",
-            format!("accepted-unread-{acknowledged}-{crash}-{markerless_crash}-{storage_failure}")
-        );
-        let worker = executor
-            .start_agent_with(
-                &caller_component.id,
-                agent.clone(),
-                HashMap::from([(
-                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    port.to_string(),
-                )]),
-                Vec::new(),
-            )
-            .await?;
-        let loads = executor.instance_load_count(&worker);
-        let mut acceptance = (!acknowledged && !storage_failure).then(|| {
-            executor.gate_next_replay_access_admission(
-                &worker,
-                "tool-output-writer::write",
-                ReplayAdmissionStage::AfterToolOutputAccepted,
-            )
-        });
-        let failure_gate = storage_failure.then(|| {
-            executor.gate_next_oplog_function_end(
+    let mut current_worker = None;
+    // Leave time for a bounded history read before the test harness's two-minute timeout.
+    let checked = async {
+        for (acknowledged, crash, markerless_crash, storage_failure) in [
+            (true, false, false, false),
+            (true, true, false, false),
+            (false, false, false, false),
+            (false, true, false, false),
+            (false, true, true, false),
+            (false, false, false, true),
+        ] {
+            let agent = agent_id!(
+                "ToolStreamingCaller",
+                format!(
+                    "accepted-unread-{acknowledged}-{crash}-{markerless_crash}-{storage_failure}"
+                )
+            );
+            let worker = executor
+                .start_agent_with(
+                    &caller_component.id,
+                    agent.clone(),
+                    HashMap::from([(
+                        "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                        port.to_string(),
+                    )]),
+                    Vec::new(),
+                )
+                .await?;
+            current_worker = Some(worker.clone());
+            let loads = executor.instance_load_count(&worker);
+            let mut acceptance = (!acknowledged && !storage_failure).then(|| {
+                executor.gate_next_replay_access_admission(
+                    &worker,
+                    "tool-output-writer::write",
+                    ReplayAdmissionStage::AfterToolOutputAccepted,
+                )
+            });
+            let failure_gate = storage_failure.then(|| {
+                executor.gate_next_oplog_function_end(
                 &worker,
                 golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite,
                 true,
             )
-        });
-        let invocation = executor.invoke_and_await_agent(
-            &caller_component,
-            &agent,
-            "recover_accepted_unread_output",
-            data_value!(storage_failure),
-        );
-        tokio::pin!(invocation);
-        let synchronize = async {
-            let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
-            if let Some((entered, release)) = failure_gate {
-                tokio::time::timeout(Duration::from_secs(30), entered).await??;
-                executor
-                    .complete_promise(
-                        &PromiseId {
-                            agent_id: worker.clone(),
-                            oplog_idx: before.oplog_idx,
-                        },
-                        Vec::new(),
-                    )
-                    .await?;
-                tokio::time::timeout(Duration::from_secs(30), async {
+            });
+            let invocation = executor.invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "recover_accepted_unread_output",
+                data_value!(storage_failure),
+            );
+            tokio::pin!(invocation);
+            let synchronize = async {
+                let before =
+                    next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+                if let Some((entered, release)) = failure_gate {
+                    tokio::time::timeout(Duration::from_secs(30), entered).await??;
+                    executor
+                        .complete_promise(
+                            &PromiseId {
+                                agent_id: worker.clone(),
+                                oplog_idx: before.oplog_idx,
+                            },
+                            Vec::new(),
+                        )
+                        .await?;
+                    tokio::time::timeout(Duration::from_secs(30), async {
                     loop {
                         executor.commit_oplog(&worker).await?;
                         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -21470,34 +21711,197 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                         tokio::task::yield_now().await;
                     }
                 }).await??;
-                release
-                    .send(())
-                    .expect("output End receipt remains owned after guest cancellation");
-                return Ok(());
-            }
-            let accepted = if let Some(acceptance) = acceptance.as_mut() {
-                tokio::time::timeout(Duration::from_secs(30), acceptance.entered()).await?;
-                None
-            } else {
-                Some(
-                    tokio::time::timeout(Duration::from_secs(30), async {
-                        loop {
-                            executor.commit_oplog(&worker).await?;
-                            let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-                            if let Some(index) = entries.iter().find_map(|entry| {
-                                matches!(&entry.entry, PublicOplogEntry::Log(log)
+                    release
+                        .send(())
+                        .expect("output End receipt remains owned after guest cancellation");
+                    return Ok(());
+                }
+                let accepted = if let Some(acceptance) = acceptance.as_mut() {
+                    tokio::time::timeout(Duration::from_secs(30), acceptance.entered()).await?;
+                    None
+                } else {
+                    Some(
+                        tokio::time::timeout(Duration::from_secs(30), async {
+                            loop {
+                                executor.commit_oplog(&worker).await?;
+                                let entries =
+                                    executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                                if let Some(index) = entries.iter().find_map(|entry| {
+                                    matches!(&entry.entry, PublicOplogEntry::Log(log)
                             if log.message.contains("accepted-unread-marker"))
-                                .then_some(entry.oplog_index)
-                            }) {
-                                return Ok::<_, anyhow::Error>(index);
+                                    .then_some(entry.oplog_index)
+                                }) {
+                                    return Ok::<_, anyhow::Error>(index);
+                                }
+                                tokio::task::yield_now().await;
                             }
-                            tokio::task::yield_now().await;
+                        })
+                        .await??,
+                    )
+                };
+                if markerless_crash {
+                    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    let write = entries
+                        .iter()
+                        .find_map(|entry| match &entry.entry {
+                            PublicOplogEntry::Start(start)
+                                if start.function_name
+                                    == "golem::tool::streams::tool-output-writer::write" =>
+                            {
+                                Some(entry.oplog_index)
+                            }
+                            _ => None,
+                        })
+                        .expect("accepted write before markerless crash");
+                    assert!(entries.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == write)
+                }));
+                    assert!(
+                        !entries.iter().any(|entry| match &entry.entry {
+                            PublicOplogEntry::CompletionDelivered(marker) =>
+                                marker.start_index == write,
+                            PublicOplogEntry::CompletionDiscarded(marker) =>
+                                marker.start_index == write,
+                            _ => false,
+                        }),
+                        "the first crash must retain an End with no acknowledgment marker"
+                    );
+                    executor.simulated_crash(&worker).await?;
+                }
+                executor
+                    .complete_promise(
+                        &PromiseId {
+                            agent_id: worker.clone(),
+                            oplog_idx: before.oplog_idx,
+                        },
+                        Vec::new(),
+                    )
+                    .await?;
+                let after =
+                    next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker, &after).await?;
+                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                print_tool_attachment_history(
+                    &format!("{worker} before stdout consumption"),
+                    &entries,
+                );
+                let entity_start = entries
+                    .iter()
+                    .find_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Start(start)
+                            if start.function_name == "golem::entity::invoke" =>
+                        {
+                            Some(entry.oplog_index)
                         }
+                        _ => None,
                     })
-                    .await??,
-                )
+                    .expect("tool entity Start");
+                let cancelled = entries.iter().find_map(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Cancelled(cancel) if cancel.start_index == entity_start)
+                    .then_some(entry.oplog_index)
+            }).expect("tool cancellation before unread-output gate");
+                assert!(
+                    accepted.is_none_or(|accepted| accepted < cancelled)
+                        && cancelled < after.oplog_idx
+                );
+                if !acknowledged && !markerless_crash {
+                    assert!(
+                        !entries.iter().any(|entry| {
+                            matches!(&entry.entry, PublicOplogEntry::Log(log)
+                        if log.message.contains("accepted-unread-marker"))
+                        }),
+                        "the provider must not observe the accepted write acknowledgment"
+                    );
+                }
+                let write_start = entries
+                    .iter()
+                    .find_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Start(start)
+                            if start.function_name
+                                == "golem::tool::streams::tool-output-writer::write" =>
+                        {
+                            Some(entry.oplog_index)
+                        }
+                        _ => None,
+                    })
+                    .expect("accepted output has a metadata-only write Start");
+                let write_end = entries.iter().find_map(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == write_start)
+                    .then_some(entry.oplog_index)
+            }).expect("accepted output has a successful write End");
+                assert!(write_start < write_end && write_end < cancelled);
+                assert!(!entries.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Cancelled(cancel) if cancel.start_index == write_start)
+            }), "cancelling the acknowledgment must not cancel the accepted write");
+                let delivered = entries.iter().filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write_start)
+            }).count();
+                let discarded = entries.iter().filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::CompletionDiscarded(marker) if marker.start_index == write_start)
+            }).count();
+                if markerless_crash {
+                    // After the replay tail, delivery can race the caller's new cancellation.
+                    assert!(delivered + discarded <= 1);
+                } else {
+                    assert_eq!(
+                        (delivered, discarded),
+                        if acknowledged { (1, 0) } else { (0, 1) },
+                        "the write must retain its exact acknowledgment disposition"
+                    );
+                }
+                eprintln!(
+                    "accepted-unread acknowledged={acknowledged} crash={crash} markerless_crash={markerless_crash}: accepted log {accepted:?}, entity Start {entity_start}, cancellation {cancelled}, unread promise {}",
+                    after.oplog_idx
+                );
+                if crash {
+                    let mut regeneration = executor.gate_next_replay_access_admission(
+                        &worker,
+                        "tool-output-writer::write",
+                        ReplayAdmissionStage::BeforeScope,
+                    );
+                    executor.simulated_crash(&worker).await?;
+                    tokio::time::timeout(Duration::from_secs(30), regeneration.entered()).await?;
+                    // The completed entity cancellation must retain output obligations even
+                    // before the producer claims its historical write.
+                    if acknowledged {
+                        tokio::time::timeout(
+                            Duration::from_secs(30),
+                            executor.simulated_crash(&worker),
+                        )
+                        .await
+                        .map_err(|error| {
+                            anyhow::anyhow!("crash during regeneration did not finish: {error}")
+                        })??;
+                    }
+                    regeneration.release();
+                }
+                executor
+                    .complete_promise(
+                        &PromiseId {
+                            agent_id: worker.clone(),
+                            oplog_idx: after.oplog_idx,
+                        },
+                        Vec::new(),
+                    )
+                    .await?;
+                Ok::<(), anyhow::Error>(())
             };
-            if markerless_crash {
+            tokio::select! {
+                result = invocation.as_mut() => panic!("invocation settled before unread checkpoint: {result:?}"),
+                checkpoint = synchronize => checkpoint?,
+            }
+            let result = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut()).await?;
+            let settled = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            print_tool_attachment_history(
+                &format!("{worker} after invocation settlement"),
+                &settled,
+            );
+            if storage_failure {
+                let error = result.expect_err("failed output persistence must fail the owner");
+                assert!(
+                    format!("{error:?}").contains("injected End append failure"),
+                    "{error:?}"
+                );
                 let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                 let write = entries
                     .iter()
@@ -21510,37 +21914,62 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                         }
                         _ => None,
                     })
-                    .expect("accepted write before markerless crash");
-                assert!(entries.iter().any(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == write)
-                }));
+                    .expect("failed output write Start");
                 assert!(
                     !entries.iter().any(|entry| match &entry.entry {
+                        PublicOplogEntry::End(end) => end.start_index == write,
+                        PublicOplogEntry::Cancelled(cancel) => cancel.start_index == write,
                         PublicOplogEntry::CompletionDelivered(marker) =>
                             marker.start_index == write,
                         PublicOplogEntry::CompletionDiscarded(marker) =>
                             marker.start_index == write,
+                        PublicOplogEntry::Log(log) =>
+                            log.message.contains("accepted-unread-marker"),
                         _ => false,
                     }),
-                    "the first crash must retain an End with no acknowledgment marker"
+                    "failed acceptance must neither acknowledge output nor fabricate a terminal"
                 );
-                executor.simulated_crash(&worker).await?;
+                executor.delete_worker(&worker).await?;
+                continue;
             }
-            executor
-                .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: before.oplog_idx,
-                    },
-                    Vec::new(),
-                )
-                .await?;
-            let after = next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &after).await?;
-            let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-            let entity_start = entries
+            let output = result?.into_typed::<Vec<u8>>()?;
+            assert_eq!(output, b"marker:");
+            let reloaded = executor.instance_load_count(&worker);
+            if crash {
+                assert!(reloaded > loads, "crash must reload the owner instance");
+            }
+            if markerless_crash {
+                assert!(
+                    reloaded >= loads + 2,
+                    "both crashes must reconstruct the owner instance"
+                );
+            }
+            eprintln!(
+                "accepted-unread acknowledged={acknowledged} crash={crash} markerless_crash={markerless_crash}: bytes {output:?}, instance loads {loads} -> {reloaded}"
+            );
+            assert_eq!(
+                settled
+                    .iter()
+                    .filter(|entry| {
+                        matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::streams::tool-output-writer::write")
+                    })
+                    .count(),
+                1,
+                "reconstruction must not append a second write"
+            );
+            if !acknowledged && !markerless_crash {
+                assert!(
+                    !settled.iter().any(|entry| {
+                        matches!(&entry.entry, PublicOplogEntry::Log(log)
+                    if log.message.contains("accepted-unread-marker"))
+                    }),
+                    "reconstruction must not deliver a discarded acknowledgment"
+                );
+            }
+            let starts = settled
                 .iter()
-                .find_map(|entry| match &entry.entry {
+                .filter_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start)
                         if start.function_name == "golem::entity::invoke" =>
                     {
@@ -21548,228 +21977,80 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                     }
                     _ => None,
                 })
-                .expect("tool entity Start");
-            let cancelled = entries.iter().find_map(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::Cancelled(cancel) if cancel.start_index == entity_start)
-                    .then_some(entry.oplog_index)
-            }).expect("tool cancellation before unread-output gate");
-            assert!(
-                accepted.is_none_or(|accepted| accepted < cancelled) && cancelled < after.oplog_idx
+                .collect::<Vec<_>>();
+            assert_eq!(
+                starts.len(),
+                1,
+                "reconstruction must not dispatch another tool invocation"
             );
-            if !acknowledged && !markerless_crash {
-                assert!(
-                    !entries.iter().any(|entry| {
-                        matches!(&entry.entry, PublicOplogEntry::Log(log)
-                        if log.message.contains("accepted-unread-marker"))
-                    }),
-                    "the provider must not observe the accepted write acknowledgment"
-                );
-            }
-            let write_start = entries
-                .iter()
-                .find_map(|entry| match &entry.entry {
-                    PublicOplogEntry::Start(start)
-                        if start.function_name
-                            == "golem::tool::streams::tool-output-writer::write" =>
-                    {
-                        Some(entry.oplog_index)
-                    }
-                    _ => None,
-                })
-                .expect("accepted output has a metadata-only write Start");
-            let write_end = entries.iter().find_map(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == write_start)
-                    .then_some(entry.oplog_index)
-            }).expect("accepted output has a successful write End");
-            assert!(write_start < write_end && write_end < cancelled);
-            assert!(!entries.iter().any(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::Cancelled(cancel) if cancel.start_index == write_start)
-            }), "cancelling the acknowledgment must not cancel the accepted write");
-            let delivered = entries.iter().filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write_start)
-            }).count();
-            let discarded = entries.iter().filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::CompletionDiscarded(marker) if marker.start_index == write_start)
-            }).count();
-            if markerless_crash {
-                // After the replay tail, delivery can race the caller's new cancellation.
-                assert!(delivered + discarded <= 1);
-            } else {
-                assert_eq!(
-                    (delivered, discarded),
-                    if acknowledged { (1, 0) } else { (0, 1) },
-                    "the write must retain its exact acknowledgment disposition"
-                );
-            }
-            eprintln!(
-                "accepted-unread acknowledged={acknowledged} crash={crash} markerless_crash={markerless_crash}: accepted log {accepted:?}, entity Start {entity_start}, cancellation {cancelled}, unread promise {}",
-                after.oplog_idx
-            );
-            if crash {
-                let mut regeneration = executor.gate_next_replay_access_admission(
-                    &worker,
-                    "tool-output-writer::write",
-                    ReplayAdmissionStage::BeforeScope,
-                );
-                executor.simulated_crash(&worker).await?;
-                tokio::time::timeout(Duration::from_secs(30), regeneration.entered()).await?;
-                // The completed entity cancellation must retain output obligations even
-                // before the producer claims its historical write.
-                if acknowledged {
-                    tokio::time::timeout(
-                        Duration::from_secs(30),
-                        executor.simulated_crash(&worker),
-                    )
-                    .await
-                    .map_err(|error| {
-                        anyhow::anyhow!("crash during regeneration did not finish: {error}")
-                    })??;
-                }
-                regeneration.release();
-            }
-            executor
-                .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: after.oplog_idx,
-                    },
-                    Vec::new(),
-                )
-                .await?;
-            Ok::<(), anyhow::Error>(())
-        };
-        tokio::select! {
-            result = invocation.as_mut() => panic!("invocation settled before unread checkpoint: {result:?}"),
-            checkpoint = synchronize => checkpoint?,
-        }
-        let result = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut()).await?;
-        if storage_failure {
-            let error = result.expect_err("failed output persistence must fail the owner");
-            assert!(
-                format!("{error:?}").contains("injected End append failure"),
-                "{error:?}"
-            );
-            let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-            let write = entries
-                .iter()
-                .find_map(|entry| match &entry.entry {
-                    PublicOplogEntry::Start(start)
-                        if start.function_name
-                            == "golem::tool::streams::tool-output-writer::write" =>
-                    {
-                        Some(entry.oplog_index)
-                    }
-                    _ => None,
-                })
-                .expect("failed output write Start");
-            assert!(
-                !entries.iter().any(|entry| match &entry.entry {
-                    PublicOplogEntry::End(end) => end.start_index == write,
-                    PublicOplogEntry::Cancelled(cancel) => cancel.start_index == write,
-                    PublicOplogEntry::CompletionDelivered(marker) => marker.start_index == write,
-                    PublicOplogEntry::CompletionDiscarded(marker) => marker.start_index == write,
-                    PublicOplogEntry::Log(log) => log.message.contains("accepted-unread-marker"),
-                    _ => false,
-                }),
-                "failed acceptance must neither acknowledge output nor fabricate a terminal"
-            );
-            executor.delete_worker(&worker).await?;
-            continue;
-        }
-        let output = result?.into_typed::<Vec<u8>>()?;
-        assert_eq!(output, b"marker:");
-        let reloaded = executor.instance_load_count(&worker);
-        if crash {
-            assert!(reloaded > loads, "crash must reload the owner instance");
-        }
-        if markerless_crash {
-            assert!(
-                reloaded >= loads + 2,
-                "both crashes must reconstruct the owner instance"
-            );
-        }
-        eprintln!(
-            "accepted-unread acknowledged={acknowledged} crash={crash} markerless_crash={markerless_crash}: bytes {output:?}, instance loads {loads} -> {reloaded}"
-        );
-        let settled = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-        assert_eq!(
-            settled
-                .iter()
-                .filter(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::Start(start)
-                if start.function_name == "golem::tool::streams::tool-output-writer::write")
-                })
-                .count(),
-            1,
-            "reconstruction must not append a second write"
-        );
-        if !acknowledged && !markerless_crash {
-            assert!(
-                !settled.iter().any(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::Log(log)
-                    if log.message.contains("accepted-unread-marker"))
-                }),
-                "reconstruction must not deliver a discarded acknowledgment"
-            );
-        }
-        let starts = settled
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(start)
-                    if start.function_name == "golem::entity::invoke" =>
-                {
-                    Some(entry.oplog_index)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            starts.len(),
-            1,
-            "reconstruction must not dispatch another tool invocation"
-        );
-        assert_eq!(settled.iter().filter(|entry| {
+            assert_eq!(settled.iter().filter(|entry| {
             matches!(&entry.entry, PublicOplogEntry::Cancelled(cancel) if cancel.start_index == starts[0])
         }).count(), 1, "the tool invocation must have exactly one cancellation terminal");
-        let controls = settled
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::ToolAttachmentControl(control) => {
-                    Some((entry.oplog_index, control))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            !controls.is_empty(),
-            "attachment cancellation must have durable provenance"
-        );
-        for (position, (index, control)) in controls.iter().enumerate() {
+            let controls = settled
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::ToolAttachmentControl(control) => {
+                        Some((entry.oplog_index, control))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             assert!(
-                controls[..position]
-                    .iter()
-                    .all(|(_, previous)| previous.attachment != control.attachment),
-                "reconstruction must not select attachment cancellation twice"
+                !controls.is_empty(),
+                "attachment cancellation must have durable provenance"
             );
-            assert!(
-                settled.iter().any(|entry| {
-                    entry.oplog_index > *index
-                        && matches!(&entry.entry,
+            for (position, (index, control)) in controls.iter().enumerate() {
+                assert!(
+                    controls[..position]
+                        .iter()
+                        .all(|(_, previous)| previous.attachment != control.attachment),
+                    "reconstruction must not select attachment cancellation twice"
+                );
+                assert!(
+                    settled.iter().any(|entry| {
+                        entry.oplog_index > *index
+                            && matches!(&entry.entry,
                     PublicOplogEntry::Cancelled(cancel) if cancel.start_index == starts[0])
-                }),
-                "attachment closure must precede entity cancellation"
-            );
-        }
-        assert!(
+                    }),
+                    "attachment closure must precede entity cancellation"
+                );
+            }
+            assert!(
             !settled.iter().any(|entry| {
                 matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])
             }),
             "a cancelled tool invocation must not also finish successfully"
         );
-        executor.delete_worker(&worker).await?;
+            executor.delete_worker(&worker).await?;
+        }
+        Ok(())
+    };
+    let checked = std::panic::AssertUnwindSafe(checked).catch_unwind();
+    let outcome = tokio::time::timeout(Duration::from_secs(110), checked).await;
+    if !matches!(&outcome, Ok(Ok(Ok(()))))
+        && let Some(worker) = &current_worker
+    {
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            executor.get_oplog(worker, OplogIndex::INITIAL),
+        )
+        .await
+        {
+            Ok(Ok(entries)) => {
+                print_tool_attachment_history(&format!("{worker} failure snapshot"), &entries);
+            }
+            Ok(Err(error)) => eprintln!("tool attachment failure snapshot for {worker}: {error:?}"),
+            Err(error) => {
+                eprintln!("tool attachment failure snapshot for {worker} timed out: {error}")
+            }
+        }
     }
     server.abort();
-    Ok(())
+    match outcome {
+        Ok(Ok(result)) => result,
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// How the client closes the stdin of an external tool call.
