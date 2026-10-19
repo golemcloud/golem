@@ -2370,7 +2370,7 @@ cd ../..
 '''
 
 [tasks.test-javascript-tool-process-backend]
-description = "Tests the shared JavaScript tool-process adapter with host facades"
+description = "Tests the JavaScript tool-process adapter with a mock transport facade"
 command = "node"
 args = ["--test", "sdks/javascript/tool-process-backend.test.mjs"]
 

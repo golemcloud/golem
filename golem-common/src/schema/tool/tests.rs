@@ -70,18 +70,12 @@ fn middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_und
     assert_eq!(
         wit_functions(wit_interface(host, "host")),
         [
-            "admitted",
             "async-invoke-and-await",
             "cancel",
-            "collect",
-            "collect-async",
             "create",
-            "create-collected-output",
-            "create-discarded-output",
             "create-output",
             "create-stdin",
             "create-stdin-from-stream",
-            "create-stdin-from-bytes",
             "fail",
             "finish",
             "get",
@@ -90,9 +84,6 @@ fn middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_und
             "get-tool",
             "invoke",
             "invoke-and-await",
-            "input",
-            "prepare-command",
-            "render-result",
             "wait",
             "write",
         ]

@@ -1,5 +1,0 @@
-package experiment:node-tool-processes;
-
-world tool-probe {
-    include golem:tool/tool-guest@0.1.0;
-}

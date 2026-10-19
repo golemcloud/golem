@@ -703,15 +703,6 @@ the task and receive its accessor. Calls made by host-owned tasks and host-inter
 inline. The start never waits on guest progress; authority waits inside request builders wait on
 card-authority recovery only.
 
-**Dropped-call cancellation receipts.** An accessor cleanup drain can itself be cancelled.
-After the request upload succeeds, `AccessDropEventDrainGuard::prepare_current_cancellation`
-submits `Cancelled` and replaces the unfinished-drop instruction with the existing
-`CleanupAfterTerminal` event, with no await between submission and replacement. The event owns
-the append receipt and live-call permit. A torn drain requeues that receipt, not another append;
-the next drain joins the original terminal and closes its scope. Both cancellation before the
-actor finishes and cancellation after append but before receipt consumption must leave exactly
-one terminal. Request-upload failure still traps without inventing a cancellation.
-
 **Host-internal results** use `DurableCallSession::invoke_host_internal_access`: Start/End
 remain durable and identity-validated, but End returns the recorded result directly to the host.
 There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless

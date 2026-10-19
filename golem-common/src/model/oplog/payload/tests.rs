@@ -786,40 +786,6 @@ mod tool_attachment {
                 },
             },
         );
-        for admitted in [false, true] {
-            super::assert_host_payload_pair_schema_roundtrip::<
-                host_functions::GolemToolCreateStdinFromBytes,
-            >(
-                HostRequestToolFiniteStdinCreate {
-                    length: 13,
-                    digest: blake3::hash(b"finite-stdin!").as_bytes().to_vec(),
-                },
-                HostResponseToolFiniteStdinCreated {
-                    created: ToolFiniteStdinCreated {
-                        attachment: ToolAttachmentCreated {
-                            attachment: read.attachment,
-                            capacity_bytes: 3,
-                        },
-                        admitted,
-                    },
-                },
-            );
-            super::assert_host_payload_pair_schema_roundtrip::<
-                host_functions::GolemToolCreateCollectedOutput,
-            >(
-                HostRequestToolCollectedOutputCreate { max_bytes: 13 },
-                HostResponseToolCollectedOutputCreated {
-                    created: ToolCollectedOutputCreated {
-                        attachment: ToolAttachmentCreated {
-                            attachment: read.attachment,
-                            capacity_bytes: 7919,
-                        },
-                        limit_bytes: 13,
-                        admitted,
-                    },
-                },
-            );
-        }
         super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinFinish>(
             HostRequestToolAttachmentFinish {
                 attachment: read.attachment,
@@ -2002,31 +1968,6 @@ fn durable_rpc_activation_payload_pair_roundtrips() {
             result: Ok(target_fingerprint),
         },
     );
-}
-
-#[test]
-fn tool_collection_deadline_payload_pairs_roundtrip() {
-    use crate::model::oplog::{
-        HostRequestToolCollectionRace, HostRequestToolCollectionWait,
-        HostResponseToolCollectionWaitResult,
-    };
-    let request = HostRequestToolCollectionWait {
-        invocation_start: OplogIndex::from_u64(42),
-        timeout_millis: u64::MAX,
-    };
-    for timed_out in [false, true] {
-        assert_host_payload_pair_roundtrip::<host_functions::GolemToolCollectionWait>(
-            request.clone(),
-            HostResponseToolCollectionWaitResult { timed_out },
-        );
-        assert_host_payload_pair_roundtrip::<host_functions::GolemToolCollectionRace>(
-            HostRequestToolCollectionRace {
-                invocation_start: request.invocation_start,
-                deadline_epoch_millis: u64::MAX,
-            },
-            HostResponseToolCollectionWaitResult { timed_out },
-        );
-    }
 }
 
 #[test]

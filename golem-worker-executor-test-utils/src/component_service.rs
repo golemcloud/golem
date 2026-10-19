@@ -152,7 +152,7 @@ impl ComponentServiceLocalFileSystem {
         let path = wasm_path.to_path_buf();
 
         self.component_cache
-            .get_or_insert_simple_spawned(&key.clone(), move || {
+            .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     let result = compiled_component_service
                         .get(environment_id, component_id, component_revision, &engine)

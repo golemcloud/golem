@@ -1,72 +1,78 @@
 # Node tool process fixtures
 
-These fixtures exercise synchronous and asynchronous JavaScript calls through the
-ordinary Golem tool dispatcher. They use the production Wasmtime configuration and
-owner filesystem. Tests consume prebuilt components; they never invoke a compiler.
+These fixtures test guest-side tool execution over the existing Golem tool API.
+The private Rust module owns the stdin pump, bounded output drains and result wait.
+It adds no tool WIT methods or worker-executor implementation.
 
-## Scope
+## Focused guest bridge
 
-| Fixture | Purpose |
-| --- | --- |
-| `probe.js`, `wit/` | A synchronous native import from main and fresh QuickJS runtimes |
-| `tool-probe.js`, `tool-world/` | Real tool dispatch and filesystem effects |
-| `collector-process-probe.js`, `collector-process-init.js` | Output collection, overflow and cancellation controls |
-| `production-process-probe.js` | The shared Golem process adapter and canonical runtime initializer |
-| `backend-probe.js`, `backend-init.js`, `backend-perf/` | Generic WRQJS backend controls |
-| `cli-process-probe.js`, `completion-check-init.js` | CLI and completion projection controls |
+- `tool-probe.js` defines the probe tool and prepares typed inputs through SDK reflection.
+- `guest-process-bridge.rs` provides the private `golem-tool-process-bridge` JavaScript module.
 
-The production adapter lives in `sdks/javascript`. Its runtime hook depends on
-[wasm-rquickjs #201](https://github.com/golemcloud/wasm-rquickjs/pull/201).
-Golem owns tool discovery, CLI parsing, permissions, result projection and replay.
-No test creates an operating-system subprocess on behalf of the guest.
+The cases cover independent stdout/stderr, binary stdin and overflow cancellation.
+The output cases also run in a fresh JavaScript runtime. This is a transport proof:
+it does not yet test CLI argument parsing or the production `node:child_process` adapter.
+The SDK templates do not register that adapter while its transport is replaced.
 
-## Native executor reproducer
+## Build prerequisites
 
-Build the Rust tool-streaming caller and provider with the local SDK through their
-Golem application build, following `test-components/tool-streaming/AGENTS.md`.
-Rebuild them after WIT or SDK changes; existing Wasm files do not establish freshness.
+Build the Rust tool-streaming caller and provider with the local SDK, following
+`test-components/tool-streaming/AGENTS.md`. Tests consume prebuilt Wasm and never
+invoke a compiler. Inspect existing artifacts rather than assuming they are fresh.
 
-The production probe must be bundled with `sdks/javascript/runtime-init.js`, resolving
-`golem-tool-process-backend` to `sdks/javascript/tool-process-backend.js` and keeping
-`node:`, `wasi:`, `golem:` and `wasm-rquickjs:` modules external. Compile the tool world
-with the feature runtime and Wizer-preinitialize it. Use that artifact below. The
-executor test does not generate or patch its runtime.
+Bundle `tool-probe.js` with the SDK's Rollup setup. Keep `node:`, `wasi:`,
+`golem:`, `wasm-rquickjs:` and `golem-tool-process-bridge` external. As in the
+SDK bundle, omit unused external interface side-effect imports. Generate a Preview 3
+wrapper from the existing `sdks/ts/wit` with `--world agent-guest`, as the SDK does.
+Do not add a test WIT world. Use the wit-bindgen fork pinned by the SDK template generator.
 
-Run from `golem-worker-executor/`:
+Copy `guest-process-bridge.rs` into the generated wrapper's `src/modules/`.
+Declare that Rust module, register `golem-tool-process-bridge` in
+`add_native_module_resolvers`, and register its `ToolProcessBridge` in
+`module_loader`. These are private JavaScript module registrations, not WIT exports.
+Build and Wizer-preinitialize the wrapper. Do not patch WRQJS's scheduler or host imports.
+
+The bridge uses the wait helper exposed by `wasip3::wit_bindgen`. The pinned WASI
+bindings and WRQJS bindings have separate guest task queues. Substituting WRQJS's
+own `block_on` can capture its pending scheduler driver and prevent the call from
+returning even after its work completes. Recheck this boundary when dependencies change.
+
+## Run
+
+From `golem-worker-executor/`:
 
 ```sh
 RUST_MIN_STACK=33554432 \
-GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM=/absolute/path/to/production-probe.wasm \
-GOLEM_NODE_TOOL_STREAM_PROBE_CASES=streams-deadline-collect \
-GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE=1 \
+GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM=/absolute/path/to/guest-probe.wasm \
+GOLEM_NODE_TOOL_STREAM_PROBE_CASES=streams-collect,streams-echo-collect,streams-pressure-collect \
 cargo test --locked --offline --profile dev-ci --test integration -- \
-  node_native_tool_stream_scheduling_probe --include-ignored --test-threads 1 --nocapture
+  node_guest_tool_process_bridge --include-ignored --test-threads 1 --nocapture
 ```
 
-`GOLEM_NODE_TOOL_STREAM_CRASH_STAGE` selects `before-race`, `race-started` or
-`race-selected`. The last cut occurs after the timeout decision is durable but
-before the child cancellation settles. It currently exposes an incomplete-child
-reconstruction failure; it is a required correctness gate, not an expected success.
+For completed offline replay, keep the same cases and set
+`GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE=1`. The test tears down the executor, stops the
+effect server, reconstructs from storage, compares the retained history and checks a
+fresh follow-up invocation. A result from an executor that still contains the old
+host prototype is only a control, not evidence for an unchanged-executor implementation.
 
-The case list accepts comma-separated repetitions. Two interleaved pairs of
-`streams-deadline-collect,streams-collect` provide a smaller completed-replay control.
-Five pairs also exercise repeated invocation state. Preserve failures when changing
-logging verbosity: the larger case has exceeded the replay bound with debug logging
-while completing at info level. That does not by itself establish the cause.
+Keep replay failures strict. Do not increase timeouts or skip unmatched history to
+make a case pass. Report bugs before adding executor changes.
 
-## Assertions
+Raw observations, synthetic WIT worlds and obsolete host collector experiments
+remain recoverable in Git history, not in this fixture tree.
 
-- independent stdout/stderr, binary stdin, structured results and exit status;
-- timeout/cancellation followed by a successful invocation;
-- one terminal per settled invocation and no unexplained incomplete calls;
-- a real executor teardown and reconstruction, not a cursor reset;
-- no repeated external effect with the effect server stopped before replay;
-- byte-identical authoritative history for the retained prefix;
-- a successful fresh invocation after reconstruction.
+## Resume implementation
 
-Do not relax these assertions or increase a timeout to hide a replay failure.
-Cancelled reconstruction must preserve historical filesystem effects and keep
-independently reconstructed children and unrelated siblings separate.
+Keep this proof separate from a complete process adapter. The remaining work is:
 
-Raw benchmark samples, generated artifacts and machine-local logs do not belong in
-this fixture directory. Earlier experiment records remain recoverable in Git history.
+- Reuse the canonical CLI parser and redacted result rendering in guest code.
+- Replace the JavaScript adapter's obsolete host facade. Do not infer dispatch
+  admission or body execution from error tags or readiness.
+- Test concurrent async children alongside synchronous calls before choosing the
+  production wait boundary. Keep output and stdin progress independent of JavaScript.
+- Validate timeout, cancellation and crash recovery without relaxing the history checks.
+- Connect the completed adapter to the SDK templates, retain its disable option,
+  and measure startup, invocation cost and component size.
+
+Discuss confirmed platform bugs before adding executor or WIT changes. The prior
+prototype's crash findings are not evidence that this replacement needs those changes.

@@ -33,13 +33,6 @@ declare module 'golem:tool/host@0.1.0' {
    */
   export function getTool(name: string): RegisteredTool | undefined;
   /**
-   * Discovers a currently bound tool and uses the canonical CLI parser.
-   * `none` means the name is unavailable. Variables supply only declared
-   * environment defaults; they are not forwarded as a process environment.
-   * Discovery uses its ordinary durable read; parsing itself has no effects.
-   */
-  export function prepareCommand(name: string, args: string[], variables: [string, string][]): CommandPreparation | undefined;
-  /**
    * Creates caller stdin endpoints. The writer and closure watcher remain
    * with the caller; the source is moved into one invocation. Before passing
    * the source to `invoke-and-await`, either select a writer terminal or drive
@@ -57,45 +50,16 @@ declare module 'golem:tool/host@0.1.0' {
    */
   export function createStdinFromStream(source: AsyncIterable<ByteStreamItem>): ToolStdin;
   /**
-   * Creates an immutable, host-owned stdin source. The complete input is
-   * admitted to host memory before this returns. The source requires no
-   * caller-side pump and can exceed the streaming attachment buffer size.
-   * Admission failure creates no endpoint. Replay preserves that decision.
-   * @throws ToolRpcError
-   */
-  export function createStdinFromBytes(bytes: Uint8Array): ToolStdin;
-  /**
    * Creates the output target and caller-readable stream before invocation.
    * Dropping the reader cancels only this attachment's consumer role.
    */
   export function createOutput(): [ToolOutput, AsyncIterable<ByteStreamItem>];
-  /**
-   * Creates an output target that discards bytes without a reader or retained
-   * prefix. Writes never wait for a consumer and cannot overflow a collector.
-   * The invocation still owns and finalizes its ordinary output writer.
-   */
-  export function createDiscardedOutput(): ToolOutput;
-  /**
-   * Reserves the retained prefix before dispatch. The limit is capped by the
-   * host's attachment byte limit. Admission failure creates no endpoints.
-   * @throws ToolRpcError
-   */
-  export function createCollectedOutput(maxBytes: bigint): [ToolOutput, OutputCollection];
   /**
    * Waits for an explicit set of result observers as one causal batch. The
    * input order controls the result order; filesystem-capable bodies become
    * eligible together and execute in durable Start order.
    */
   export function getInvokeResults(futures: FutureInvokeResult[]): Promise<Result<InvocationResult, ToolRpcError>[]>;
-  export class PreparedCommand {
-    input(): CommandInput;
-    /**
-     * Projects a terminal using named ProcessExitStatus, declared error
-     * statuses and redacted result text. Append this output after the
-     * collected streams. Preserve any prior stream failure or cancellation.
-     */
-    renderResult(terminal: Result<InvocationResult, ToolRpcError>): CommandOutput;
-  }
   export class ToolStdinWriter {
     /**
      * @throws StreamWriteError
@@ -116,8 +80,6 @@ declare module 'golem:tool/host@0.1.0' {
     wait(): Promise<ByteStreamCloseCause>;
   }
   export class ToolOutput {
-  }
-  export class OutputCollection {
   }
   export class ToolRpc {
     /**
@@ -152,34 +114,11 @@ declare module 'golem:tool/host@0.1.0' {
   }
   export class FutureInvokeResult {
     /**
-     * The immutable dispatch decision. True means an entity invocation was
-     * accepted, not that its body executed or succeeded. Replay retains the
-     * recorded decision. This does not wait for the body or inspect readiness.
-     */
-    admitted(): boolean;
-    /**
      * Sequential calls return the same immutable terminal. Only one call may
      * be outstanding at a time.
      * @throws ToolRpcError
      */
     get(): Promise<InvocationResult>;
-    /**
-     * Waits for the terminal while the host drains both supplied streams.
-     * This does not require concurrent progress in the calling guest. Pass
-     * collection handles created before async-invoke-and-await. Each channel
-     * retains at most the limit reserved at creation. Exceeding that limit
-     * cancels the invocation and reports overflow on that channel.
-     * Dropping the wait does not itself cancel the invocation.
-     * A positive timeout bounds the result wait, in milliseconds. The host
-     * records its deadline and winner before requesting cancellation, then
-     * joins the terminal and both streams. None or zero disables the deadline.
-     */
-    collect(stdout: OutputCollection | undefined, stderr: OutputCollection | undefined, timeoutMillis: bigint | undefined): CollectedInvocation;
-    /**
-     * The same collection with an asynchronous guest boundary, so the
-     * calling runtime can continue to drive timers and explicit cancellation.
-     */
-    collectAsync(stdout: OutputCollection | undefined, stderr: OutputCollection | undefined, timeoutMillis: bigint | undefined): Promise<CollectedInvocation>;
     /**
      * Explicitly cancels the operation. Dropping this resource only detaches
      * result observation and does not cancel accepted work.
@@ -210,53 +149,6 @@ declare module 'golem:tool/host@0.1.0' {
     lookupName: string;
     definition: Tool;
     implementedBy: ComponentId;
-  };
-  export type CommandInput = {
-    commandPath: string[];
-    input: TypedSchemaValue;
-    stdin: boolean;
-    stdout: boolean;
-    stderr: boolean;
-  };
-  export type CommandOutput = {
-    exitCode: number;
-    stdout: Uint8Array;
-    stderr: Uint8Array;
-  };
-  export type CommandPreparation =
-  /** Help or a CLI diagnostic; no tool invocation is needed. */
-  {
-    tag: 'output'
-    val: CommandOutput
-  } |
-  {
-    tag: 'invoke'
-    val: PreparedCommand
-  };
-  /**
-   * Bounded bytes collected from one output channel. A stream failure is
-   * separate from the tool's structured result. Overflow retains the prefix.
-   */
-  export type CollectedOutput = {
-    bytes: Uint8Array;
-    failure?: ByteStreamFailure;
-    overflow: boolean;
-  };
-  export type CollectedInvocation = {
-    result: Result<InvocationResult, ToolRpcError>;
-    /**
-     * True when the invocation's recorded terminal says its body executed.
-     * A tool error alone does not distinguish refused admission from a
-     * failure after execution. Middleware counts as part of the invocation.
-     */
-    bodyExecuted: boolean;
-    /**
-     * The recorded deadline fired before the structured terminal was ready.
-     * Cancellation still follows the ordinary tool terminal-winner protocol.
-     */
-    timedOut: boolean;
-    stdout?: CollectedOutput;
-    stderr?: CollectedOutput;
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

@@ -72,7 +72,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tool_attachment::{
     ToolAttachmentCreated, ToolAttachmentTerminalOutcome, ToolAttachmentWriteOutcome,
-    ToolAttachmentWriteRequest, ToolCollectedOutputCreated, ToolFiniteStdinCreated,
+    ToolAttachmentWriteRequest,
 };
 use uuid::Uuid;
 
@@ -433,8 +433,6 @@ oplog_payload! {
         GolemAgentGetAgentTypeByAgentId {
             agent_id: String
         },
-        ToolCollectedOutputCreate { max_bytes: u64 },
-        ToolFiniteStdinCreate { length: u64, digest: Vec<u8> },
         ToolAttachmentWrite { request: ToolAttachmentWriteRequest },
         ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
         ToolAttachmentFail { attachment: ToolAttachmentId, operation_ordinal: u64, reason: ByteStreamFailure },
@@ -450,8 +448,6 @@ oplog_payload! {
         SocketsUdpPermissionCheck {
             addresses: Vec<String>
         },
-        ToolCollectionWait { invocation_start: OplogIndex, timeout_millis: u64 },
-        ToolCollectionRace { invocation_start: OplogIndex, deadline_epoch_millis: u64 },
     }
 }
 
@@ -792,8 +788,6 @@ oplog_payload! {
             result: Result<TypedSchemaValue, String>
         },
         ToolAttachmentCreated { created: ToolAttachmentCreated },
-        ToolCollectedOutputCreated { created: ToolCollectedOutputCreated },
-        ToolFiniteStdinCreated { created: ToolFiniteStdinCreated },
         ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
         ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
         ToolAttachmentClosed { cause: ByteStreamCloseCause },
@@ -813,7 +807,6 @@ oplog_payload! {
             wallet_id_hash: Vec<u8>,
             generation: u64,
         },
-        ToolCollectionWaitResult { timed_out: bool },
     }
 }
 
@@ -1080,8 +1073,6 @@ pub mod host_functions {
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType),
         (GolemToolCreateStdin => "golem::tool::host", "create-stdin", NoInput, ToolAttachmentCreated),
         (GolemToolCreateOutput => "golem::tool::host", "create-output", NoInput, ToolAttachmentCreated),
-        (GolemToolCreateCollectedOutput => "golem::tool::host", "create-collected-output", ToolCollectedOutputCreate, ToolCollectedOutputCreated),
-        (GolemToolCreateStdinFromBytes => "golem::tool::host", "create-stdin-from-bytes", ToolFiniteStdinCreate, ToolFiniteStdinCreated),
         (GolemToolStdinWrite => "golem::tool::host::tool-stdin-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolStdinFinish => "golem::tool::host::tool-stdin-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolStdinFail => "golem::tool::host::tool-stdin-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
@@ -1093,9 +1084,7 @@ pub mod host_functions {
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
-        (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion),
-        (GolemToolCollectionWait => "golem::tool::internal", "collection-wait", ToolCollectionWait, ToolCollectionWaitResult),
-        (GolemToolCollectionRace => "golem::tool::internal", "collection-race", ToolCollectionRace, ToolCollectionWaitResult)
+        (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }
 }
 

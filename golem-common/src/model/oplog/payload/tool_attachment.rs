@@ -26,19 +26,6 @@ pub struct ToolAttachmentCreated {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoSchema, FromSchema)]
-pub struct ToolCollectedOutputCreated {
-    pub attachment: ToolAttachmentCreated,
-    pub limit_bytes: u64,
-    pub admitted: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoSchema, FromSchema)]
-pub struct ToolFiniteStdinCreated {
-    pub attachment: ToolAttachmentCreated,
-    pub admitted: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoSchema, FromSchema)]
 pub struct ToolAttachmentWriteRequest {
     pub attachment: ToolAttachmentId,
     pub operation_ordinal: u64,

@@ -47,46 +47,6 @@ interface host {
   /// has no binding for it; the two cases are not distinguished.
   get-tool: func(name: string) -> option<registered-tool>;
 
-  record command-input {
-    command-path: list<string>,
-    input: typed-schema-value,
-    stdin: bool,
-    stdout: bool,
-    stderr: bool,
-  }
-
-  record command-output {
-    exit-code: u8,
-    stdout: list<u8>,
-    stderr: list<u8>,
-  }
-
-  /// An immutable CLI projection, not invocation authority. Invoke its input
-  /// through the ordinary tool-rpc so bindings and permissions still apply.
-  resource prepared-command {
-    input: func() -> command-input;
-    /// Projects a terminal using named ProcessExitStatus, declared error
-    /// statuses and redacted result text. Append this output after the
-    /// collected streams. Preserve any prior stream failure or cancellation.
-    render-result: func(terminal: result<invocation-result, tool-rpc-error>) -> command-output;
-  }
-
-  variant command-preparation {
-    /// Help or a CLI diagnostic; no tool invocation is needed.
-    output(command-output),
-    invoke(own<prepared-command>),
-  }
-
-  /// Discovers a currently bound tool and uses the canonical CLI parser.
-  /// `none` means the name is unavailable. Variables supply only declared
-  /// environment defaults; they are not forwarded as a process environment.
-  /// Discovery uses its ordinary durable read; parsing itself has no effects.
-  prepare-command: func(
-    name: string,
-    args: list<string>,
-    variables: list<tuple<string, string>>,
-  ) -> option<command-preparation>;
-
   /// Producer endpoint for caller-provided stdin. Exactly one write, finish,
   /// or fail operation may be outstanding. The first terminal is immutable;
   /// dropping an open writer selects `abandoned`.
@@ -125,12 +85,6 @@ interface host {
   /// stream items that cannot rendezvous within one Component Model task.
   create-stdin-from-stream: func(source: stream<byte-stream-item>) -> own<tool-stdin>;
 
-  /// Creates an immutable, host-owned stdin source. The complete input is
-  /// admitted to host memory before this returns. The source requires no
-  /// caller-side pump and can exceed the streaming attachment buffer size.
-  /// Admission failure creates no endpoint. Replay preserves that decision.
-  create-stdin-from-bytes: func(bytes: list<u8>) -> result<own<tool-stdin>, tool-rpc-error>;
-
   /// Single-use output target consumed by one result-bearing invocation.
   /// Dropping it unused fails the paired reader as abandoned.
   resource tool-output;
@@ -138,42 +92,6 @@ interface host {
   /// Creates the output target and caller-readable stream before invocation.
   /// Dropping the reader cancels only this attachment's consumer role.
   create-output: func() -> tuple<own<tool-output>, stream<byte-stream-item>>;
-
-  /// Creates an output target that discards bytes without a reader or retained
-  /// prefix. Writes never wait for a consumer and cannot overflow a collector.
-  /// The invocation still owns and finalizes its ordinary output writer.
-  create-discarded-output: func() -> own<tool-output>;
-
-  /// Bounded bytes collected from one output channel. A stream failure is
-  /// separate from the tool's structured result. Overflow retains the prefix.
-  record collected-output {
-    bytes: list<u8>,
-    failure: option<byte-stream-failure>,
-    overflow: bool,
-  }
-
-  record collected-invocation {
-    %result: result<invocation-result, tool-rpc-error>,
-    /// True when the invocation's recorded terminal says its body executed.
-    /// A tool error alone does not distinguish refused admission from a
-    /// failure after execution. Middleware counts as part of the invocation.
-    body-executed: bool,
-    /// The recorded deadline fired before the structured terminal was ready.
-    /// Cancellation still follows the ordinary tool terminal-winner protocol.
-    timed-out: bool,
-    stdout: option<collected-output>,
-    stderr: option<collected-output>,
-  }
-
-  /// Host-owned reader, consumed by one result collection. Unlike an ordinary
-  /// stream reader, it does not need a caller-side forwarding pump.
-  resource output-collection;
-
-  /// Reserves the retained prefix before dispatch. The limit is capped by the
-  /// host's attachment byte limit. Admission failure creates no endpoints.
-  create-collected-output: func(max-bytes: u64) -> result<
-    tuple<own<tool-output>, own<output-collection>>, tool-rpc-error
-  >;
 
   resource tool-rpc {
     /// Binds an ordinary tool client to its configured tool name.
@@ -215,34 +133,9 @@ interface host {
   }
 
   resource future-invoke-result {
-    /// The immutable dispatch decision. True means an entity invocation was
-    /// accepted, not that its body executed or succeeded. Replay retains the
-    /// recorded decision. This does not wait for the body or inspect readiness.
-    admitted: func() -> bool;
     /// Sequential calls return the same immutable terminal. Only one call may
     /// be outstanding at a time.
     get: async func() -> result<invocation-result, tool-rpc-error>;
-    /// Waits for the terminal while the host drains both supplied streams.
-    /// This does not require concurrent progress in the calling guest. Pass
-    /// collection handles created before async-invoke-and-await. Each channel
-    /// retains at most the limit reserved at creation. Exceeding that limit
-    /// cancels the invocation and reports overflow on that channel.
-    /// Dropping the wait does not itself cancel the invocation.
-    /// A positive timeout bounds the result wait, in milliseconds. The host
-    /// records its deadline and winner before requesting cancellation, then
-    /// joins the terminal and both streams. None or zero disables the deadline.
-    collect: func(
-      stdout: option<own<output-collection>>,
-      stderr: option<own<output-collection>>,
-      timeout-millis: option<u64>,
-    ) -> collected-invocation;
-    /// The same collection with an asynchronous guest boundary, so the
-    /// calling runtime can continue to drive timers and explicit cancellation.
-    collect-async: async func(
-      stdout: option<own<output-collection>>,
-      stderr: option<own<output-collection>>,
-      timeout-millis: option<u64>,
-    ) -> collected-invocation;
     /// Explicitly cancels the operation. Dropping this resource only detaches
     /// result observation and does not cancel accepted work.
     cancel: func();

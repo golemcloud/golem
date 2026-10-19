@@ -15,8 +15,6 @@ const sharedModules = [
   ["effect", "dist/effect.mjs"],
   ["effect/http", "dist/effect-http.mjs"],
   ["effect/http-api", "dist/effect-httpapi.mjs"],
-  ["wasm-rquickjs-runtime-init", "../javascript/runtime-init.js"],
-  ["golem-tool-process-backend", "../javascript/tool-process-backend.js"],
 ]
 
 for (const template of templateMatrix) {

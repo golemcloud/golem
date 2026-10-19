@@ -242,13 +242,7 @@ impl CursorTx<'_> {
 
 impl RetainedClaims<'_> {
     pub(super) fn register_replay_inert_subtree_root(&mut self, root: OplogIndex) {
-        self.adopt_replay_inert_subtree(root, HashSet::from([root]));
-    }
-
-    fn adopt_replay_inert_subtree(&mut self, root: OplogIndex, mut members: HashSet<OplogIndex>) {
-        if let Some(existing) = self.st.custom_subtrees.get(&root) {
-            members.extend(existing);
-        }
+        let mut members = HashSet::from([root]);
         let adopted: Vec<OplogIndex> = self
             .st
             .retained_starts
@@ -264,8 +258,7 @@ impl RetainedClaims<'_> {
                 };
                 // Retained entries are visited in oplog order and a parent always precedes its
                 // children, so one pass adopts whole retained chains.
-                let member = members.contains(idx)
-                    || observational_owner.is_some_and(|owner| members.contains(&owner))
+                let member = observational_owner.is_some_and(|owner| members.contains(&owner))
                     || parent_start_index.is_some_and(|parent| members.contains(&parent));
                 member.then(|| {
                     members.insert(*idx);
@@ -4272,99 +4265,6 @@ impl ReplayState {
                 next = last_read.next();
             }
             Ok(None)
-        })
-        .await
-    }
-
-    /// Accounts for descendants a joined entity body can no longer claim after its recorded
-    /// cancellation. A completed body must still claim all of its calls. The caller keeps body
-    /// membership until this returns; independently claimed entities retain their own subtrees.
-    pub(crate) async fn finish_entity_reconstruction_body(
-        &self,
-        root: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        let terminal = self
-            .run_owned_cursor_op(move |state| async move {
-                match state.visible_terminal_record(root).await? {
-                    Some((_, OplogEntry::End { .. })) => Ok(None),
-                    Some((terminal, OplogEntry::Cancelled { .. })) => Ok(Some(terminal)),
-                    _ => Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("recorded entity terminal for Start {root}"),
-                        "completed reconstruction has no replay-visible terminal",
-                    )),
-                }
-            })
-            .await?;
-        let Some(terminal) = terminal else {
-            return Ok(());
-        };
-        // Accepted output reconstruction can outlive the body. Keep its unbounded wait
-        // cancellable, outside the finite owned cursor task that adopts the remaining calls.
-        self.await_tool_attachment_reconstruction(root).await?;
-        self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await?;
-            let mut claimed_entities = cursor
-                .reconstruction_claims
-                .subscribe_fences()
-                .borrow()
-                .clone();
-            claimed_entities.extend(
-                cursor
-                    .reconstruction_claims
-                    .subscribe_bodies()
-                    .borrow()
-                    .iter()
-                    .copied(),
-            );
-            if tx.st.skipped_regions.is_in_deleted_region(root)
-                || tx.st.retained_starts.contains_key(&root)
-                || !claimed_entities.contains(&root)
-                || !matches!(
-                    cursor.oplog.read(root).await?,
-                    OplogEntry::Start {
-                        function_name: HostFunctionName::GolemEntityInvoke,
-                        ..
-                    }
-                )
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "a claimed entity invocation Start",
-                    format!("cannot settle cancelled entity body at {root}"),
-                ));
-            }
-            let mut members = HashSet::from([root]);
-            let mut next = root.next();
-            while next < terminal {
-                let entries = cursor
-                    .read_oplog(next, CHUNK_SIZE.min(terminal.as_u64() - next.as_u64()))
-                    .await?;
-                let last = entries.last().expect("exact oplog reads are nonempty").0;
-                for (index, entry) in entries {
-                    if index >= terminal || tx.st.skipped_regions.is_in_deleted_region(index) {
-                        continue;
-                    }
-                    if let OplogEntry::Start {
-                        function_name,
-                        parent_start_index,
-                        observational_owner,
-                        ..
-                    } = entry
-                        && (parent_start_index.is_some_and(|parent| members.contains(&parent))
-                            || observational_owner.is_some_and(|owner| members.contains(&owner)))
-                        && !(function_name == HostFunctionName::GolemEntityInvoke
-                            && claimed_entities.contains(&index))
-                    {
-                        members.insert(index);
-                    }
-                }
-                next = last.next();
-            }
-            tx.retained_claims()
-                .adopt_replay_inert_subtree(root, members);
-            tx.notify_progress = true;
-            cursor.finish_tx(tx);
-            Ok(())
         })
         .await
     }
