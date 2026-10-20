@@ -164,6 +164,11 @@ async fn main() {
                 serde_yaml::from_str(&raw_suite).expect("Failed to parse benchmark suite");
 
             validate_benchmark_names(&benchmarks_by_name, &suite);
+            if suite.skip_ts_agents {
+                info!("The suite skips the TS agents of the throughput benchmarks");
+            }
+            benchmarks::set_skip_ts_agents(suite.skip_ts_agents);
+            benchmarks::set_ingress_settings(suite.ingress.clone());
 
             // Pre-flight warmup runs after all names are validated.
             cloud_preflight_warmup(
@@ -386,6 +391,18 @@ fn benchmark_registry() -> BenchmarkRegistry {
         "sleep",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<benchmarks::sleep::Sleep>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "ingress-load",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::ingress_load::IngressLoad>(
                 mode,
                 verbosity,
                 item,

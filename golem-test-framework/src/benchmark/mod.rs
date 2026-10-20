@@ -23,11 +23,11 @@ pub use config::{
     DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg, DensityPromiseTopologyArg,
     DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
     DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
-    DensitySnapshottingArg, RunConfig,
+    DensitySnapshottingArg, IngressMethod, IngressMixEntry, IngressSettings, RunConfig,
 };
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,
-    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata,
+    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata, RunWindow,
 };
 
 use crate::config::benchmark::TestMode;
@@ -207,6 +207,11 @@ pub trait Benchmark: Send + Sync + Sized + 'static {
     fn name() -> &'static str;
     fn description() -> &'static str;
 
+    /// Time that `setup_iteration` gets before it counts as failed.
+    fn setup_deadline() -> Duration {
+        Duration::from_secs(300)
+    }
+
     async fn create_benchmark_context(
         mode: &TestMode,
         verbosity: Level,
@@ -324,7 +329,7 @@ async fn run_benchmark<B: Benchmark>(
         if let Some(context) = phase(
             &recorder,
             "setup",
-            Duration::from_secs(300),
+            B::setup_deadline(),
             benchmark.setup_iteration(benchmark_context, recorder.clone()),
         )
         .await
@@ -338,6 +343,7 @@ async fn run_benchmark<B: Benchmark>(
             .await
             .is_some()
             {
+                let started_at = chrono::Utc::now();
                 phase(
                     &recorder,
                     "run",
@@ -345,6 +351,10 @@ async fn run_benchmark<B: Benchmark>(
                     benchmark.run(benchmark_context, &context, recorder.clone()),
                 )
                 .await;
+                aggregated_results.run_windows.push(RunWindow {
+                    started_at,
+                    finished_at: chrono::Utc::now(),
+                });
             }
             phase(
                 &recorder,

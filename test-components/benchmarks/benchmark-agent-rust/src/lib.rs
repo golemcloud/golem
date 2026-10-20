@@ -13,7 +13,9 @@ trait RustBenchmarkAgent {
     #[endpoint(post = "/cpu-intensive")]
     fn cpu_intensive(&mut self, length: f64) -> u32; // length is f64 to have the same interface as the TS agent
 
+    #[endpoint(post = "/oplog-heavy")]
     fn oplog_heavy(&mut self, length: u32, commit: bool) -> u32;
+    #[endpoint(post = "/sleep")]
     fn sleep(&mut self, millis: u64) -> bool;
 }
 

@@ -14,6 +14,7 @@
 
 use crate::benchmarks::{
     cleanup_user_state, delete_workers, invoke_and_await_agent, invoke_and_await_http,
+    skip_ts_agents,
 };
 use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
@@ -623,17 +624,20 @@ impl ThroughputBenchmark {
         .instrument(tracing::info_span!("register_components"))
         .await;
 
+        // Without TS agents the TS lists stay empty, so warmup, run and cleanup skip them.
+        let with_ts = !skip_ts_agents();
         for n in 0..config.size {
             rust_agent_ids.push(agent_id!("RustBenchmarkAgent", format!("test-{n}")));
-            ts_agent_ids.push(agent_id!("BenchmarkAgent", format!("test-{n}")));
             rust_agent_ids_for_http.push(agent_id!("RustBenchmarkAgent", format!("test-{n}-http")));
-            ts_agent_ids_for_http.push(agent_id!("BenchmarkAgent", format!("test-{n}-http")));
-
-            ts_rpc_agent_id_pairs.push(AgentIdPair {
-                component_id: ts_agent_component.id,
-                parent: agent_id!("RpcBenchmarkAgent", format!("rpc-test-{n}")),
-                child: agent_id!("BenchmarkAgent", format!("rpc-test-{n}")),
-            });
+            if with_ts {
+                ts_agent_ids.push(agent_id!("BenchmarkAgent", format!("test-{n}")));
+                ts_agent_ids_for_http.push(agent_id!("BenchmarkAgent", format!("test-{n}-http")));
+                ts_rpc_agent_id_pairs.push(AgentIdPair {
+                    component_id: ts_agent_component.id,
+                    parent: agent_id!("RpcBenchmarkAgent", format!("rpc-test-{n}")),
+                    child: agent_id!("BenchmarkAgent", format!("rpc-test-{n}")),
+                });
+            }
             rust_rpc_agent_id_pairs.push(AgentIdPair {
                 component_id: rust_agent_component.id,
                 parent: agent_id!("RustRpcBenchmarkAgent", format!("rpc-test-{n}")),
@@ -838,6 +842,10 @@ impl ThroughputBenchmark {
             prefix: &str,
             aggregate: bool,
         ) {
+            // No targets: no measurement, not even an aggregate one of zero calls.
+            if targets.is_empty() {
+                return;
+            }
             let result_futures = targets
                 .iter()
                 .map(move |target| {
@@ -1019,59 +1027,62 @@ impl ThroughputBenchmark {
         .instrument(tracing::info_span!("measure_rust_agents_http"))
         .await;
 
-        async {
-            let result_futures = iteration
-                .ts_agent_ids_for_http
-                .iter()
-                .enumerate()
-                .map(move |(idx, _agent_id)| {
-                    let client = client.clone();
-                    let base = http_base_url.clone();
-                    async move {
-                        let mut results = vec![];
-                        for _ in 0..self.call_count {
-                            results.push(
-                                invoke_and_await_http(client.clone(), || {
-                                    (self.http_request)(&base, idx, iteration.length)
-                                })
-                                .await,
-                            )
+        if !iteration.ts_agent_ids_for_http.is_empty() {
+            async {
+                let result_futures = iteration
+                    .ts_agent_ids_for_http
+                    .iter()
+                    .enumerate()
+                    .map(move |(idx, _agent_id)| {
+                        let client = client.clone();
+                        let base = http_base_url.clone();
+                        async move {
+                            let mut results = vec![];
+                            for _ in 0..self.call_count {
+                                results.push(
+                                    invoke_and_await_http(client.clone(), || {
+                                        (self.http_request)(&base, idx, iteration.length)
+                                    })
+                                    .await,
+                                )
+                            }
+                            results
                         }
-                        results
-                    }
-                })
-                .collect::<Vec<_>>();
+                    })
+                    .collect::<Vec<_>>();
 
-            let start = Instant::now();
-            let results = result_futures.join().await;
-            let elapsed = start.elapsed();
-            record_throughput(
-                &recorder,
-                "ts-agent-http-",
-                iteration.ts_agent_ids_for_http.len() * self.call_count,
-                elapsed,
-            );
-            if aggregate {
-                recorder.duration(&"ts-agent-http-batch-duration".into(), elapsed);
-                recorder.count(
-                    &"ts-agent-http-batch-completions".into(),
-                    results.iter().map(Vec::len).sum::<usize>() as u64,
+                let start = Instant::now();
+                let results = result_futures.join().await;
+                let elapsed = start.elapsed();
+                record_throughput(
+                    &recorder,
+                    "ts-agent-http-",
+                    iteration.ts_agent_ids_for_http.len() * self.call_count,
+                    elapsed,
                 );
-            }
-            for (idx, results) in results.iter().enumerate() {
-                for result in results {
-                    if aggregate {
-                        for failure in &result.failures {
-                            recorder.failure(&"ts-agent-http-invocation".into(), failure.clone());
+                if aggregate {
+                    recorder.duration(&"ts-agent-http-batch-duration".into(), elapsed);
+                    recorder.count(
+                        &"ts-agent-http-batch-completions".into(),
+                        results.iter().map(Vec::len).sum::<usize>() as u64,
+                    );
+                }
+                for (idx, results) in results.iter().enumerate() {
+                    for result in results {
+                        if aggregate {
+                            for failure in &result.failures {
+                                recorder
+                                    .failure(&"ts-agent-http-invocation".into(), failure.clone());
+                            }
+                        } else {
+                            result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
                         }
-                    } else {
-                        result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
                     }
                 }
             }
+            .instrument(tracing::info_span!("measure_ts_agents_http"))
+            .await;
         }
-        .instrument(tracing::info_span!("measure_ts_agents_http"))
-        .await;
 
         measure_agents(
             &iteration.user,

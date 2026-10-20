@@ -1,0 +1,81 @@
+# Cloud-perf with Rust agents only: cloud-perf.yaml without the TypeScript agents.
+# Run it like cloud-perf.yaml (see there). The cloud-perf workflow of golem-cloud
+# takes it with `suite: cloud-perf-rust.yaml`.
+#
+# Use it to measure the Rust paths when the TypeScript agents load the cluster so
+# much that they disturb the other measurements.
+#
+# Left out of cloud-perf.yaml:
+# - the TS agent, TS HTTP and TS RPC phases of the throughput benchmarks
+#   (skipTsAgents);
+# - cold-start-unknown-medium and latency-medium, which use the TS agent.
+#
+# The benchmark names, run configs and result keys are the same as in
+# cloud-perf.yaml, so a result of this suite compares with a cloud-perf result.
+
+name: cloud-perf-rust
+skipTsAgents: true
+benchmarks:
+  # Throughput: rust agent (gRPC), rust agent (HTTP) and rust RPC pair.
+  # size   = number of workers per implementation
+  # length = unused for echo
+  - name: throughput-echo
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 50, 100, 250]
+    length: [1000]
+
+  # length = payload size in bytes sent to large_input
+  - name: throughput-large-input
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 50, 100, 250]
+    length: [100, 10000]
+
+  # length = CPU work length passed to cpu_intensive
+  - name: throughput-cpu-intensive
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 50, 100, 250]
+    length: [100]
+
+  # Cold start with the Rust agent, first without and then with the compilation cache.
+  # size   = number of unique components created (each in its own env)
+  # length = seconds to wait per component for pre-compilation warm-up
+  - name: cold-start-unknown-small
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 5, 25, 50]
+    length: [2]
+    disableCompilationCache: true
+
+  - name: cold-start-unknown-small
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 5, 25, 50]
+    length: [2]
+
+  # Invocation latency with the Rust agent, hot and cold.
+  # size   = number of workers created
+  # length = number of hot invocations per worker after the first cold one
+  - name: latency-small
+    iterations: 3
+    clusterSize: [2]
+    size: [100, 500, 1000, 2000, 5000]
+    length: [2]
+
+  # size   = number of workers launched in parallel
+  # length = sleep duration in milliseconds
+  - name: sleep
+    iterations: 3
+    clusterSize: [2]
+    size: [10, 100, 500, 1000, 2000]
+    length: [10000]
+
+  # size   = number of workers per variant
+  # length = loop iteration count passed to oplog_heavy
+  - name: durability-overhead
+    iterations: 3
+    clusterSize: [2]
+    size: [10, 50, 100, 200]
+    length: [5000]

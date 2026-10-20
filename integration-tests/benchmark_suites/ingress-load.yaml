@@ -1,0 +1,54 @@
+# Ingress load: many independent clients against the proxies, worker-service and
+# registry-service of a deployed Golem, the way production traffic arrives.
+#
+# The other cloud suites send all requests over about one connection per host, so they
+# measure Golem itself. Here every account is a client with its own connection and
+# token. The clients send at a fixed rate whether or not their earlier requests have
+# returned, and a request's latency counts from the time it was due.
+#
+# Run it like cloud-perf.yaml (see there). The cloud-perf workflow of golem-cloud takes
+# it with `suite: ingress-load.yaml`.
+#
+# All accounts call agents in one environment, shared with them by permission shares,
+# so every token is different but the executors load one component. The HTTP API
+# requests go to `httpApiDomains` domains, each with its own environment.
+#
+# The worker-service auth and router caches hold 1024 entries for 600 s. With up to
+# 1000 accounts nothing is evicted, so registry-service sees the first request of each
+# account on each worker-service pod, then one refresh per account and pod every 600 s.
+
+name: ingress-load
+ingress:
+  # Longer than the 600 s cache TTL, so every cache entry expires once in a step.
+  stepSecs: 720
+  # Agents per account, so no single agent limits the rate.
+  agentsPerAccount: 4
+  # 0 keeps one connection per client for the whole step.
+  requestsPerConnection: 0
+  # Share of the clients that use HTTP/1.1; the others negotiate HTTP/2.
+  http1Percent: 30
+  # Share of the requests through the HTTP API; the others go to the REST invoke endpoint.
+  httpApiPercent: 50
+  httpApiDomains: 8
+  # Accounts set up at the same time.
+  setupConcurrency: 32
+benchmarks:
+  # size   = accounts, each one a client with its own connection and token
+  # length = target requests per second from all accounts together
+  #
+  # The first run (2000 and 3000 req/s) stopped at about 1900 req/s with every number of
+  # accounts, already with 100. So the account sweep there measured an overloaded cluster.
+  #
+  # Where latency starts to grow, with few clients.
+  - name: ingress-load
+    iterations: 1
+    clusterSize: [2]
+    size: [100]
+    length: [1000, 1500, 1800]
+
+  # The same with the most clients: below and at the limit of the first run.
+  - name: ingress-load
+    iterations: 1
+    clusterSize: [2]
+    size: [1000]
+    length: [1500, 2000]
