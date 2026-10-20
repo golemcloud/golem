@@ -4,8 +4,9 @@
 import { Buffer } from "node:buffer";
 import { resolve } from "node:path";
 import { EventEmitter } from "node:events";
-import { PassThrough, Writable } from "node:stream";
 import { nextTick } from "node:process";
+import { PassThrough, Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 
 const DEFAULT_MAX_BUFFER = 1024 * 1024;
 const PIPE_STDIO = ["pipe", "pipe", "pipe"];
@@ -276,7 +277,10 @@ function project(
     [2, "stderr"],
   ]) {
     if (modes[index] === "ignore") continue;
-    if (collected[channel]?.overflow) {
+    const remaining = maxBuffer - (collected[channel]?.forwarded ?? 0);
+    const overflow = result[channel].length > remaining;
+    if (overflow) result[channel] = result[channel].subarray(0, remaining);
+    if (collected[channel]?.overflow || overflow) {
       result.error ??= processError(
         "ENOBUFS",
         command,
@@ -381,13 +385,16 @@ function createInput(host, command, resources, onFailure) {
     stream,
     source,
     async stop() {
+      // The terminal result (or an unused source drop) closes the consumer.
+      // Observe that closure before deciding whether stdin needs a terminal.
+      const [closure] = await Promise.allSettled([watched]);
       const stopped = stream.closed
         ? Promise.resolve()
         : new Promise((resolve) => stream.once("close", resolve));
       stream.destroy();
       await stopped;
       await io;
-      await watched;
+      if (closure.status === "rejected") throw closure.reason;
     },
   };
 }
@@ -459,12 +466,24 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   let timer;
   let abortError;
   let stdinError;
+  let outputError;
+  const outputWrites = new Set();
   let cancellationRequested = false;
   let started = prepared.tag === "output";
+  let resolveStartup;
+  const startup = new Promise((resolve) => {
+    resolveStartup = resolve;
+  });
   const cancel = () => {
     if (!future || cancellationRequested) return;
-    future.cancel();
-    cancellationRequested = true;
+    try {
+      future.cancel();
+      cancellationRequested = true;
+    } finally {
+      // Flush owned pipes so admitted writes settle before the process closes.
+      child.stdout?.resume();
+      child.stderr?.resume();
+    }
   };
   const inputFailed = (error) => {
     stdinError ??= error;
@@ -585,6 +604,40 @@ function spawnTool(host, runtimeProcess, command, args, options) {
         transfer(stdout?.[1]),
         transfer(stderr?.[1]),
         undefined,
+        async (channel, bytes) => {
+          await startup;
+          if (!started) return;
+          const index = channel === "stdout" ? 1 : 2;
+          const destination =
+            modes[index] === "inherit"
+              ? runtimeProcess[channel]
+              : child[channel];
+          if (!destination) return;
+          const writing = new Promise((resolve, reject) =>
+            destination.write(bytes, (error) =>
+              error ? reject(error) : resolve(),
+            ),
+          );
+          if (modes[index] === "inherit") {
+            await writing;
+          } else {
+            // These pipes are bounded by maxBuffer. Let collection reach the
+            // terminal even if the caller only starts reading at exit.
+            outputWrites.add(writing);
+            writing.then(
+              () => outputWrites.delete(writing),
+              (error) => {
+                outputWrites.delete(writing);
+                outputError ??= error;
+                try {
+                  cancel();
+                } catch (failure) {
+                  outputError.cause ??= failure;
+                }
+              },
+            );
+          }
+        },
       );
       // This marks a local process handle, not remote permission or execution.
       started = true;
@@ -614,11 +667,12 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   }
   child.stdio = [child.stdin, child.stdout, child.stderr];
   if (started) child.pid = 1;
-  const startup = new Promise((resolve) => {
-    nextTick(() => {
+  nextTick(() => {
+    try {
       if (started) child.emit("spawn");
-      resolve();
-    });
+    } finally {
+      resolveStartup();
+    }
   });
   // Collection starts at dispatch. Observe failures until startup has delivered
   // its event; the completion task still awaits the original result below.
@@ -720,11 +774,40 @@ function spawnTool(host, runtimeProcess, command, args, options) {
     }
     child.exitCode = terminal.status;
     child.signalCode = terminal.signal;
-    child.stdout?.end(terminal.stdout);
-    child.stderr?.end(terminal.stderr);
+    const outputCompletion = Promise.allSettled([
+      ...outputWrites,
+      ...["stdout", "stderr"].map(async (channel) => {
+        const stream = child[channel];
+        if (!stream) return;
+        const completion = finished(stream, { cleanup: true });
+        try {
+          stream.end(terminal[channel]);
+        } catch (error) {
+          stream.destroy(error);
+        }
+        await completion;
+      }),
+    ]);
     if (terminal.error) child.emit("error", terminal.error);
     else child.emit("exit", terminal.status, terminal.signal);
-    nextTick(() => child.emit("close", terminal.status, terminal.signal));
+    child.stdout?.resume();
+    child.stderr?.resume();
+    const outputFailure = (await outputCompletion).find(
+      (result) => result.status === "rejected",
+    );
+    if ((outputFailure || outputError) && !terminal.error) {
+      terminal.error = processError(
+        "EIO",
+        command,
+        "output finalization failed",
+        "spawn",
+      );
+      terminal.error.cause = outputFailure?.reason ?? outputError;
+      terminal.status = null;
+      child.exitCode = null;
+      child.emit("error", terminal.error);
+    }
+    child.emit("close", terminal.status, terminal.signal);
   });
   return child;
 }

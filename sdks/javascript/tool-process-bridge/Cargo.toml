@@ -1,0 +1,14 @@
+[package]
+name = "golem-js-tool-process-bridge"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+futures = "0.3"
+golem-rust = { path = "../../rust/golem-rust", default-features = false, features = ["macro"] }
+rquickjs = { version = "0.10.0", default-features = false, features = ["std", "futures", "bindgen", "loader", "macro"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }

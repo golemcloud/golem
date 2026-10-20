@@ -2379,9 +2379,9 @@ cd ../..
 '''
 
 [tasks.test-javascript-tool-process-backend]
-description = "Tests the JavaScript tool-process adapter with a mock transport facade"
+description = "Tests the JavaScript tool-process adapter and native transport facade"
 command = "node"
-args = ["--test", "sdks/javascript/tool-process-backend.test.mjs"]
+args = ["--test", "sdks/javascript/tool-process-backend.test.mjs", "sdks/javascript/tool-process-host.test.mjs"]
 
 [tasks.builtin-javascript-typescript-build]
 private = true
