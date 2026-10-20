@@ -228,8 +228,9 @@ or `ReacquirePermits` decision reaching the outer loop becomes a terminal interr
 without replacing an already published outcome. An active `Suspend` also becomes a terminal
 `EphemeralCannotSuspend` failure after interrupt acknowledgement and monthly-exhaustion conversion,
 so a lowered memory limit or failed monthly monitor cannot leave a method suffix for constructor-only
-replay. Monthly capacity exhaustion retains its specific monthly error. Idle and pre-method
-suspension remain safe: ordinary ephemeral agents keep their outer-loop `TryStop` unchanged;
+replay. Monthly capacity exhaustion retains its specific monthly error, and a monthly-policy outage
+keeps its `Monthly enforcement unavailable` reason. Idle and pre-method suspension remain safe:
+ordinary ephemeral agents keep their outer-loop `TryStop` unchanged;
 ephemeral external-tool owners also treat it as terminal. Startup retries before a Store exists
 remain unchanged. A started method never runs again live.
 Replay starts from the chosen snapshot baseline

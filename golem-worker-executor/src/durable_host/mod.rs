@@ -4984,14 +4984,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .acknowledge_invocation_interrupt(*kind)
                 .await;
         }
-        let monthly_trap = self.public_state.worker().monthly_failure(trap_type);
+        let retry_from = self
+            .invocation_anchor()
+            .unwrap_or(self.state.effective_retry_point());
+        let monthly_trap = self
+            .public_state
+            .worker()
+            .monthly_failure(trap_type, retry_from);
         let trap_type = monthly_trap.as_ref().unwrap_or(trap_type);
-        let suspend_trap = ephemeral_suspend_trap(
-            self.agent_mode(),
-            trap_type,
-            self.invocation_anchor()
-                .unwrap_or(self.state.effective_retry_point()),
-        );
+        let suspend_trap = ephemeral_suspend_trap(self.agent_mode(), trap_type, retry_from);
         let trap_type = suspend_trap.as_ref().unwrap_or(trap_type);
 
         if let TrapType::Error { error, .. } = trap_type {
