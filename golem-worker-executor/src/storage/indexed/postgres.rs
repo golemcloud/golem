@@ -391,8 +391,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         }
 
         // With no epoch asserted there is nothing to check atomically with the insert, so a lone
-        // entry is one autocommit `INSERT` rather than a transaction held open around it. An
-        // entry that asserts an epoch takes the transaction below, as a batch does.
+        // entry is one autocommit `INSERT` rather than a transaction held open around it.
         if let (None, [(id, value)]) = (expected_epoch, pairs.as_ref()) {
             return self
                 .pool
@@ -409,6 +408,50 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .await
                 .map(|_| ())
                 .map_err(classify);
+        }
+
+        if let Some(expected) = expected_epoch
+            && pairs.len() <= Self::APPEND_MANY_CHUNK_SIZE
+        {
+            // The implicit transaction holds the epoch row through the insert and commit.
+            // Materialize the locked row before filtering so refusals retain the stored epoch.
+            let mut query_builder = QueryBuilder::<Postgres>::new(
+                "WITH locked_epoch AS MATERIALIZED (SELECT epoch FROM indexed_key_epoch WHERE namespace = ",
+            );
+            query_builder
+                .push_bind(namespace.as_str())
+                .push(" AND key = ")
+                .push_bind(key.as_str())
+                .push(" FOR UPDATE), inserted AS (INSERT INTO index_storage (namespace, key, id, value) SELECT ")
+                .push_bind(namespace.as_str())
+                .push(", ")
+                .push_bind(key.as_str())
+                .push(", data.id, data.value FROM locked_epoch CROSS JOIN (");
+            query_builder.push_values(pairs.iter(), |mut builder, (id, value)| {
+                builder
+                    .push_bind(i64::try_from(*id).expect("validated oplog index"))
+                    .push_bind(value.as_ref());
+            });
+            query_builder
+                .push(") AS data(id, value) WHERE locked_epoch.epoch = ")
+                .push_bind(i64::try_from(expected.0).ok())
+                .push(" RETURNING id) SELECT (SELECT epoch FROM locked_epoch);");
+
+            // fetch_one drains through ReadyForQuery, including the implicit commit, rather
+            // than acknowledging success when the first result row arrives.
+            let (stored,): (Option<i64>,) = self
+                .pool
+                .with_rw(svc_name, api_name)
+                .fetch_one_as(query_builder.build_query_as())
+                .await
+                .map_err(classify)?;
+            return FencedTxError::check_record(
+                &key,
+                expected,
+                stored,
+                Self::negative_epoch_message,
+            )
+            .map_err(|err| err.into_indexed_storage_error(classify));
         }
 
         self.pool
