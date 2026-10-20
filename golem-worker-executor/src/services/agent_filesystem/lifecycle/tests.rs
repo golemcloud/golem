@@ -6,8 +6,9 @@ use crate::sandbox_filesystem::{
     ScriptedSandboxPathCall,
 };
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
-use crate::services::golem_config::FilesystemStorageMode;
-use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
+use crate::services::golem_config::{
+    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig, ResourceUsageMeteringConfig,
+};
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::close_window;
@@ -386,12 +387,12 @@ async fn unmetered_reconstructing_with_recovery(
     .await
     .unwrap();
     let (account, entry) = configured_account(false);
-    let filesystem = bind_configured_resource_usage_metering(
-        created,
-        account,
-        ResourceUsageMeteringConfig::default(),
-    )
-    .unwrap();
+    let mut config = GolemConfig::default();
+    config.resource_usage_metering.filesystem = true;
+    config.filesystem_storage.mode = FilesystemStorageMode::Temporary;
+    let metering = config.effective_resource_usage_metering();
+    assert!(!metering.filesystem);
+    let filesystem = bind_configured_resource_usage_metering(created, account, metering).unwrap();
     (filesystem, control, entry)
 }
 
@@ -1239,7 +1240,7 @@ async fn reconstruction_seed_storage_full_at_limit_is_agent_quota() {
 }
 
 #[test]
-async fn managed_quota_behavior_remains_active_with_storage_metering_disabled() {
+async fn per_agent_quota_remains_active_when_unmanaged_config_disables_monthly_storage() {
     let storage_limits = limits(4096, 8);
     let (filesystem, control, entry) =
         unmetered_reconstructing_with_recovery(ResolvedStorageLimits::Finite(storage_limits), None)
@@ -6960,6 +6961,80 @@ async fn unlimited_unmanaged_usage_opens_a_memory_only_window() {
 
 #[test]
 #[timeout("5s")]
+async fn allocation_timeout_retains_the_read_and_permit_until_close_and_stops_sampling() {
+    use crate::services::resource_usage_metering::{
+        MeteringCloseError, MeteringFault, close_window_retaining_permit,
+        wait_for_enforcement_failure,
+    };
+    use std::sync::atomic::AtomicBool;
+
+    let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+    let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
+        provisioning,
+        scratch_directory().await,
+        agent_id(),
+        ResolvedStorageLimits::Unlimited,
+        None,
+        AgentAccounting::Development,
+    )
+    .await
+    .unwrap();
+    let (account, entry) = account();
+    let reconstructing = bind_resource_usage_metering(created, account).unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
+    let reconstructing = finish_replay(reconstructing).await.unwrap();
+    control.push_observe_allocation(Ok(allocation(100, 1)));
+    let filesystem = finish_reconstruction(reconstructing).await.unwrap();
+    control.push_observe_allocation(Ok(allocation(100, 1)));
+    control.push_observe_allocation(Ok(allocation(100, 1)));
+    let observation = control.block("observe_allocation");
+    let mut window = open_resource_usage_window(&filesystem, permit(&entry).await)
+        .await
+        .unwrap();
+    let held = Arc::new(AtomicBool::new(false));
+    window.track_permit_for_test(held.clone());
+    let mut health = window.subscribe_enforcement_failure();
+    observation.wait_started().await;
+
+    assert_eq!(
+        wait_for_enforcement_failure(&mut health).await,
+        MeteringFault::FilesystemObservationTimeout
+    );
+    assert!(held.load(Ordering::Acquire));
+    let observations = call_count(&control, "observe_allocation(");
+    let mut closing =
+        close_window_retaining_permit(window, Instant::now() + Duration::from_secs(1));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), closing.as_mut())
+            .await
+            .is_err(),
+        "closing must retain the pending allocation read"
+    );
+    assert!(held.load(Ordering::Acquire));
+    assert_eq!(call_count(&control, "observe_allocation("), observations);
+    observation.release();
+    observation.wait_completed().await;
+    let (result, permit) = closing.await;
+    assert!(matches!(result, Err(MeteringCloseError::Faulted(_))));
+    assert!(held.load(Ordering::Acquire));
+    drop(permit);
+    assert!(!held.load(Ordering::Acquire));
+
+    let observations = call_count(&control, "observe_allocation(");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(call_count(&control, "observe_allocation("), observations);
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("5s")]
 async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
@@ -8500,18 +8575,27 @@ async fn dropped_write_observer_keeps_recovery_without_billing_close_coupling() 
 }
 
 #[test]
+#[timeout("5s")]
 async fn dropping_delete_observer_keeps_verified_deletion_module_owned() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    filesystem.set_release_metrics_for_test(metrics.scope());
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 19).await;
     control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
     let close_gate = control.block("close");
+    let deletion_gate = control.block("delete_and_verify");
     drop(close(OpenNode::File(file)));
     close_gate.wait_started().await;
 
     drop(delete(seal(filesystem)));
     assert!(!has_call(&control, "delete_and_verify("));
+    metrics.advance(2500);
+    assert_eq!(
+        metrics.pending("filesystem_delete", "filesystem_deleted"),
+        1.0
+    );
     close_gate.release();
     tokio::time::timeout(Duration::from_secs(1), async {
         while !has_call(&control, "delete_and_verify(") {
@@ -8520,6 +8604,23 @@ async fn dropping_delete_observer_keeps_verified_deletion_module_owned() {
     })
     .await
     .unwrap();
+    deletion_gate.wait_started().await;
+    deletion_gate.release();
+    deletion_gate.wait_completed().await;
+    // Adapter completion precedes the owner's verified-deletion receipt; wait for that receipt.
+    loop {
+        if metrics.pending("filesystem_delete", "filesystem_deleted") == 0.0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        metrics.value(
+            "golem_agent_filesystem_lifecycle_seconds",
+            &[("outcome", "success")]
+        ),
+        1.0
+    );
 }
 
 #[test]
@@ -8538,7 +8639,9 @@ async fn delete_observer_waits_for_sandbox_verification() {
 #[test]
 #[timeout("5s")]
 async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    filesystem.set_release_metrics_for_test(metrics.scope());
     let generation = filesystem.generation.as_ref().unwrap().clone();
     control.push_delete_and_verify(Err(sandbox_error(
         "first deletion",
@@ -8577,12 +8680,34 @@ async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
             .count(),
         3
     );
+    assert_eq!(
+        metrics.pending("filesystem_delete", "filesystem_deleted"),
+        0.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_filesystem_lifecycle_seconds",
+            &[("outcome", "success_after_failure")]
+        ),
+        1.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_resource_cleanup_failures_total",
+            &[
+                ("stage", "filesystem_deleted"),
+                ("reason", "filesystem_delete")
+            ]
+        ),
+        1.0
+    );
 }
 
 #[cfg(unix)]
 #[test]
 #[timeout("10s")]
 async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let parent = tempfile::tempdir().unwrap();
     let provisioning = SandboxFilesystemProvisioning::new(
         &FilesystemStorageMode::Directory {
@@ -8603,6 +8728,7 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
     )
     .await
     .unwrap();
+    filesystem.set_release_metrics_for_test(metrics.scope());
     let root = filesystem
         .generation
         .as_ref()
@@ -8650,6 +8776,27 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
         b"new generation"
     );
     delete_created(replacement).await.unwrap();
+    assert_eq!(
+        metrics.pending("filesystem_delete", "filesystem_deleted"),
+        0.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_filesystem_lifecycle_seconds",
+            &[("outcome", "success_after_failure")]
+        ),
+        1.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_resource_cleanup_failures_total",
+            &[
+                ("stage", "filesystem_deleted"),
+                ("reason", "filesystem_delete")
+            ]
+        ),
+        1.0
+    );
 }
 
 #[test]
@@ -9833,6 +9980,44 @@ proptest! {
         prop_assert_eq!(second_suffix.as_ref(), &bytes[second..]);
         prop_assert!(second_suffix.len() <= first_suffix.len());
     }
+}
+
+#[test]
+#[timeout("5s")]
+async fn interrupted_guest_observation_retains_started_call_and_drain() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let generation = resident_generation_handle(&filesystem);
+    let node = OpenNode::File(open_file(&generation, &control, 620).await);
+    control.push_flush(Ok(()));
+    control.push_close(Ok(()));
+    control.push_delete_and_verify(Ok(()));
+    let gate = control.block("flush");
+    let call = flush(&generation, &node, FlushLevel::DataAndMetadata).unwrap();
+    let (stop, receive) = tokio::sync::oneshot::channel();
+    let observer = tokio::spawn(crate::wasi_filesystem::observe_filesystem_operation(
+        async { receive.await.unwrap() },
+        call,
+    ));
+    gate.wait_started().await;
+    let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+        golem_common::model::Timestamp::now_utc(),
+    );
+    stop.send(kind).unwrap();
+    assert_eq!(observer.await.unwrap().unwrap_err(), kind);
+    drop(node);
+    let mut deletion = tokio::spawn(delete(seal(filesystem)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut deletion)
+            .await
+            .is_err()
+    );
+    assert!(!has_call(&control, "delete_and_verify("));
+    gate.release();
+    gate.wait_completed().await;
+    deletion.await.unwrap().unwrap();
+    assert_eq!(call_count(&control, "flush("), 1);
+    assert_eq!(call_count(&control, "close("), 1);
+    assert_eq!(call_count(&control, "delete_and_verify("), 1);
 }
 
 // The module reads the permission bits, the inode identity and the hard-link counts of a

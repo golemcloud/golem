@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::account::AccountId;
+use golem_common::model::account_usage::MonthlyUsageMode;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::repo::RepoError;
@@ -39,6 +40,12 @@ pub enum AccountUsageError {
     ComponentTooLarge(u64),
     #[error("Account {0} not found")]
     AccountNotfound(AccountId),
+    #[error("The account's current plan does not permit paid overage")]
+    OverageNotEligible,
+    #[error("Monthly usage mode is already {0}")]
+    MonthlyUsageModeUnchanged(MonthlyUsageMode),
+    #[error("Only an account owner may enable overage; administrators may only force hardLimit")]
+    MonthlyUsageModeChangeNotAllowed,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -51,6 +58,9 @@ impl SafeDisplay for AccountUsageError {
             Self::LimitExceeded { .. } => self.to_string(),
             Self::ComponentTooLarge(_) => self.to_string(),
             Self::AccountNotfound(_) => self.to_string(),
+            Self::OverageNotEligible => self.to_string(),
+            Self::MonthlyUsageModeUnchanged(_) => self.to_string(),
+            Self::MonthlyUsageModeChangeNotAllowed => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }

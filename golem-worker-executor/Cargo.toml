@@ -120,7 +120,7 @@ tracing = { workspace = true }
 try_match = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { workspace = true }
+wasmtime = { workspace = true, features = ["call-hook"] }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
@@ -165,6 +165,8 @@ axum = { workspace = true }
 figment = { workspace = true, features = ["test"] }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }
 proptest = { workspace = true }
 rand = { workspace = true }
@@ -174,6 +176,7 @@ tempfile = { workspace = true }
 test-r = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 system-interface = { workspace = true }
 wat = { workspace = true }

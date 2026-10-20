@@ -7,7 +7,7 @@ import { Callout } from "nextra/components"
   your account plan, and your permission to view or change the selected account.
 </Callout>
 
-Golem reports account usage by UTC calendar month. Usage reporting is separate from enforcement: usage answers what was measured, while per-agent storage and linear-memory limits constrain allocations. The monthly included-memory setting is an allowance for accounting; it does not stop agents when consumption reaches that value.
+Golem reports account usage by UTC calendar month. Enabled monthly compute, memory, durable-storage, and ephemeral-storage amounts are hard caps by default. Exhaustion stops applicable execution until capacity returns. Eligible account owners can explicitly enable paid overage to continue beyond those amounts. Per-agent memory and storage limits constrain allocations independently of monthly policy and billing metering.
 
 ## Current and monthly usage
 
@@ -27,7 +27,7 @@ The response includes an `as-of` timestamp and four dimensions:
 
 | Dimension | Unit | Meaning |
 | --- | --- | --- |
-| Compute | GCU | Wasmtime fuel divided by 1,000,000 |
+| Compute | GCU | Metered compute consumption |
 | Memory | GB-seconds | Allocated WebAssembly linear memory over time |
 | Durable storage | GB-month | Durable filesystem allocated-byte-time |
 | Ephemeral storage | GB-month | Ephemeral filesystem allocated-byte-time |
@@ -49,47 +49,45 @@ Use `--account <email>` or `--account-id <uuid>` on usage commands when authoriz
 
 ## Effective limits and overrides
 
-Show the effective resource limits, their plan defaults, optional overrides, ceilings, and whether the account may configure them:
+Show monthly mode, overage eligibility, the four monthly dimensions, and per-agent limits:
 
 ```shell copy
 golem account limits show
 ```
 
-The three override dimensions are:
+Each enabled monthly dimension shows its plan amount, active administrator grant, resolved monthly amount, usage, remaining capacity, unit, and behavior. In `hardLimit` mode, its amount is a hard cap. In `allowOverage` mode, it is an included allowance. Disabled dimensions are labeled disabled rather than reported as ordinary zero usage or unlimited limits.
 
-- maximum filesystem storage per agent, in bytes
-- maximum WebAssembly linear memory per agent, in bytes
-- monthly included linear-memory allowance, in GB-seconds; this is not a runtime cap
+Mode changes can take up to five minutes to reach running agents. Usage remains eligible for excess billing under an applied `allowOverage` policy until `hardLimit` applies. During overlapping refreshes, Registry allocates the included amount by policy revision rather than exact cross-executor consumption order. Changing modes does not reset monthly usage. The UTC month resets usage, but the account's selected mode persists. Monthly amounts and mode are read-only in the CLI.
+
+The two self-service override dimensions are maximum memory per agent and maximum storage per agent, both in bytes. Maximum storage is disabled when managed filesystem quota enforcement is unavailable. The CLI does not display an internal unlimited storage sentinel as a byte limit.
 
 Set one override per command:
 
 ```shell copy
-golem account limits set 10737418240
+golem account limits set --max-storage-per-agent 10737418240
 golem account limits set --max-memory-per-agent 536870912
-golem account limits set --monthly-memory-gb-seconds 1000000
 ```
 
-The storage value is positional. Choose values after inspecting `limits show`: memory and monthly-memory overrides must be between the plan default and ceiling, inclusive, while storage overrides must not exceed their ceiling. The effective value is the override or plan default capped by that ceiling. The service rejects setting an override when its dimension is not user-configurable.
+Use an explicit named flag for each write. Choose values after inspecting `limits show`: self-service values must be between the plan default and self-service ceiling, inclusive. The service rejects writes for non-configurable dimensions and rejects storage writes when managed quota enforcement is unavailable.
 
 Clear one override per command:
 
 ```shell copy
-golem account limits unset --storage
+golem account limits unset --max-storage-per-agent
 golem account limits unset --max-memory-per-agent
-golem account limits unset --monthly-memory-gb-seconds
 ```
 
-For storage, `golem account limits unset` without a flag is also accepted, but the explicit `--storage` form is clearer.
+Clearing a self-service override uses the larger of the current plan default and the active administrator grant, when present.
 
-The CLI creates non-expiring overrides. The REST API also accepts an expiry timestamp, but setting an expiry requires an administrator token. Once an override expires, it no longer participates in the effective limit; the plan default and ceiling apply again.
+The CLI creates non-expiring self-service overrides. Administrator grants use a separate administrator-token API and can have an expiry. A grant can increase the permitted amount, but never reduce it. Monthly allowances use the larger of the plan amount and the active grant. For per-agent limits, first resolve the valid self-service setting or plan default. Then use the larger of that normal limit and the active grant. For example, a plan allowance of 5 with a grant of 8 permits 8, not 13. Upgrading the plan to 10 permits 10 even while the grant remains active. A temporary grant does not overwrite a persistent self-service choice, and an expired grant becomes inactive before cleanup removes its row. Grants do not create paid-overage consent or enable a disabled resource feature.
 
 ## Usage, quotas, and operator metering
 
 These concepts are independent:
 
 - **Account usage** is the monthly, user-facing billing measurement shown by `golem account usage`.
-- **Resource limits** include the enforced per-agent storage and linear-memory caps shown by `golem account limits`; the same command also shows the monthly included-memory allowance.
+- **Resource limits** include monthly hard caps or included overage allowances and the independent per-agent memory and storage limits shown by `golem account limits`.
 - **Application quotas** are capability-style concurrency or resource controls used by agents. See [Quotas](/v1.6/develop/quotas).
-- **Operator metering switches** configure which worker-executor dimensions a deployment measures and exports. They do not enable enforcement. See [Resource metering](/v1.6/operate/resource_metering).
+- **Operator metering switches** enable monthly accounting, caps, and billing for the matching dimensions. They do not control per-agent memory safety or managed filesystem quotas. See [Resource metering](/v1.6/operate/resource_metering).
 
-Self-hosted operators can enforce filesystem and memory controls while usage metering is disabled. Conversely, an enabled meter reports consumption; it does not by itself establish a quota or resource limit.
+Self-hosted operators can enforce per-agent memory limits and managed filesystem quotas while all billing meters are disabled. Compute, memory, and filesystem billing meters are independent opt-ins. Filesystem metering enables the two separate monthly storage dimensions. When every billing meter is disabled, monthly policy has no runtime effect.

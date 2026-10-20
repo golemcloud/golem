@@ -179,7 +179,7 @@ not add a feature-specific recovery path or immediate restart.
 An *entity* is a transient guest body that runs inside an agent's durable context but is not the
 agent: a tool sidecar or a tool middleware (`AgentEntity::{Tool, ToolMiddleware}`,
 `golem-common/src/model/entity.rs`). It gets its own Wasmtime `Store` and attaches to the
-owner's `AgentFilesystem` generation (`OwnerRuntimeResources`, `worker/instance.rs`), so its
+owner's `AgentFilesystem` generation (`OwnerRuntimeResources`, `worker/instance/mod.rs`), so its
 filesystem effects are the agent's; that is why completed bodies are re-executed on replay
 rather than replaced by a recorded result.
 

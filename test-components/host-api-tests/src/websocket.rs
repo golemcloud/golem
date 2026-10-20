@@ -53,6 +53,11 @@ pub trait WebsocketTest {
     -> Result<String, String>;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
     async fn async_bidi_test(&self, url: String) -> Result<String, String>;
+    async fn receive_lock_contention(
+        &self,
+        url: String,
+        timeout_ms: u64,
+    ) -> Result<(String, Option<String>), String>;
     fn connect_result(&self, url: String) -> Result<(), String>;
 
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String>;
@@ -62,6 +67,81 @@ pub trait WebsocketTest {
         timeout_ms: u64,
         max_timeouts: u32,
     ) -> Result<String, String>;
+}
+
+#[agent_definition(ephemeral)]
+pub trait EphemeralWebsocketTest {
+    fn new(name: String) -> Self;
+    fn connect_and_receive_first(&self, url: String) -> String;
+    fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
+    async fn receive_lock_contention(
+        &self,
+        url: String,
+        timeout_ms: u64,
+    ) -> Result<(String, Option<String>), String>;
+}
+
+async fn receive_lock_contention(
+    url: &str,
+    timeout_ms: u64,
+) -> Result<(String, Option<String>), String> {
+    use futures_concurrency::future::Join;
+
+    let ws =
+        WebsocketConnection::connect(url, None, None).map_err(|e| format!("Connect: {e:?}"))?;
+    let reader_ready = golem_rust::create_promise();
+    let timed = async {
+        golem_rust::await_promise(&reader_ready).await;
+        ws.receive_with_timeout(timeout_ms).await
+    };
+    let (first, second) = (ws.receive(), timed).join().await;
+    let text = |message: WebSocketMessage| match message {
+        WebSocketMessage::Text(text) => text,
+        WebSocketMessage::Binary(bytes) => format!("{} bytes", bytes.len()),
+    };
+    Ok((
+        text(first.map_err(|e| format!("First receive: {e:?}"))?),
+        second
+            .map_err(|e| format!("Timed receive: {e:?}"))?
+            .map(text),
+    ))
+}
+
+pub struct EphemeralWebsocketTestImpl;
+
+#[agent_implementation]
+impl EphemeralWebsocketTest for EphemeralWebsocketTestImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+
+    fn connect_and_receive_first(&self, url: String) -> String {
+        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
+        match ws.blocking_receive().expect("receive failed") {
+            WebSocketMessage::Text(t) => t,
+            WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
+        }
+    }
+
+    fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
+        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
+        match ws
+            .blocking_receive_with_timeout(timeout_ms)
+            .expect("receive failed")
+        {
+            Some(WebSocketMessage::Text(t)) => Some(t),
+            Some(WebSocketMessage::Binary(b)) => Some(format!("{} bytes", b.len())),
+            None => None,
+        }
+    }
+
+    async fn receive_lock_contention(
+        &self,
+        url: String,
+        timeout_ms: u64,
+    ) -> Result<(String, Option<String>), String> {
+        receive_lock_contention(&url, timeout_ms).await
+    }
 }
 
 pub struct WebsocketTestImpl {
@@ -403,6 +483,14 @@ impl WebsocketTest for WebsocketTestImpl {
             Some(WebSocketMessage::Binary(b)) => Some(format!("{} bytes", b.len())),
             None => None,
         }
+    }
+
+    async fn receive_lock_contention(
+        &self,
+        url: String,
+        timeout_ms: u64,
+    ) -> Result<(String, Option<String>), String> {
+        receive_lock_contention(&url, timeout_ms).await
     }
 
     async fn async_bidi_test(&self, url: String) -> Result<String, String> {

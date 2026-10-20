@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::event::InternalWorkerEvent;
@@ -29,6 +30,17 @@ use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
+
+// Raw TCP input and raw TCP splice have no durable call to complete.
+// Race only their native wait, never file operations or resource deletion.
+pub(super) async fn interruptible_tcp_input<T>(
+    native: impl Future<Output = Result<T, StreamError>>,
+    wait: NativeIoWait,
+) -> Result<T, StreamError> {
+    wait.wait(native)
+        .await
+        .unwrap_or_else(|kind| Err(StreamError::Trap(wasmtime::Error::from_anyhow(kind.into()))))
+}
 
 impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn read(
@@ -85,7 +97,24 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
         self.observe_function_call("io::streams::input_stream", "blocking_read");
-        HostInputStream::blocking_read(self.table(), self_, len).await
+        if self.state.open_tcp_input_streams.contains(&self_.rep()) {
+            let interrupt = NativeIoWait::new(self.interrupt_sources());
+            let native = HostInputStream::blocking_read(self.table(), self_, len);
+            interruptible_tcp_input(native, interrupt).await
+        } else if self
+            .state
+            .open_filesystem_input_streams
+            .contains(&self_.rep())
+        {
+            let interrupt = self.create_interrupt_signal();
+            observe_file_stream(
+                interrupt,
+                HostInputStream::blocking_read(self.table(), self_, len),
+            )
+            .await
+        } else {
+            HostInputStream::blocking_read(self.table(), self_, len).await
+        }
     }
 
     async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
@@ -136,7 +165,24 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<u64, StreamError> {
         self.observe_function_call("io::streams::input_stream", "blocking_skip");
-        HostInputStream::blocking_skip(self.table(), self_, len).await
+        if self.state.open_tcp_input_streams.contains(&self_.rep()) {
+            let interrupt = NativeIoWait::new(self.interrupt_sources());
+            let native = HostInputStream::blocking_skip(self.table(), self_, len);
+            interruptible_tcp_input(native, interrupt).await
+        } else if self
+            .state
+            .open_filesystem_input_streams
+            .contains(&self_.rep())
+        {
+            let interrupt = self.create_interrupt_signal();
+            observe_file_stream(
+                interrupt,
+                HostInputStream::blocking_skip(self.table(), self_, len),
+            )
+            .await
+        } else {
+            HostInputStream::blocking_skip(self.table(), self_, len).await
+        }
     }
 
     fn subscribe(&mut self, self_: Resource<InputStream>) -> wasmtime::Result<Resource<Pollable>> {
@@ -158,6 +204,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         let result = HostInputStream::drop(self.table(), rep).await;
         if result.is_ok() {
             // Reps can be reused only after a successful drop.
+            self.state.open_tcp_input_streams.remove(&stream_rep);
             self.state.open_filesystem_input_streams.remove(&stream_rep);
         }
         result
@@ -187,7 +234,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                         return match recorded.result {
                             Ok(0) => Ok(0),
                             Ok(budget) => {
-                                self.table().get_mut(&self_)?.write_ready().await?;
+                                let interrupt = self.create_interrupt_signal();
+                                observe_file_stream(
+                                    interrupt,
+                                    self.table().get_mut(&self_)?.write_ready(),
+                                )
+                                .await?;
                                 Ok(budget)
                             }
                             Err(err) => Err(StreamError::from(err)),
@@ -252,7 +304,20 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
     async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
         self.observe_function_call("io::streams::output_stream", "blocking_flush");
-        HostOutputStream::blocking_flush(self.table(), self_).await
+        if self
+            .state
+            .open_filesystem_output_streams
+            .contains_key(&self_.rep())
+        {
+            let interrupt = self.create_interrupt_signal();
+            observe_file_stream(
+                interrupt,
+                HostOutputStream::blocking_flush(self.table(), self_),
+            )
+            .await
+        } else {
+            HostOutputStream::blocking_flush(self.table(), self_).await
+        }
     }
 
     fn subscribe(&mut self, self_: Resource<OutputStream>) -> wasmtime::Result<Resource<Pollable>> {
@@ -304,14 +369,39 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<u64, StreamError> {
         self.observe_function_call("io::streams::output_stream", "blocking_splice");
-        if self
-            .state
-            .open_filesystem_output_streams
-            .contains_key(&self_.rep())
-        {
-            self.table().get_mut(&self_)?.write_ready().await?;
+        let rep = self_.rep();
+        let tcp_input = self.state.open_tcp_input_streams.contains(&src.rep());
+        let file_output = self.state.open_filesystem_output_streams.contains_key(&rep);
+        if file_output {
+            let file_input = self
+                .state
+                .open_filesystem_input_streams
+                .contains(&src.rep());
+            let readiness = if file_input || tcp_input {
+                let interrupt = self.create_interrupt_signal();
+                observe_file_stream(interrupt, self.table().get_mut(&self_)?.write_ready()).await
+            } else {
+                self.table().get_mut(&self_)?.write_ready().await
+            };
+            readiness?;
         }
-        HostOutputStream::blocking_splice(self.table(), self_, src, len).await
+        let raw_tcp_output = self.state.open_tcp_output_streams.contains(&rep);
+        // Dropping observation retains any entered file work under the filesystem owner.
+        let file_splice = file_output
+            && (tcp_input
+                || self
+                    .state
+                    .open_filesystem_input_streams
+                    .contains(&src.rep()));
+        let file_interrupt = file_splice.then(|| self.create_interrupt_signal());
+        let interrupt =
+            (tcp_input && raw_tcp_output).then(|| NativeIoWait::new(self.interrupt_sources()));
+        let native = HostOutputStream::blocking_splice(self.table(), self_, src, len);
+        match (interrupt, file_interrupt) {
+            (Some(interrupt), _) => interruptible_tcp_input(native, interrupt).await,
+            (_, Some(interrupt)) => observe_file_stream(interrupt, native).await,
+            _ => native.await,
+        }
     }
 
     async fn drop(&mut self, rep: Resource<OutputStream>) -> wasmtime::Result<()> {
@@ -319,6 +409,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let handle = rep.rep();
         let result = HostOutputStream::drop(self.table(), rep).await;
         if result.is_ok() {
+            self.state.open_tcp_output_streams.remove(&handle);
             self.state.open_filesystem_output_streams.remove(&handle);
         }
         result
@@ -334,6 +425,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
+async fn observe_file_stream<T>(
+    interrupt: crate::wasi_filesystem::FilesystemInterruptSignal,
+    native: impl std::future::Future<Output = Result<T, StreamError>>,
+) -> Result<T, StreamError> {
+    crate::wasi_filesystem::observe_filesystem_operation(interrupt, native)
+        .await
+        .map_err(|kind| StreamError::Trap(wasmtime::Error::from(kind)))?
+}
+
+/// Re-reads exactly `recorded_len` bytes from the restored file during replay.
 async fn replay_file_stream_read<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: u32,
@@ -342,8 +443,13 @@ async fn replay_file_stream_read<Ctx: WorkerCtx>(
     let mut collected = Vec::with_capacity(recorded_len as usize);
     while (collected.len() as u64) < recorded_len {
         let remaining = recorded_len - collected.len() as u64;
-        match HostInputStream::blocking_read(ctx.table(), Resource::new_borrow(handle), remaining)
-            .await
+        let stream = Resource::<InputStream>::new_borrow(handle);
+        let interrupt = ctx.create_interrupt_signal();
+        match observe_file_stream(
+            interrupt,
+            HostInputStream::blocking_read(ctx.table(), stream, remaining),
+        )
+        .await
         {
             Ok(chunk) if !chunk.is_empty() => collected.extend_from_slice(&chunk),
             Ok(_) | Err(StreamError::Closed) => {
@@ -365,10 +471,12 @@ async fn replay_file_stream_skip<Ctx: WorkerCtx>(
 ) -> Result<u64, StreamError> {
     let mut skipped = 0;
     while skipped < recorded_len {
-        match HostInputStream::blocking_skip(
-            ctx.table(),
-            Resource::new_borrow(handle),
-            recorded_len - skipped,
+        let remaining = recorded_len - skipped;
+        let stream = Resource::<InputStream>::new_borrow(handle);
+        let interrupt = ctx.create_interrupt_signal();
+        match observe_file_stream(
+            interrupt,
+            HostInputStream::blocking_skip(ctx.table(), stream, remaining),
         )
         .await
         {
@@ -386,4 +494,120 @@ fn file_stream_replay_divergence(got: u64, expected: u64) -> StreamError {
     StreamError::Trap(wasmtime::Error::msg(format!(
         "file stream replay divergence: the file provided {got} bytes but {expected} bytes were recorded"
     )))
+}
+
+#[cfg(test)]
+mod tcp_input_tests {
+    use super::{NativeIoWait, interruptible_tcp_input};
+    use golem_common::model::Timestamp;
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use std::future::{pending, poll_fn, ready};
+    use std::task::Poll;
+    use test_r::{test, timeout};
+    use wasmtime_wasi::StreamError;
+
+    fn assert_interrupt<T: std::fmt::Debug>(
+        result: Result<T, StreamError>,
+        expected: InterruptKind,
+    ) {
+        match result {
+            Err(StreamError::Trap(error)) => {
+                assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected))
+            }
+            other => panic!("expected typed interrupt trap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn prepublished_signal_interrupts_tcp_input() {
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        assert_interrupt(
+            interruptible_tcp_input(
+                pending::<Result<u64, StreamError>>(),
+                NativeIoWait::with_signal(ready(kind)),
+            )
+            .await,
+            kind,
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn signal_interrupts_pending_tcp_input() {
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        let (pending_tx, pending_rx) = tokio::sync::oneshot::channel();
+        let (signal_tx, signal_rx) = tokio::sync::oneshot::channel();
+        let mut pending_tx = Some(pending_tx);
+        let native = poll_fn(|_| {
+            if let Some(tx) = pending_tx.take() {
+                let _ = tx.send(());
+            }
+            Poll::<Result<u64, StreamError>>::Pending
+        });
+        let input = interruptible_tcp_input(
+            native,
+            NativeIoWait::with_signal(async { signal_rx.await.unwrap() }),
+        );
+        let trigger = async {
+            pending_rx.await.unwrap();
+            signal_tx.send(kind).unwrap();
+        };
+        let (result, ()) = tokio::join!(input, trigger);
+        assert_interrupt(result, kind);
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn tcp_input_completion_before_signal_keeps_result() {
+        let (signal_tx, signal_rx) = tokio::sync::oneshot::channel();
+        let result = interruptible_tcp_input(
+            ready(Ok::<_, StreamError>(vec![b'x'])),
+            NativeIoWait::with_signal(async { signal_rx.await.unwrap() }),
+        )
+        .await;
+        assert_eq!(result.unwrap(), vec![b'x']);
+        assert!(
+            signal_tx
+                .send(InterruptKind::Suspend(Timestamp::now_utc()))
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod file_observation_tests {
+    use super::*;
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn pending_file_stream_observation_preserves_typed_stop() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let error = observe_file_stream(
+            Box::pin(std::future::ready(kind)),
+            std::future::pending::<Result<(), StreamError>>(),
+        )
+        .await
+        .unwrap_err();
+        let StreamError::Trap(error) = error else {
+            panic!("typed trap expected");
+        };
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+    }
+
+    #[test]
+    async fn file_stream_completion_wins_before_stop() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        assert_eq!(
+            observe_file_stream(
+                Box::pin(std::future::ready(kind)),
+                std::future::ready(Ok(19))
+            )
+            .await
+            .unwrap(),
+            19
+        );
+    }
 }

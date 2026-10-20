@@ -6193,6 +6193,24 @@ type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, DurableR
 
 struct ReceiveGuard {
     _live_call: LiveCallPermit,
+    interrupt: Option<crate::durable_host::stream_transport::FrontendInterrupt>,
+}
+
+async fn await_first_durable_source<F: Future + Send>(
+    native: F,
+    guard: &mut Option<ReceiveGuard>,
+) -> Result<F::Output, InterruptKind>
+where
+    F::Output: Send,
+{
+    match guard.as_mut().and_then(|guard| guard.interrupt.as_mut()) {
+        Some(interrupt) => tokio::select! {
+            biased;
+            result = native => Ok(result),
+            kind = interrupt => Err(kind),
+        },
+        None => Ok(native.await),
+    }
 }
 
 struct DurableReadWait {
@@ -6259,6 +6277,7 @@ struct PrepareInputObservation {
     observation: PendingConsumerObservation,
     streams: StreamSession,
     replay: ReplayState,
+    guest_order: Option<super::replay_state::GuestReadOrder>,
     activity: TailActivity,
     result: oneshot::Sender<Result<StreamReadObserver, WorkerExecutorError>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -6326,6 +6345,7 @@ impl PrepareInputObservation {
         }
         InputObservationDelivery {
             replay: self.replay,
+            guest_order: self.guest_order,
             activity: self.activity,
             runtime_teardown: self.runtime_teardown,
             cleanup_sink: self.cleanup_sink,
@@ -6511,6 +6531,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx
                 let ctx = access.get();
                 ReceiveGuard {
                     _live_call: LiveCallPermit::new(ctx.state.live_host_call_counter()),
+                    interrupt: Some(ctx.create_interrupt_signal()),
                 }
             }))
         };
@@ -6898,7 +6919,7 @@ impl DurableInputEndpoint {
         let recorded_observation = self.observations.remove(&ordinal);
         let role = self.role;
         Box::pin(async move {
-            let _guard = guard;
+            let mut guard = guard;
             let reader_id = reader_id.await?;
             let guest = matches!(observation, StreamConsumerObservation::Guest { .. });
             if !guest
@@ -6935,12 +6956,14 @@ impl DurableInputEndpoint {
                         record_source_journal_lag(reader.as_mut(), source_after, true).await;
                     }
                     let result = match reader.as_mut() {
-                        Some(reader) => match suspension {
-                            Some(wait) if reader.source_wait_can_suspend() => {
-                                wait.wait(reader.next()).await?
+                        Some(reader) => {
+                            let can_suspend = reader.source_wait_can_suspend();
+                            let native = reader.next();
+                            match suspension {
+                                Some(wait) if can_suspend => wait.wait(native).await?,
+                                _ => await_first_durable_source(native, &mut guard).await?,
                             }
-                            _ => reader.next().await,
-                        },
+                        }
                         None => Ok(None),
                     };
                     result.map_err(SessionError::from)?
@@ -7325,6 +7348,7 @@ impl DurableInputProducer {
                 observation,
                 streams: self.input.streams.clone(),
                 replay: ctx.state.replay_state.clone(),
+                guest_order: ctx.guest_read_order(),
                 activity: ctx.tail_work_tracker().activity(),
                 result,
                 runtime_teardown: self.runtime_teardown.clone(),
@@ -7479,6 +7503,7 @@ impl DurableInputProducer {
             self.pending = Some(self.input.receive_observed(
                 Some(ReceiveGuard {
                     _live_call: live_call,
+                    interrupt: Some(ctx.create_interrupt_signal()),
                 }),
                 suspension,
                 if guest {

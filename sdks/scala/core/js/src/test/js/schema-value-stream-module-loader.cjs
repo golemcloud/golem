@@ -181,6 +181,12 @@ Module._load = function (request) {
       installCard: missingHostImport("installCard"),
     };
   }
+  if (request === "wasm-rquickjs:execution") {
+    return {
+      runJavaScript: missingHostImport("runJavaScript"),
+      startJavaScript: missingHostImport("startJavaScript"),
+    };
+  }
   if (request === "golem:permissions/kernel-introspection@0.1.0") {
     return {
       listModules: missingHostImport("listModules"),

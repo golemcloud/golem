@@ -31,6 +31,7 @@ use super::{OidcCallbackBehaviour, ResponseBody, RichRouteSecurity, RouteExecuti
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
 use golem_schema::schema::render::json_value::to_json_value_redacted;
+use golem_service_base::body_limit::RequestBodyLimit;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::OpenApiSpecFormat;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -48,6 +49,7 @@ pub struct RequestHandler {
     raw_handler: RawHandler,
     mounted_dispatch: MountedDispatch,
     openapi_service: Arc<OpenApiService>,
+    body_limit: RequestBodyLimit,
 }
 
 #[derive(Debug)]
@@ -77,6 +79,7 @@ impl RequestHandler {
         http_session_limits: crate::config::HttpSessionLimits,
         initial_files: Arc<InitialAgentFilesService>,
         openapi_service: Arc<OpenApiService>,
+        max_body_size: usize,
     ) -> Self {
         Self {
             route_resolver,
@@ -85,6 +88,7 @@ impl RequestHandler {
             oidc_handler,
             webhook_callback_handler,
             openapi_service,
+            body_limit: RequestBodyLimit::new(max_body_size),
             mounted_dispatch: MountedDispatch::new(
                 worker_service.clone(),
                 &http_session_limits,
@@ -124,6 +128,10 @@ impl RequestHandler {
             .map_err(RequestHandlerError::from)?;
         let mut request = RichRequest::new(request);
         let request_method = request.underlying.method().clone();
+        let body_limit = self.body_limit.apply(&mut request.underlying);
+        if let Some(response) = body_limit.rejection() {
+            return finish_selected_response(Ok(response), &request, &matching_route);
+        }
 
         if matches!(
             matching_route.route.behavior,
@@ -142,7 +150,8 @@ impl RequestHandler {
                     domain = %matching_route.domain, method = %request_method,
                     route = %matching_route.route.path.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
                 ));
-        let execution_result = execute.await;
+        let execution_result = execute.await.and_then(route_execution_result_to_response);
+        let execution_result = body_limit.rejection().map(Ok).unwrap_or(execution_result);
         finish_selected_response(execution_result, &request, &matching_route)
     }
 
@@ -273,7 +282,7 @@ async fn require_available_security(
 }
 
 fn finish_selected_response(
-    result: Result<RouteExecutionResult, RequestHandlerError>,
+    result: Result<Response, RequestHandlerError>,
     request: &RichRequest,
     selected: &ResolvedRouteEntry,
 ) -> Result<Response, RequestFailure> {
@@ -281,7 +290,7 @@ fn finish_selected_response(
         selected.route.behavior,
         RichRouteBehaviour::AgentFilesystem(_)
     );
-    match result.and_then(route_execution_result_to_response) {
+    match result {
         Ok(mut response) => {
             apply_cors_outgoing_middleware(&mut response, request, selected)?;
             if live_files {
@@ -559,6 +568,7 @@ mod mounted_tests {
                     golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
                 ))),
                 Arc::new(OpenApiService::new(harness.worker_service.clone())),
+                crate::config::RequestBodyLimits::default().http_api,
             );
             let request = Request::builder()
                 .uri(input["target"].as_str().unwrap().parse().unwrap())
@@ -670,9 +680,12 @@ mod mounted_tests {
                     panic!("Unavailable route must not authenticate or dispatch")
                 })
                 .await;
-                let response =
-                    finish_selected_response(result, &RichRequest::new(request), &selected)
-                        .unwrap();
+                let response = finish_selected_response(
+                    result.and_then(route_execution_result_to_response),
+                    &RichRequest::new(request),
+                    &selected,
+                )
+                .unwrap();
                 assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
                 assert_eq!(
                     response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
@@ -753,7 +766,11 @@ mod mounted_tests {
             ),
         ] {
             let failed = result.is_err();
-            let result = finish_selected_response(result, &request, &selected);
+            let result = finish_selected_response(
+                result.and_then(route_execution_result_to_response),
+                &request,
+                &selected,
+            );
             assert_eq!(
                 result.is_err(),
                 failed,

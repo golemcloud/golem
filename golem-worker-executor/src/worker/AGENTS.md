@@ -47,7 +47,7 @@ result lookup; the instance must never be started again (`INACTIVE_EPHEMERAL_AGE
 
 ## Entity scheduling
 
-`OwnerExecution` (`instance.rs`) is the single durable execution stream for an owner and all of
+`OwnerExecution` (`instance/mod.rs`) is the single durable execution stream for an owner and all of
 its entity Stores; `HostedInstance::invoke_scoped` runs one entity export and destroys its Store.
 `EntitySlot` (`entity_slot.rs`) only registers active invocations and never grants execution;
 `OwnerLane` (`owner_lane.rs`) alone serializes filesystem-capable bodies and returns
@@ -59,5 +59,5 @@ or move admission into the slot.
 Revert and fork retain the exact inclusive oplog prefix at the cut point. A retained `Start`
 without its terminal uses ordinary incomplete-call recovery. A retained accessor `End` without
 its `CompletionDelivered`/`CompletionDiscarded` marker uses replay-tail delivery. Outcomes beyond
-the cut do not constrain these calls. `cut_point.rs` still rejects cuts splitting an atomic-region
-or remote-transaction outcome; audit new paired constructs against that validation.
+the cut do not constrain these calls. `cut_point.rs` still rejects cuts splitting a remote-transaction
+outcome; audit new paired constructs against that validation.

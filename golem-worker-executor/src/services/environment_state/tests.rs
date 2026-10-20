@@ -1412,6 +1412,7 @@ impl RegistryService for MockRegistryService {
     async fn get_resource_limits(
         &self,
         _: AccountId,
+        _metering: golem_service_base::clients::registry::ResourceUsageMetering,
     ) -> Result<ResourceLimits, RegistryServiceError> {
         unimplemented!()
     }

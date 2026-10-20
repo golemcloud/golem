@@ -17,16 +17,18 @@ use crate::api::error::ApiError;
 use crate::services::account_resource_override::AccountResourceOverrideService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::auth::AuthService;
+use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsage, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit, SetMemoryLimit,
-    SetStorageLimit, StorageLimit,
+    AccountResourcePolicy, AccountUsage, AdminResourceGrantChange, AdminResourceGrantChangeValue,
+    AdminResourceGrantDimension, AdminResourceGrantEventType, AdminResourceGrantReason,
+    DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit, MonthlyUsageModeTransition,
+    SetAdminResourceGrant, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_service_base::repo::SqlDateTime;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -37,6 +39,58 @@ pub struct AccountUsageApi {
     account_usage_service: Arc<AccountUsageService>,
     account_resource_override_service: Arc<AccountResourceOverrideService>,
     auth_service: Arc<AuthService>,
+}
+
+// Poem attaches response examples to schemas, so DELETE needs its own response schema to show the
+// cleared transition rather than the granted transition used by PUT.
+#[derive(Object)]
+#[oai(example, rename_all = "camelCase", skip_serializing_if_is_none)]
+struct ClearedAdminResourceGrantChange {
+    account_id: AccountId,
+    dimension: AdminResourceGrantDimension,
+    event_type: AdminResourceGrantEventType,
+    reason: AdminResourceGrantReason,
+    actor_account_id: AccountId,
+    changed_at: DateTime<Utc>,
+    old_value: u64,
+    new_value: AdminResourceGrantChangeValue,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+impl poem_openapi::types::Example for ClearedAdminResourceGrantChange {
+    fn example() -> Self {
+        Self {
+            account_id: AccountId(uuid::Uuid::from_u128(1)),
+            dimension: AdminResourceGrantDimension::MonthlyComputeGcu,
+            event_type: AdminResourceGrantEventType::OverrideCleared,
+            reason: AdminResourceGrantReason::Support,
+            actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
+            changed_at: DateTime::from_timestamp(1_700_000_000, 0)
+                .expect("example timestamp is valid"),
+            old_value: 10,
+            new_value: AdminResourceGrantChangeValue::from_raw(
+                AdminResourceGrantDimension::MonthlyComputeGcu,
+                5,
+            ),
+            expires_at: None,
+        }
+    }
+}
+
+impl From<AdminResourceGrantChange> for ClearedAdminResourceGrantChange {
+    fn from(value: AdminResourceGrantChange) -> Self {
+        Self {
+            account_id: value.account_id,
+            dimension: value.dimension,
+            event_type: value.event_type,
+            reason: value.reason,
+            actor_account_id: value.actor_account_id,
+            changed_at: value.changed_at,
+            old_value: value.old_value,
+            new_value: value.new_value,
+            expires_at: value.expires_at,
+        }
+    }
 }
 
 #[OpenApi(
@@ -64,7 +118,7 @@ impl AccountUsageApi {
     /// the registry last received a usage snapshot for the period, or the response time if no
     /// snapshot exists. Metering status distinguishes enabled meters that measured zero from
     /// disabled meters. `unknown` means no usage producer has reported metering state for the
-    /// period. Durable and ephemeral storage both reflect the shared filesystem meter.
+    /// period. Durable and ephemeral storage both use storage metering.
     #[oai(
         path = "/:account_id/usage",
         method = "get",
@@ -133,31 +187,69 @@ impl AccountUsageApi {
         record.result(Ok(Json(response)))
     }
 
-    /// Get effective storage-per-agent override metadata for an account.
+    /// Get the current account resource policy.
+    ///
+    /// The policy combines Plan Row monthly amounts with current UTC-period usage and both
+    /// per-agent safety limits. Enabled monthly dimensions report measured usage and remaining
+    /// capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
+    /// behavior. `unknown` means no producer has reported metering state; it does not mean disabled
+    /// or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
+    /// GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
+    /// `includedAllowance`, according to the account's current usage mode.
     #[oai(
-        path = "/:account_id/resource-overrides/max-storage-per-agent",
+        path = "/:account_id/limits",
         method = "get",
-        operation_id = "get_account_storage_override"
+        operation_id = "get_account_limits"
     )]
-    async fn get_storage_override(
+    async fn get_limits(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<StorageLimit>> {
+    ) -> ApiResult<Json<AccountResourcePolicy>> {
+        let record =
+            recorded_http_api_request!("get_account_limits", account_id = account_id.0.to_string());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let policy = self
+            .account_usage_service
+            .get_resource_policy(account_id.0, &auth)
+            .instrument(record.span.clone())
+            .await?;
+        record.result(Ok(Json(policy)))
+    }
+
+    /// Explicitly enter or leave paid-overage mode.
+    ///
+    /// Only the account owner can enable overage, and the current Plan Row must permit it.
+    /// Administrators impersonating the account may force `hardLimit`, but cannot enable overage.
+    /// Each successful transition records immutable consent history. Requests that repeat the
+    /// current mode are rejected and do not add history.
+    #[oai(
+        path = "/:account_id/monthly-usage-mode",
+        method = "put",
+        operation_id = "set_account_monthly_usage_mode"
+    )]
+    async fn set_monthly_usage_mode(
+        &self,
+        account_id: Path<AccountId>,
+        request: Json<SetMonthlyUsageMode>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<MonthlyUsageModeTransition>> {
         let record = recorded_http_api_request!(
-            "get_account_storage_override",
+            "set_account_monthly_usage_mode",
             account_id = account_id.0.to_string()
         );
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let storage_limit = self
-            .account_resource_override_service
-            .get_max_disk_space_per_worker(account_id.0, &auth)
+        let response = self
+            .account_usage_service
+            .set_monthly_usage_mode(account_id.0, request.0.mode, &auth)
             .instrument(record.span.clone())
-            .await?;
-        record.result(Ok(Json(storage_limit)))
+            .await
+            .map(Json)
+            .map_err(ApiError::from);
+        record.result(response)
     }
 
-    /// Set a storage-per-agent override for an account. Setting an expiry requires an admin token.
+    /// Set a storage-per-agent override for the authenticated account owner.
     #[oai(
         path = "/:account_id/resource-overrides/max-storage-per-agent",
         method = "put",
@@ -176,12 +268,7 @@ impl AccountUsageApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = self
             .account_resource_override_service
-            .set_max_disk_space_per_worker(
-                account_id.0,
-                request.0.value,
-                request.0.expires_at.map(SqlDateTime::new),
-                &auth,
-            )
+            .set_max_disk_space_per_worker(account_id.0, request.0.value, &auth)
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -217,31 +304,7 @@ impl AccountUsageApi {
         record.result(response)
     }
 
-    /// Get the effective maximum linear memory per agent.
-    #[oai(
-        path = "/:account_id/resource-overrides/max-memory-per-agent",
-        method = "get",
-        operation_id = "get_account_max_memory_override"
-    )]
-    async fn get_max_memory_override(
-        &self,
-        account_id: Path<AccountId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
-        let record = recorded_http_api_request!(
-            "get_account_max_memory_override",
-            account_id = account_id.0.to_string()
-        );
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let response = self
-            .account_resource_override_service
-            .get_max_memory_per_worker(account_id.0, &auth)
-            .instrument(record.span.clone())
-            .await?;
-        record.result(Ok(Json(response)))
-    }
-
-    /// Set the maximum linear memory per agent. Setting an expiry requires an admin token.
+    /// Set the maximum linear memory per agent for the authenticated account owner.
     #[oai(
         path = "/:account_id/resource-overrides/max-memory-per-agent",
         method = "put",
@@ -260,12 +323,7 @@ impl AccountUsageApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = self
             .account_resource_override_service
-            .set_max_memory_per_worker(
-                account_id.0,
-                request.0.value,
-                request.0.expires_at.map(SqlDateTime::new),
-                &auth,
-            )
+            .set_max_memory_per_worker(account_id.0, request.0.value, &auth)
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -299,55 +357,31 @@ impl AccountUsageApi {
         record.result(response)
     }
 
-    /// Get the effective monthly memory GB-seconds allowance.
+    /// Grant an account additional resources.
+    ///
+    /// This operation requires an administrator token. Promotional grants require a future
+    /// expiry. Grants do not change the account's paid-overage consent.
     #[oai(
-        path = "/:account_id/resource-overrides/monthly-memory-gb-seconds",
-        method = "get",
-        operation_id = "get_account_monthly_memory_override"
-    )]
-    async fn get_monthly_memory_override(
-        &self,
-        account_id: Path<AccountId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
-        let record = recorded_http_api_request!(
-            "get_account_monthly_memory_override",
-            account_id = account_id.0.to_string()
-        );
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let response = self
-            .account_resource_override_service
-            .get_monthly_memory_gb_seconds(account_id.0, &auth)
-            .instrument(record.span.clone())
-            .await?;
-        record.result(Ok(Json(response)))
-    }
-
-    /// Set the monthly memory GB-seconds allowance. Setting an expiry requires an admin token.
-    #[oai(
-        path = "/:account_id/resource-overrides/monthly-memory-gb-seconds",
+        path = "/:account_id/resource-grants/:dimension",
         method = "put",
-        operation_id = "set_account_monthly_memory_override"
+        operation_id = "set_account_admin_resource_grant"
     )]
-    async fn set_monthly_memory_override(
+    async fn set_admin_resource_grant(
         &self,
         account_id: Path<AccountId>,
-        request: Json<SetMemoryLimit>,
+        dimension: Path<AdminResourceGrantDimension>,
+        request: Json<SetAdminResourceGrant>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
+    ) -> ApiResult<Json<AdminResourceGrantChange>> {
         let record = recorded_http_api_request!(
-            "set_account_monthly_memory_override",
-            account_id = account_id.0.to_string()
+            "set_account_admin_resource_grant",
+            account_id = account_id.0.to_string(),
+            dimension = dimension.0.to_string()
         );
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = self
             .account_resource_override_service
-            .set_monthly_memory_gb_seconds(
-                account_id.0,
-                request.0.value,
-                request.0.expires_at.map(SqlDateTime::new),
-                &auth,
-            )
+            .set_admin_grant(account_id.0, dimension.0, request.0, &auth)
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -355,29 +389,54 @@ impl AccountUsageApi {
         record.result(response)
     }
 
-    /// Clear the monthly memory GB-seconds allowance override.
+    /// Clear an active admin resource grant.
     #[oai(
-        path = "/:account_id/resource-overrides/monthly-memory-gb-seconds",
+        path = "/:account_id/resource-grants/:dimension",
         method = "delete",
-        operation_id = "clear_account_monthly_memory_override"
+        operation_id = "clear_account_admin_resource_grant"
     )]
-    async fn clear_monthly_memory_override(
+    async fn clear_admin_resource_grant(
         &self,
         account_id: Path<AccountId>,
+        dimension: Path<AdminResourceGrantDimension>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
+    ) -> ApiResult<Json<ClearedAdminResourceGrantChange>> {
         let record = recorded_http_api_request!(
-            "clear_account_monthly_memory_override",
-            account_id = account_id.0.to_string()
+            "clear_account_admin_resource_grant",
+            account_id = account_id.0.to_string(),
+            dimension = dimension.0.to_string()
         );
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = self
             .account_resource_override_service
-            .clear_monthly_memory_gb_seconds(account_id.0, &auth)
+            .clear_admin_grant(account_id.0, dimension.0, &auth)
             .instrument(record.span.clone())
             .await
+            .map(ClearedAdminResourceGrantChange::from)
             .map(Json)
             .map_err(ApiError::from);
         record.result(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClearedAdminResourceGrantChange;
+    use golem_common::model::account_usage::{
+        AdminResourceGrantChange, AdminResourceGrantEventType,
+    };
+    use poem_openapi::types::Example;
+    use test_r::test;
+
+    #[test]
+    fn admin_resource_grant_response_examples_match_the_operation() {
+        assert_eq!(
+            AdminResourceGrantChange::example().event_type,
+            AdminResourceGrantEventType::OverrideGranted
+        );
+        assert_eq!(
+            ClearedAdminResourceGrantChange::example().event_type,
+            AdminResourceGrantEventType::OverrideCleared
+        );
     }
 }

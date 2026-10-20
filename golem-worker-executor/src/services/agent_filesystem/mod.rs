@@ -55,22 +55,22 @@ const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
 /// Resolves an agent's byte allocation into storage limits with `policy`, on storage that
 /// accounts for each agent as `accounting` says.
 ///
-/// Storage without per-agent accounting enforces no per-agent limit, so every allocation gives
-/// `Unlimited` there. Elsewhere, an allocation at or above the effectively-unlimited sentinel of
-/// the resource service gives `Unlimited`, and a smaller allocation gives the finite limits of
-/// `policy`, which refuses zero bytes.
+/// An allocation at or above the effectively-unlimited sentinel gives `Unlimited`. A finite
+/// allocation requires per-agent accounting and resolves through `policy`, which refuses zero
+/// bytes. Storage without that capability rejects finite policy rather than dropping its limit.
 fn resolve_storage_limits(
     policy: &FilesystemObjectLimitPolicyConfig,
     allocated_bytes: u64,
     accounting: AgentAccounting,
 ) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
     match accounting {
-        AgentAccounting::Unaccounted => Ok(ResolvedStorageLimits::Unlimited),
-        AgentAccounting::ProjectQuotas | AgentAccounting::Development
-            if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE =>
-        {
+        _ if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE => {
             Ok(ResolvedStorageLimits::Unlimited)
         }
+        AgentAccounting::Unaccounted => Err(FilesystemStorageError::verification(
+            "enforce finite storage limit on a quota-capable backend",
+            Path::new("<configuration>"),
+        )),
         AgentAccounting::ProjectQuotas | AgentAccounting::Development => policy
             .resolve(allocated_bytes)
             .map(ResolvedStorageLimits::Finite),
@@ -224,11 +224,9 @@ impl AgentFilesystems {
 
     /// Resolves an agent's byte allocation into the limits installed on a new generation.
     ///
-    /// Storage without per-agent accounting gives `Unlimited` for every allocation. On other
-    /// storage, allocations at or above the resource service's effectively-unlimited sentinel
-    /// produce `Unlimited`; smaller allocations also derive a bounded object limit. Zero or
-    /// unrepresentable finite allocations return a verification error and must be rejected before
-    /// creation.
+    /// Allocations at or above the effectively-unlimited sentinel produce `Unlimited`. Smaller
+    /// allocations require a quota-capable backend and derive a bounded object limit. Unsupported,
+    /// zero or unrepresentable finite allocations must be rejected before creation.
     pub(crate) fn resolved_limits(
         &self,
         allocated_bytes: u64,
@@ -519,11 +517,33 @@ mod tests {
     }
 
     #[test]
-    fn storage_without_per_agent_accounting_enforces_no_limit() {
+    fn unaccounted_storage_cannot_accept_a_finite_registry_limit() {
+        let policy = FilesystemObjectLimitPolicyConfig::default();
+        let sentinel = AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE;
+        for allocated_bytes in [0, 1024, sentinel - 1] {
+            let error =
+                resolve_storage_limits(&policy, allocated_bytes, AgentAccounting::Unaccounted)
+                    .expect_err("a finite Registry safety limit requires a quota-capable backend");
+            assert!(
+                error.to_string().contains("finite storage limit"),
+                "{error}"
+            );
+        }
+        for allocated_bytes in [sentinel, u64::MAX] {
+            assert_eq!(
+                resolve_storage_limits(&policy, allocated_bytes, AgentAccounting::Unaccounted)
+                    .unwrap(),
+                ResolvedStorageLimits::Unlimited
+            );
+        }
+    }
+
+    #[test]
+    fn storage_without_per_agent_accounting_accepts_only_unlimited_policy() {
         let policy = FilesystemObjectLimitPolicyConfig::default();
         let sentinel = AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE;
 
-        [0, 1024 * 1024 * 1024, sentinel - 1, sentinel, u64::MAX]
+        [sentinel, u64::MAX]
             .into_iter()
             .for_each(|allocated_bytes| {
                 assert_eq!(

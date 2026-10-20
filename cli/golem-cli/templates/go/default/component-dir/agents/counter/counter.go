@@ -16,12 +16,14 @@ type AddIn struct{ By int64 }
 var Agent = golem.DefineAgent[ID](golem.Spec{
 	Name:        "CounterAgent",
 	Description: "A simple durable counter",
+	HTTP:        &golem.Mount{Path: "/counters/{name}", CORS: []string{"*"}},
 })
 
 // Method descriptors are package-level vars: the same value drives the published
 // schema, the implementation binding, and calls from other agents.
 var (
-	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Description("Increase the count by one"))
-	Add       = Agent.Method[AddIn, int64]("add", golem.Description("Add to the count"))
-	Value     = Agent.Method[golem.Unit, int64]("value", golem.Description("Return the current value"))
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Description("Increase the count by one"), golem.HTTP(golem.POST("/increment")))
+	Add       = Agent.Method[AddIn, int64]("add", golem.Description("Add to the count"), golem.HTTP(golem.POST("/add")))
+	Value     = Agent.Method[golem.Unit, int64]("value", golem.Description("Return the current value"), golem.HTTP(golem.GET("/value")))
+	Reset     = Agent.Method[golem.Unit, golem.Unit]("reset", golem.Description("Reset the count"), golem.HTTP(golem.POST("/reset")))
 )

@@ -22,6 +22,7 @@ use wasmtime_wasi::cli::{IsTerminal, Stderr, StdinStream, Stdout, StdoutStream};
 use wasmtime_wasi::{InputStream, OutputStream, Pollable, StreamError, StreamResult};
 
 pub mod error;
+pub(crate) mod native_wait;
 pub mod poll;
 pub mod streams;
 

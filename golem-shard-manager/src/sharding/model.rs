@@ -584,6 +584,13 @@ impl ShardLeaseState {
         std::mem::take(&mut self.pending_rebalance)
     }
 
+    /// Whether any stored lease has expired at `now`, by the same rule as [`Self::housekeep`].
+    pub fn has_expired_lease(&self, now: DateTime<Utc>) -> bool {
+        self.executor_leases
+            .values()
+            .any(|lease| now >= lease.expires_at)
+    }
+
     pub fn housekeep(&mut self, now: DateTime<Utc>) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
         let expired: Vec<ExecutorId> = self
             .executor_leases
@@ -1387,6 +1394,16 @@ mod tests {
         assert_eq!(sets[1].shard_ids, BTreeSet::new());
         assert_eq!(sets[2].shard_ids, shards(&[4]));
         assert_eq!(shard_state.get_unassigned_shards(), shards(&[1, 3, 5]));
+    }
+
+    #[test]
+    fn a_lease_counts_as_expired_from_its_expiry_on() {
+        let mut shard_state = ShardLeaseState::new(4);
+        shard_state.add_executor(executor(1), addr(1), None, t0(), Duration::from_secs(60));
+
+        assert!(!shard_state.has_expired_lease(t0()));
+        assert!(!shard_state.has_expired_lease(t0() + chrono::Duration::seconds(59)));
+        assert!(shard_state.has_expired_lease(t0() + chrono::Duration::seconds(60)));
     }
 
     #[test]

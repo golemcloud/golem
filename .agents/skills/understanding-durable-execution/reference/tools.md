@@ -323,7 +323,7 @@ Its terminal is an ordinary `End` (success) or `Cancelled` (cancellation); a tra
 with `parent_start_index` pointing at its enclosing scope — normally that entity `Start`
 (`durable_host/concurrent/call.rs`).
 
-`OwnerExecution` (`worker/instance.rs`) is "the durable execution stream shared by every Store
+`OwnerExecution` (`worker/instance/mod.rs`) is "the durable execution stream shared by every Store
 belonging to one owner": entity Stores clone the primary's `ReplayState`, which shares the cursor
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs
 one entity export and then destroys the body `Store`.
@@ -387,6 +387,11 @@ failed join but does not authorize primary completion. Wakeups use the original 
 channel, and host waits subscribe before checking the settled-failure latch so a late subscriber
 cannot miss completion. None of this invents entity terminals or changes oplog recovery.
 
+Trap selection retains a host-classified `TrapType::Interrupt` with its exact interruption kind.
+The native host adapter still reports that trap to the operation owner. A previously selected
+lifecycle failure wins instead; a later lifecycle candidate cannot overwrite the selected trap.
+Closing admission during ordinary unload alone elects neither candidate.
+
 ### Native bodies
 
 Native tools use the same owner-oplog entity boundary with a retained worker context instead of
@@ -406,7 +411,7 @@ cancellation source: the handle reports false and its cancellation future stays 
 
 A tool body is not a plain host call whose result can be replayed from its `End`. The entity
 `Store` attaches to the **owner's** `AgentFilesystem` generation
-(`OwnerRuntimeResources::filesystem_generation_handle`, `worker/instance.rs`), so every file the
+(`OwnerRuntimeResources::filesystem_generation_handle`, `worker/instance/mod.rs`), so every file the
 body reads or writes is the agent's own state. Replaying the agent must therefore rebuild those
 filesystem effects, which only re-running the body does; the recorded terminal is then used to
 *validate* the reconstruction and to hand the recorded result to the owner. External effects made

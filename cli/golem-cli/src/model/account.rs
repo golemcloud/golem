@@ -20,10 +20,12 @@ use chrono::SecondsFormat;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsage, AccountUsageMetrics, MemoryLimit, StorageLimit,
+    AccountResourcePolicy, AccountUsage, AccountUsageMetrics, AdminResourceGrant, MemoryLimit,
+    MeteringStatus, MonthlyLimitBehavior, ResourceLimitValue, StorageResourceLimitValue,
 };
 use golem_common::model::permission_share::PermissionShareId;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 fn account_fields(account: &Account) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
@@ -231,88 +233,296 @@ impl StructuredOutput for AccountUsageListView {
 #[serde(rename_all = "camelCase")]
 pub struct AccountLimitsView {
     #[serde(flatten)]
-    pub max_storage_per_agent: StorageLimit,
-    pub max_memory_per_agent: MemoryLimit,
-    pub monthly_memory_gb_seconds: MemoryLimit,
+    pub policy: AccountResourcePolicy,
 }
 
 impl Masked for AccountLimitsView {}
 
 impl AccountLimitsView {
-    pub fn new(
-        max_storage_per_agent: StorageLimit,
-        max_memory_per_agent: MemoryLimit,
-        monthly_memory_gb_seconds: MemoryLimit,
-    ) -> Self {
-        Self {
-            max_storage_per_agent,
-            max_memory_per_agent,
-            monthly_memory_gb_seconds,
-        }
+    pub fn new(policy: AccountResourcePolicy) -> Self {
+        Self { policy }
     }
 }
 
 impl MessageWithFields for AccountLimitsView {
     fn message(&self) -> String {
-        "Account storage limits".to_string()
+        "Account resource policy".to_string()
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        let limit = &self.max_storage_per_agent;
+        let limit = &self.policy.max_storage_per_agent;
         let mut fields = FieldsBuilder::new();
+        fields.fmt_field("Account ID", &self.policy.account_id, format_main_id);
         fields
+            .field("Monthly usage mode", &self.policy.monthly_usage_mode)
             .field(
-                "Max storage per agent",
-                &format!("{} bytes", limit.effective_value),
-            )
-            .field("Plan default", &format!("{} bytes", limit.plan_default))
-            .field(
-                "Override",
-                &limit
-                    .override_value
-                    .map(|value| format!("{value} bytes"))
-                    .unwrap_or_else(|| "(none)".to_string()),
-            )
-            .field("Ceiling", &format!("{} bytes", limit.ceiling))
-            .field("User configurable", &limit.user_configurable);
+                "Overage allowed by plan",
+                &self.policy.overage_allowed_by_plan,
+            );
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly compute",
+            self.policy.monthly.compute_gcu.metering,
+            self.policy.monthly.compute_gcu.plan_amount,
+            self.policy.monthly.compute_gcu.resolved_monthly_amount,
+            self.policy.monthly.compute_gcu.usage,
+            self.policy.monthly.compute_gcu.remaining,
+            self.policy.monthly.compute_gcu.allow_overage_usage,
+            self.policy.monthly.compute_gcu.unit,
+            self.policy.monthly.compute_gcu.behavior,
+        );
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly memory",
+            self.policy.monthly.memory_gb_seconds.metering,
+            self.policy.monthly.memory_gb_seconds.plan_amount,
+            self.policy
+                .monthly
+                .memory_gb_seconds
+                .resolved_monthly_amount,
+            self.policy.monthly.memory_gb_seconds.usage,
+            self.policy.monthly.memory_gb_seconds.remaining,
+            self.policy.monthly.memory_gb_seconds.allow_overage_usage,
+            self.policy.monthly.memory_gb_seconds.unit,
+            self.policy.monthly.memory_gb_seconds.behavior,
+        );
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly durable storage",
+            self.policy.monthly.durable_storage_gb_month.metering,
+            self.policy.monthly.durable_storage_gb_month.plan_amount,
+            self.policy
+                .monthly
+                .durable_storage_gb_month
+                .resolved_monthly_amount,
+            self.policy.monthly.durable_storage_gb_month.usage,
+            self.policy.monthly.durable_storage_gb_month.remaining,
+            self.policy
+                .monthly
+                .durable_storage_gb_month
+                .allow_overage_usage,
+            self.policy.monthly.durable_storage_gb_month.unit,
+            self.policy.monthly.durable_storage_gb_month.behavior,
+        );
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly ephemeral storage",
+            self.policy.monthly.ephemeral_storage_gb_month.metering,
+            self.policy.monthly.ephemeral_storage_gb_month.plan_amount,
+            self.policy
+                .monthly
+                .ephemeral_storage_gb_month
+                .resolved_monthly_amount,
+            self.policy.monthly.ephemeral_storage_gb_month.usage,
+            self.policy.monthly.ephemeral_storage_gb_month.remaining,
+            self.policy
+                .monthly
+                .ephemeral_storage_gb_month
+                .allow_overage_usage,
+            self.policy.monthly.ephemeral_storage_gb_month.unit,
+            self.policy.monthly.ephemeral_storage_gb_month.behavior,
+        );
+        if let StorageResourceLimitValue::Disabled(disabled) = limit.effective_value {
+            fields.field("Max storage per agent", &"disabled").field(
+                "Max storage per agent disabled reason",
+                &disabled.reason.to_string(),
+            );
+        } else {
+            fields
+                .field(
+                    "Max storage per agent",
+                    &format_storage_limit(&limit.effective_value, &limit.unit.to_string()),
+                )
+                .field(
+                    "Max storage per agent plan default",
+                    &format_limit(&limit.plan_default, &limit.unit.to_string()),
+                )
+                .field(
+                    "Max storage per agent override",
+                    &format_optional_limit(limit.override_value, &limit.unit.to_string()),
+                )
+                .field(
+                    "Max storage per agent ceiling",
+                    &format_limit(&limit.ceiling, &limit.unit.to_string()),
+                )
+                .field(
+                    "Max storage per agent user configurable",
+                    &limit.user_configurable,
+                );
+        }
         add_memory_limit_fields(
             &mut fields,
             "Max memory per agent",
-            &self.max_memory_per_agent,
-            "bytes",
+            &self.policy.max_memory_per_agent,
         );
-        add_memory_limit_fields(
-            &mut fields,
-            "Monthly memory",
-            &self.monthly_memory_gb_seconds,
-            "GB-seconds",
-        );
+        add_active_admin_grants(&mut fields, &self.policy);
         fields.build()
     }
 }
 
-fn add_memory_limit_fields(
+fn add_monthly_limit_fields<
+    Usage: std::fmt::Display,
+    Remaining: std::fmt::Display,
+    Overage: std::fmt::Display,
+>(
     fields: &mut FieldsBuilder,
     label: &str,
-    limit: &MemoryLimit,
-    unit: &str,
+    metering: MeteringStatus,
+    plan_amount: Option<u64>,
+    resolved_monthly_amount: Option<u64>,
+    usage: Option<Usage>,
+    remaining: Option<Remaining>,
+    allow_overage_usage: Option<Overage>,
+    unit: impl std::fmt::Display,
+    behavior: Option<MonthlyLimitBehavior>,
 ) {
+    fields.field(&format!("{label} metering"), &metering.to_string());
+    if let Some(plan_amount) = plan_amount {
+        fields.field(
+            &format!("{label} plan amount"),
+            &format!("{plan_amount} {unit}"),
+        );
+    }
+    if let Some(resolved_monthly_amount) = resolved_monthly_amount {
+        fields.field(
+            &format!("{label} resolved monthly amount"),
+            &format!("{resolved_monthly_amount} {unit}"),
+        );
+    }
+    if let Some(usage) = usage {
+        fields.field(&format!("{label} usage"), &format!("{usage} {unit}"));
+    }
+    if let Some(remaining) = remaining {
+        fields.field(
+            &format!("{label} remaining"),
+            &format!("{remaining} {unit}"),
+        );
+    }
+    if let Some(allow_overage_usage) = allow_overage_usage {
+        fields.field(
+            &format!("{label} billable excess"),
+            &format!("{allow_overage_usage} {unit}"),
+        );
+    }
+    if let Some(behavior) = behavior {
+        fields.field(&format!("{label} behavior"), &behavior.to_string());
+    }
+}
+
+fn add_active_admin_grants(fields: &mut FieldsBuilder, policy: &AccountResourcePolicy) {
+    let grants = [
+        (
+            "Monthly compute",
+            policy.monthly.compute_gcu.active_admin_grant.as_ref(),
+            policy.monthly.compute_gcu.unit.to_string(),
+        ),
+        (
+            "Monthly memory",
+            policy.monthly.memory_gb_seconds.active_admin_grant.as_ref(),
+            policy.monthly.memory_gb_seconds.unit.to_string(),
+        ),
+        (
+            "Monthly durable storage",
+            policy
+                .monthly
+                .durable_storage_gb_month
+                .active_admin_grant
+                .as_ref(),
+            policy.monthly.durable_storage_gb_month.unit.to_string(),
+        ),
+        (
+            "Monthly ephemeral storage",
+            policy
+                .monthly
+                .ephemeral_storage_gb_month
+                .active_admin_grant
+                .as_ref(),
+            policy.monthly.ephemeral_storage_gb_month.unit.to_string(),
+        ),
+        (
+            "Max memory per agent",
+            policy.max_memory_per_agent.active_admin_grant.as_ref(),
+            policy.max_memory_per_agent.unit.to_string(),
+        ),
+        (
+            "Max storage per agent",
+            policy.max_storage_per_agent.active_admin_grant.as_ref(),
+            policy.max_storage_per_agent.unit.to_string(),
+        ),
+    ];
+
+    let mut rendered_any = false;
+    for (dimension, grant, unit) in grants {
+        if let Some(grant) = grant {
+            fields.field(
+                "Active admin grant",
+                &format_active_admin_grant(dimension, grant, &unit),
+            );
+            rendered_any = true;
+        }
+    }
+    if !rendered_any {
+        fields.field("Active admin grant", &"(none)");
+    }
+}
+
+fn format_active_admin_grant(dimension: &str, grant: &AdminResourceGrant, unit: &str) -> String {
+    let granted_at = grant
+        .granted_at
+        .to_rfc3339_opts(SecondsFormat::AutoSi, true);
+    let mut rendered = format!(
+        "{dimension}: {} {unit}; reason: {}; actor: {}; granted at: {granted_at}",
+        grant.value, grant.reason, grant.actor_account_id
+    );
+    if let Some(expires_at) = grant.expires_at {
+        write!(
+            rendered,
+            "; expires at: {}",
+            expires_at.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+        )
+        .expect("writing to a String cannot fail");
+    } else {
+        rendered.push_str("; no expiry");
+    }
+    rendered
+}
+
+fn format_optional_limit(value: Option<ResourceLimitValue>, unit: &str) -> String {
+    value
+        .map(|value| format_limit(&value, unit))
+        .unwrap_or_else(|| "(none)".to_string())
+}
+
+fn format_limit(value: &ResourceLimitValue, unit: &str) -> String {
+    match value {
+        ResourceLimitValue::Finite(value) => format!("{} {unit}", value.value),
+        ResourceLimitValue::Unlimited(_) => "unlimited".to_string(),
+    }
+}
+
+fn format_storage_limit(value: &StorageResourceLimitValue, unit: &str) -> String {
+    match value {
+        StorageResourceLimitValue::Finite(value) => format!("{} {unit}", value.value),
+        StorageResourceLimitValue::Unlimited(_) => "unlimited".to_string(),
+        StorageResourceLimitValue::Disabled(_) => "disabled".to_string(),
+    }
+}
+
+fn add_memory_limit_fields(fields: &mut FieldsBuilder, label: &str, limit: &MemoryLimit) {
+    let unit = limit.unit.to_string();
     fields
-        .field(label, &format!("{} {unit}", limit.effective_value))
+        .field(label, &format_limit(&limit.effective_value, &unit))
         .field(
             &format!("{label} plan default"),
-            &format!("{} {unit}", limit.plan_default),
+            &format_limit(&limit.plan_default, &unit),
         )
         .field(
             &format!("{label} override"),
-            &limit
-                .override_value
-                .map(|value| format!("{value} {unit}"))
-                .unwrap_or_else(|| "(none)".to_string()),
+            &format_optional_limit(limit.override_value, &unit),
         )
         .field(
             &format!("{label} ceiling"),
-            &format!("{} {unit}", limit.ceiling),
+            &format_limit(&limit.ceiling, &unit),
         )
         .field(
             &format!("{label} user configurable"),
@@ -473,13 +683,22 @@ impl StructuredOutput for PermissionShareListView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_USAGE_LABELS, AccountUsageView, MessageWithFields};
-    use chrono::{TimeZone, Utc};
+    use super::{
+        ACCOUNT_USAGE_LABELS, AccountLimitsView, AccountUsageView, MessageWithFields,
+        format_active_admin_grant, format_limit, format_optional_limit, format_storage_limit,
+    };
+    use chrono::{DateTime, TimeZone, Timelike, Utc};
     use golem_common::model::account_usage::{
-        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, MeteringStatus,
+        AccountResourcePolicy, AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
+        AdminResourceGrant, AdminResourceGrantDimension, AdminResourceGrantReason, MemoryLimit,
+        MeteringStatus, MonthlyComputeLimit, MonthlyComputeUnit, MonthlyLimitBehavior,
+        MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyResourceLimits, MonthlyStorageLimit,
+        MonthlyStorageUnit, MonthlyUsageMode, PerAgentLimitUnit, ResourceLimitValue, StorageLimit,
+        StorageResourceLimitValue,
     };
     use proptest::prelude::*;
     use test_r::test;
+    use uuid::uuid;
 
     /// Usage magnitudes we actually bill on: exact zero, sub-GB fractions where a
     /// rounded format would silently truncate, and up through implausibly large.
@@ -576,6 +795,282 @@ mod tests {
     #[test]
     fn account_usage_heading_names_the_account_and_period() {
         assert_eq!(sample_usage().message(), "Account usage for 2026-04");
+    }
+
+    fn admin_grant(
+        dimension: AdminResourceGrantDimension,
+        value: u64,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> AdminResourceGrant {
+        AdminResourceGrant {
+            dimension,
+            value,
+            reason: AdminResourceGrantReason::Support,
+            actor_account_id: golem_common::model::account::AccountId(uuid!(
+                "f30c30f7-c541-4386-bc8c-de92a5607ca2"
+            )),
+            granted_at: Utc.with_ymd_and_hms(2026, 4, 1, 2, 3, 4).unwrap(),
+            expires_at,
+        }
+    }
+
+    fn account_resource_policy_with_all_grants() -> AccountResourcePolicy {
+        AccountResourcePolicy {
+            account_id: golem_common::model::account::AccountId(uuid!(
+                "e71a6160-4144-4720-9e34-e5943458d129"
+            )),
+            monthly_usage_mode: MonthlyUsageMode::HardLimit,
+            overage_allowed_by_plan: false,
+            latest_owner_transition: None,
+            monthly: MonthlyResourceLimits {
+                compute_gcu: MonthlyComputeLimit {
+                    metering: MeteringStatus::Enabled,
+                    plan_amount: Some(10),
+                    active_admin_grant: Some(admin_grant(
+                        AdminResourceGrantDimension::MonthlyComputeGcu,
+                        12,
+                        Some(Utc.with_ymd_and_hms(2026, 5, 1, 2, 3, 4).unwrap()),
+                    )),
+                    resolved_monthly_amount: Some(12),
+                    usage: Some(3.5),
+                    remaining: Some(8.5),
+                    allow_overage_usage: Some(0.0),
+                    unit: MonthlyComputeUnit::Gcu,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                memory_gb_seconds: MonthlyMemoryLimit {
+                    metering: MeteringStatus::Enabled,
+                    plan_amount: Some(20),
+                    active_admin_grant: Some(admin_grant(
+                        AdminResourceGrantDimension::MonthlyMemoryGbSeconds,
+                        22,
+                        None,
+                    )),
+                    resolved_monthly_amount: Some(22),
+                    usage: Some(7),
+                    remaining: Some(13),
+                    allow_overage_usage: Some(0.0),
+                    unit: MonthlyMemoryUnit::GbSeconds,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                durable_storage_gb_month: MonthlyStorageLimit {
+                    metering: MeteringStatus::Enabled,
+                    plan_amount: Some(30),
+                    active_admin_grant: Some(admin_grant(
+                        AdminResourceGrantDimension::MonthlyDurableStorageGbMonth,
+                        32,
+                        None,
+                    )),
+                    resolved_monthly_amount: Some(32),
+                    usage: Some(11.25),
+                    remaining: Some(18.75),
+                    allow_overage_usage: Some(0.0),
+                    unit: MonthlyStorageUnit::GbMonth,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                ephemeral_storage_gb_month: MonthlyStorageLimit {
+                    metering: MeteringStatus::Enabled,
+                    plan_amount: Some(40),
+                    active_admin_grant: Some(admin_grant(
+                        AdminResourceGrantDimension::MonthlyEphemeralStorageGbMonth,
+                        42,
+                        None,
+                    )),
+                    resolved_monthly_amount: Some(42),
+                    usage: Some(2.5),
+                    remaining: Some(37.5),
+                    allow_overage_usage: Some(0.0),
+                    unit: MonthlyStorageUnit::GbMonth,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+            },
+            max_storage_per_agent: StorageLimit {
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: Some(admin_grant(
+                    AdminResourceGrantDimension::MaxStoragePerAgent,
+                    62,
+                    None,
+                )),
+                effective_value: StorageResourceLimitValue::from_storage_value(62),
+                plan_default: ResourceLimitValue::from_storage_value(5),
+                override_value: None,
+                ceiling: ResourceLimitValue::from_storage_value(20),
+                user_configurable: true,
+            },
+            max_memory_per_agent: MemoryLimit {
+                unit: PerAgentLimitUnit::Bytes,
+                active_admin_grant: Some(admin_grant(
+                    AdminResourceGrantDimension::MaxMemoryPerAgent,
+                    52,
+                    None,
+                )),
+                effective_value: ResourceLimitValue::from_memory_value(52),
+                plan_default: ResourceLimitValue::from_memory_value(25),
+                override_value: Some(ResourceLimitValue::from_memory_value(30)),
+                ceiling: ResourceLimitValue::from_memory_value(40),
+                user_configurable: true,
+            },
+        }
+    }
+
+    #[test]
+    fn account_limits_render_all_enabled_values() {
+        let limits = AccountLimitsView::new(account_resource_policy_with_all_grants());
+
+        assert_eq!(limits.message(), "Account resource policy");
+        let fields = limits.fields();
+        for expected in [
+            ("Monthly usage mode", "hardLimit"),
+            ("Overage allowed by plan", "false"),
+            ("Monthly compute plan amount", "10 GCU"),
+            ("Monthly compute resolved monthly amount", "12 GCU"),
+            ("Monthly compute usage", "3.5 GCU"),
+            ("Monthly compute remaining", "8.5 GCU"),
+            ("Monthly compute billable excess", "0 GCU"),
+            ("Monthly compute behavior", "hardLimit"),
+            ("Monthly memory plan amount", "20 GB-seconds"),
+            ("Monthly memory resolved monthly amount", "22 GB-seconds"),
+            ("Monthly memory usage", "7 GB-seconds"),
+            ("Monthly durable storage plan amount", "30 GB-month"),
+            ("Monthly durable storage usage", "11.25 GB-month"),
+            ("Monthly ephemeral storage plan amount", "40 GB-month"),
+            ("Monthly ephemeral storage remaining", "37.5 GB-month"),
+            ("Max storage per agent", "62 bytes"),
+            ("Max memory per agent", "52 bytes"),
+        ] {
+            assert!(
+                fields
+                    .iter()
+                    .any(|(name, value)| name == expected.0 && value == expected.1),
+                "missing field {expected:?} in {fields:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn account_limits_render_all_admin_grants_in_policy_order() {
+        let grant_rows = AccountLimitsView::new(account_resource_policy_with_all_grants())
+            .fields()
+            .into_iter()
+            .filter(|(name, _)| name == "Active admin grant")
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            grant_rows,
+            vec![
+                (
+                    "Active admin grant".to_string(),
+                    "Monthly compute: 12 GCU; reason: support; actor: f30c30f7-c541-4386-bc8c-de92a5607ca2; granted at: 2026-04-01T02:03:04Z; expires at: 2026-05-01T02:03:04Z".to_string(),
+                ),
+                (
+                    "Active admin grant".to_string(),
+                    "Monthly memory: 22 GB-seconds; reason: support; actor: f30c30f7-c541-4386-bc8c-de92a5607ca2; granted at: 2026-04-01T02:03:04Z; no expiry".to_string(),
+                ),
+                (
+                    "Active admin grant".to_string(),
+                    "Monthly durable storage: 32 GB-month; reason: support; actor: f30c30f7-c541-4386-bc8c-de92a5607ca2; granted at: 2026-04-01T02:03:04Z; no expiry".to_string(),
+                ),
+                (
+                    "Active admin grant".to_string(),
+                    "Monthly ephemeral storage: 42 GB-month; reason: support; actor: f30c30f7-c541-4386-bc8c-de92a5607ca2; granted at: 2026-04-01T02:03:04Z; no expiry".to_string(),
+                ),
+                (
+                    "Active admin grant".to_string(),
+                    "Max memory per agent: 52 bytes; reason: support; actor: f30c30f7-c541-4386-bc8c-de92a5607ca2; granted at: 2026-04-01T02:03:04Z; no expiry".to_string(),
+                ),
+                (
+                    "Active admin grant".to_string(),
+                    "Max storage per agent: 62 bytes; reason: support; actor: f30c30f7-c541-4386-bc8c-de92a5607ca2; granted at: 2026-04-01T02:03:04Z; no expiry".to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn admin_grant_timestamps_preserve_fractional_precision() {
+        let mut grant = admin_grant(AdminResourceGrantDimension::MonthlyComputeGcu, 12, None);
+        grant.granted_at = Utc
+            .with_ymd_and_hms(2026, 4, 1, 2, 3, 4)
+            .unwrap()
+            .with_nanosecond(123_456_789)
+            .unwrap();
+        grant.expires_at = Some(
+            Utc.with_ymd_and_hms(2026, 5, 1, 2, 3, 4)
+                .unwrap()
+                .with_nanosecond(987_654_321)
+                .unwrap(),
+        );
+
+        assert_eq!(
+            format_active_admin_grant("Monthly compute", &grant, "GCU"),
+            "Monthly compute: 12 GCU; reason: support; actor: f30c30f7-c541-4386-bc8c-de92a5607ca2; granted at: 2026-04-01T02:03:04.123456789Z; expires at: 2026-05-01T02:03:04.987654321Z"
+        );
+    }
+
+    #[test]
+    fn account_limits_render_one_empty_admin_grant_row() {
+        let mut policy = account_resource_policy_with_all_grants();
+        policy.monthly.compute_gcu.active_admin_grant = None;
+        policy.monthly.memory_gb_seconds.active_admin_grant = None;
+        policy.monthly.durable_storage_gb_month.active_admin_grant = None;
+        policy.monthly.ephemeral_storage_gb_month.active_admin_grant = None;
+        policy.max_memory_per_agent.active_admin_grant = None;
+        policy.max_storage_per_agent.active_admin_grant = None;
+
+        let grant_rows = AccountLimitsView::new(policy)
+            .fields()
+            .into_iter()
+            .filter(|(name, _)| name == "Active admin grant")
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            grant_rows,
+            vec![("Active admin grant".to_string(), "(none)".to_string())]
+        );
+    }
+
+    #[test]
+    fn account_limits_structured_output_is_the_canonical_policy() {
+        let policy = account_resource_policy_with_all_grants();
+        let limits = AccountLimitsView::new(policy.clone());
+
+        assert_eq!(
+            serde_json::to_value(limits).unwrap(),
+            serde_json::to_value(policy).unwrap()
+        );
+    }
+
+    #[test]
+    fn special_per_agent_limits_render_without_units() {
+        assert_eq!(format_optional_limit(None, "bytes"), "(none)");
+        assert_eq!(
+            format_optional_limit(Some(ResourceLimitValue::from_memory_value(10)), "bytes"),
+            "10 bytes"
+        );
+        assert_eq!(
+            format_optional_limit(
+                Some(ResourceLimitValue::from_memory_value(u64::MAX)),
+                "bytes",
+            ),
+            "unlimited"
+        );
+        assert_eq!(
+            format_limit(&ResourceLimitValue::from_memory_value(u64::MAX), "bytes"),
+            "unlimited"
+        );
+        assert_eq!(
+            format_storage_limit(
+                &StorageResourceLimitValue::from_storage_value(
+                    golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+                ),
+                "bytes",
+            ),
+            "unlimited"
+        );
+        assert_eq!(
+            format_storage_limit(&StorageResourceLimitValue::disabled(), "bytes"),
+            "disabled"
+        );
     }
 
     proptest! {

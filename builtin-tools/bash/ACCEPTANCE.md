@@ -1,8 +1,10 @@
 # Bash acceptance evidence
 
-Version 0.2.0 changes the contract to `run(cwd, script, timeout)`: a call stops its script at a
-time limit (600 s by default, at most 3600 s) with TERM, then KILL, and exit code 124, and the
-shell gains GNU's `timeout` command. The artifact rows below are for 0.2.0.
+Version 0.3.0 changes the contract to `run(cwd, script, timeout, stdin)`: `stdin` is an optional
+stream that is not the script's input, and a caller that cancels it stops the script with INT,
+then KILL, and exit code 130. Version 0.2.0 changed it to `run(cwd, script, timeout)`: a call
+stops its script at a time limit (600 s by default, at most 3600 s) with TERM, then KILL, and exit
+code 124, and the shell gains GNU's `timeout` command. The artifact rows below are for 0.2.0.
 
 Verified on 2026-10-01 on the `builtin-bash-tool` branch with the fork revisions and the artifact
 below. The real-server scenarios were run on 2026-10-02 on Golem `0f4bd0e4e` with that artifact,

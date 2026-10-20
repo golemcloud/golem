@@ -367,7 +367,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     ) -> Arc<dyn ResourceLimits> {
         crate::services::resource_limits::configured(
             &golem_config.resource_limits,
-            golem_config.resource_usage_metering,
+            golem_config.effective_resource_usage_metering(),
             registry_service.clone(),
             shutdown_token.clone(),
         )
@@ -408,6 +408,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// the backend, standing in for an outage that outlived it.
     fn wrap_blob_storage(&self, blob_storage: Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> {
         blob_storage
+    }
+
+    /// Decorates the final oplog service before dependent services retain it. Worker metadata,
+    /// enumeration, scheduling and executing workers must share the same service instance.
+    fn wrap_oplog_service(&self, oplog_service: Arc<dyn OplogService>) -> Arc<dyn OplogService> {
+        oplog_service
     }
 
     fn create_blob_store_service(
@@ -1102,6 +1108,7 @@ pub async fn create_worker_executor_impl<
     } else {
         forwarding_oplog_service
     };
+    let oplog_service = bootstrap.wrap_oplog_service(oplog_service);
 
     let worker_service = Arc::new(DefaultWorkerService::new(
         key_value_storage.clone(),

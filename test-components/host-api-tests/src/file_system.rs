@@ -104,6 +104,7 @@ pub trait FileSystem {
     fn write_file_direct(&self, name: String, contents: String) -> Result<(), String>;
     fn get_file_info(&self, path: String) -> Result<FileTimestamps, String>;
     fn get_info(&self, path: String) -> Result<FileTimestamps, String>;
+    fn stat_root(&self) -> bool;
     fn create_directory(&self, path: String) -> Result<(), String>;
     fn create_link(&self, source: String, destination: String) -> Result<(), String>;
     fn create_sym_link(&self, source: String, destination: String) -> Result<(), String>;
@@ -255,6 +256,10 @@ impl FileSystem for FileSystemImpl {
             accessed_secs: accessed.as_secs(),
             accessed_nanos: accessed.subsec_nanos(),
         })
+    }
+
+    fn stat_root(&self) -> bool {
+        std::fs::metadata("/").unwrap().is_dir()
     }
 
     fn get_info(&self, path: String) -> Result<FileTimestamps, String> {

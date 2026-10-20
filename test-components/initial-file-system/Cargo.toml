@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "it_initial_file_system"
 version = "0.0.1"

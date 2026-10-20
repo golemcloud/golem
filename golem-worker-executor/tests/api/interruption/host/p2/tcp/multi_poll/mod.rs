@@ -1,0 +1,549 @@
+mod completion;
+mod history;
+mod peers;
+
+use super::*;
+use anyhow::{Context as _, ensure};
+use golem_common::model::agent::AgentMode;
+use golem_common::model::oplog::{AgentError, OplogEntry, PublicOplogEntryWithIndex};
+use golem_service_base::error::worker_executor::InterruptKind;
+use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+use golem_worker_executor::worker::Worker;
+use test_r::test;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
+use history::*;
+use peers::*;
+
+macro_rules! pending_case {
+    ($name:ident, Storage, $mode:ident) => {
+        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
+        $(#[$attr])*
+        #[test]
+        #[timeout("2m")]
+        async fn $name(
+            last_unique_id: &LastUniqueId,
+            deps: &WorkerExecutorTestDependencies,
+            #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+            _tracing: &Tracing,
+        ) -> anyhow::Result<()> {
+            pending_multi_poll(
+                last_unique_id,
+                deps,
+                host_api_tests,
+                Resource::$resource,
+                AgentMode::$mode,
+            )
+            .await
+        }
+    };
+}
+
+pending_case!(durable_p2_multi_poll_memory_quota, Memory, Durable);
+pending_case!(ephemeral_p2_multi_poll_memory_quota, Memory, Ephemeral);
+pending_case!(
+    durable_p2_multi_poll_compute_quota_prepaid,
+    Compute,
+    Durable
+);
+pending_case!(
+    ephemeral_p2_multi_poll_compute_quota_prepaid,
+    Compute,
+    Ephemeral
+);
+pending_case!(
+    durable_p2_multi_poll_managed_xfs_storage_quota,
+    Storage,
+    Durable
+);
+pending_case!(
+    ephemeral_p2_multi_poll_managed_xfs_storage_quota,
+    Storage,
+    Ephemeral
+);
+
+async fn pending_multi_poll(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    resource: Resource,
+    mode: AgentMode,
+) -> anyhow::Result<()> {
+    let policy = resource.policy();
+    let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
+    let metering = resource.metering();
+    let shutdown = CancellationToken::new();
+    let _shutdown_guard = shutdown.clone().drop_guard();
+    let limits = ResourceLimitsGrpc::new(
+        registry.clone(),
+        Duration::from_secs(3600),
+        Duration::ZERO,
+        metering,
+        shutdown,
+    );
+    let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
+    let executor = start_with_resource_limits_and_configure(
+        deps,
+        &context,
+        limits.clone(),
+        Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
+            config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
+            config.limits.fuel_to_borrow = FUEL_BUDGET;
+        }),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let seed_id = executor
+        .start_agent(&component.id, agent_id!("Networking", "p2-multi-poll-seed"))
+        .await?;
+    let seed = executor
+        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .await
+        .unwrap()
+        .primary();
+    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !seed.stop_if_idle().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("seed idle teardown")?;
+    // Refund the seed Store before the target borrows the full account budget.
+    if resource == Resource::Compute {
+        limits.run_batch_for_test().await;
+    }
+    let durable = mode == AgentMode::Durable;
+    let name = if durable {
+        agent_id!("Networking", "monthly-p2-multi-poll")
+    } else {
+        agent_id!("EphemeralNetworking", "monthly-p2-multi-poll")
+    };
+    let key = IdempotencyKey::fresh();
+    let physical = if durable {
+        name.clone()
+    } else {
+        name.clone()
+            .with_ephemeral_invocation_phantom(&key)
+            .unwrap()
+    };
+    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = Worker::get_or_create_suspended(
+        seed.all(),
+        &owned,
+        None,
+        vec![],
+        None,
+        None,
+        &InvocationContextStack::fresh(),
+        Principal::anonymous(),
+    )
+    .await?;
+    let listeners = listeners().await?;
+    let first_port = listeners[0].local_addr()?.port();
+    let second_port = listeners[1].local_addr()?.port();
+    let mut cleanup = vec![(id.clone(), worker.clone())];
+    let mut invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let name = name.clone();
+        let key = key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &name,
+                    &key,
+                    "tcp_inputs_poll_p2",
+                    data_value!(first_port, second_port),
+                )
+                .await
+        }
+    });
+    let result = async {
+        let mut effects = PeerEffects::default();
+        let mut peers = accept_pair(&listeners, &mut effects).await?;
+        wait_for_input_poll(&executor, &id, &key, 2).await?;
+        executor.commit_oplog(&id).await?;
+        let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let poll_start = input_poll(&entries, &key, 2, None)?;
+        assert_invocation(&entries, &key, 0)?;
+        ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
+        let initial = worker
+            .owner_runtime_resources()
+            .with_monthly_capacity(mode, |capacity| capacity);
+        let mut raw = worker.raw_interrupt_for_test();
+        let account = limits.initialize_account(context.account_id).await?;
+        ensure!(initial.exhaustion.is_none(), "{initial:?}");
+        ensure!(effects.accepts == [1, 1] && effects.sent == [0, 0]);
+        ensure!(worker.is_loaded().await);
+        ensure!(!invocation.is_finished());
+        info!(
+            ?resource, ?mode, %key, ?id, %poll_start, ?effects,
+            "Two-input poll has a committed count-2 Start; peers have sent no data"
+        );
+
+        if resource == Resource::Compute {
+            ensure!(initial.fuel_generation.is_some());
+            ensure!(!account.prepaid_fuel_is_exhausted(mode, initial.fuel_generation));
+            ensure!(
+                account.monthly_capacity_is_exhausted_for_test(mode),
+                "Store must prepay the remaining fuel"
+            );
+            ensure!(!invocation.is_finished());
+        }
+        let stop_started = tokio::time::Instant::now();
+        if resource == Resource::Storage {
+            allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, durable)
+                .await?;
+        }
+        let mut exhausted = policy.clone();
+        match resource {
+            Resource::Memory => exhausted.available_memory_gb_seconds = 0,
+            Resource::Compute => exhausted.available_fuel = 0,
+            Resource::Storage if durable => exhausted.available_durable_storage_byte_seconds = 0,
+            Resource::Storage => exhausted.available_ephemeral_storage_byte_seconds = 0,
+        }
+        registry.set_policy(exhausted);
+        let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
+        let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
+        ensure!(matches!(signal, InterruptKind::Suspend(_)));
+        ensure!(
+            worker.selected_owner_failure_for_test().await
+                == Some(ToolOwnerFailureMetadata::Lifecycle)
+        );
+        if resource == Resource::Storage {
+            let other = if durable {
+                AgentMode::Ephemeral
+            } else {
+                AgentMode::Durable
+            };
+            ensure!(!account.monthly_capacity_is_exhausted_for_test(other));
+        }
+        // Neither peer sends or closes before the Worker retires both sockets.
+        closed_pair(&mut peers, &mut effects).await?;
+        ensure!(effects.closed == [1, 1] && effects.sent == [0, 0]);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.is_loaded().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("physical window closure")?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            worker.join_accepted_stops_for_test(),
+        )
+        .await??;
+        tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
+        if let Some(refresh) = refresh {
+            refresh.await?;
+        }
+        if resource == Resource::Storage {
+            assert_storage_deleted(&owned)?;
+        }
+        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        ensure!(input_poll(&stopped, &key, 2, None)? == poll_start);
+        assert_invocation(&stopped, &key, 0)?;
+        let entries = worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await?;
+        let errors: Vec<_> = entries
+            .values()
+            .filter_map(|entry| match entry {
+                OplogEntry::Error { error, .. } => Some(error),
+                _ => None,
+            })
+            .collect();
+        let suspends = entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::Suspend { .. }))
+            .count();
+        if durable {
+            ensure!(errors.is_empty(), "{errors:?}");
+            ensure!(suspends == 1);
+            ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
+            ensure!(!invocation.is_finished());
+        } else {
+            ensure!(suspends == 0);
+            match resource {
+                Resource::Compute => {
+                    ensure!(
+                        matches!(errors.as_slice(), [AgentError::EphemeralFuelExhausted(_)]),
+                        "{errors:?}"
+                    );
+                }
+                _ => {
+                    ensure!(
+                        matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(reason)]
+                            if reason.reason == resource.reason(false)),
+                        "{errors:?}"
+                    );
+                }
+            }
+            ensure!(
+                tokio::time::timeout(Duration::from_secs(10), &mut invocation)
+                    .await??
+                    .is_err()
+            );
+        }
+        flush_stopped_usage(&limits, &registry, resource).await?;
+        let settled = registry.applied_updates();
+        check_accounting(
+            &settled,
+            resource,
+            durable,
+            initial.policy_revision + u64::from(resource == Resource::Storage),
+            initial.period,
+        )?;
+        let settled_count = settled.len();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        limits.run_batch_for_test().await;
+        if resource == Resource::Storage {
+            assert_storage_deleted(&owned)?;
+        }
+        // Idle policy refreshes may still emit updates, but cannot charge a closed window.
+        for update in &registry.applied_updates()[settled_count..] {
+            ensure!(
+                update.fuel_delta == 0
+                    && update.memory_gb_seconds_delta == 0
+                    && update.memory_byte_nanoseconds_remainder == 0
+                    && update.durable_storage_byte_seconds_delta == 0
+                    && update.durable_storage_byte_nanoseconds_remainder == 0
+                    && update.ephemeral_storage_byte_seconds_delta == 0
+                    && update.ephemeral_storage_byte_nanoseconds_remainder == 0,
+                "closed window must stop accruing: {update:?}"
+            );
+        }
+        info!(
+            ?resource, ?mode, %poll_start, ?effects, elapsed = ?stop_started.elapsed(),
+            "Monthly stop closed both sockets with no poll terminal"
+        );
+
+        let mut grant = policy;
+        if resource == Resource::Storage {
+            grant.available_durable_storage_byte_seconds = u64::MAX;
+            grant.available_ephemeral_storage_byte_seconds = u64::MAX;
+        }
+        registry.set_policy(grant);
+        applied_refresh(&limits, &registry, context.account_id)
+            .await?
+            .await?;
+        if durable {
+            executor.resume(&id, false).await?;
+            let mut resumed_peers = accept_pair(&listeners, &mut effects).await?;
+            executor.commit_oplog(&id).await?;
+            ensure!(
+                input_poll(
+                    &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
+                    &key,
+                    2,
+                    None
+                )? == poll_start
+            );
+            release_second(&mut resumed_peers, &mut effects).await?;
+            let resumed = tokio::time::timeout(Duration::from_secs(10), &mut invocation)
+                .await
+                .context("retained multi-poll continuation")???
+                .into_typed::<Result<Vec<u32>, String>>()?;
+            ensure!(
+                resumed == Ok(vec![1]),
+                "only peer B was made ready: {resumed:?}"
+            );
+            closed_pair(&mut resumed_peers, &mut effects).await?;
+            ensure!(
+                effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]
+            );
+            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            ensure!(input_poll(&recovered, &key, 2, Some(&[1]))? == poll_start);
+            ensure!(poll_starts(&recovered) == poll_starts(&stopped));
+            assert_invocation(&recovered, &key, 1)?;
+            settled_history(&recovered)?;
+            ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
+            let cached = executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &name,
+                    &key,
+                    "tcp_inputs_poll_p2",
+                    data_value!(first_port, second_port),
+                )
+                .await?
+                .into_typed::<Result<Vec<u32>, String>>()?;
+            ensure!(cached == Ok(vec![1]));
+            no_connections(&listeners).await?;
+            ensure!(
+                poll_starts(&executor.get_oplog(&id, OplogIndex::INITIAL).await?)
+                    == poll_starts(&recovered)
+            );
+            assert_invocation(
+                &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
+                &key,
+                1,
+            )?;
+            let fresh_key = IdempotencyKey::fresh();
+            let fresh = executor.invoke_and_await_agent_with_key(
+                &component,
+                &name,
+                &fresh_key,
+                "tcp_inputs_poll_p2",
+                data_value!(first_port, second_port),
+            );
+            let fresh_peers = async {
+                let mut peers = accept_pair(&listeners, &mut effects).await?;
+                release_second(&mut peers, &mut effects).await?;
+                closed_pair(&mut peers, &mut effects).await?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::try_join!(fresh, fresh_peers)
+            })
+            .await??;
+            ensure!(fresh.into_typed::<Result<Vec<u32>, String>>()? == Ok(vec![1]));
+            ensure!(
+                effects.accepts == [3, 3] && effects.closed == [3, 3] && effects.sent == [0, 2]
+            );
+            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            ensure!(input_poll(&history, &key, 2, Some(&[1]))? == poll_start);
+            input_poll(&history, &fresh_key, 2, Some(&[1]))?;
+            assert_invocation(&history, &key, 1)?;
+            assert_invocation(&history, &fresh_key, 1)?;
+            ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
+            settled_history(&history)?;
+        } else {
+            ensure!(
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &name,
+                        &key,
+                        "tcp_inputs_poll_p2",
+                        data_value!(first_port, second_port),
+                    )
+                    .await
+                    .is_err()
+            );
+            ensure!(!worker.is_loaded().await);
+            let unchanged = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            ensure!(input_poll(&unchanged, &key, 2, None)? == poll_start);
+            assert_invocation(&unchanged, &key, 0)?;
+            // Public tracing attributes are rendered from maps in arbitrary order.
+            let raw_after = worker
+                .oplog()
+                .read_exact(
+                    OplogIndex::INITIAL,
+                    worker.oplog().current_oplog_index().await.as_u64(),
+                )
+                .await?;
+            ensure!(
+                raw_after == entries,
+                "ephemeral retry must not replay or append history"
+            );
+            ensure!(
+                effects.accepts == [1, 1] && effects.closed == [1, 1] && effects.sent == [0, 0]
+            );
+            no_connections(&listeners).await?;
+            let fresh_key = IdempotencyKey::fresh();
+            let fresh_physical = name
+                .clone()
+                .with_ephemeral_invocation_phantom(&fresh_key)
+                .unwrap();
+            let fresh_id = AgentId::from_agent_id(component.id, &fresh_physical).unwrap();
+            ensure!(fresh_id != id);
+            let fresh_worker = Worker::get_or_create_suspended(
+                seed.all(),
+                &OwnedAgentId::new(context.default_environment_id, &fresh_id),
+                None,
+                vec![],
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+                Principal::anonymous(),
+            )
+            .await?;
+            cleanup.push((fresh_id.clone(), fresh_worker.clone()));
+            let fresh = executor.invoke_and_await_agent_with_key(
+                &component,
+                &name,
+                &fresh_key,
+                "tcp_inputs_poll_p2",
+                data_value!(first_port, second_port),
+            );
+            let fresh_peers = async {
+                let mut peers = accept_pair(&listeners, &mut effects).await?;
+                release_second(&mut peers, &mut effects).await?;
+                closed_pair(&mut peers, &mut effects).await?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::try_join!(fresh, fresh_peers)
+            })
+            .await??;
+            ensure!(fresh.into_typed::<Result<Vec<u32>, String>>()? == Ok(vec![1]));
+            let history = executor.get_oplog(&fresh_id, OplogIndex::INITIAL).await?;
+            input_poll(&history, &fresh_key, 2, Some(&[1]))?;
+            assert_invocation(&history, &fresh_key, 1)?;
+            settled_history(&history)?;
+            ensure!(
+                effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]
+            );
+            let original = worker
+                .oplog()
+                .read_exact(
+                    OplogIndex::INITIAL,
+                    worker.oplog().current_oplog_index().await.as_u64(),
+                )
+                .await?;
+            ensure!(
+                original == entries,
+                "fresh ephemeral identity cannot execute failed history"
+            );
+        }
+        no_connections(&listeners).await?;
+        info!(?resource, ?mode, %key, %poll_start, ?effects,
+            "Peer effects counted separately from same-key lookup and fresh invocation");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    // On a failed parked-wait assertion the peer is dropped before stopping the Worker.
+    // The deadline is a fixture bound, never evidence that interruption succeeded.
+    drop(listeners);
+    if result.is_err() {
+        for (id, worker) in cleanup {
+            let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(10),
+                worker.join_accepted_stops_for_test(),
+            )
+            .await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test())
+                    .await;
+        }
+        if !invocation.is_finished()
+            && tokio::time::timeout(Duration::from_secs(10), &mut invocation)
+                .await
+                .is_err()
+        {
+            invocation.abort();
+            let _ = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await;
+        }
+    }
+    result
+}

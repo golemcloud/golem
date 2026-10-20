@@ -34,6 +34,9 @@ const BLACK_HOLE_POLL: Duration = Duration::from_millis(20);
 pub struct BreakableProxy {
     address: SocketAddr,
     black_holed: Arc<AtomicBool>,
+    /// For each connection, whether it alone is black-holed. A connection opened later is not
+    /// affected by what was done to the earlier ones.
+    stuck: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
     /// One handle per direction of every connection. Aborting a task closes its sockets, since it
     /// owns their halves - that is how the peers see a close.
     pumps: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -58,10 +61,12 @@ impl BreakableProxy {
 
         let black_holed = Arc::new(AtomicBool::new(false));
         let pumps: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
+        let stuck: Arc<Mutex<Vec<Arc<AtomicBool>>>> = Arc::new(Mutex::new(Vec::new()));
 
         let accept = tokio::spawn({
             let black_holed = black_holed.clone();
             let pumps = pumps.clone();
+            let stuck = stuck.clone();
             async move {
                 loop {
                     let Ok((client, _)) = listener.accept().await else {
@@ -74,16 +79,20 @@ impl BreakableProxy {
                     let (client_read, client_write) = client.into_split();
                     let (server_read, server_write) = server.into_split();
 
+                    let this_one = Arc::new(AtomicBool::new(false));
+                    stuck.lock().await.push(this_one.clone());
                     let mut handles = pumps.lock().await;
                     handles.push(tokio::spawn(pump(
                         client_read,
                         server_write,
                         black_holed.clone(),
+                        this_one.clone(),
                     )));
                     handles.push(tokio::spawn(pump(
                         server_read,
                         client_write,
                         black_holed.clone(),
+                        this_one,
                     )));
                 }
             }
@@ -93,6 +102,7 @@ impl BreakableProxy {
         Self {
             address,
             black_holed,
+            stuck,
             pumps,
             accept,
         }
@@ -101,6 +111,11 @@ impl BreakableProxy {
     /// The endpoint to point an `EtcdConfig` at.
     pub fn url(&self) -> String {
         format!("http://{}", self.address)
+    }
+
+    /// The port the proxy listens on.
+    pub fn port(&self) -> u16 {
+        self.address.port()
     }
 
     /// Closes every connection currently proxied, as an etcd member going away does.
@@ -124,6 +139,17 @@ impl BreakableProxy {
         info!("Test etcd proxy is now black-holing traffic");
     }
 
+    /// Stops forwarding bytes on the connections that exist now, in either direction, without
+    /// closing a socket, and keeps doing so for good. A connection opened afterwards works, so a
+    /// client that replaces a dead connection by a new one recovers, and one that keeps waiting
+    /// on the old one does not.
+    pub async fn black_hole_existing_connections(&self) {
+        for connection in self.stuck.lock().await.iter() {
+            connection.store(true, Ordering::SeqCst);
+        }
+        info!("Test etcd proxy is now black-holing the connections that exist");
+    }
+
     /// Forwards bytes again, as an etcd that was slow rather than gone does.
     ///
     /// Connections held open throughout recover delayed rather than broken: bytes a pump was
@@ -145,20 +171,25 @@ impl Drop for BreakableProxy {
     }
 }
 
-async fn pump(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, black_holed: Arc<AtomicBool>) {
+async fn pump(
+    mut from: OwnedReadHalf,
+    mut to: OwnedWriteHalf,
+    black_holed: Arc<AtomicBool>,
+    stuck: Arc<AtomicBool>,
+) {
     let mut buffer = vec![0u8; 16 * 1024];
 
     loop {
         // Checked on both sides of the read: a black hole declared while parked in `read` must
         // hold the bytes that woke it rather than forward them.
-        park_while_black_holed(&black_holed).await;
+        park_while_black_holed(&black_holed, &stuck).await;
         let Ok(read) = from.read(&mut buffer).await else {
             return;
         };
         if read == 0 {
             return;
         }
-        park_while_black_holed(&black_holed).await;
+        park_while_black_holed(&black_holed, &stuck).await;
 
         if to.write_all(&buffer[..read]).await.is_err() {
             return;
@@ -170,8 +201,8 @@ async fn pump(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, black_holed: Arc<
 ///
 /// Returning would drop them and close the connections, which is the *other* fault. Polled rather
 /// than notified because an unlifted black hole parks here for the life of the test either way.
-async fn park_while_black_holed(black_holed: &AtomicBool) {
-    while black_holed.load(Ordering::SeqCst) {
+async fn park_while_black_holed(black_holed: &AtomicBool, stuck: &AtomicBool) {
+    while black_holed.load(Ordering::SeqCst) || stuck.load(Ordering::SeqCst) {
         tokio::time::sleep(BLACK_HOLE_POLL).await;
     }
 }

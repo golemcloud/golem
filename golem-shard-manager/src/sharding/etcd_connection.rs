@@ -31,6 +31,11 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 use x509_parser::time::ASN1Time;
 
+/// How often a quiet etcd connection is probed. etcd closes a connection that pings faster than
+/// its `--grpc-keepalive-min-time`, five seconds by default, with `too_many_pings`; one second of
+/// margin keeps clear of it.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(6);
+
 fn invalid_config(message: String) -> ShardManagerError {
     ShardManagerError::InvalidConfig(message)
 }
@@ -526,6 +531,15 @@ pub(crate) async fn watch_refused_certificates(
 }
 
 /// A client for ordinary key/value requests, bounded by `request_timeout`.
+///
+/// The connection is probed only while a stream is open, never while idle: etcd counts a ping on a
+/// connection with no open stream as a strike and closes the connection after the third, unless it
+/// was started to permit them, which is not its default. The client library probes while idle
+/// unless told not to, so this is set explicitly. Hyper sends a ping as soon as a stream opens
+/// after an interval without a read, so the first request after 6 s of silence probes the
+/// connection: a dead idle connection costs that one request (up to `request_timeout`) and is then
+/// replaced. Reads retry onto the new connection; a write fails with an unknown outcome, as any
+/// write in flight does.
 pub async fn connect_for_requests(config: &EtcdConfig) -> Result<Client, ShardManagerError> {
     connect_requests_with(config, &EtcdConnectSettings::load(config)?).await
 }
@@ -538,11 +552,20 @@ pub async fn connect_requests_with(
     let options = settings
         .options
         .clone()
-        .with_timeout(config.request_timeout);
+        .with_timeout(config.request_timeout)
+        .with_keep_alive(KEEP_ALIVE_INTERVAL, config.request_timeout)
+        .with_keep_alive_while_idle(false);
     Ok(Client::connect(&config.endpoints, Some(options)).await?)
 }
 
 /// A client for the leadership campaign and its lease keepalive, with no request timeout.
+///
+/// A connection that goes silent without a close, as one through a node that lost power does,
+/// would otherwise hold the watch of the election and the lease keepalive for good, because a
+/// request timeout does not replace the connection. The probe finds it dead within an interval and
+/// a timeout, and the client connects again. This client always has a stream open (the watch of
+/// the election and the keepalive of the lease), so it is probed whenever it is in use, and it is
+/// not probed while idle: a ping with no open stream is refused by etcd and closes the connection.
 ///
 /// The connect itself is bounded: with a user, it waits for etcd's answer to the login, and a
 /// login that is never answered - a connection cut off right after the handshake - would otherwise
@@ -551,7 +574,12 @@ pub async fn connect_election_with(
     config: &EtcdConfig,
     settings: &EtcdConnectSettings,
 ) -> Result<Client, ShardManagerError> {
-    let connect = Client::connect(&config.endpoints, Some(settings.options.clone()));
+    let options = settings
+        .options
+        .clone()
+        .with_keep_alive(KEEP_ALIVE_INTERVAL, config.request_timeout)
+        .with_keep_alive_while_idle(false);
+    let connect = Client::connect(&config.endpoints, Some(options));
     match tokio::time::timeout(config.connect_timeout + config.request_timeout, connect).await {
         Ok(client) => Ok(client?),
         Err(_) => Err(ShardManagerError::Timeout),

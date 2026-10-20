@@ -1007,6 +1007,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
+        if runtime != OwnerRuntime::Agent {
+            linear_memory.begin_reconstruction_usage();
+        }
+        filesystem_generation_handle
+            .attach_usage_tracker(
+                &linear_memory,
+                filesystem_capability == FilesystemCapability::Capable,
+            )
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+
         debug!(
             "Worker {} initialized with skipped regions {}",
             owned_agent_id.agent_id, worker_config.skipped_regions
@@ -1573,6 +1583,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.entity_parent_start_index().or(self
             .primary_invocation_start_index
             .filter(|index| *index != OplogIndex::NONE))
+    }
+
+    fn guest_read_order(&self) -> Option<replay_state::GuestReadOrder> {
+        self.invocation_anchor()
+            .map(|anchor| replay_state::GuestReadOrder {
+                anchor,
+                issued: self.state.issued_deferred_imports.clone(),
+            })
+    }
+
+    fn record_deferred_import(&self, id: golem_common::model::oplog::DurableInvocationId) {
+        if let Some(order) = self.guest_read_order()
+            && order.anchor == id.anchor
+        {
+            self.state
+                .replay_state
+                .record_deferred_import(&order, id.ordinal);
+        }
     }
 
     /// Reserves the next ordinal in guest call order for a direct Store-holding durable call.
@@ -2625,6 +2653,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn linear_memory_tracker(&self) -> LinearMemoryTracker {
         self.linear_memory.clone()
+    }
+
+    pub(crate) fn begin_guest_resource_usage(
+        &self,
+    ) -> crate::services::linear_memory::GuestResourceUsageGuard {
+        self.linear_memory.begin_guest_body()
+    }
+
+    pub(crate) fn activate_live_resource_usage(&self) {
+        if self.is_live() {
+            self.linear_memory.activate_live_usage_if_guest_body();
+        }
     }
 
     async fn begin_switch_to_live(&self) -> Result<BeginReplayToLive, WorkerExecutorError> {
@@ -4728,9 +4768,11 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading { agent_mode, .. } => {
-                let (tx, _) = tokio::sync::broadcast::channel(128);
-                let interrupt_signal = Arc::new(tx);
+            ExecutionStatus::Loading {
+                agent_mode,
+                interrupt_signal,
+                ..
+            } => {
                 *execution_status = ExecutionStatus::Running {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
@@ -4884,7 +4926,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
-        // lost shard's oplog belongs to another executor now. Like `Restart` and `Jump`, a
+        // lost shard's oplog belongs to another executor now. Like a durable `Restart` or `Jump`, a
         // `ShardLost` trap records nothing - not the drain, not an entry, not a status change - and
         // the shard's new owner replays the invocation and records its outcome itself.
         if let TrapType::Interrupt(kind) = trap_type
@@ -4895,6 +4937,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         {
             return InvocationFailureDecision::Retry(RetryDecision::None);
         }
+
+        let terminal_trap = ephemeral_terminal_trap(
+            self.agent_mode(),
+            trap_type,
+            self.invocation_anchor()
+                .unwrap_or(self.state.effective_retry_point()),
+        );
+        let trap_type = terminal_trap.as_ref().unwrap_or(trap_type);
 
         // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
         // ordinary semantic dropped-call close, which could await replay scopes or append
@@ -4927,6 +4977,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             };
         }
 
+        if let TrapType::Interrupt(kind) = trap_type {
+            self.public_state
+                .worker()
+                .acknowledge_invocation_interrupt(*kind)
+                .await;
+        }
+        let monthly_trap = self.public_state.worker().monthly_failure(trap_type);
+        let trap_type = monthly_trap.as_ref().unwrap_or(trap_type);
+
         if let TrapType::Error { error, .. } = trap_type {
             match error {
                 AgentError::EphemeralSleepTooLong(_) => {
@@ -4950,6 +5009,18 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 full_function_name,
             )
             .await;
+
+        let terminal_decision = ephemeral_terminal_decision(self.agent_mode(), decision.clone());
+        let retry_policy_state = if terminal_decision != decision {
+            Some(
+                retry_policy_state
+                    .unwrap_or(RetryPolicyState::Terminal)
+                    .exhausted(),
+            )
+        } else {
+            retry_policy_state
+        };
+        let decision = terminal_decision;
 
         let entity_parent_start_index = self.entity_parent_start_index();
         let permission_denial_persisted = if let (
@@ -6734,6 +6805,36 @@ fn should_replay_invocation(
         || (matches!(owner, ResolvedOwnerContext::Agent(_)) && replayed_invocations == 0)
 }
 
+fn ephemeral_terminal_trap(
+    mode: AgentMode,
+    trap_type: &TrapType,
+    retry_from: OplogIndex,
+) -> Option<TrapType> {
+    match (mode, trap_type) {
+        (
+            AgentMode::Ephemeral,
+            TrapType::Interrupt(kind @ (InterruptKind::Jump | InterruptKind::Restart)),
+        ) => Some(TrapType::Error {
+            error: AgentError::InternalError(format!(
+                "ephemeral agent cannot be restarted in process ({kind:?})"
+            )),
+            retry_from,
+            semantic_trap_retry_override: None,
+        }),
+        _ => None,
+    }
+}
+
+fn ephemeral_terminal_decision(mode: AgentMode, decision: RetryDecision) -> RetryDecision {
+    match (mode, decision) {
+        (
+            AgentMode::Ephemeral,
+            RetryDecision::Immediate | RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits,
+        ) => RetryDecision::None,
+        (_, decision) => decision,
+    }
+}
+
 fn store_is_live(
     entity_execution_mode: Option<InvocationExecutionMode>,
     local_live_tail: bool,
@@ -6789,6 +6890,7 @@ pub(crate) struct PendingReplayToLive {
     tool_entity: bool,
     tool_operation: Option<tool::operation::OwnerToolOperation>,
     local_live_tail: Arc<AtomicBool>,
+    linear_memory: LinearMemoryTracker,
 }
 
 impl PendingReplayToLive {
@@ -6835,6 +6937,7 @@ impl PendingReplayToLive {
         if self.role == ReplayToLiveRole::NonPrimary {
             self.local_live_tail.store(true, Ordering::Release);
         }
+        self.linear_memory.activate_live_usage_if_guest_body();
         Ok(FinishReplayToLive::Live)
     }
 }
@@ -6932,6 +7035,7 @@ async fn begin_replay_to_live<Ctx: WorkerCtx>(
                 tool_entity,
                 tool_operation,
                 local_live_tail,
+                linear_memory: linear_memory.clone(),
             }))
         }
     }
@@ -6969,6 +7073,7 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
         tool_entity,
         tool_operation,
         local_live_tail,
+        linear_memory: linear_memory.clone(),
     })
 }
 
@@ -7565,6 +7670,72 @@ mod tests {
     }
 
     #[test]
+    fn ephemeral_restart_interrupts_become_invocation_failures() {
+        let start_index = OplogIndex::from_u64(37);
+        for (kind, message) in [
+            (
+                InterruptKind::Jump,
+                "ephemeral agent cannot be restarted in process (Jump)",
+            ),
+            (
+                InterruptKind::Restart,
+                "ephemeral agent cannot be restarted in process (Restart)",
+            ),
+        ] {
+            let trap = TrapType::Interrupt(kind);
+            assert!(ephemeral_terminal_trap(AgentMode::Durable, &trap, start_index).is_none());
+            let converted = ephemeral_terminal_trap(AgentMode::Ephemeral, &trap, start_index)
+                .expect("ephemeral restart is terminal");
+            assert!(matches!(&converted,
+                TrapType::Error { error: AgentError::InternalError(error), retry_from,
+                    semantic_trap_retry_override: None }
+                if error == message && *retry_from == start_index));
+            assert!(matches!(converted.as_golem_error(""),
+                Some(WorkerExecutorError::InvocationFailed { error: AgentError::InternalError(error), .. })
+                if error == message));
+        }
+        for trap in [
+            TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())),
+            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc())),
+            TrapType::Interrupt(InterruptKind::ShardLost),
+            TrapType::Exit,
+            TrapType::Error {
+                error: AgentError::OutOfMemory,
+                retry_from: start_index,
+                semantic_trap_retry_override: None,
+            },
+        ] {
+            assert!(ephemeral_terminal_trap(AgentMode::Ephemeral, &trap, start_index).is_none());
+        }
+    }
+
+    #[test]
+    fn ephemeral_restart_decisions_are_terminal() {
+        for (decision, ephemeral) in [
+            (RetryDecision::Immediate, RetryDecision::None),
+            (
+                RetryDecision::Delayed(Duration::from_millis(37)),
+                RetryDecision::None,
+            ),
+            (RetryDecision::ReacquirePermits, RetryDecision::None),
+            (RetryDecision::None, RetryDecision::None),
+            (
+                RetryDecision::TryStop(Timestamp::from(1234)),
+                RetryDecision::TryStop(Timestamp::from(1234)),
+            ),
+        ] {
+            assert_eq!(
+                ephemeral_terminal_decision(AgentMode::Durable, decision.clone()),
+                decision
+            );
+            assert_eq!(
+                ephemeral_terminal_decision(AgentMode::Ephemeral, decision),
+                ephemeral
+            );
+        }
+    }
+
+    #[test]
     fn ephemeral_replay_is_only_for_typed_owner_initialization() {
         use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 
@@ -7660,6 +7831,8 @@ mod tests {
 
     #[test]
     async fn pending_replay_to_live_is_fail_closed_until_finished() {
+        let memory = replay_usage_tracker();
+        let _body = memory.begin_guest_body();
         let local_live_tail = Arc::new(AtomicBool::new(false));
         let pending = PendingReplayToLive {
             replay_target: OplogIndex::from_u64(42),
@@ -7668,17 +7841,22 @@ mod tests {
             tool_entity: false,
             tool_operation: None,
             local_live_tail: local_live_tail.clone(),
+            linear_memory: memory.clone(),
         };
 
         assert_eq!(pending.replay_target(), OplogIndex::from_u64(42));
         assert!(!local_live_tail.load(Ordering::Acquire));
+        assert!(!memory.usage_is_live());
         assert_eq!(
             pending.finish_at(None).await.unwrap(),
             FinishReplayToLive::Live
         );
         assert!(local_live_tail.load(Ordering::Acquire));
+        assert!(memory.usage_is_live());
 
         let dropped_tail = Arc::new(AtomicBool::new(false));
+        let dropped_memory = replay_usage_tracker();
+        let _dropped_body = dropped_memory.begin_guest_body();
         drop(PendingReplayToLive {
             replay_target: OplogIndex::from_u64(43),
             role: ReplayToLiveRole::NonPrimary,
@@ -7686,8 +7864,28 @@ mod tests {
             tool_entity: false,
             tool_operation: None,
             local_live_tail: dropped_tail.clone(),
+            linear_memory: dropped_memory.clone(),
         });
         assert!(!dropped_tail.load(Ordering::Acquire));
+        assert!(!dropped_memory.usage_is_live());
+    }
+
+    pub(super) fn replay_usage_tracker() -> LinearMemoryTracker {
+        LinearMemoryTracker::new_with_metering(
+            0,
+            0,
+            AgentMode::Durable,
+            true,
+            Arc::new(AtomicResourceEntry::new(
+                0,
+                usize::MAX,
+                usize::MAX,
+                u64::MAX,
+                1,
+            )),
+            Arc::new(Mutex::new(MemoryGrant::inert(0))),
+            false,
+        )
     }
 
     #[test]
@@ -10012,6 +10210,9 @@ struct PrivateDurableWorkerState {
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
     invocation_ordinals: HashMap<OplogIndex, u64>,
+    /// One-past the highest deferred import ordinal in this Store invocation. Pending reads
+    /// retain this allocation, not the mutable slot used by the next invocation.
+    issued_deferred_imports: Arc<AtomicU64>,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
@@ -10058,6 +10259,9 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
+    tcp_connect_replay: sockets::tcp::TcpConnectReplay,
+    open_tcp_input_streams: HashSet<u32>,
+    open_tcp_output_streams: HashSet<u32>,
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
     p2_timer_deadlines: HashMap<u32, std::time::Instant>,
 
@@ -10439,6 +10643,7 @@ impl PrivateDurableWorkerState {
             local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             active_custom_invocations: HashMap::new(),
             invocation_ordinals: HashMap::new(),
+            issued_deferred_imports: Arc::new(AtomicU64::new(0)),
             tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
@@ -10448,6 +10653,9 @@ impl PrivateDurableWorkerState {
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
+            tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
+            open_tcp_input_streams: HashSet::new(),
+            open_tcp_output_streams: HashSet::new(),
             p2_timer_deadlines: HashMap::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: false,
@@ -10867,6 +11075,7 @@ impl PrivateDurableWorkerState {
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
         self.invocation_ordinals.clear();
+        self.issued_deferred_imports = Arc::new(AtomicU64::new(0));
     }
 
     pub async fn get_workers(

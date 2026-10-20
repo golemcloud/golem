@@ -52,6 +52,14 @@ pub trait CustomDurability {
 
     fn warmup_environment(&self);
 
+    fn create_promise(&self) -> golem_rust::PromiseId;
+
+    async fn concurrent_promises(
+        &self,
+        first: golem_rust::PromiseId,
+        second: golem_rust::PromiseId,
+    ) -> Vec<String>;
+
     async fn nested_no_input(&self) -> Vec<String>;
 
     async fn concurrent_no_input(&self) -> Vec<String>;
@@ -91,6 +99,23 @@ impl CustomDurability for CustomDurabilityImpl {
 
     fn warmup_environment(&self) {
         std::env::var("PORT").unwrap();
+    }
+
+    fn create_promise(&self) -> golem_rust::PromiseId {
+        golem_rust::create_promise()
+    }
+
+    async fn concurrent_promises(
+        &self,
+        first: golem_rust::PromiseId,
+        second: golem_rust::PromiseId,
+    ) -> Vec<String> {
+        let (first, second) = (durable_promise(&first), durable_promise(&second))
+            .join()
+            .await;
+        // This root call must keep its identity after either sibling reconstructs.
+        let _ = golem_rust::generate_idempotency_key();
+        vec![first, second]
     }
 
     async fn nested_no_input(&self) -> Vec<String> {
@@ -419,6 +444,19 @@ impl CustomDurabilityImpl {
         })
         .result
     }
+}
+
+async fn durable_promise(promise: &golem_rust::PromiseId) -> String {
+    Durability::<String, UnusedError>::new(
+        "golem-it",
+        "test-promise",
+        DurableFunctionType::ReadRemote,
+        promise,
+    )
+    .run_infallible_async(|| async {
+        String::from_utf8(golem_rust::await_promise(promise).await).unwrap()
+    })
+    .await
 }
 
 async fn durable_nested_generator() -> String {

@@ -19,7 +19,7 @@ use super::{
 use crate::config::EtcdConfig;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_requests;
-use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until};
+use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until, send_again_while_unsent};
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::model::ShardLeaseState;
 use async_trait::async_trait;
@@ -144,8 +144,12 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
         shard_state: &ShardLeaseState,
         prev_revision: ExternalRevision,
     ) -> Result<ExternalRevision, ShardManagerError> {
-        // Not retried, unlike `read`: a retry re-sends the same expected revision, so an attempt
-        // that did land comes back as a conflict. A refused write stops the process instead.
+        // Sent again only when it never reached etcd, unlike `read`, which is repeated on any
+        // transient failure: a write that may have been received and is sent again re-sends the
+        // same expected revision, so an attempt that did land comes back as a conflict. A request
+        // that was never sent cannot have landed, so repeating that one is safe. Any other failed
+        // write stops the process instead. The caller's write timeout bounds the loop; the read
+        // budget bounds it too, for a caller without one.
         check_prev_revision(prev_revision)?;
         check_state_for_write(shard_state)?;
         let encoded = serialize(shard_state).map_err(ShardManagerError::SerializationError)?;
@@ -165,8 +169,18 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
             // So a rejected write can say which precondition failed.
             .or_else([self.fence.read_back()]);
 
-        let mut kv = self.client.kv_client();
-        let response = kv.txn(txn).await?;
+        let deadline = self.read_retry.deadline()?;
+        let response = send_again_while_unsent(
+            "writing the shard lease state",
+            || {
+                let mut kv = self.client.kv_client();
+                let txn = txn.clone();
+                async move { kv.txn(txn).await }
+            },
+            deadline,
+            self.read_retry.min_delay,
+        )
+        .await?;
 
         if !response.succeeded() {
             return Err(self.classify_failure(&response));
@@ -194,8 +208,20 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
             return Ok(());
         }
 
-        let mut kv = self.client.kv_client();
-        match kv.compact(target, None).await {
+        // Idempotent, but sent again under the same rule as the write, so that there is one rule
+        // for which etcd failures are repeated.
+        let deadline = self.read_retry.deadline()?;
+        let compacted = send_again_while_unsent(
+            "compacting the shard lease state history",
+            || {
+                let mut kv = self.client.kv_client();
+                async move { kv.compact(target, None).await }
+            },
+            deadline,
+            self.read_retry.min_delay,
+        )
+        .await;
+        match compacted {
             Ok(_) => {}
             // Another replica, or an operator, already compacted past `target`. The history
             // behind it is gone either way, which is what was asked for.

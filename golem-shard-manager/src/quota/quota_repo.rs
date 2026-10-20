@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::sharding::error::ShardManagerError;
-use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until};
+use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until, send_again_while_unsent};
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::persistence::{ExternalRevision, NO_REVISION};
 use async_trait::async_trait;
@@ -818,8 +818,9 @@ impl EtcdQuotaRepo {
     /// Commits `ops` if this replica still holds the leadership and the resource's `state` key is
     /// still at `previous_revision`, and returns the revision they were stored at.
     ///
-    /// Not retried: a retry re-sends the same expected revision, so an attempt that did land
-    /// would come back as a conflict.
+    /// Sent again only when it never reached etcd: a write that may have been received and is
+    /// sent again re-sends the same expected revision, so an attempt that did land would come back
+    /// as a conflict. A request that was never sent cannot have landed.
     async fn compare_and_swap(
         &self,
         resource_definition_id: Uuid,
@@ -843,7 +844,7 @@ impl EtcdQuotaRepo {
             .and_then(ops)
             .or_else([self.fence.read_back()]);
 
-        let response = self.client.kv_client().txn(txn).await.map_err(etcd_error)?;
+        let response = self.send_txn("writing the quota state", txn).await?;
 
         if !response.succeeded() {
             return Err(if self.fence.held_after_refusal(&response) {
@@ -864,13 +865,33 @@ impl EtcdQuotaRepo {
             .and_then(ops)
             .or_else([self.fence.read_back()]);
 
-        let response = self.client.kv_client().txn(txn).await.map_err(etcd_error)?;
+        let response = self.send_txn("deleting quota state", txn).await?;
 
         if response.succeeded() {
             Ok(())
         } else {
             Err(self.leadership_lost())
         }
+    }
+
+    /// Sends `txn`, again while it fails before reaching etcd, within the read budget.
+    async fn send_txn(&self, what: &str, txn: Txn) -> Result<TxnResponse, QuotaRepoError> {
+        let deadline = self
+            .read_retry
+            .deadline()
+            .map_err(|err| QuotaRepoError::InternalError(anyhow::Error::from(err)))?;
+        send_again_while_unsent(
+            what,
+            || {
+                let mut kv = self.client.kv_client();
+                let txn = txn.clone();
+                async move { kv.txn(txn).await }
+            },
+            deadline,
+            self.read_retry.min_delay,
+        )
+        .await
+        .map_err(etcd_error)
     }
 
     fn leadership_lost(&self) -> QuotaRepoError {

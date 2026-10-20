@@ -36,6 +36,7 @@ use golem_cli::model::app::ResolvedLocalServer;
 use golem_common::config::{DbConfig, DbPostgresConfig, DbSqliteConfig, env_config_provider};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account_usage::MonthlyPlanAmounts;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::plan::{PlanId, PlanName};
@@ -637,18 +638,20 @@ fn local_initial_plans() -> HashMap<String, PrecreatedPlan> {
         worker_connection_limit: UNLIMITED,
         storage_limit: UNLIMITED,
         blob_storage_limit: UNLIMITED,
-        monthly_gas_limit: UNLIMITED,
         monthly_upload_limit: UNLIMITED,
-        max_memory_per_worker: UNLIMITED,
-        max_memory_per_worker_ceiling: UNLIMITED,
-        max_memory_per_worker_user_configurable: true,
-        monthly_memory_gb_seconds: UNLIMITED,
-        monthly_memory_gb_seconds_ceiling: UNLIMITED,
-        monthly_memory_gb_seconds_user_configurable: true,
+        monthly_compute_gcu: 0,
+        monthly_memory_gb_seconds: 0,
+        monthly_durable_storage_gb_month: 0,
+        monthly_ephemeral_storage_gb_month: 0,
+        overage_eligible: false,
+        max_memory_per_agent: UNLIMITED,
+        max_memory_per_agent_ceiling: UNLIMITED,
+        max_memory_per_agent_user_configurable: true,
         max_table_elements_per_worker: UNLIMITED,
-        max_disk_space_per_worker: UNLIMITED,
-        max_disk_space_per_worker_ceiling: None,
-        max_disk_space_per_worker_user_configurable: true,
+        max_storage_per_agent_enabled: false,
+        max_storage_per_agent: UNLIMITED,
+        max_storage_per_agent_ceiling: None,
+        max_storage_per_agent_user_configurable: false,
         per_invocation_http_call_limit: UNLIMITED,
         per_invocation_rpc_call_limit: UNLIMITED,
         monthly_http_call_limit: UNLIMITED,
@@ -1011,6 +1014,7 @@ fn extract(
         match figment.extract::<GolemServerConfig>() {
             Ok(config) => {
                 validate(&config)?;
+                validate_resource_policy(&config, &dicts[1..])?;
                 return Ok(config);
             }
             Err(err) => {
@@ -1141,6 +1145,50 @@ fn insert_path(dict: &mut Dict, path: &[String], value: Value) {
         }
     }
     current.insert(last.clone(), value);
+}
+
+fn validate_resource_policy(config: &GolemServerConfig, layers: &[Dict]) -> anyhow::Result<()> {
+    let metering = config.worker_executor.resource_usage_metering;
+    let managed_filesystem = matches!(
+        config.worker_executor.filesystem_storage.mode,
+        FilesystemStorageMode::ManagedXfs { .. }
+    );
+    for (name, plan) in &config.registry_service.initial_plans {
+        if plan.max_storage_per_agent_enabled && !managed_filesystem {
+            bail!("Per-agent storage limits in initial plan `{name}` require managed XFS storage");
+        }
+        for (field, enabled) in [
+            ("monthly_compute_gcu", metering.compute),
+            ("monthly_memory_gb_seconds", metering.memory),
+            ("monthly_durable_storage_gb_month", metering.filesystem),
+            ("monthly_ephemeral_storage_gb_month", metering.filesystem),
+        ] {
+            let path = vec![
+                "registry_service".to_string(),
+                "initial_plans".to_string(),
+                name.clone(),
+                field.to_string(),
+            ];
+            if enabled && !layers.iter().any(|layer| get_path(layer, &path).is_some()) {
+                bail!(
+                    "`{}` must be configured when its billing meter is enabled",
+                    path.join(".")
+                );
+            }
+        }
+        MonthlyPlanAmounts {
+            compute_gcu: plan.monthly_compute_gcu,
+            memory_gb_seconds: plan.monthly_memory_gb_seconds,
+            durable_storage_gb_month: plan.monthly_durable_storage_gb_month,
+            ephemeral_storage_gb_month: plan.monthly_ephemeral_storage_gb_month,
+        }
+        .resolve()
+        .with_context(|| format!("Invalid monthly resource amounts in initial plan `{name}`"))?;
+    }
+    if metering.filesystem && !managed_filesystem {
+        bail!("Monthly filesystem metering requires managed XFS storage");
+    }
+    Ok(())
 }
 
 /// Checks the rules that span services.
@@ -1925,6 +1973,7 @@ mod tests {
                 r#"
                     [registry_service.initial_plans.default]
                     component_limit = 25
+                    monthly_compute_gcu = 2
 
                     [registry_service.initial_accounts.root]
                     token = "a-secret-admin-token-of-sufficient-length"
@@ -1961,6 +2010,98 @@ mod tests {
             );
             assert!(config.worker_executor.resource_usage_metering.compute);
             assert!(!config.worker_executor.resource_usage_metering.memory);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn local_resource_policy_defaults_preserve_opt_in_and_storage_capability() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            let config = load(None, &run_args_with_data_dir("/data")).unwrap();
+            let plan = &config.registry_service.initial_plans["default"];
+            assert_eq!(plan.monthly_compute_gcu, 0);
+            assert_eq!(plan.monthly_memory_gb_seconds, 0);
+            assert_eq!(plan.monthly_durable_storage_gb_month, 0);
+            assert_eq!(plan.monthly_ephemeral_storage_gb_month, 0);
+            assert!(!plan.overage_eligible);
+            assert!(!plan.max_storage_per_agent_enabled);
+            assert_eq!(plan.max_memory_per_agent, UNLIMITED);
+            assert!(!config.worker_executor.resource_usage_metering.compute);
+            assert!(!config.worker_executor.resource_usage_metering.memory);
+            assert!(!config.worker_executor.resource_usage_metering.filesystem);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn per_agent_storage_capability_requires_managed_xfs_without_billing() {
+        for mode in [
+            FilesystemStorageMode::Temporary,
+            FilesystemStorageMode::Directory {
+                root: PathBuf::from("/data").into_boxed_path(),
+            },
+            FilesystemStorageMode::ReflinkXfs {
+                root: PathBuf::from("/data").into_boxed_path(),
+            },
+            FilesystemStorageMode::Apfs {
+                root: PathBuf::from("/data").into_boxed_path(),
+            },
+            FilesystemStorageMode::ManagedXfs {
+                root: PathBuf::from("/data").into_boxed_path(),
+                xfs_quotad_socket: PathBuf::from("/data/xfs-quotad.sock").into_boxed_path(),
+            },
+        ] {
+            let managed = matches!(mode, FilesystemStorageMode::ManagedXfs { .. });
+            let mut config = GolemServerConfig::for_data_dir(Path::new("/data")).unwrap();
+            config.worker_executor.filesystem_storage.mode = mode;
+            assert!(!config.worker_executor.resource_usage_metering.filesystem);
+            let plan = config
+                .registry_service
+                .initial_plans
+                .get_mut("default")
+                .unwrap();
+            plan.max_storage_per_agent_enabled = true;
+            plan.max_storage_per_agent = 100;
+            let result = validate_resource_policy(&config, &[]);
+            assert_eq!(result.is_ok(), managed, "{result:?}");
+            if let Err(error) = result {
+                assert!(error.to_string().contains("managed XFS"), "{error}");
+            }
+            config
+                .registry_service
+                .initial_plans
+                .get_mut("default")
+                .unwrap()
+                .max_storage_per_agent_enabled = false;
+            assert!(validate_resource_policy(&config, &[]).is_ok());
+        }
+    }
+
+    #[test]
+    fn enabled_local_meter_requires_an_explicit_amount_and_accepts_explicit_zero() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env(
+                "GOLEM__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY",
+                "true",
+            );
+            let args = run_args_with_data_dir("/data");
+            let error = jail_error(load(None, &args));
+            assert!(
+                error.contains("registry_service.initial_plans.default.monthly_memory_gb_seconds"),
+                "{error}"
+            );
+            jail.set_env(
+                "GOLEM__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
+                "0",
+            );
+            let config = load(None, &args).unwrap();
+            assert!(config.worker_executor.resource_usage_metering.memory);
+            assert_eq!(
+                config.registry_service.initial_plans["default"].monthly_memory_gb_seconds,
+                0
+            );
             Ok(())
         });
     }

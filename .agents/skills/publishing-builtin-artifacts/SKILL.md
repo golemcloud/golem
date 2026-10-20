@@ -25,6 +25,8 @@ and authorization gates. The normal publisher is the protected `golem-release`
 job in `prepare-golem-release.yaml`, dispatched on the exact Golem tag. It runs
 after full reusable CI preflight, creates or resumes the draft, publishes all eight
 entries, and uploads the verified manifest. It never publishes the Golem draft.
+All eight packages, including corresponding source, finish before the first
+built-in upload. The upload pass reuses those packages without repackaging.
 Only this job mints the GitHub App token from environment variable
 `RELEASE_APP_ID` and secret `RELEASE_APP_PRIVATE_KEY`. The App needs contents
 read/write on `golemcloud/golem` and `golemcloud/golem-builtins`. Restrict the
@@ -33,6 +35,9 @@ no built-in write token. The publisher's CI guard accepts only this workflow's
 `workflow_dispatch` on the matching Golem tag in `golemcloud/golem`.
 
 ## Authorized local recovery
+
+Use Python 3.14 as `python3` for source packaging; do not rely on the runner's
+system Python. The protected publisher installs this version explicitly.
 
 1. Use a clean exact release-tag checkout with full history. Push the tag and
    create a draft Golem GitHub release first. The tag must identify the exact
@@ -47,9 +52,10 @@ no built-in write token. The publisher's CI guard accepts only this workflow's
    publication is requested. All use the tag version without its leading `v`.
 4. The task verifies public bytes, generates
    `builtin-artifacts.release.json`, and uploads it to the Golem release without
-   replacement. Publish the draft only after the upload. The publication event
-   starts release CI, which fetches the manifest and sets `GOLEM_BUILTIN_RELEASE=1`
-   before compilation. Do not commit the generated manifest.
+   replacement. Wait for preparation to attach all native binaries before human
+   draft publication. That event starts Docker publication without repeating full
+   CI. Both native and Docker builds fetch the manifest and set
+   `GOLEM_BUILTIN_RELEASE=1` before compilation. Do not commit the generated manifest.
 
 The existing `cargo make publish-builtin-artifact` remains a manual packaging
 entry point with `BUILTIN_COMPONENT`, `BUILTIN_VERSION`, `BUILTIN_SKIP_BUILD=1`,
@@ -60,3 +66,10 @@ assets, uploads only missing assets, and verifies the complete public set before
 the outer task creates the manifest. A conflicting asset stops publication.
 An existing manifest must be identical and is verified and reused. Never use
 `--clobber`, move a tag, or bypass the CI guard. Changed bytes require a new tag.
+
+Cross-host rebuilds need not produce identical WASM bytes. For explicitly
+authorized recovery that retains complete packages already verified by the
+original publisher and publishes only missing components, follow
+[recovery across build hosts](../../../BUILTIN_ARTIFACTS.md#recovery-across-build-hosts).
+Require the original verification evidence and verify every public asset before
+constructing the manifest. Do not bypass a byte mismatch in the all-entry task.

@@ -13,11 +13,13 @@
 // limitations under the License.
 
 //! The line shown while a command runs. With colours it is the rune loader, the elapsed time
-//! and how to stop waiting; without, nothing in it moves. It is as long as the window allows.
+//! and what Ctrl+C does; without, nothing in it moves. It is as long as the window allows.
 
-use super::look::{self, Loader, Palette};
+use super::look::{self, Loader, Palette, WayOut};
 
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -42,6 +44,7 @@ pub fn frame(
     tick: usize,
     elapsed: Duration,
     look: Option<(Palette, Loader)>,
+    way_out: WayOut,
     columns: u16,
 ) -> Option<String> {
     if columns < SHORT_WIDTH {
@@ -49,11 +52,17 @@ pub fn frame(
     }
     let full = columns >= WIDTH;
     let line = match look {
-        Some((palette, loader)) if full => look::running(tick, elapsed, loader, palette),
-        Some((palette, loader)) => look::running_compact(tick, elapsed, loader, palette),
+        Some((palette, loader)) if full => look::running(tick, elapsed, loader, palette, way_out),
+        Some((palette, loader)) => look::running_compact(tick, elapsed, loader, palette, way_out),
         // Without colours nothing is animated, so the line is the same at every tick.
-        None if full => "running\u{2026} Ctrl+C to stop waiting".to_string(),
-        None => "running\u{2026} Ctrl+C".to_string(),
+        None => match (way_out, full) {
+            (WayOut::StopWaiting, true) => "running\u{2026} Ctrl+C to stop waiting",
+            (WayOut::Stop, true) => "running\u{2026} Ctrl+C to stop",
+            (WayOut::StopWaiting | WayOut::Stop, false) => "running\u{2026} Ctrl+C",
+            (WayOut::Stopping, true) => "Stopping\u{2026}  Ctrl+C again to stop waiting",
+            (WayOut::Stopping, false) => "Stopping\u{2026}  Ctrl+C again",
+        }
+        .to_string(),
     };
     Some(format!("\r{line}\x1b[K"))
 }
@@ -62,25 +71,36 @@ pub fn frame(
 pub struct Ticker {
     stop: Option<mpsc::Sender<()>>,
     thread: Option<JoinHandle<()>>,
+    /// Set once Ctrl+C has asked for the command to be stopped.
+    command_stopping: Arc<AtomicBool>,
 }
 
 impl Ticker {
     /// Starts drawing on stderr: the loader when there are colours to draw it in, and a line
-    /// that does not move when there are none. `columns` is asked for the window's width at
-    /// every tick, so the line follows a resize.
+    /// that does not move when there are none. `stoppable` is whether Ctrl+C stops the command.
+    /// `columns` is asked for the window's width at every tick, so the line follows a resize.
     pub fn start(
         look: Option<(Palette, Loader)>,
+        stoppable: bool,
         columns: impl Fn() -> u16 + Send + 'static,
     ) -> Self {
-        Self::start_on(std::io::stderr(), look, columns)
+        Self::start_on(std::io::stderr(), look, stoppable, columns)
+    }
+
+    /// From here on the line says that the command is being stopped.
+    pub fn command_stopping(&self) {
+        self.command_stopping.store(true, Ordering::Relaxed);
     }
 
     fn start_on(
         mut output: impl Write + Send + 'static,
         look: Option<(Palette, Loader)>,
+        stoppable: bool,
         columns: impl Fn() -> u16 + Send + 'static,
     ) -> Self {
         let (stop, stopped) = mpsc::channel::<()>();
+        let command_stopping = Arc::new(AtomicBool::new(false));
+        let stopping = command_stopping.clone();
         let thread = std::thread::spawn(move || {
             let started = Instant::now();
             let mut tick = 0;
@@ -92,7 +112,14 @@ impl Ticker {
                 if elapsed < DELAY {
                     continue;
                 }
-                let line = frame(tick, elapsed, look, columns());
+                let way_out = if stopping.load(Ordering::Relaxed) {
+                    WayOut::Stopping
+                } else if stoppable {
+                    WayOut::Stop
+                } else {
+                    WayOut::StopWaiting
+                };
+                let line = frame(tick, elapsed, look, way_out, columns());
                 tick += 1;
                 // Written only when it changed, which without colours is once per width.
                 if line == shown {
@@ -111,6 +138,7 @@ impl Ticker {
         Self {
             stop: Some(stop),
             thread: Some(thread),
+            command_stopping,
         }
     }
 }
@@ -127,12 +155,15 @@ impl Drop for Ticker {
 #[cfg(test)]
 mod tests {
     use super::{ERASE, Ticker, frame};
-    use crate::command_handler::ssh::look::{self, Loader, Palette};
+    use crate::command_handler::ssh::look::{self, Loader, Palette, WayOut};
     use std::io::Write;
     use std::sync::atomic::{AtomicU16, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use test_r::test;
+
+    /// Ctrl+C for a command that cannot be stopped.
+    const WAITING: WayOut = WayOut::StopWaiting;
 
     #[derive(Clone, Default)]
     struct Screen(Arc<Mutex<Vec<u8>>>);
@@ -159,17 +190,23 @@ mod tests {
         // Without colours nothing in the line moves: it is the same at any time.
         for (tick, elapsed) in [(0, 400), (7, 12_900)] {
             assert_eq!(
-                frame(tick, Duration::from_millis(elapsed), None, 80).unwrap(),
+                frame(tick, Duration::from_millis(elapsed), None, WAITING, 80).unwrap(),
                 "\rrunning\u{2026} Ctrl+C to stop waiting\x1b[K"
             );
         }
         // With colours it is the loader's line, redrawn in place.
         let look = Some((Palette::Rich, Loader::Runes));
         assert_eq!(
-            frame(9, Duration::from_secs(1), look, 80).unwrap(),
+            frame(9, Duration::from_secs(1), look, WAITING, 80).unwrap(),
             format!(
                 "\r{}\x1b[K",
-                look::running(9, Duration::from_secs(1), Loader::Runes, Palette::Rich)
+                look::running(
+                    9,
+                    Duration::from_secs(1),
+                    Loader::Runes,
+                    Palette::Rich,
+                    WAITING
+                )
             )
         );
     }
@@ -177,46 +214,94 @@ mod tests {
     #[test]
     fn a_narrow_window_gets_a_shorter_line_and_a_very_narrow_one_none() {
         assert_eq!(
-            frame(0, Duration::from_millis(12_900), None, 40).unwrap(),
+            frame(0, Duration::from_millis(12_900), None, WAITING, 40).unwrap(),
             "\rrunning\u{2026} Ctrl+C\x1b[K"
         );
         let look = Some((Palette::Rich, Loader::Runes));
         assert_eq!(
-            frame(9, Duration::from_secs(1), look, 24).unwrap(),
+            frame(9, Duration::from_secs(1), look, WAITING, 24).unwrap(),
             format!(
                 "\r{}\x1b[K",
-                look::running_compact(9, Duration::from_secs(1), Loader::Runes, Palette::Rich)
+                look::running_compact(
+                    9,
+                    Duration::from_secs(1),
+                    Loader::Runes,
+                    Palette::Rich,
+                    WAITING
+                )
             )
         );
         // A line that wrapped could not be erased, so there it is not drawn.
-        assert_eq!(frame(0, Duration::from_secs(1), None, 23), None);
-        assert_eq!(frame(0, Duration::from_secs(1), look, 0), None);
+        assert_eq!(frame(0, Duration::from_secs(1), None, WAITING, 23), None);
+        assert_eq!(frame(0, Duration::from_secs(1), look, WAITING, 0), None);
     }
 
     #[test]
     fn every_line_fits_the_width_it_is_drawn_at() {
-        for (columns, limit) in [(52, 52), (51, 24), (24, 24)] {
-            let line = frame(0, Duration::from_secs(3600), None, columns).unwrap();
-            let visible = line
-                .trim_start_matches('\r')
-                .trim_end_matches("\x1b[K")
-                .chars()
-                .count();
-            assert!(visible <= limit, "{columns}: {visible}");
+        for way_out in [WAITING, WayOut::Stop, WayOut::Stopping] {
+            for (columns, limit) in [(52, 52), (51, 24), (24, 24)] {
+                let line = frame(0, Duration::from_secs(3600), None, way_out, columns).unwrap();
+                let visible = line
+                    .trim_start_matches('\r')
+                    .trim_end_matches("\x1b[K")
+                    .chars()
+                    .count();
+                assert!(visible <= limit, "{way_out:?} at {columns}: {visible}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_command_that_can_be_stopped_says_so_and_then_that_it_is_being_stopped() {
+        let plain = |way_out, columns| frame(0, Duration::from_secs(2), None, way_out, columns);
+        assert_eq!(
+            plain(WayOut::Stop, 80).unwrap(),
+            "\rrunning\u{2026} Ctrl+C to stop\x1b[K"
+        );
+        assert_eq!(
+            plain(WayOut::Stopping, 80).unwrap(),
+            "\rStopping\u{2026}  Ctrl+C again to stop waiting\x1b[K"
+        );
+        // The short line names the key, and after it was pressed that it can be pressed again.
+        assert_eq!(
+            plain(WayOut::Stop, 40).unwrap(),
+            "\rrunning\u{2026} Ctrl+C\x1b[K"
+        );
+        assert_eq!(
+            plain(WayOut::Stopping, 40).unwrap(),
+            "\rStopping\u{2026}  Ctrl+C again\x1b[K"
+        );
+        // With colours they are the loader's lines.
+        let look = Some((Palette::Rich, Loader::Runes));
+        for way_out in [WayOut::Stop, WayOut::Stopping] {
+            assert_eq!(
+                frame(9, Duration::from_secs(1), look, way_out, 80).unwrap(),
+                format!(
+                    "\r{}\x1b[K",
+                    look::running(
+                        9,
+                        Duration::from_secs(1),
+                        Loader::Runes,
+                        Palette::Rich,
+                        way_out
+                    )
+                )
+            );
         }
     }
 
     #[test]
     fn a_quick_command_never_shows_the_line() {
         let screen = Screen::default();
-        drop(Ticker::start_on(screen.clone(), None, || 80));
+        drop(Ticker::start_on(screen.clone(), None, false, || 80));
         assert_eq!(screen.text(), "");
     }
 
     #[test]
     fn a_slow_command_shows_the_line_and_erases_it_at_the_end() {
         let screen = Screen::default();
-        let ticker = Ticker::start_on(screen.clone(), Some((Palette::Rich, Loader::Runes)), || 80);
+        let look = Some((Palette::Rich, Loader::Runes));
+        let ticker = Ticker::start_on(screen.clone(), look, false, || 80);
         std::thread::sleep(Duration::from_millis(700));
         drop(ticker);
         let text = screen.text();
@@ -228,7 +313,7 @@ mod tests {
     #[test]
     fn without_colours_the_line_is_written_once_and_does_not_move() {
         let screen = Screen::default();
-        let ticker = Ticker::start_on(screen.clone(), None, || 80);
+        let ticker = Ticker::start_on(screen.clone(), None, false, || 80);
         std::thread::sleep(Duration::from_millis(900));
         drop(ticker);
         assert_eq!(
@@ -238,11 +323,30 @@ mod tests {
     }
 
     #[test]
+    fn the_line_of_a_command_that_can_be_stopped_changes_when_the_stop_is_asked_for() {
+        let screen = Screen::default();
+        let ticker = Ticker::start_on(screen.clone(), None, true, || 80);
+        std::thread::sleep(Duration::from_millis(600));
+        ticker.command_stopping();
+        std::thread::sleep(Duration::from_millis(400));
+        drop(ticker);
+        assert_eq!(
+            screen.text(),
+            format!(
+                "\rrunning\u{2026} Ctrl+C to stop\x1b[K\rStopping\u{2026}  Ctrl+C again to stop \
+                 waiting\x1b[K{ERASE}"
+            )
+        );
+    }
+
+    #[test]
     fn the_line_follows_the_window_as_it_is_resized() {
         let screen = Screen::default();
         let columns = Arc::new(AtomicU16::new(80));
         let window = columns.clone();
-        let ticker = Ticker::start_on(screen.clone(), None, move || window.load(Ordering::Relaxed));
+        let ticker = Ticker::start_on(screen.clone(), None, false, move || {
+            window.load(Ordering::Relaxed)
+        });
         std::thread::sleep(Duration::from_millis(600));
         columns.store(30, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(400));

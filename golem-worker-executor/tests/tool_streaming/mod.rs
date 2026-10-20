@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::execution_observations::WorkerObservations;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
@@ -101,6 +102,7 @@ mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod dropped_waits;
+mod durable_entity_blob;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
@@ -864,7 +866,7 @@ struct SecretPolicyEvidence {
     leaf_revealed: bool,
 }
 
-fn deployment_state(
+pub(crate) fn deployment_state(
     owner_account_id: AccountId,
     provider_component_id: golem_common::model::component::ComponentId,
     provider_revision: ComponentRevision,
@@ -6568,6 +6570,73 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         "trap recovery must consume the recorded nested durable effect exactly once"
     );
 
+    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.lane.holder.is_none());
+        assert_eq!(active.lane.active_invocation_count, 0);
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
+    http_server.abort();
+    trap_once_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn rust_generated_client_interrupt_releases_held_tool_streams(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The backpressured provider writes 4 KiB chunks, each a durable call, so the capacity
+    // bounds how many writes the unread stdout needs before the producer blocks.
+    const CAPACITY: usize = 64 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = CAPACITY;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
     for (name, method, calls) in [
         ("interrupt-stdin", "hold_open_stdin", 3_u32),
         ("interrupt-stdout", "hold_unread_stdout", 1_u32),
@@ -6595,7 +6664,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
                         .await
                         .and_then(|active| active.tool_operations.operations.into_iter().next())
                         .and_then(|operation| operation.stdout)
-                        && stdout.buffered_bytes == 16 * 1024 * 1024
+                        && stdout.buffered_bytes == CAPACITY
                     {
                         break stdout;
                     }
@@ -6606,7 +6675,8 @@ async fn rust_generated_client_streams_live_and_handles_edges(
             .map_err(|_| {
                 anyhow::anyhow!("await-result-before-read never reached bounded backpressure")
             })?;
-            assert_eq!(stdout.accepted_bytes, 16 * 1024 * 1024);
+            assert_eq!(stdout.capacity_bytes, CAPACITY);
+            assert_eq!(stdout.accepted_bytes, CAPACITY as u64);
             assert_eq!(stdout.delivered_bytes, 0);
             assert!(!stdout.terminal_selected);
         }
@@ -6619,15 +6689,6 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         }
         executor.delete_worker(&held_worker_id).await?;
     }
-
-    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await {
-        assert!(active.tool_operations.operations.is_empty());
-        assert!(active.lane.holder.is_none());
-        assert_eq!(active.lane.active_invocation_count, 0);
-        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
-    }
-    http_server.abort();
-    trap_once_server.abort();
 
     Ok(())
 }
@@ -11092,10 +11153,11 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
     assert_eq!(held_operation.admission, ToolBodyAdmissionMetadata::Running);
     let drain_worker = executor.active_agent(&owned_drain_agent).await.unwrap();
     let restart = tokio::spawn(async move {
-        drain_worker
-            .primary()
+        let worker = drain_worker.primary();
+        worker
             .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
-            .await
+            .await?;
+        worker.join_accepted_stops_for_test().await
     });
     tokio::time::timeout(std::time::Duration::from_secs(30), restart)
         .await
@@ -16394,6 +16456,293 @@ fs.writeFileSync('/workspace/project/entry.js', "console.log([require('probe-pac
     .await?;
     assert_eq!(file.exit_code, 0, "file: {file:?}");
     assert_eq!(file.stdout, b"package:project,local:project\n");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_and_npx_run_typescript(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_name = "node-typescript";
+    let fixture_source = r##"
+const fs = require('node:fs');
+fs.mkdirSync('/workspace/plain', { recursive: true });
+fs.mkdirSync('/workspace/installed/local-tsx', { recursive: true });
+fs.writeFileSync('/workspace/plain/main.ts', [
+  'enum Color { Red = "red" }',
+  'const args: string[] = process.argv.slice(2);',
+  'console.log(`${Color.Red}:${args.join(",")}`);',
+  '',
+].join('\n'));
+fs.writeFileSync('/workspace/plain/main.mts', 'const value: number = await Promise.resolve(7);\nconsole.log(value);\n');
+fs.writeFileSync('/workspace/installed/package.json', JSON.stringify({ name: 'installed', version: '1.0.0', private: true }));
+fs.writeFileSync('/workspace/installed/main.ts', 'console.log("unused");\n');
+fs.writeFileSync('/workspace/installed/local-tsx/package.json', JSON.stringify({
+  name: 'tsx',
+  version: '0.0.0-fixture',
+  bin: { tsx: 'cli.js' }
+}));
+fs.writeFileSync(
+  '/workspace/installed/local-tsx/cli.js',
+  "#!/usr/bin/env node\nconsole.log('installed-tsx:' + process.argv.slice(2).join(','));\n",
+  { mode: 0o755 }
+);
+"##;
+    let fixture = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec!["-e", fixture_source],
+    )
+    .await?;
+    assert_eq!(fixture.exit_code, 0, "fixture: {fixture:?}");
+    let install = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "npm",
+        "/workspace/installed",
+        vec![
+            "install",
+            "./local-tsx",
+            "--offline",
+            "--ignore-scripts",
+            "--no-package-lock",
+            "--no-audit",
+            "--no-fund",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        install.exit_code,
+        0,
+        "npm install stderr: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let typed_eval = "enum E { A = 'typed' } const parts: string[] = [E.A, 'eval']; console.log(parts.join('-'))";
+    let typed_eval_with_return = "const n: number = await Promise.resolve(1); if (n) { console.log('early'); return } console.log('late')";
+    // (tool, cwd, args, exit code, stdout, stderr)
+    type Case<'a> = (&'a str, &'a str, Vec<&'a str>, i32, &'a str, &'a str);
+    let cases: Vec<Case> = vec![
+        (
+            "node",
+            "/workspace/plain",
+            vec!["main.ts", "a", "b"],
+            0,
+            "red:a,b\n",
+            "",
+        ),
+        ("node", "/workspace/plain", vec!["main.mts"], 0, "7\n", ""),
+        (
+            "node",
+            "/workspace/plain",
+            vec!["--experimental-strip-types", "--no-warnings", "main.ts"],
+            0,
+            "red:\n",
+            "",
+        ),
+        (
+            "node",
+            "/workspace",
+            vec!["-e", typed_eval],
+            0,
+            "typed-eval\n",
+            "",
+        ),
+        (
+            "node",
+            "/workspace",
+            vec!["--input-type=commonjs-typescript", "-e", typed_eval],
+            0,
+            "typed-eval\n",
+            "",
+        ),
+        (
+            "node",
+            "/workspace",
+            vec!["-e", typed_eval_with_return],
+            0,
+            "early\n",
+            "",
+        ),
+        (
+            "npx",
+            "/workspace/plain",
+            vec!["tsx", "main.ts", "x"],
+            0,
+            "red:x\n",
+            "",
+        ),
+        (
+            "npx",
+            "/workspace/plain",
+            vec!["-y", "tsx", "-e", typed_eval],
+            0,
+            "typed-eval\n",
+            "",
+        ),
+        (
+            "npx",
+            "/workspace/plain",
+            vec!["ts-node", "main.ts"],
+            0,
+            "red:\n",
+            "npx ts-node (golem built-in): type checking is skipped; use the tsc tool to type-check.\n",
+        ),
+        (
+            "npx",
+            "/workspace/plain",
+            vec!["ts-node", "-e", typed_eval, "--transpile-only"],
+            0,
+            "typed-eval\n",
+            "npx ts-node (golem built-in): type checking is skipped; use the tsc tool to type-check.\n",
+        ),
+        (
+            "npx",
+            "/workspace/installed",
+            vec!["--no-install", "tsx", "main.ts"],
+            0,
+            "installed-tsx:main.ts\n",
+            "",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (tool, cwd, args, exit_code, stdout, stderr) in cases {
+        let result = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            tool,
+            cwd,
+            args.clone(),
+        )
+        .await?;
+        if result.exit_code != exit_code
+            || result.stdout != stdout.as_bytes()
+            || result.stderr != stderr.as_bytes()
+        {
+            failures.push(format!(
+                "{tool} {args:?} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                result.exit_code,
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            ));
+        }
+    }
+
+    // A SyntaxError thrown while the program runs must not rerun the source as TypeScript.
+    let runtime_syntax_error = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace/plain",
+        vec!["-e", "console.log('once'); JSON.parse('{')"],
+    )
+    .await?;
+    if runtime_syntax_error.exit_code != 1
+        || runtime_syntax_error.stdout != b"once\n"
+        || !String::from_utf8_lossy(&runtime_syntax_error.stderr).contains("SyntaxError")
+    {
+        failures.push(format!("runtime SyntaxError: {runtime_syntax_error:?}"));
+    }
+
+    let failing: Vec<(&str, Vec<&str>, i32, &str)> = vec![
+        (
+            "node",
+            vec!["--watch", "main.ts"],
+            9,
+            "node: bad option: --watch\n",
+        ),
+        (
+            "node",
+            vec!["--input-type=module", "-e", "console.log(1)"],
+            9,
+            "write the code to a .mjs file",
+        ),
+        (
+            "npx",
+            vec!["tsx", "--watch", "main.ts"],
+            1,
+            "npm install -D tsx",
+        ),
+    ];
+    for (tool, args, exit_code, stderr) in failing {
+        let result = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            tool,
+            "/workspace/plain",
+            args.clone(),
+        )
+        .await?;
+        let actual = String::from_utf8_lossy(&result.stderr);
+        if result.exit_code != exit_code || !actual.contains(stderr) || !result.stdout.is_empty() {
+            failures.push(format!(
+                "{tool} {args:?}: exit {}; stdout: {}; stderr: {actual}",
+                result.exit_code,
+                String::from_utf8_lossy(&result.stdout),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
     Ok(())
 }
 

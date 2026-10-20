@@ -20,6 +20,10 @@ func (s *state) current() int64 { return s.value }
 var agent = counter.Agent.Implement(func(counter.ID) *state { return &state{} })
 
 func init() {
+	agent.Handle(counter.Reset, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+		ctx.State.value = 0
+		return golem.Unit{}
+	})
 	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		ctx.State.value++
 		return ctx.State.value

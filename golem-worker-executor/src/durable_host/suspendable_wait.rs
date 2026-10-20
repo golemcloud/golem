@@ -114,8 +114,75 @@ pub(crate) fn chrono_duration_to_nanos(duration: chrono::Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::Timestamp;
     use std::future::{pending, ready};
+    use std::task::Poll;
     use test_r::test;
+
+    async fn deadline_wait_order(agent_mode: AgentMode, ready_first: bool, stop_before_poll: bool) {
+        let ready = tokio::sync::Notify::new();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        let mut stop = Some(stop);
+        if stop_before_poll {
+            stop.take().unwrap().send(kind).unwrap();
+        }
+        let mut wait = Box::pin(wait_for_ready(
+            agent_mode,
+            Duration::from_secs(300),
+            Some(Duration::from_secs(20)),
+            Box::pin(async { stopped.await.unwrap() }),
+            ready.notified(),
+        ));
+        if !stop_before_poll {
+            std::future::poll_fn(|cx| {
+                assert!(wait.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+        }
+        if ready_first {
+            ready.notify_one();
+        } else if let Some(stop) = stop.take() {
+            stop.send(kind).unwrap();
+        }
+        let outcome = tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("wait must not depend on the deadline or voluntary grace");
+        drop(wait);
+        if ready_first {
+            assert_eq!(outcome, ParkOutcome::Ready);
+            // A later stop has no receiver and cannot rewrite selected readiness.
+            assert_eq!(stop.take().unwrap().send(kind), Err(kind));
+        } else {
+            assert_eq!(outcome, ParkOutcome::Interrupted(kind));
+            ready.notify_one();
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn deadline_wait_readiness_before_stop_stays_ready() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            deadline_wait_order(mode, true, false).await;
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn deadline_wait_stop_before_readiness_retains_typed_cause() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            deadline_wait_order(mode, false, false).await;
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn deadline_wait_stop_before_first_poll_is_not_lost() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            deadline_wait_order(mode, false, true).await;
+        }
+    }
 
     #[test]
     async fn suppressed_durable_wait_has_no_ephemeral_timeout_or_local_election() {

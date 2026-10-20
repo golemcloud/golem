@@ -6847,12 +6847,18 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
     );
     assert_eq!(environment_state_service.agent_secret_revision_calls(), 1);
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
-        oplog
-            .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_))),
-        "secret-handle agent must have a recovery snapshot before restart"
-    );
+    let constructor_snapshot = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .expect("secret-handle agent must have a recovery snapshot before restart")
+        .oplog_index;
+    // Keep the completed reveal outside the selected snapshot so recovery must replay it.
+    let reveal_snapshot =
+        crate::hot_update::wait_for_snapshot_after(&executor, &worker_id, constructor_snapshot)
+            .await?;
+    executor
+        .reject_automatic_snapshots(&worker_id, [reveal_snapshot])
+        .await?;
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, make_overrides()).await?;
@@ -6870,7 +6876,11 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
         1,
         "snapshot reconstruction must not perform an extra authorization"
     );
-    assert_eq!(environment_state_service.agent_secret_revision_calls(), 2);
+    assert_eq!(
+        environment_state_service.agent_secret_revision_calls(),
+        3,
+        "replay must re-materialize the pinned secret without reauthorizing the reveal"
+    );
     Ok(())
 }
 

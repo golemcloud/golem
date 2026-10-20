@@ -3796,13 +3796,17 @@ mod rejection_mapping_tests {
 
     /// A worker service client whose only executor is `executor`, and an agent to invoke through
     /// it.
-    async fn client_against(executor: RejectingExecutor) -> (WorkerExecutorWorkerClient, AgentId) {
+    async fn client_against(
+        executor: RejectingExecutor,
+        max_decoding_message_size: usize,
+    ) -> (WorkerExecutorWorkerClient, AgentId) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             tonic::transport::Server::builder()
                 .add_service(
                     WorkerExecutorServer::new(executor)
+                        .max_decoding_message_size(max_decoding_message_size)
                         .accept_compressed(CompressionEncoding::Gzip)
                         .send_compressed(CompressionEncoding::Gzip),
                 )
@@ -3850,8 +3854,11 @@ mod rejection_mapping_tests {
 
     /// Invokes an agent through a worker service whose only executor is `executor`, and returns
     /// the error the invocation ends with.
-    async fn invoke_against(executor: RejectingExecutor) -> WorkerServiceError {
-        let (client, agent_id) = client_against(executor).await;
+    async fn invoke_against(
+        executor: RejectingExecutor,
+        max_decoding_message_size: usize,
+    ) -> WorkerServiceError {
+        let (client, agent_id) = client_against(executor, max_decoding_message_size).await;
 
         client
             .invoke_agent(
@@ -3878,13 +3885,43 @@ mod rejection_mapping_tests {
 
     #[test]
     async fn unary_not_found_rejection_preserves_the_public_error_category() {
-        let error = invoke_against(RejectingExecutor::default()).await;
+        let error = invoke_against(RejectingExecutor::default(), 32 * 1024 * 1024).await;
 
         let public_error: AgentError = error.into();
         assert!(
             matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
             "InvocationRejected(NotFound) must remain a public not-found error, got {public_error:?}"
         );
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn oversized_opening_frame_maps_to_413_for_both_http_apis() {
+        use crate::api::common::ApiEndpointError;
+        use crate::custom_api::error::RequestHandlerError;
+        use crate::service::worker::CallWorkerExecutorError;
+        use poem::IntoResponse;
+
+        for custom_api in [false, true] {
+            let error = invoke_against(RejectingExecutor::default(), 1).await;
+            let WorkerServiceError::InternalCallError(CallWorkerExecutorError::MessageTooLarge(
+                ref status,
+            )) = error
+            else {
+                panic!("expected a gRPC size-limit error, got {error:?}");
+            };
+            let message = status.message().to_string();
+            let api_error = if custom_api {
+                ApiEndpointError::from(RequestHandlerError::AgentInvocationFailed(error))
+            } else {
+                ApiEndpointError::from(error)
+            };
+            let response = api_error.into_response();
+            assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+            let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+            assert_eq!(body["code"], "REQUEST_PAYLOAD_TOO_LARGE");
+            assert!(body["error"].as_str().unwrap().contains(&message));
+        }
     }
 
     #[test]
@@ -3896,7 +3933,7 @@ mod rejection_mapping_tests {
         };
         let calls = executor.calls.clone();
         // `client_against` admits one oplog entry read at a time.
-        let (client, agent_id) = client_against(executor).await;
+        let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
         let read = |oplog_index: u64| {
             let client = client.clone();
             let agent_id = agent_id.clone();
@@ -3954,7 +3991,7 @@ mod rejection_mapping_tests {
         };
         let calls = executor.calls.clone();
 
-        let error = invoke_against(executor).await;
+        let error = invoke_against(executor, 32 * 1024 * 1024).await;
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -3993,7 +4030,7 @@ mod rejection_mapping_tests {
         };
         let calls = executor.calls.clone();
         let dispositions = executor.dispositions.clone();
-        let (client, agent_id) = client_against(executor).await;
+        let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
 
         let responses = client
             .invoke_agent_session(
@@ -4044,7 +4081,7 @@ mod rejection_mapping_tests {
             tail_frames: Some(tail_frames),
             ..Default::default()
         };
-        let (client, agent_id) = client_against(executor).await;
+        let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
         let request = stream::iter([
             session_start(&agent_id),
             InvocationRequest {

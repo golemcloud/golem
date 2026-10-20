@@ -2,13 +2,32 @@ x-aliases:
   blob-storage-env-vars: &blob-storage-env-vars
     GOLEM__BLOB_STORAGE__TYPE: "LocalFileSystem"
     GOLEM__BLOB_STORAGE__CONFIG__ROOT: "/data/blob_storage"
+  shard-manager-env-vars: &shard-manager-env-vars
+    RUST_BACKTRACE: 1
+    RUST_LOG=info,h2=warn,hyper=warn,tower: warn
+    GOLEM__ENVIRONMENT: local
+
+    GOLEM__HTTP_PORT: ${SHARD_MANAGER_HTTP_PORT}
+    GOLEM__GRPC__PORT: ${SHARD_MANAGER_GRPC_PORT}
+
+    GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
+    GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
+
+    # Distributed mode. The shard lease state lives in etcd behind a compare-and-swap,
+    # and one replica wins an etcd lease campaign and drives all topology decisions.
+    # The endpoint list must be bracketed: unbracketed, it is read as a single string
+    # and fails to deserialize. This example's etcd is plaintext, so the endpoint is
+    # http://; for an etcd with TLS and a user, see compose.tls.yaml and this example's
+    # README.
+    GOLEM__PERSISTENCE__TYPE: Etcd
+    GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
+    # connect_timeout (10s), request_timeout (5s), leader_lease_ttl (10s) and
+    # compaction_retention_revisions (1000) keep their defaults here.
 
 services:
   # Requests for GOLEM_ROUTER_MANAGEMENT_HOST reach the management API; requests for every
   # other host reach the HTTP API and MCP deployments on the worker service's custom request port.
-  # Releases up to v1.5.0 have no golem-router image. For such a GOLEM_IMAGES_VERSION, build it
-  # from the repository root first:
-  #   docker build -f golem-router/docker/Dockerfile -t golemservices/golem-router:<version> .
+  # Use the same published release for every Golem image, including the router.
   router:
     image: golemservices/golem-router:${GOLEM_IMAGES_VERSION}
     pull_policy: missing
@@ -91,6 +110,8 @@ services:
       GOLEM__INITIAL_ACCOUNTS__MARKETING__TOKEN: ${MARKETING_TOKEN}
       GOLEM__LOGIN__TYPE: Disabled
       GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS: '["${GOLEM_ROUTER_MANAGEMENT_HOST}"]'
+      # Temporary agent filesystems have no quota authority. Finite disk limits need ManagedXfs.
+      GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER: 1000000000000000000
 
       GOLEM__DB__TYPE: Postgres
       GOLEM__DB__CONFIG__DATABASE: golem_db
@@ -101,44 +122,45 @@ services:
       GOLEM__DB__CONFIG__USERNAME: golem_user
       GOLEM__DB__CONFIG__PASSWORD: golem_password
 
-      GOLEM__COMPILATION__CONFIG__HOST: golem-component-compilation-service
-      GOLEM__COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
+      GOLEM__COMPONENT_COMPILATION__CONFIG__HOST: golem-component-compilation-service
+      GOLEM__COMPONENT_COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
     volumes:
       - blob_storage:/data/blob_storage
     depends_on:
       postgres:
         condition: service_healthy
 
-  golem-shard-manager:
+  # Three shard managers. Every replica serves its gRPC port; a standby answers each call with
+  # the leader's address, and the executors and the worker service then call the leader
+  # directly. They reach any replica through the shared network alias `golem-shard-manager`,
+  # and each replica advertises its own service name as the host to reach it at.
+  golem-shard-manager-1: &shard-manager
     image: golemservices/golem-shard-manager:${GOLEM_IMAGES_VERSION}
     pull_policy: always
     restart: on-failure
     environment:
-      RUST_BACKTRACE: 1
-      RUST_LOG=info,h2=warn,hyper=warn,tower: warn
-      GOLEM__ENVIRONMENT: local
-
-      GOLEM__HTTP_PORT: ${SHARD_MANAGER_HTTP_PORT}
-      GOLEM__GRPC__PORT: ${SHARD_MANAGER_GRPC_PORT}
-
-      GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
-      GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
-
-      # Distributed mode. The shard lease state lives in etcd behind a compare-and-swap,
-      # and one replica wins an etcd lease campaign and drives all topology decisions.
-      # The endpoint list must be bracketed: unbracketed, it is read as a single string
-      # and fails to deserialize. This example's etcd is plaintext, so the endpoint is
-      # http://; for an etcd with TLS and a user, see compose.tls.yaml and this example's
-      # README.
-      GOLEM__PERSISTENCE__TYPE: Etcd
-      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
-      # connect_timeout (10s), request_timeout (5s), leader_lease_ttl (10s) and
-      # compaction_retention_revisions (1000) keep their defaults here.
+      <<: *shard-manager-env-vars
+      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-1
+    networks:
+      default:
+        aliases: [golem-shard-manager]
     depends_on:
       etcd:
         condition: service_healthy
       golem-registry-service:
         condition: service_started
+
+  golem-shard-manager-2:
+    <<: *shard-manager
+    environment:
+      <<: *shard-manager-env-vars
+      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-2
+
+  golem-shard-manager-3:
+    <<: *shard-manager
+    environment:
+      <<: *shard-manager-env-vars
+      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-3
 
   golem-worker-service:
     image: golemservices/golem-worker-service:${GOLEM_IMAGES_VERSION}
@@ -176,7 +198,11 @@ services:
         condition: service_started
       golem-worker-executor:
         condition: service_started
-      golem-shard-manager:
+      golem-shard-manager-1:
+        condition: service_started
+      golem-shard-manager-2:
+        condition: service_started
+      golem-shard-manager-3:
         condition: service_started
       golem-registry-service:
         condition: service_started
@@ -264,7 +290,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      golem-shard-manager:
+      golem-shard-manager-1:
+        condition: service_started
+      golem-shard-manager-2:
+        condition: service_started
+      golem-shard-manager-3:
         condition: service_started
       golem-registry-service:
         condition: service_started

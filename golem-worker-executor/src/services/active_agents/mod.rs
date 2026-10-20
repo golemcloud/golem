@@ -143,6 +143,50 @@ pub struct ActiveAgentEntityMetadata {
     pub tool_operations: crate::durable_host::tool::ToolOperationSetMetadata,
 }
 
+pub(crate) struct EntityFence<'a> {
+    pub operations: &'a crate::durable_host::tool::operation::OwnerToolOperations,
+    pub entities: &'a Mutex<HashMap<AgentEntity, Arc<EntitySlot>>>,
+    pub accepting: &'a AtomicBool,
+    pub generation: &'a AtomicU64,
+    pub resources: &'a OwnerRuntimeResources,
+}
+
+impl EntityFence<'_> {
+    pub(crate) async fn begin(&self, failure: OwnerFailureWinner) {
+        self.operations.select_owner_failure(failure).await;
+        self.close();
+    }
+
+    pub(crate) fn close(&self) {
+        self.operations.close_failed_attachments();
+        {
+            let entities = self.entities.lock().unwrap();
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            self.accepting.store(false, Ordering::Release);
+            for slot in entities.values() {
+                slot.fence();
+            }
+        }
+        self.resources.fence_filesystem_generation();
+    }
+
+    pub(crate) async fn drain(&self, owner_id: &OwnedAgentId) {
+        let entities = self
+            .entities
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        debug!(%owner_id, entity_slot_count = entities.len(), "Draining fenced entity bodies");
+        for slot in entities {
+            slot.wait_drained().await;
+        }
+        self.operations.drain_owner_failure_lanes().await;
+        debug!(%owner_id, "Fenced entity bodies drained");
+    }
+}
+
 impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     fn new_unresolved(
         owner_id: OwnedAgentId,
@@ -268,37 +312,51 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             failure_kind = failure.kind_label(),
             "Selecting owner failure for entity fence"
         );
-        tool_operations.select_owner_failure(failure).await;
-        tool_operations.close_failed_attachments();
-        {
-            let entities = self.entities.lock().unwrap();
-            self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);
-            self.accepting_entities.store(false, Ordering::Release);
-            for slot in entities.values() {
-                slot.fence();
-            }
+        let resources = self.resources();
+        EntityFence {
+            operations: &tool_operations,
+            entities: &self.entities,
+            accepting: &self.accepting_entities,
+            generation: &self.entity_fence_generation,
+            resources: &resources,
         }
-        self.resources().fence_filesystem_generation();
+        .begin(failure)
+        .await;
+        debug!(owner_id = %self.owner_id, "Entity fence selected and resources closed");
+    }
+
+    pub(crate) async fn fence_entity_bodies_for_unload(&self) {
+        self.execution().tool_operations().fence_for_unload().await;
+        self.close_entity_admission();
+        self.drain_fenced_entity_bodies().await;
+    }
+
+    fn close_entity_admission(&self) {
+        let operations = self.execution().tool_operations();
+        let resources = self.resources();
+        EntityFence {
+            operations: &operations,
+            entities: &self.entities,
+            accepting: &self.accepting_entities,
+            generation: &self.entity_fence_generation,
+            resources: &resources,
+        }
+        .close();
         debug!(owner_id = %self.owner_id, "Entity fence selected and resources closed");
     }
 
     pub(crate) async fn drain_fenced_entity_bodies(&self) {
-        let entities = self
-            .entities
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        debug!(owner_id = %self.owner_id, entity_slot_count = entities.len(), "Draining fenced entity bodies");
-        for slot in entities {
-            slot.wait_drained().await;
+        let operations = self.execution().tool_operations();
+        let resources = self.resources();
+        EntityFence {
+            operations: &operations,
+            entities: &self.entities,
+            accepting: &self.accepting_entities,
+            generation: &self.entity_fence_generation,
+            resources: &resources,
         }
-        self.execution()
-            .tool_operations()
-            .drain_owner_failure_lanes()
-            .await;
-        debug!(owner_id = %self.owner_id, "Fenced entity bodies drained");
+        .drain(&self.owner_id)
+        .await;
     }
 
     pub(crate) async fn fence_entity_bodies(&self, failure: OwnerFailureWinner) {

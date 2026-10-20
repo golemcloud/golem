@@ -1,0 +1,225 @@
+# A fixed Golem cluster on one host: the per-service images with several worker executors,
+# a Postgres database and an S3 bucket outside the host, and Caddy for TLS.
+# Guide: https://learn.golem.cloud/next/deploy/vm#fixed-cluster-with-docker-compose
+
+x-blob-storage: &blob-storage
+  # All services share one bucket. namespace_prefixes cannot change after the first start.
+  GOLEM__BLOB_STORAGE__TYPE: S3
+  GOLEM__BLOB_STORAGE__CONFIG__REGION: ${S3_REGION}
+  # For an S3-compatible service other than AWS S3, uncomment these two lines:
+  # GOLEM__BLOB_STORAGE__CONFIG__AWS_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  # GOLEM__BLOB_STORAGE__CONFIG__AWS_PATH_STYLE: "true"
+  GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX: ""
+  GOLEM__BLOB_STORAGE__CONFIG__NAMESPACE_PREFIXES: "true"
+  GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET: ${S3_BUCKET}
+  GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET: ${S3_BUCKET}
+  GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET: ${S3_BUCKET}
+  GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS: '["${S3_BUCKET}"]'
+  GOLEM__BLOB_STORAGE__CONFIG__INITIAL_AGENT_FILES_BUCKET: ${S3_BUCKET}
+  GOLEM__BLOB_STORAGE__CONFIG__COMPONENTS_BUCKET: ${S3_BUCKET}
+  GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET: ${S3_BUCKET}
+  GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_ATTEMPTS: 3
+  GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MIN_DELAY: "100ms"
+  GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_DELAY: "1s"
+  GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MULTIPLIER: 3.0
+  GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_JITTER_FACTOR: 0.15
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+
+x-service: &service
+  pull_policy: always
+  restart: unless-stopped
+  networks: [golem]
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      GOLEM_MANAGEMENT_HOST: ${GOLEM_MANAGEMENT_HOST}
+      GOLEM_APP_DOMAINS: ${GOLEM_APP_DOMAINS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      golem:
+        # The worker service trusts the forwarded headers of this address only.
+        ipv4_address: 172.30.0.10
+    depends_on:
+      - golem-registry-service
+      - golem-worker-service
+
+  golem-registry-service:
+    <<: *service
+    image: golemservices/registry-service:${GOLEM_IMAGES_VERSION}
+    environment:
+      <<: *blob-storage
+      RUST_LOG: info,h2=warn,hyper=warn,tower=warn
+      GOLEM__HTTP_PORT: 8083
+      GOLEM__GRPC__PORT: 9008
+
+      GOLEM__CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX}
+      GOLEM__LOGIN__TYPE: Disabled
+      GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN: ${ADMIN_TOKEN}
+      GOLEM__INITIAL_ACCOUNTS__MARKETING__TOKEN: ${MARKETING_TOKEN}
+      GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS: '["${GOLEM_MANAGEMENT_HOST}"]'
+      # An agent on the default Temporary filesystem storage does not start with a finite
+      # per-agent disk limit. Set a limit only with ManagedXfs storage on the executors.
+      GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER: 1000000000000000000
+
+      GOLEM__DB__TYPE: Postgres
+      GOLEM__DB__CONFIG__HOST: ${POSTGRES_HOST}
+      GOLEM__DB__CONFIG__PORT: ${POSTGRES_PORT}
+      GOLEM__DB__CONFIG__DATABASE: ${POSTGRES_DB}
+      GOLEM__DB__CONFIG__USERNAME: ${POSTGRES_USER}
+      GOLEM__DB__CONFIG__PASSWORD: ${POSTGRES_PASSWORD}
+      GOLEM__DB__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__DB__CONFIG__SCHEMA: golem_registry_service
+
+      GOLEM__COMPONENT_COMPILATION__CONFIG__HOST: golem-component-compilation-service
+      GOLEM__COMPONENT_COMPILATION__CONFIG__PORT: 9010
+    volumes:
+      - builtin_artifacts:/app/builtin-artifacts
+
+  # Exactly one replica: two shard managers on one database can run the same agent twice.
+  # `docker compose up` stops the old container before it starts the new one.
+  golem-shard-manager:
+    <<: *service
+    image: golemservices/golem-shard-manager:${GOLEM_IMAGES_VERSION}
+    environment:
+      RUST_LOG: info,h2=warn,hyper=warn,tower=warn
+      GOLEM__HTTP_PORT: 8081
+      GOLEM__GRPC__PORT: 9002
+
+      GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
+      GOLEM__REGISTRY_SERVICE__PORT: 9008
+
+      GOLEM__PERSISTENCE__TYPE: Postgres
+      GOLEM__PERSISTENCE__CONFIG__HOST: ${POSTGRES_HOST}
+      GOLEM__PERSISTENCE__CONFIG__PORT: ${POSTGRES_PORT}
+      GOLEM__PERSISTENCE__CONFIG__DATABASE: ${POSTGRES_DB}
+      GOLEM__PERSISTENCE__CONFIG__USERNAME: ${POSTGRES_USER}
+      GOLEM__PERSISTENCE__CONFIG__PASSWORD: ${POSTGRES_PASSWORD}
+      GOLEM__PERSISTENCE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__PERSISTENCE__CONFIG__SCHEMA: golem_shard_manager
+    depends_on:
+      - golem-registry-service
+
+  golem-worker-service:
+    <<: *service
+    image: golemservices/golem-worker-service:${GOLEM_IMAGES_VERSION}
+    environment:
+      <<: *blob-storage
+      RUST_LOG: info,h2=warn,hyper=warn,tower=warn
+      GOLEM__PORT: 9005
+      GOLEM__CUSTOM_REQUEST_PORT: 9006
+      GOLEM__MCP_PORT: 9007
+      GOLEM__GRPC__PORT: 9094
+
+      GOLEM__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY: ${WEBHOOK_HMAC_KEY}
+      GOLEM__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID: ${SESSION_TOKEN_KEY_ID}
+      GOLEM__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY: ${SESSION_TOKEN_KEY}
+      GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES: '["172.30.0.10"]'
+
+      GOLEM__GATEWAY_SESSION_STORAGE__TYPE: Postgres
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST: ${POSTGRES_HOST}
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT: ${POSTGRES_PORT}
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__DATABASE: ${POSTGRES_DB}
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__USERNAME: ${POSTGRES_USER}
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PASSWORD: ${POSTGRES_PASSWORD}
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__SCHEMA: golem_worker_service_session_store
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PENDING_LOGIN_EXPIRATION: "1h"
+      GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__CLEANUP_INTERVAL: "5m"
+
+      GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
+      GOLEM__REGISTRY_SERVICE__PORT: 9008
+      GOLEM__SHARD_MANAGER__HOST: golem-shard-manager
+      GOLEM__SHARD_MANAGER__PORT: 9002
+    depends_on:
+      - golem-registry-service
+      - golem-shard-manager
+
+  golem-component-compilation-service:
+    <<: *service
+    image: golemservices/golem-component-compilation-service:${GOLEM_IMAGES_VERSION}
+    environment:
+      <<: *blob-storage
+      RUST_LOG: info,h2=warn,hyper=warn,tower=warn
+      GOLEM__HTTP_PORT: 8084
+      GOLEM__GRPC__PORT: 9010
+
+      GOLEM__REGISTRY_SERVICE__TYPE: Static
+      GOLEM__REGISTRY_SERVICE__CONFIG__HOST: golem-registry-service
+      GOLEM__REGISTRY_SERVICE__CONFIG__PORT: 9008
+    depends_on:
+      - golem-registry-service
+
+  golem-worker-executor:
+    <<: *service
+    image: golemservices/golem-worker-executor:${GOLEM_IMAGES_VERSION}
+    deploy:
+      replicas: ${WORKER_EXECUTOR_REPLICAS}
+    environment:
+      <<: *blob-storage
+      RUST_LOG: info
+      GOLEM__HTTP_PORT: 8082
+      GOLEM__GRPC__PORT: 9000
+
+      GOLEM__AGENT_WEBHOOKS_SERVICE__HMAC_KEY: ${WEBHOOK_HMAC_KEY}
+
+      GOLEM__KEY_VALUE_STORAGE__TYPE: Postgres
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST: ${POSTGRES_HOST}
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT: ${POSTGRES_PORT}
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE: ${POSTGRES_DB}
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__USERNAME: ${POSTGRES_USER}
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD: ${POSTGRES_PASSWORD}
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__SCHEMA: golem_worker_executor
+
+      GOLEM__INDEXED_STORAGE__TYPE: Postgres
+      GOLEM__INDEXED_STORAGE__CONFIG__HOST: ${POSTGRES_HOST}
+      GOLEM__INDEXED_STORAGE__CONFIG__PORT: ${POSTGRES_PORT}
+      GOLEM__INDEXED_STORAGE__CONFIG__DATABASE: ${POSTGRES_DB}
+      GOLEM__INDEXED_STORAGE__CONFIG__USERNAME: ${POSTGRES_USER}
+      GOLEM__INDEXED_STORAGE__CONFIG__PASSWORD: ${POSTGRES_PASSWORD}
+      GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__INDEXED_STORAGE__CONFIG__SCHEMA: golem_worker_executor_indexed
+
+      GOLEM__SCHEDULER_STORAGE__TYPE: Postgres
+      GOLEM__SCHEDULER_STORAGE__CONFIG__HOST: ${POSTGRES_HOST}
+      GOLEM__SCHEDULER_STORAGE__CONFIG__PORT: ${POSTGRES_PORT}
+      GOLEM__SCHEDULER_STORAGE__CONFIG__DATABASE: ${POSTGRES_DB}
+      GOLEM__SCHEDULER_STORAGE__CONFIG__USERNAME: ${POSTGRES_USER}
+      GOLEM__SCHEDULER_STORAGE__CONFIG__PASSWORD: ${POSTGRES_PASSWORD}
+      GOLEM__SCHEDULER_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__SCHEDULER_STORAGE__CONFIG__SCHEMA: golem_worker_executor_scheduler
+
+      GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
+      GOLEM__REGISTRY_SERVICE__PORT: 9008
+      GOLEM__SHARD_MANAGER__HOST: golem-shard-manager
+      GOLEM__SHARD_MANAGER__PORT: 9002
+      GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS: 10
+      GOLEM__PUBLIC_WORKER_API__HOST: golem-worker-service
+      GOLEM__PUBLIC_WORKER_API__PORT: 9094
+      GOLEM__COMPILED_COMPONENT_SERVICE__TYPE: Enabled
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    depends_on:
+      - golem-registry-service
+      - golem-shard-manager
+
+networks:
+  golem:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  caddy_data:
+  builtin_artifacts:

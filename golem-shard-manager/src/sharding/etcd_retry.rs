@@ -14,15 +14,17 @@
 
 //! Retries for the etcd requests that can safely be repeated.
 //!
-//! Reads only: a write here is a compare-and-swap that may already have been applied when its
-//! transport failed, so the write path fail-stops instead.
+//! Reads, which change nothing, and writes that never reached etcd. A write is a compare-and-swap
+//! that may already have been applied when its transport failed, so a write that may have been
+//! received is never repeated and the write path fail-stops on it instead.
 //!
 //! Worth having because tonic keeps an unreachable endpoint in the balancer's rotation, so with
 //! several endpoints a share of reads fail fast until it is back; a slow answer counts too.
 
 use crate::config::EtcdConfig;
-use crate::sharding::error::ShardManagerError;
+use crate::sharding::error::{ShardManagerError, dropped_before_sending};
 use golem_common::retriable_error::IsRetriableError;
+use std::error::Error as _;
 use std::future::Future;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
@@ -41,6 +43,88 @@ fn is_request_timeout(err: &ShardManagerError) -> bool {
         ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
             if status.code() == Code::Cancelled
     )
+}
+
+/// Whether a failed request was never sent: no connection to the chosen endpoint could be made,
+/// or the connection it was handed to closed before it took the request.
+///
+/// A request that was never sent cannot have landed, so a compare-and-swap that failed this way
+/// still has the right expected revision and sending it again is safe. These are the only
+/// failures for which it is: an answer from etcd is final, and a timeout or a reset connection may
+/// come after etcd received the request, so those stay false.
+///
+/// `etcd-client` hands each request to a random endpoint of its balancer, and an endpoint that
+/// cannot be connected to stays in the rotation, so with one member down a share of the requests
+/// fail this way at once. The failure arrives as `Unavailable` whose source is the transport error
+/// of the connection attempt, and tonic wraps every error of that attempt in
+/// [`tonic::ConnectError`].
+/// That marker is present when the connection was refused, when the name did not resolve and when
+/// the connection attempt ran into the connect timeout, and the request had not been written in
+/// any of them. It is absent when a request fails on an established connection (a request
+/// timeout, a reset or a closed connection), so it is the marker used here and the operating
+/// system's error kind is not: a timed-out or reset socket can also happen after the request was
+/// written.
+///
+/// A connection that closes under a request it has not yet taken is the other case: hyper drops
+/// the request unsent and reports that it did; see [`dropped_before_sending`].
+pub fn never_reached_etcd(err: &etcd_client::Error) -> bool {
+    if dropped_before_sending(err) {
+        return true;
+    }
+    let etcd_client::Error::GRpcStatus(status) = err else {
+        return false;
+    };
+    if status.code() != Code::Unavailable {
+        return false;
+    }
+
+    let mut source = status.source();
+    if !source.is_some_and(|first| first.is::<tonic::transport::Error>()) {
+        return false;
+    }
+    while let Some(error) = source {
+        if error.is::<tonic::ConnectError>() {
+            return true;
+        }
+        source = error.source();
+    }
+    false
+}
+
+/// Sends a request again while it fails without having reached etcd, until `deadline`, and then
+/// reports that failure. Any other failure is returned at once.
+///
+/// For writes, whose outcome is unknown unless the request was never sent; see
+/// [`never_reached_etcd`].
+pub async fn send_again_while_unsent<T, F, Fut>(
+    what: &str,
+    mut op: F,
+    deadline: Instant,
+    delay: Duration,
+) -> Result<T, etcd_client::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, etcd_client::Error>>,
+{
+    loop {
+        let failure = match op().await {
+            Ok(value) => return Ok(value),
+            Err(err) if never_reached_etcd(&err) => err,
+            Err(err) => return Err(err),
+        };
+
+        if deadline.saturating_duration_since(Instant::now()) <= delay {
+            return Err(failure);
+        }
+
+        warn!(
+            operation = what,
+            error = %failure,
+            retry_in = ?delay,
+            "An etcd write failed before reaching etcd; sending it again"
+        );
+        sleep(delay).await;
+    }
 }
 
 /// How long a read may keep retrying, and how it backs off between attempts, as configured.

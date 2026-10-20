@@ -41,7 +41,7 @@ enum Call {
 
 struct ScriptTransport {
     calls: mpsc::UnboundedSender<Call>,
-    responses: Mutex<VecDeque<InvocationResponseStream>>,
+    responses: Mutex<VecDeque<Result<InvocationResponseStream, WorkerServiceError>>>,
     cleanups: mpsc::UnboundedSender<(AgentId, ModelIdempotencyKey)>,
     cleanup_gate: Arc<Semaphore>,
 }
@@ -58,7 +58,7 @@ impl SessionTransport for ScriptTransport {
             .lock()
             .await
             .pop_front()
-            .ok_or_else(|| WorkerServiceError::Internal("missing start script".into()))
+            .unwrap_or_else(|| Err(WorkerServiceError::Internal("missing start script".into())))
     }
 
     async fn resume(
@@ -73,7 +73,7 @@ impl SessionTransport for ScriptTransport {
             .lock()
             .await
             .pop_front()
-            .ok_or_else(|| WorkerServiceError::Internal("missing resume script".into()))
+            .unwrap_or_else(|| Err(WorkerServiceError::Internal("missing resume script".into())))
     }
 
     async fn cleanup(&self, agent: AgentId, key: ModelIdempotencyKey) -> CleanupOutcome {
@@ -83,11 +83,21 @@ impl SessionTransport for ScriptTransport {
     }
 }
 
-struct Harness {
+pub(in crate::custom_api) struct Harness {
     transport: Arc<ScriptTransport>,
     calls: mpsc::UnboundedReceiver<Call>,
     cleanups: mpsc::UnboundedReceiver<(AgentId, ModelIdempotencyKey)>,
-    response_txs: Vec<ResponseSender>,
+    pub(in crate::custom_api) response_txs: Vec<ResponseSender>,
+}
+
+impl Harness {
+    pub(in crate::custom_api) fn start_session(&self) -> HttpSession {
+        HttpSession::start_with_transport(start(), self.transport.clone(), limits()).unwrap()
+    }
+
+    pub(in crate::custom_api) async fn reject_start(&self, error: WorkerServiceError) {
+        self.transport.responses.lock().await.push_front(Err(error));
+    }
 }
 
 struct ReadyCountingStream {
@@ -119,9 +129,9 @@ fn counting_harness() -> (Harness, Arc<AtomicUsize>) {
     let harness = Harness {
         transport: Arc::new(ScriptTransport {
             calls: call_tx,
-            responses: Mutex::new(VecDeque::from([
+            responses: Mutex::new(VecDeque::from([Ok(
                 Box::pin(stream) as InvocationResponseStream
-            ])),
+            )])),
             cleanups: cleanup_tx,
             cleanup_gate: Arc::new(Semaphore::new(1)),
         }),
@@ -132,7 +142,7 @@ fn counting_harness() -> (Harness, Arc<AtomicUsize>) {
     (harness, ready)
 }
 
-fn harness(attempts: usize) -> Harness {
+pub(in crate::custom_api) fn harness(attempts: usize) -> Harness {
     harness_with_cleanup_permits(attempts, 1)
 }
 
@@ -144,8 +154,10 @@ fn harness_with_cleanup_permits(attempts: usize, cleanup_permits: usize) -> Harn
     for _ in 0..attempts {
         let (tx, rx) = mpsc::channel(16);
         response_txs.push(tx);
-        responses.push_back(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
-            as Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>);
+        responses.push_back(Ok(
+            Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+                as Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>,
+        ));
     }
     Harness {
         transport: Arc::new(ScriptTransport {
@@ -241,7 +253,7 @@ fn output_mapping() -> DurableStreamMapping {
     mapping
 }
 
-fn stream_result() -> InvocationResponse {
+pub(in crate::custom_api) fn stream_result() -> InvocationResponse {
     response(invocation_response::Response::Result(
         golem_api_grpc::proto::golem::worker::InvocationSessionResult {
             result: Some(invocation_session_result::Result::MethodResult(
@@ -302,7 +314,7 @@ fn producer_cancel(sequence: u64) -> InvocationResponse {
     }))
 }
 
-fn accepted(epoch: u64, high_water: Option<u64>) -> InvocationResponse {
+pub(in crate::custom_api) fn accepted(epoch: u64, high_water: Option<u64>) -> InvocationResponse {
     response(invocation_response::Response::Accepted(
         InvocationAccepted {
             agent_id: Some(proto_agent()),

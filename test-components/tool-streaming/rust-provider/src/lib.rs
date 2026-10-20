@@ -190,6 +190,12 @@ pub trait ClockRace {
     ) -> Result<String, ClockRaceError>;
     async fn follow_up(&self) -> Result<String, ClockRaceError>;
     async fn read_clocks(&self) -> Result<u64, ClockRaceError>;
+    async fn write_blob(
+        &self,
+        container: String,
+        object: String,
+        contents: String,
+    ) -> Result<String, ClockRaceError>;
 }
 
 struct ClockRaceImpl;
@@ -290,6 +296,36 @@ impl ClockRace for ClockRaceImpl {
         let wall = wasi::clocks::wall_clock::now();
         let system = golem_rust::wasip3::clocks::system_clock::now();
         Ok(wall.seconds.max(system.seconds.max(0) as u64))
+    }
+
+    async fn write_blob(
+        &self,
+        container: String,
+        object: String,
+        contents: String,
+    ) -> Result<String, ClockRaceError> {
+        use golem_rust::bindings::wasi::blobstore::{blobstore, types::OutgoingValue};
+
+        let failed = |error| ClockRaceError::Failed {
+            message: format!("{error:?}"),
+        };
+        let target = blobstore::get_container(&container).map_err(failed)?;
+        let value = OutgoingValue::new_outgoing_value();
+        let (mut writer, reader) = golem_rust::wit_stream::new::<u8>();
+        value
+            .outgoing_value_write_body(reader)
+            .map_err(|()| ClockRaceError::Failed {
+                message: "host could not attach the blob body stream".into(),
+            })?;
+        let remaining = writer.write_all(contents.as_bytes().to_vec()).await;
+        if !remaining.is_empty() {
+            return Err(ClockRaceError::Failed {
+                message: "host did not consume the complete blob body".into(),
+            });
+        }
+        drop(writer);
+        target.write_data(&object, &value).map_err(failed)?;
+        Ok(format!("blob:{container}/{object}:{contents}"))
     }
 }
 

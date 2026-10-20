@@ -250,6 +250,7 @@ pub(crate) enum AgentOpenRouteError {
     Unsupported,
     SymlinkLoop,
     Filesystem(AgentFilesystemError),
+    Interrupted(golem_service_base::error::worker_executor::InterruptKind),
 }
 
 impl From<AgentOpenPolicyError> for AgentOpenRouteError {
@@ -325,6 +326,24 @@ pub(crate) async fn run_agent_filesystem_call<T: Send + 'static>(
         Ok(call) => call.await,
         Err(error) => Err(AgentFilesystemError::Access(error)),
     }
+}
+
+pub(crate) type FilesystemInterruptSignal = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = golem_service_base::error::worker_executor::InterruptKind>
+            + Send,
+    >,
+>;
+
+/// Stops guest observation only. Dropping a started FilesystemCall retains its operation and lease
+/// under the filesystem owner, so drain can still wait for backend completion.
+pub(crate) async fn observe_filesystem_operation<T>(
+    interrupt: impl std::future::Future<
+        Output = golem_service_base::error::worker_executor::InterruptKind,
+    >,
+    operation: impl std::future::Future<Output = T>,
+) -> Result<T, golem_service_base::error::worker_executor::InterruptKind> {
+    tokio::select! { biased; result = operation => Ok(result), kind = interrupt => Err(kind) }
 }
 
 /// Submits a P2/P3 file write to `agent_filesystem` and returns its deferred call.
@@ -439,6 +458,7 @@ pub(crate) async fn route_agent_open(
     generation_handle: &FilesystemGenerationHandle,
     target: PathTarget,
     request: AgentOpenRequest,
+    mut interrupt: FilesystemInterruptSignal,
 ) -> Result<Opened, AgentOpenRouteError> {
     if request.write || request.mutate_directory || request.create || request.truncate {
         target.require_mutable().map_err(|error| {
@@ -448,19 +468,27 @@ pub(crate) async fn route_agent_open(
     let options = match decide_agent_open(request)? {
         AgentOpenDecision::Open(options) => options,
         AgentOpenDecision::ObserveAttributes => {
-            let attributes = run_agent_filesystem_call(agent_filesystem::attributes(
-                generation_handle,
-                Target::Path(&target, request.follow()),
-            ))
+            let attributes = observe_filesystem_operation(
+                &mut interrupt,
+                run_agent_filesystem_call(agent_filesystem::attributes(
+                    generation_handle,
+                    Target::Path(&target, request.follow()),
+                )),
+            )
             .await
+            .map_err(AgentOpenRouteError::Interrupted)?
             .map_err(AgentOpenRouteError::Filesystem)?;
             decide_agent_existing_open(request, attributes.kind)?
         }
     };
 
-    run_agent_filesystem_call(agent_filesystem::open(generation_handle, target, options))
-        .await
-        .map_err(AgentOpenRouteError::Filesystem)
+    observe_filesystem_operation(
+        interrupt,
+        run_agent_filesystem_call(agent_filesystem::open(generation_handle, target, options)),
+    )
+    .await
+    .map_err(AgentOpenRouteError::Interrupted)?
+    .map_err(AgentOpenRouteError::Filesystem)
 }
 
 /// Computes the stable metadata-hash words shared by P2 and P3 from modification time and size.

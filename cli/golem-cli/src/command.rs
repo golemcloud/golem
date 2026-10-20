@@ -788,8 +788,9 @@ pub enum GolemCliSubcommand {
     /// git branch and the last result as coloured blocks. It continues unfinished input on a new line, completes command names and paths
     /// on the agent with Tab, and keeps a history per agent. `help` explains the session and
     /// `tools` lists the tools bound to the agent. Leave with `exit`, `exit N` or Ctrl+D.
-    /// Ctrl+C clears the line; while a command runs it stops waiting for it, and the command
-    /// keeps running on the agent unless it was still queued.
+    /// Ctrl+C clears the line. While a command runs it stops the command, when the tool can stop
+    /// one, as the built-in bash tool can from 0.3.0 on. With a tool that cannot, it stops
+    /// waiting for the command, which keeps running on the agent unless it was still queued.
     ///
     /// An AI coding agent at the terminal gets a plain session instead: a one-line prompt, no
     /// colours, no editing keys and nothing drawn while a command runs.
@@ -2888,25 +2889,18 @@ pub mod account {
 
             /// Maximum storage per agent in bytes. Cannot exceed the plan ceiling.
             #[arg(
+                long,
                 value_name = "BYTES",
-                required_unless_present_any = ["max_memory_per_agent", "monthly_memory_gb_seconds"],
-                conflicts_with_all = ["max_memory_per_agent", "monthly_memory_gb_seconds"]
+                required_unless_present = "max_memory_per_agent",
+                conflicts_with = "max_memory_per_agent"
             )]
             max_storage_per_agent: Option<u64>,
 
             /// Maximum linear memory per agent in bytes.
-            #[arg(
-                long,
-                value_name = "BYTES",
-                conflicts_with = "monthly_memory_gb_seconds"
-            )]
+            #[arg(long, value_name = "BYTES")]
             max_memory_per_agent: Option<u64>,
-
-            /// Monthly included memory usage in GB-seconds.
-            #[arg(long, value_name = "GB_SECONDS")]
-            monthly_memory_gb_seconds: Option<u64>,
         },
-        /// Clear selected overrides. With no flags, clears storage for compatibility.
+        /// Clear one per-agent resource override.
         #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_UNSET)]
         Unset {
             #[command(flatten)]
@@ -2914,18 +2908,15 @@ pub mod account {
 
             /// Clear the maximum storage per-agent override.
             #[arg(
-                long,
-                conflicts_with_all = ["max_memory_per_agent", "monthly_memory_gb_seconds"]
+                long = "max-storage-per-agent",
+                required_unless_present = "max_memory_per_agent",
+                conflicts_with = "max_memory_per_agent"
             )]
-            storage: bool,
+            max_storage_per_agent: bool,
 
             /// Clear the maximum memory per-agent override.
-            #[arg(long, conflicts_with = "monthly_memory_gb_seconds")]
-            max_memory_per_agent: bool,
-
-            /// Clear the monthly memory GB-seconds override.
             #[arg(long)]
-            monthly_memory_gb_seconds: bool,
+            max_memory_per_agent: bool,
         },
     }
 
@@ -3040,7 +3031,7 @@ pub mod account {
             #[command(subcommand)]
             subcommand: AccountUsageSubcommand,
         },
-        /// Show or change account storage limits.
+        /// Show or change per-agent memory and storage limits.
         Limits {
             #[command(subcommand)]
             subcommand: AccountLimitsSubcommand,
@@ -3803,11 +3794,23 @@ mod test {
     fn account_limits_show_set_and_unset_parse() {
         let show_command =
             GolemCliCommand::try_parse_from(["golem", "account", "limits", "show"]).unwrap();
-        let set_command =
-            GolemCliCommand::try_parse_from(["golem", "account", "limits", "set", "1048576"])
-                .unwrap();
-        let unset_command =
-            GolemCliCommand::try_parse_from(["golem", "account", "limits", "unset"]).unwrap();
+        let set_command = GolemCliCommand::try_parse_from([
+            "golem",
+            "account",
+            "limits",
+            "set",
+            "--max-storage-per-agent",
+            "1048576",
+        ])
+        .unwrap();
+        let unset_command = GolemCliCommand::try_parse_from([
+            "golem",
+            "account",
+            "limits",
+            "unset",
+            "--max-storage-per-agent",
+        ])
+        .unwrap();
         let memory_command = GolemCliCommand::try_parse_from([
             "golem",
             "account",
@@ -3817,15 +3820,15 @@ mod test {
             "2097152",
         ])
         .unwrap();
-        let multiple_memory_limits = GolemCliCommand::try_parse_from([
+        let multiple_limits = GolemCliCommand::try_parse_from([
             "golem",
             "account",
             "limits",
             "set",
+            "--max-storage-per-agent",
+            "1048576",
             "--max-memory-per-agent",
             "2097152",
-            "--monthly-memory-gb-seconds",
-            "3600",
         ]);
         let missing_limit = GolemCliCommand::try_parse_from(["golem", "account", "limits", "set"]);
         let multiple_unset_limits = GolemCliCommand::try_parse_from([
@@ -3833,7 +3836,7 @@ mod test {
             "account",
             "limits",
             "unset",
-            "--storage",
+            "--max-storage-per-agent",
             "--max-memory-per-agent",
         ]);
 
@@ -3871,13 +3874,12 @@ mod test {
                     subcommand: AccountLimitsSubcommand::Set {
                         max_storage_per_agent: None,
                         max_memory_per_agent: Some(2_097_152),
-                        monthly_memory_gb_seconds: None,
                         ..
                     },
                 },
             }
         ));
-        assert!(multiple_memory_limits.is_err());
+        assert!(multiple_limits.is_err());
         assert!(missing_limit.is_err());
         assert!(multiple_unset_limits.is_err());
     }
@@ -3893,10 +3895,34 @@ mod test {
     }
 
     #[test]
+    fn shipped_account_limit_examples_use_supported_arguments() {
+        for text in [
+            crate::command_examples::ACCOUNT_LIMITS_SET,
+            crate::command_examples::ACCOUNT_LIMITS_UNSET,
+            include_str!("../../../docs/src/content/next/cli/account-usage.mdx"),
+        ] {
+            for line in text.lines().map(str::trim).filter(|line| {
+                line.starts_with("golem-cli account limits ")
+                    || line.starts_with("golem account limits ")
+            }) {
+                GolemCliCommand::try_parse_from(line.split_whitespace())
+                    .unwrap_or_else(|error| panic!("invalid shipped example {line:?}: {error}"));
+            }
+        }
+    }
+
+    #[test]
     fn account_limits_set_rejects_invalid_storage_size() {
         assert!(
-            GolemCliCommand::try_parse_from(["golem", "account", "limits", "set", "not-a-size",])
-                .is_err()
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "account",
+                "limits",
+                "set",
+                "--max-storage-per-agent",
+                "not-a-size",
+            ])
+            .is_err()
         );
     }
 
@@ -3910,8 +3936,14 @@ mod test {
             &["account", "usage", "show"],
             &["account", "usage", "history"],
             &["account", "limits", "show"],
-            &["account", "limits", "set", "1024"],
-            &["account", "limits", "unset"],
+            &[
+                "account",
+                "limits",
+                "set",
+                "--max-storage-per-agent",
+                "1024",
+            ],
+            &["account", "limits", "unset", "--max-storage-per-agent"],
             &["account", "permission-share", "list"],
             &["account", "permission-share", "get-by-name", "share"],
             &[

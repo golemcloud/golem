@@ -18,6 +18,7 @@
 //! share, no state key to serialise against. `Client::connect` is lazy, so connecting succeeds and
 //! every failure lands on a later request instead.
 
+use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_shard_manager::config::{
     EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
@@ -65,6 +66,7 @@ fn unreachable_config() -> EtcdConfig {
         username: None,
         password: None,
         password_file: None,
+        test_version: None,
     }
 }
 
@@ -72,6 +74,10 @@ async fn campaigner(shutdown: CancellationToken) -> LeaderElection {
     LeaderElection::connect(
         &unreachable_config(),
         format!("{LEADER_ELECTION_NAME}-test-unreachable"),
+        LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port: 9002,
+        },
     )
     .await
     .expect("Connecting is lazy, so an unreachable endpoint should still connect")
@@ -161,6 +167,7 @@ fn unreachable_shard_manager_config() -> ShardManagerConfig {
         http_port: 0,
         grpc: GrpcApiConfig {
             port: 0,
+            advertised_host: Some("127.0.0.1".to_string()),
             ..GrpcApiConfig::default()
         },
         persistence: PersistenceConfig::Etcd(unreachable_config()),

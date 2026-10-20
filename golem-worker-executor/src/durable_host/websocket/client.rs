@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WebSocketConnectionPool;
 use crate::durable_host::authorization::targets::websocket_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DeferredCallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop,
@@ -255,15 +256,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
         };
 
         let pool = accessor.with(|mut access| access.get().websocket_connection_pool.clone());
-        let permit = match wait_or_interrupt(
-            pool.acquire(),
-            accessor.with(|mut access| access.get().create_interrupt_signal()),
-        )
-        .await
+        let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
+        let permit = match acquire_websocket_connection_or_interrupt(&pool, interrupt_signal).await
         {
             Ok(Ok(permit)) => permit,
-            Ok(Err(err)) => return Err(call.trap(err)),
-            Err(kind) => return Err(call.trap(kind)),
+            Err(err) => return Err(call.trap(err)),
+            Ok(Err(interrupt_kind)) => {
+                call.abandon_for_trap();
+                return Err(interrupt_kind.into());
+            }
         };
 
         let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
@@ -740,10 +741,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 };
             (interrupt_signal, live_lookup)
         });
-
         let live_result: Result<Option<Message>, Error> = match live_lookup {
             Ok(Ok(live)) => {
-                let mut reader = live.reader.lock().await;
+                let reader_lock = live.reader.lock();
+                let mut reader = reader_lock.await;
                 let deadline = Instant::now() + Duration::from_millis(timeout_ms);
                 pin_mut!(interrupt_signal);
                 loop {
@@ -751,7 +752,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                     if remaining.is_zero() {
                         break Ok(None);
                     }
-                    let next_frame = tokio::time::timeout(remaining, reader.next());
+                    let next_frame = reader.next();
+                    let next_frame = tokio::time::timeout(remaining, next_frame);
                     pin_mut!(next_frame);
                     match futures::future::select(next_frame, interrupt_signal.as_mut()).await {
                         Either::Left((Ok(Some(Ok(msg))), _)) => match to_user_message(msg) {
@@ -1030,15 +1032,16 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         }
     };
 
-    let permit = match wait_or_interrupt(
-        pool.acquire(),
-        accessor.with(|mut access| access.get().create_interrupt_signal()),
-    )
-    .await
-    {
-        Ok(permit) => permit?,
-        Err(interrupt_kind) => return Err(interrupt_kind.into()),
-    };
+    let acquire = pool.acquire();
+    let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
+    let permit =
+        match acquire_websocket_connection_or_interrupt_future(acquire, interrupt_signal).await? {
+            Ok(permit) => permit,
+            Err(interrupt_kind) => {
+                tracing::info!("Interrupted while waiting for WebSocket reconnect pool");
+                return Err(interrupt_kind.into());
+            }
+        };
     let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
 
     let connect_fut = connect_async(request);
@@ -1136,6 +1139,34 @@ fn mark_websocket_terminal<Ctx: WorkerCtx>(
         *entry = WebSocketConnectionEntry::Terminal(error);
     }
     Ok(())
+}
+
+async fn acquire_websocket_connection_or_interrupt(
+    pool: &WebSocketConnectionPool,
+    interrupt_signal: impl Future<Output = golem_service_base::error::worker_executor::InterruptKind>,
+) -> anyhow::Result<
+    Result<
+        tokio::sync::OwnedSemaphorePermit,
+        golem_service_base::error::worker_executor::InterruptKind,
+    >,
+> {
+    acquire_websocket_connection_or_interrupt_future(pool.acquire(), interrupt_signal).await
+}
+
+async fn acquire_websocket_connection_or_interrupt_future(
+    acquire: impl Future<Output = anyhow::Result<tokio::sync::OwnedSemaphorePermit>>,
+    interrupt_signal: impl Future<Output = golem_service_base::error::worker_executor::InterruptKind>,
+) -> anyhow::Result<
+    Result<
+        tokio::sync::OwnedSemaphorePermit,
+        golem_service_base::error::worker_executor::InterruptKind,
+    >,
+> {
+    pin_mut!(acquire, interrupt_signal);
+    match futures::future::select(acquire, interrupt_signal).await {
+        Either::Left((result, _)) => result.map(Ok),
+        Either::Right((interrupt, _)) => Ok(Err(interrupt)),
+    }
 }
 
 fn build_request(
@@ -1283,7 +1314,44 @@ fn serializable_error_to_error(e: SerializableWebsocketError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_r::test;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("10s")]
+    async fn occupied_pool_observes_preexisting_deadline_or_entity_cancellation() {
+        use golem_common::model::Timestamp;
+        use golem_service_base::error::worker_executor::InterruptKind;
+        use tokio_util::sync::CancellationToken;
+
+        let pool = WebSocketConnectionPool::new(1);
+        let held = pool.acquire().await.unwrap();
+        let deadline = std::future::ready(InterruptKind::Interrupt(Timestamp::now_utc()));
+        assert!(matches!(
+            acquire_websocket_connection_or_interrupt(&pool, deadline)
+                .await
+                .unwrap(),
+            Err(InterruptKind::Interrupt(_))
+        ));
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(matches!(
+            acquire_websocket_connection_or_interrupt(&pool, async move {
+                cancellation.cancelled().await;
+                InterruptKind::Interrupt(Timestamp::now_utc())
+            })
+            .await
+            .unwrap(),
+            Err(InterruptKind::Interrupt(_))
+        ));
+        drop(held);
+        assert!(
+            acquire_websocket_connection_or_interrupt(&pool, std::future::pending())
+                .await
+                .unwrap()
+                .is_ok()
+        );
+    }
 
     #[test]
     fn permission_denial_uses_the_existing_other_error_case() {

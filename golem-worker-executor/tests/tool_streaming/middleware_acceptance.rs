@@ -1951,6 +1951,13 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     };
     let cancel_ready =
         next_promise_checkpoint(&mut promise_arrivals, "middleware-race-cancel-ready").await?;
+    // The promise holds the middleware before cancellation and before either later sibling
+    // is admitted, so this is the cancelled leaf's durable identity.
+    let admitted = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let cancelled_starts =
+        entity_starts(&admitted, PublicAgentEntityKind::Tool, "middleware-probe");
+    assert_eq!(cancelled_starts.len(), 1);
+    let cancelled_start = cancelled_starts[0].oplog_index;
     executor
         .complete_promise(
             &PromiseId {
@@ -1960,29 +1967,27 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
             vec![],
         )
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             if executor
-                .active_entity_metadata(&owner)
-                .await
-                .is_some_and(|active| {
-                    active.tool_operations.operations.iter().any(|operation| {
-                        matches!(
-                            operation.winner,
-                            ToolOperationWinnerMetadata::SelectingCancelled
-                                | ToolOperationWinnerMetadata::Cancelled
-                        )
-                    })
+                .get_oplog(&worker_id, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .any(|entry| {
+                    matches!(
+                        &entry.entry,
+                        PublicOplogEntry::Cancelled(cancelled)
+                            if cancelled.start_index == cancelled_start
+                    )
                 })
             {
-                break;
+                break Ok::<_, anyhow::Error>(());
             }
             tokio::task::yield_now().await;
         }
     })
     .await
-    .map_err(|_| anyhow::anyhow!("timed out waiting for loser cancellation selection"))?;
+    .map_err(|_| anyhow::anyhow!("timed out waiting for loser Cancelled terminal"))??;
     drop(cancelled);
     let detached = tokio::select! {
         result = invocation.as_mut() => panic!("parent settled before detached child: {result:?}"),

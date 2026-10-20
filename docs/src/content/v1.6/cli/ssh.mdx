@@ -65,7 +65,7 @@ The prompt shows the agent identity, current directory, and Git branch when the 
 
 When space permits, the prompt also shows the last non-zero exit status, queued command count, and elapsed time. Narrow terminals shorten the display. Control characters in directory and branch names are escaped before display, for example an escape character appears as `^[`.
 
-While a command runs, a progress indicator shows elapsed time and how to stop waiting. Output appears when the command finishes; interactive sessions dim standard error. Without colours, the prompt and progress message use plain text.
+While a command runs, a progress indicator shows elapsed time and whether Ctrl+C stops the command or only stops waiting for it. Output appears when the command finishes; interactive sessions dim standard error. Without colours, the prompt and progress message use plain text.
 
 Completion and Git-branch lookup run short helper commands on the agent, so they appear in its invocation history. Command names are fetched when the session opens. Uncached completions can make another call; if the agent does not answer within about three seconds, completion pauses until a command returns. Git-branch lookup runs only with colours enabled, after a command changes directory or runs `git`. Branch changes made another way are not immediately reflected in the prompt.
 
@@ -105,11 +105,25 @@ The session stops with status 255 if its current directory is refused or input c
 
 ## Interrupt commands and recover results
 
-Ctrl+C during a command **stops waiting** and requests cancellation. A queued call can be cancelled, but a call that has started continues until it finishes or reaches its time limit. The next command waits behind it.
+Ctrl+C during a command **stops the command** when the bound tool supports cancellation. The built-in Bash tool supports it from version 0.3.0. The CLI cancels the call's input stream; Bash sends INT to the script and its child processes, then KILL one second later if needed. It returns the output collected so far, the final working directory, and exit status 130. The next command can run immediately.
 
-The CLI prints a `golem tool invoke --lookup` command to retrieve the result later. If the command finished before cancellation took effect, the CLI reports that and displays its result. Otherwise, an interactive session continues with status 130; `-c` and piped sessions exit with 130.
+A command still queued behind another invocation is cancelled before it starts. If the command finished before cancellation took effect, the CLI displays its completed result instead.
 
-If the connection fails before a result arrives, the command might already have run. Use the printed lookup command before retrying a command with side effects. The session exits with 255 because it no longer knows the working directory. If the agent itself has failed, recover or recreate it before running more commands.
+| Session | After a command is stopped |
+| --- | --- |
+| Interactive | Display its output and return to the prompt with status 130 and the command's final directory. |
+| `-c` | Display its output and exit with its status, normally 130. |
+| Piped commands | Display its output, skip the remaining commands, and exit with 130. |
+
+If no result arrives within five seconds, or you press Ctrl+C again, the CLI **stops waiting**. It prints a `golem tool invoke --lookup` command to retrieve the result later. The interactive session returns to the prompt with status 130; `-c` and piped sessions exit with 130. Stopping the wait does not confirm that the command stopped.
+
+With a tool that has no optional input stream, including Bash 0.2.x, Ctrl+C only stops waiting and requests cancellation of a queued call. A command that has started continues until it finishes or reaches its time limit. The next command waits behind it, and the CLI prints the lookup command for its result.
+
+### Recover after a disconnect
+
+For tools that support cancellation, commands use a live invocation session. Opening the session has a ten-second limit. If an established connection drops, the client attempts to reconnect and retrieve the result; Ctrl+C can interrupt the wait. Tools without this support use a scalar call, which reports a connection failure without reconnecting.
+
+If the call fails before a result arrives, the command might already have run. Use the printed lookup command before retrying a command with side effects. The session exits with 255 because it no longer knows the working directory. If the agent itself has failed, recover or recreate it before running more commands.
 
 ## Exit statuses
 
@@ -118,7 +132,7 @@ If the connection fails before a result arrives, the command might already have 
 | Command status | Normal completion returns the last command's status, or `N` after `exit N`. |
 | `1` | An output-write failure can replace an otherwise successful session status. |
 | `2` | Invalid CLI options. |
-| `130` | Interrupted while waiting for a command. |
+| `130` | The command was stopped, cancelled before starting, or the CLI stopped waiting for it. |
 | `255` | The CLI or tool call failed, the command did not run, or its outcome is unknown. Check standard error and any printed lookup command. |
 
 A script can itself return these statuses, including 255. Use the accompanying diagnostics to distinguish a script exit from a session failure.

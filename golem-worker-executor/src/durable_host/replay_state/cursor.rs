@@ -679,7 +679,7 @@ impl CursorTx<'_> {
         &mut self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, None, UnclaimedStarts::Retain, condition)
+        self.try_get_oplog_entry_inner(None, None, None, UnclaimedStarts::Retain, condition)
             .await
     }
 
@@ -692,7 +692,7 @@ impl CursorTx<'_> {
         &mut self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, None, UnclaimedStarts::Leave, condition)
+        self.try_get_oplog_entry_inner(None, None, None, UnclaimedStarts::Leave, condition)
             .await
     }
 
@@ -702,10 +702,12 @@ impl CursorTx<'_> {
         &mut self,
         start_index: Option<OplogIndex>,
         marker_index: OplogIndex,
+        guest_order: Option<&GuestReadOrder>,
     ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
         let consumed = self
             .try_get_oplog_entry_inner(
                 Some((start_index, marker_index)),
+                guest_order,
                 None,
                 UnclaimedStarts::Retain,
                 |_| false,
@@ -732,13 +734,20 @@ impl CursorTx<'_> {
         abandoned: &mut AbandonedStarts,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, Some(abandoned), UnclaimedStarts::Retain, condition)
-            .await
+        self.try_get_oplog_entry_inner(
+            None,
+            None,
+            Some(abandoned),
+            UnclaimedStarts::Retain,
+            condition,
+        )
+        .await
     }
 
     async fn try_get_oplog_entry_inner(
         &mut self,
         expected_delivery: Option<(Option<OplogIndex>, OplogIndex)>,
+        guest_order: Option<&GuestReadOrder>,
         mut abandoned: Option<&mut AbandonedStarts>,
         unclaimed_starts: UnclaimedStarts,
         mut condition: impl FnMut(&OplogEntry) -> bool,
@@ -757,7 +766,18 @@ impl CursorTx<'_> {
             let (read_idx, entry) = self.raw_read_next_oplog_entry().await?;
 
             if self.is_stream_observation(read_idx) {
-                if expected_delivery == Some((None, read_idx)) {
+                let unreached_guest_call = guest_order.is_some_and(|order| {
+                    let issued = order.issued.load(Ordering::Acquire);
+                    self.st
+                        .retained_starts
+                        .range(..read_idx)
+                        .any(|(_, retained)| {
+                            matches!(&retained.entry, OplogEntry::Start {
+                            invocation_id: Some(id), ..
+                        } if id.anchor == order.anchor && id.ordinal >= issued)
+                        })
+                });
+                if expected_delivery == Some((None, read_idx)) && !unreached_guest_call {
                     self.commit_consumed_entry(read_idx, &entry).await?;
                     return Ok(Some((read_idx, entry)));
                 }

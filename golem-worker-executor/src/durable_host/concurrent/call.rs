@@ -918,8 +918,9 @@ pub(crate) fn reserve_import_invocation_id<Ctx: WorkerCtx>(
     let Some(anchor) = ctx.invocation_anchor() else {
         return Ok(InvocationIdSource::Reserved(None));
     };
-    reserve_invocation_id(ctx, None, anchor)
-        .map(|invocation_id| InvocationIdSource::Reserved(Some(invocation_id)))
+    let invocation_id = reserve_invocation_id(ctx, None, anchor)?;
+    ctx.record_deferred_import(invocation_id);
+    Ok(InvocationIdSource::Reserved(Some(invocation_id)))
 }
 
 pub(super) fn reserve_guest_import_invocation_id<T, D, Ctx>(

@@ -14,7 +14,7 @@
 
 #![recursion_limit = "256"]
 
-use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+use golem_common::tracing::{TracingConfig, init_tracing_returning_provider};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
     test_component,
@@ -28,12 +28,15 @@ pub mod agent;
 pub mod agent_sdk_go;
 pub mod agent_sdk_ts;
 pub mod api;
+mod blob_mutation_storage;
 pub mod blobstore;
 pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
 pub mod effect_permissions;
+mod entity_fence_waits;
+mod execution_observations;
 pub mod external_durable_stream;
 pub mod filesystem_inspection;
 pub mod filesystem_snapshots;
@@ -45,6 +48,7 @@ pub mod ignite_service;
 pub mod in_function_retry;
 pub mod indexed_storage;
 pub mod instance_layer;
+mod invocation_waits;
 pub mod key_value_storage;
 pub mod keyvalue;
 pub mod mcp_stdout;
@@ -68,6 +72,7 @@ pub mod revert_replay_tail;
 pub mod rpc;
 pub mod scalability;
 pub mod scheduler_storage;
+mod scheduler_waits;
 pub mod scope_cards;
 pub mod suspension_races;
 pub mod tool_discovery;
@@ -164,12 +169,33 @@ pub struct Tracing;
 
 static TRACING_INIT: Once = Once::new();
 
+fn test_observer_filter(
+    predicate: impl Fn(&tracing::Metadata<'_>) -> bool + Send + Sync + 'static,
+) -> impl tracing_subscriber::layer::Filter<tracing_subscriber::Registry> + Send + Sync {
+    // An unbounded hint makes dependency TRACE arguments expensive even when output is filtered.
+    tracing_subscriber::filter::filter_fn(move |metadata| {
+        *metadata.level() <= tracing::Level::DEBUG && predicate(metadata)
+    })
+    .with_max_level_hint(tracing::level_filters::LevelFilter::DEBUG)
+}
+
+fn test_observer_layers()
+-> Vec<Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>> {
+    vec![
+        invocation_waits::layer(),
+        scheduler_waits::layer(),
+        entity_fence_waits::layer(),
+    ]
+}
+
 impl Tracing {
     pub fn init() -> Self {
         TRACING_INIT.call_once(|| {
-            init_tracing_with_default_debug_env_filter(
+            let _ = init_tracing_returning_provider(
                 &TracingConfig::test_pretty_without_time("worker-executor-tests")
                     .with_env_overrides(),
+                golem_common::tracing::filter::for_all_outputs::default_debug_env(),
+                test_observer_layers(),
             );
         });
         Self

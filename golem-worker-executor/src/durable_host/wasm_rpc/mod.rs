@@ -3672,12 +3672,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             biased;
                             _ = cancel_token.cancelled() => None,
                             result = async {
+                                let ready = &mut *guard;
                                 match rpc_wait {
-                                    Some(wait) => wait.wait_result(&mut *guard, interrupt_signal).await,
+                                    Some(wait) => wait.wait_result(ready, interrupt_signal).await,
                                     None => tokio::select! {
                                         biased;
                                         kind = interrupt_signal => Err(kind),
-                                        result = &mut *guard => Ok(result),
+                                        result = ready => Ok(result),
                                     },
                                 }
                             } => match result {

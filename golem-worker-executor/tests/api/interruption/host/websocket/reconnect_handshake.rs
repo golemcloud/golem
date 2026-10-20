@@ -1,0 +1,483 @@
+use super::reconnect_pool::{self, Path};
+use super::*;
+use test_r::test;
+
+macro_rules! handshake_case {
+    ($name:ident, Storage, $path:ident) => {
+        handshake_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
+    };
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $path:ident) => {
+        $(#[$attr])*
+        #[test]
+        #[timeout("2m")]
+        async fn $name(
+            last_unique_id: &LastUniqueId,
+            deps: &WorkerExecutorTestDependencies,
+            #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+            _tracing: &Tracing,
+        ) -> anyhow::Result<()> {
+            pending_reconnect_handshake(
+                last_unique_id,
+                deps,
+                host_api_tests,
+                Resource::$resource,
+                Path::$path,
+                false,
+            )
+            .await
+        }
+    };
+}
+handshake_case!(
+    durable_websocket_reconnect_handshake_receive_memory_quota,
+    Memory,
+    Accessor
+);
+handshake_case!(
+    durable_websocket_reconnect_handshake_receive_compute_quota_prepaid,
+    Compute,
+    Accessor
+);
+handshake_case!(
+    durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota,
+    Storage,
+    Accessor
+);
+handshake_case!(
+    durable_websocket_reconnect_handshake_close_memory_quota,
+    Memory,
+    Direct
+);
+handshake_case!(
+    durable_websocket_reconnect_handshake_close_compute_quota_prepaid,
+    Compute,
+    Direct
+);
+handshake_case!(
+    durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota,
+    Storage,
+    Direct
+);
+
+#[test]
+#[timeout("2m")]
+async fn websocket_reconnect_handshake_receive_completion_before_quota_exhaustion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    pending_reconnect_handshake(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Resource::Memory,
+        Path::Accessor,
+        true,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2m")]
+async fn websocket_reconnect_handshake_close_completion_before_quota_exhaustion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    pending_reconnect_handshake(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Resource::Memory,
+        Path::Direct,
+        true,
+    )
+    .await
+}
+
+pub(super) async fn pending_reconnect_handshake(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    resource: Resource,
+    path: Path,
+    completion_first: bool,
+) -> anyhow::Result<()> {
+    let mut policy = resource.policy();
+    if resource == Resource::Compute {
+        policy.available_fuel = 2 * FUEL_BUDGET;
+    }
+    let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
+    let metering = resource.metering();
+    let shutdown = CancellationToken::new();
+    let _shutdown_guard = shutdown.clone().drop_guard();
+    let limits = ResourceLimitsGrpc::new(
+        registry.clone(),
+        Duration::from_secs(3600),
+        Duration::ZERO,
+        metering,
+        shutdown,
+    );
+    let context = TestContext::new(last_unique_id);
+    let filesystem = managed_filesystem_config(metering)?;
+    let executor = start_with_resource_limits_and_configure(
+        deps,
+        &context,
+        limits.clone(),
+        Arc::new(move |config| {
+            config.resource_usage_metering = metering;
+            if let Some(filesystem) = &filesystem {
+                config.filesystem_storage.mode = filesystem.clone();
+            }
+            config.limits.fuel_to_borrow = FUEL_BUDGET;
+            config.max_websocket_connections = 1;
+        }),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let name = agent_id!("WebsocketTest", "monthly-ws-reconnect-target");
+    let id = AgentId::from_agent_id(component.id, &name).unwrap();
+    let seed_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("WebsocketTest", "monthly-ws-reconnect-seed"),
+        )
+        .await?;
+    let seed = executor
+        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .await
+        .context("seed missing")?
+        .primary();
+    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !seed.stop_if_idle().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    if resource == Resource::Compute {
+        limits.run_batch_for_test().await;
+    }
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = Worker::get_or_create_suspended(
+        seed.all(),
+        &owned,
+        None,
+        vec![],
+        None,
+        None,
+        &InvocationContextStack::fresh(),
+        Principal::anonymous(),
+    )
+    .await?;
+    let pool = worker.websocket_connection_pool();
+    let mut peer = Peer::start_holding_third(path == Path::Direct).await?;
+    let holder_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("WebsocketTest", "monthly-ws-reconnect-holder"),
+        )
+        .await?;
+    let holder = executor
+        .production_active_agent(&OwnedAgentId::new(
+            context.default_environment_id,
+            &holder_id,
+        ))
+        .await
+        .context("holder missing")?
+        .primary();
+    let mut invocation: Option<tokio::task::JoinHandle<anyhow::Result<_>>> = None;
+    let mut holder_invocation: Option<tokio::task::JoinHandle<anyhow::Result<_>>> = None;
+    let mut target_joined = false;
+    let mut holder_joined = false;
+    let result = async {
+        // Persist a genuine completed Connect and the saved guest handle, then discard its Store.
+        let first_key = IdempotencyKey::fresh();
+        let first_call = executor.invoke_and_await_agent_with_key(&component, &name, &first_key, "connect_and_receive_first", data_value!(peer.url.clone()));
+        let first_frame = async {
+            let first = peer.handshake().await?;
+            ensure!(first.number == 1);
+            first.send.send("original".to_owned()).map_err(|_| anyhow::anyhow!("first frame gate closed"))?;
+            Ok::<_, anyhow::Error>(())
+        };
+        let (first_result, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(first_call, first_frame) }).await??;
+        ensure!(first_result.into_typed::<String>()? == "original");
+        let original = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        pool::connect_start(&original, 1, 1)?;
+        assert_receive_terminal(&original, starts_named(&original, RECEIVE)[0], 1)?;
+        assert_invocation(&original, &first_key, 1)?;
+        ensure!(count_agent_invocation_pair_since(&original, OplogIndex::INITIAL) == (2, 2));
+        tokio::time::timeout(Duration::from_secs(10), async { while !worker.stop_if_idle().await { tokio::task::yield_now().await; } }).await.context("target idle eviction")?;
+        peer.closed(1).await?;
+        tokio::time::timeout(Duration::from_secs(10), async { while worker.is_loaded().await { tokio::task::yield_now().await; } }).await?;
+        tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
+        tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
+        let slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+        drop(slot);
+        limits.run_batch_for_test().await;
+        if resource == Resource::Memory {
+            registry.set_policy(policy.clone());
+            applied_refresh(&limits, &registry, context.account_id).await?.await?;
+            limits.run_batch_for_test().await;
+        }
+        let target_updates_start = registry.applied_updates().len();
+        let holder_key = IdempotencyKey::fresh();
+        holder_invocation = Some(tokio::spawn({
+            let executor = executor.clone(); let component = component.clone(); let key = holder_key.clone(); let url = peer.url.clone();
+            async move { executor.invoke_and_await_agent_with_key(&component, &agent_id!("WebsocketTest", "monthly-ws-reconnect-holder"), &key, "connect_and_receive_first", data_value!(url)).await }
+        }));
+        let second = peer.handshake().await?;
+        ensure!(second.number == 2);
+        second.send.send("holder".to_owned()).map_err(|_| anyhow::anyhow!("holder frame gate closed"))?;
+        let held = tokio::time::timeout(Duration::from_secs(15), holder_invocation.as_mut().unwrap()).await??;
+        holder_joined = true;
+        ensure!(held?.into_typed::<String>()? == "holder");
+        executor.wait_for_status(&holder_id, AgentStatus::Idle, Duration::from_secs(10)).await?;
+        ensure!(holder.is_loaded().await, "holder must stay loaded idle");
+        reconnect_pool::evict_holder(&holder, &pool, &mut peer, true).await?;
+        let key = IdempotencyKey::fresh();
+        let method = if path == Path::Accessor { "receive_next_from_persisted" } else { "close_persisted_result" };
+        invocation = Some(tokio::spawn({
+            let executor = executor.clone(); let component = component.clone(); let key = key.clone(); let name = name.clone();
+            async move { executor.invoke_and_await_agent_with_key(&component, &name, &key, method, data_value!()).await }
+        }));
+        let held = peer.held().await?;
+        ensure!(held.number == 3);
+        executor.commit_oplog(&id).await?;
+        let open = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let start = reconnect_pool::operation_start(&open, path, 0, 0)?;
+        assert_invocation(&open, &key, 0)?;
+        assert_invocation(&open, &first_key, 1)?;
+        ensure!(count_agent_invocation_pair_since(&open, OplogIndex::INITIAL) == (3, 2));
+        let initial = worker.owner_runtime_resources().with_monthly_capacity(AgentMode::Durable, |capacity| capacity);
+        ensure!(initial.exhaustion.is_none());
+        ensure!(worker.is_loaded().await && !holder.is_loaded().await);
+        let account = limits.initialize_account(context.account_id).await?;
+        peer.assert_effects(3, 2, 2)?;
+        {
+            let acquire = pool.acquire(); tokio::pin!(acquire);
+            ensure!(futures::poll!(acquire).is_pending(), "reconnect handshake must own the only pool slot");
+        }
+        info!(?path, ?resource, %start, ?key, "reconnect operation recorded with third handshake response withheld");
+        if completion_first {
+            held.release.send(()).map_err(|_| anyhow::anyhow!("third response gate closed"))?;
+            let third = peer.handshake().await?;
+            ensure!(third.number == 3);
+            if path == Path::Accessor { third.send.send("completed".into()).map_err(|_| anyhow::anyhow!("frame gate closed"))?; }
+            let done = tokio::time::timeout(Duration::from_secs(15), invocation.as_mut().unwrap()).await??;
+            target_joined = true;
+            if path == Path::Accessor { ensure!(done?.into_typed::<String>()? == "completed"); }
+            else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
+            if path == Path::Direct { peer.closed(3).await?; }
+            let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            ensure!(reconnect_pool::operation_start(&completed, path, 1, 1)? == start);
+            ensure!(reconnect_pool::operation_start(&completed, path, 1, 0).is_err(), "Finished cannot retain an undelivered operation");
+            let delivery = completed.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start => Some(entry.oplog_index),
+                _ => None,
+            }).context("completed operation delivery")?;
+            let before_delivery: Vec<_> = completed.iter()
+                .filter(|entry| entry.oplog_index < delivery)
+                .cloned()
+                .collect();
+            // An oplog read can observe the real End before the guest takes its result.
+            ensure!(reconnect_pool::operation_start(&before_delivery, path, 1, 0)? == start);
+            ensure!(reconnect_pool::operation_start(&before_delivery, path, 1, 1).is_err(), "completed history still requires its delivery marker");
+            if path == Path::Accessor {
+                assert_receive_terminal(&completed, start, 1)?;
+            }
+            assert_invocation(&completed, &key, 1)?;
+            peer.assert_effects(3, 3, if path == Path::Accessor { 3 } else { 2 })?;
+            let mut exhausted = policy;
+            exhausted.available_memory_gb_seconds = 0;
+            registry.set_policy(exhausted);
+            applied_refresh(&limits, &registry, context.account_id).await?.await?;
+            let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, method, data_value!()).await?;
+            if path == Path::Accessor { ensure!(cached.into_typed::<String>()? == "completed"); }
+            else { ensure!(cached.into_typed::<Result<(), String>>()?.is_ok()); }
+            peer.assert_effects(3, 3, if path == Path::Accessor { 3 } else { 2 })?;
+            return Ok::<_, anyhow::Error>(());
+        }
+        let mut raw = worker.raw_interrupt_for_test();
+        if resource == Resource::Compute {
+            ensure!(initial.fuel_generation.is_some() && !account.prepaid_fuel_is_exhausted(AgentMode::Durable, initial.fuel_generation));
+        }
+        if resource == Resource::Storage {
+            allocate_storage_with_billing_refresh(&owned, &limits, &registry, &policy, true).await?;
+        }
+        let mut exhausted = policy.clone();
+        match resource {
+            Resource::Memory => exhausted.available_memory_gb_seconds = 0,
+            Resource::Compute => exhausted.available_fuel = 0,
+            Resource::Storage => exhausted.available_durable_storage_byte_seconds = 0,
+        }
+        registry.set_policy(exhausted);
+        let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
+        let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
+        ensure!(matches!(signal, InterruptKind::Suspend(_)));
+        peer.assert_effects(3, 2, 2)?;
+        info!(?path, ?resource, %start, ?signal, "monthly stop with third handshake response withheld");
+        peer.closed(3).await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.is_loaded().await { tokio::task::yield_now().await; }
+        }).await.context("target physical unload with third 101 withheld")?;
+        tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
+        tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
+        if let Some(refresh) = refresh { refresh.await?; }
+        let slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await.context("stopped handshake still holds pool slot")??;
+        drop(slot);
+        peer.assert_effects(3, 2, 2)?;
+        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        ensure!(reconnect_pool::operation_start(&stopped, path, 0, 0)? == start);
+        assert_invocation(&stopped, &key, 0)?;
+        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
+        ensure!(entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 1);
+        ensure!(!entries.values().any(|entry| matches!(entry, OplogEntry::Error { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Exited { .. })));
+        ensure!(!invocation.as_ref().unwrap().is_finished());
+        executor.wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10)).await?;
+        flush_stopped_usage(&limits, &registry, resource).await?;
+        let updates = registry.applied_updates();
+        check_accounting(&updates[target_updates_start..], resource, true, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
+        let count = updates.len();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        limits.run_batch_for_test().await;
+        if resource == Resource::Storage { assert_storage_deleted(&owned)?; }
+        for update in &registry.applied_updates()[count..] {
+            ensure!(update.fuel_delta == 0 && update.memory_gb_seconds_delta == 0 && update.memory_byte_nanoseconds_remainder == 0 && update.durable_storage_byte_seconds_delta == 0 && update.durable_storage_byte_nanoseconds_remainder == 0 && update.ephemeral_storage_byte_seconds_delta == 0 && update.ephemeral_storage_byte_nanoseconds_remainder == 0, "closed window accrued: {update:?}");
+        }
+        if resource == Resource::Storage { ensure!(!account.monthly_capacity_is_exhausted_for_test(AgentMode::Ephemeral)); }
+
+        drop(held.release);
+        let mut grant = policy;
+        grant.available_durable_storage_byte_seconds = u64::MAX;
+        registry.set_policy(grant);
+        applied_refresh(&limits, &registry, context.account_id).await?.await?;
+        executor.resume(&id, false).await?;
+        let fourth = peer.handshake().await?;
+        ensure!(fourth.number == 4);
+        executor.commit_oplog(&id).await?;
+        let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
+        let intermediate_deliveries = usize::from(repairing.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)));
+        ensure!(intermediate_terminals <= 1 && reconnect_pool::operation_start(&repairing, path, intermediate_terminals, intermediate_deliveries)? == start);
+        if path == Path::Accessor { assert_invocation(&repairing, &key, 0)?; }
+        peer.assert_effects(4, 3, 2)?;
+        if path == Path::Accessor { fourth.send.send("repaired".into()).map_err(|_| anyhow::anyhow!("repair frame gate closed"))?; }
+        let done = tokio::time::timeout(Duration::from_secs(15), invocation.as_mut().unwrap()).await.context("retained target invocation")??;
+        target_joined = true;
+        if path == Path::Accessor { ensure!(done?.into_typed::<String>()? == "repaired"); }
+        else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
+        if path == Path::Direct { peer.closed(4).await?; }
+        let repaired = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        ensure!(reconnect_pool::operation_start(&repaired, path, 1, 1)? == start);
+        if path == Path::Accessor {
+            assert_receive_terminal(&repaired, start, 1)?;
+        }
+        assert_settled_history(&repaired)?;
+        assert_invocation(&repaired, &first_key, 1)?;
+        assert_invocation(&repaired, &key, 1)?;
+        ensure!(count_agent_invocation_pair_since(&repaired, OplogIndex::INITIAL) == (3, 3));
+        let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, method, data_value!()).await?;
+        if path == Path::Accessor { ensure!(cached.into_typed::<String>()? == "repaired"); }
+        else { ensure!(cached.into_typed::<Result<(), String>>()?.is_ok()); }
+        peer.assert_effects(4, 3, if path == Path::Accessor { 3 } else { 2 })?;
+        let terminal_probe_key = if path == Path::Direct {
+            let probe_key = IdempotencyKey::fresh();
+            let closed = executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &name,
+                    &probe_key,
+                    "receive_next_from_persisted_result",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<Result<String, String>>()?;
+            ensure!(matches!(closed, Err(ref error) if error.contains("Closed")),
+                "repaired Close must terminalize the saved handle: {closed:?}");
+            peer.assert_effects(4, 3, 2)?;
+            Some(probe_key)
+        } else {
+            None
+        };
+        tokio::time::timeout(Duration::from_secs(10), async { while !worker.stop_if_idle().await { tokio::task::yield_now().await; } }).await?;
+        if path == Path::Accessor { peer.closed(4).await?; }
+        tokio::time::timeout(Duration::from_secs(10), async { while worker.is_loaded().await { tokio::task::yield_now().await; } }).await?;
+        tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
+        tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
+        let noop_key = IdempotencyKey::fresh();
+        let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
+        ensure!(noop.into_typed::<String>()? == "ok");
+        peer.assert_effects(4, 3, if path == Path::Accessor { 3 } else { 2 })?;
+        let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        ensure!(reconnect_pool::operation_start(&replayed, path, 1, 1)? == start);
+        assert_invocation(&replayed, &key, 1)?;
+        assert_invocation(&replayed, &noop_key, 1)?;
+        if let Some(probe_key) = &terminal_probe_key {
+            assert_invocation(&replayed, probe_key, 1)?;
+        }
+        assert_settled_history(&replayed)?;
+        let invocation_count = 4 + usize::from(terminal_probe_key.is_some());
+        ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL)
+            == (invocation_count, invocation_count));
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    let mut cleanup_errors = Vec::new();
+    handshake::retire_handshake_worker(
+        &executor,
+        &worker,
+        &id,
+        invocation
+            .as_ref()
+            .is_some_and(|handle| !target_joined && !handle.is_finished()),
+        &mut cleanup_errors,
+    )
+    .await;
+    if let Some(handle) = invocation.as_mut().filter(|_| !target_joined) {
+        pool::settle_invocation("target", handle, &mut cleanup_errors).await;
+    }
+    let target_cleanup_error_count = cleanup_errors.len();
+    if target_cleanup_error_count == 0 && !worker.is_loaded().await {
+        handshake::retire_handshake_worker(
+            &executor,
+            &holder,
+            &holder_id,
+            holder_invocation
+                .as_ref()
+                .is_some_and(|handle| !holder_joined && !handle.is_finished()),
+            &mut cleanup_errors,
+        )
+        .await;
+        if let Some(handle) = holder_invocation.as_mut().filter(|_| !holder_joined) {
+            pool::settle_invocation("holder", handle, &mut cleanup_errors).await;
+        }
+        match tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await {
+            Ok(Ok(slot)) => drop(slot),
+            other => cleanup_errors.push(format!("pool permit: {other:?}")),
+        }
+    } else {
+        cleanup_errors.push(format!(
+            "holder retained: target cleanup had {target_cleanup_error_count} error(s) or Store release could not be verified"
+        ));
+        if let Some(handle) = holder_invocation.as_mut().filter(|_| !holder_joined) {
+            pool::settle_invocation("holder", handle, &mut cleanup_errors).await;
+        }
+    }
+    if let Err(error) = peer.finish().await {
+        cleanup_errors.push(format!("peer shutdown: {error:#}"));
+    }
+    if cleanup_errors.is_empty() {
+        result
+    } else {
+        let failures = cleanup_errors.join("; ");
+        match result {
+            Ok(()) => Err(anyhow::anyhow!("cleanup failed: {failures}")),
+            Err(error) => Err(error.context(format!("cleanup failed: {failures}"))),
+        }
+    }
+}

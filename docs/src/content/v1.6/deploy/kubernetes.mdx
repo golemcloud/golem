@@ -15,3 +15,5 @@ securityContext:
 ```
 
 Set `fsGroup: 65534` in the pod `securityContext`, so that the volumes of the pod are writable by the service, and `fsGroupChangePolicy: OnRootMismatch`, so that the kubelet does not walk a large volume each time the pod starts. See [User and Permissions](/v1.6/deploy#user-and-permissions). `ManagedXfs` agent filesystem storage also needs `xfs-quotad`, a native sidecar with `CAP_SYS_ADMIN`; see [Run xfs-quotad](/v1.6/operate/filesystem_snapshots/xfs#run-xfs-quotad).
+
+The Kubernetes manifests take the same configuration as a [fixed cluster](/v1.6/deploy/cluster). Kubernetes can also run two shard manager replicas in etcd mode, with a readiness probe on the gRPC port; see [Shard Manager](/v1.6/deploy#shard-manager). Go through the [production checklist](/v1.6/deploy/production-checklist) too.

@@ -159,20 +159,22 @@ blob_storage_limit = 1000000000000000000
 component_limit = 1000000000000000000
 env_limit = 1000000000000000000
 max_concurrent_agents_per_executor = 1000000000000000000
-max_disk_space_per_worker = 1000000000000000000
-max_disk_space_per_worker_user_configurable = true
-max_memory_per_worker = 1000000000000000000
-max_memory_per_worker_ceiling = 1000000000000000000
-max_memory_per_worker_user_configurable = true
+max_memory_per_agent = 1000000000000000000
+max_memory_per_agent_ceiling = 1000000000000000000
+max_memory_per_agent_user_configurable = true
+max_storage_per_agent = 1000000000000000000
+max_storage_per_agent_enabled = false
+max_storage_per_agent_user_configurable = false
 max_table_elements_per_worker = 1000000000000000000
-monthly_gas_limit = 1000000000000000000
+monthly_compute_gcu = 0
+monthly_durable_storage_gb_month = 0
+monthly_ephemeral_storage_gb_month = 0
 monthly_http_call_limit = 1000000000000000000
-monthly_memory_gb_seconds = 1000000000000000000
-monthly_memory_gb_seconds_ceiling = 1000000000000000000
-monthly_memory_gb_seconds_user_configurable = true
+monthly_memory_gb_seconds = 0
 monthly_rpc_call_limit = 1000000000000000000
 monthly_upload_limit = 1000000000000000000
 oplog_writes_per_second = 1000000000000000000
+overage_eligible = false
 per_invocation_http_call_limit = 1000000000000000000
 per_invocation_rpc_call_limit = 1000000000000000000
 plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
@@ -227,6 +229,9 @@ document_bytes = 1048576
 request_bytes = 65536
 timeout = "20s"
 
+[registry_service.resource_grants]
+cleanup_interval = "1m"
+
 [registry_service.security_scheme]
 strict_issuer_url_validation = false
 
@@ -244,7 +249,7 @@ http2_max_pending_accept_reset_streams = 20
 
 [shard_manager]
 bind_address = "127.0.0.1"
-initial_health_check_timeout = "15s"
+initial_health_check_timeout = "3s"
 number_of_shards = 1024
 rebalance_threshold = 0.1
 runtime_metrics_sampling_interval = "5s"
@@ -733,6 +738,7 @@ type = "LocalFileSystem"
 
 [worker_service.body_limits]
 api = 33554432
+http_api = 33554432
 mcp = 33554432
 
 [worker_service.component_service]
@@ -909,7 +915,6 @@ multiplier = 2.0
 type = "Disabled"
 
 [worker_service.worker_executor.tls.config]
-
 
 ## Generated from example config: Postgres and S3
 # data_dir = "/var/lib/golem"
@@ -1111,20 +1116,22 @@ type = "Disabled"
 # component_limit = 1000000000000000000
 # env_limit = 1000000000000000000
 # max_concurrent_agents_per_executor = 1000000000000000000
-# max_disk_space_per_worker = 1000000000000000000
-# max_disk_space_per_worker_user_configurable = true
-# max_memory_per_worker = 1000000000000000000
-# max_memory_per_worker_ceiling = 1000000000000000000
-# max_memory_per_worker_user_configurable = true
+# max_memory_per_agent = 1000000000000000000
+# max_memory_per_agent_ceiling = 1000000000000000000
+# max_memory_per_agent_user_configurable = true
+# max_storage_per_agent = 1000000000000000000
+# max_storage_per_agent_enabled = false
+# max_storage_per_agent_user_configurable = false
 # max_table_elements_per_worker = 1000000000000000000
-# monthly_gas_limit = 1000000000000000000
+# monthly_compute_gcu = 0
+# monthly_durable_storage_gb_month = 0
+# monthly_ephemeral_storage_gb_month = 0
 # monthly_http_call_limit = 1000000000000000000
-# monthly_memory_gb_seconds = 1000000000000000000
-# monthly_memory_gb_seconds_ceiling = 1000000000000000000
-# monthly_memory_gb_seconds_user_configurable = true
+# monthly_memory_gb_seconds = 0
 # monthly_rpc_call_limit = 1000000000000000000
 # monthly_upload_limit = 1000000000000000000
 # oplog_writes_per_second = 1000000000000000000
+# overage_eligible = false
 # per_invocation_http_call_limit = 1000000000000000000
 # per_invocation_rpc_call_limit = 1000000000000000000
 # plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
@@ -1179,6 +1186,9 @@ type = "Disabled"
 # request_bytes = 65536
 # timeout = "20s"
 #
+# [registry_service.resource_grants]
+# cleanup_interval = "1m"
+#
 # [registry_service.security_scheme]
 # strict_issuer_url_validation = false
 #
@@ -1196,7 +1206,7 @@ type = "Disabled"
 #
 # [shard_manager]
 # bind_address = "127.0.0.1"
-# initial_health_check_timeout = "15s"
+# initial_health_check_timeout = "3s"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
@@ -1742,6 +1752,7 @@ type = "Disabled"
 #
 # [worker_service.body_limits]
 # api = 33554432
+# http_api = 33554432
 # mcp = 33554432
 #
 # [worker_service.component_service]

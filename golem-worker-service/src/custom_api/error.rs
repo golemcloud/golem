@@ -75,6 +75,8 @@ pub enum RequestHandlerError {
     RawRequest(http::StatusCode),
     #[error("Raw HTTP upstream failed")]
     RawBadGateway,
+    #[error("gRPC message exceeded the configured size limit: {0}")]
+    RawMessageTooLarge(String),
     #[error("Raw HTTP handler failed")]
     RawInternal,
     #[error("Raw HTTP handler timed out")]
@@ -117,9 +119,11 @@ impl SafeDisplay for RequestHandlerError {
             }
 
             Self::InternalError(_) => "internal error".to_string(),
-            Self::RawRequest(_) | Self::RawBadGateway | Self::RawInternal | Self::RawDeadline => {
-                self.to_string()
-            }
+            Self::RawRequest(_)
+            | Self::RawBadGateway
+            | Self::RawMessageTooLarge(_)
+            | Self::RawInternal
+            | Self::RawDeadline => self.to_string(),
         }
     }
 }
