@@ -4926,7 +4926,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
-        // lost shard's oplog belongs to another executor now. Like `Restart` and `Jump`, a
+        // lost shard's oplog belongs to another executor now. Like a durable `Restart` or `Jump`, a
         // `ShardLost` trap records nothing - not the drain, not an entry, not a status change - and
         // the shard's new owner replays the invocation and records its outcome itself.
         if let TrapType::Interrupt(kind) = trap_type
@@ -4937,6 +4937,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         {
             return InvocationFailureDecision::Retry(RetryDecision::None);
         }
+
+        let terminal_trap = ephemeral_terminal_trap(
+            self.agent_mode(),
+            trap_type,
+            self.invocation_anchor()
+                .unwrap_or(self.state.effective_retry_point()),
+        );
+        let trap_type = terminal_trap.as_ref().unwrap_or(trap_type);
 
         // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
         // ordinary semantic dropped-call close, which could await replay scopes or append
@@ -5001,6 +5009,18 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 full_function_name,
             )
             .await;
+
+        let terminal_decision = ephemeral_terminal_decision(self.agent_mode(), decision.clone());
+        let retry_policy_state = if terminal_decision != decision {
+            Some(
+                retry_policy_state
+                    .unwrap_or(RetryPolicyState::Terminal)
+                    .exhausted(),
+            )
+        } else {
+            retry_policy_state
+        };
+        let decision = terminal_decision;
 
         let entity_parent_start_index = self.entity_parent_start_index();
         let permission_denial_persisted = if let (
@@ -6785,6 +6805,36 @@ fn should_replay_invocation(
         || (matches!(owner, ResolvedOwnerContext::Agent(_)) && replayed_invocations == 0)
 }
 
+fn ephemeral_terminal_trap(
+    mode: AgentMode,
+    trap_type: &TrapType,
+    retry_from: OplogIndex,
+) -> Option<TrapType> {
+    match (mode, trap_type) {
+        (
+            AgentMode::Ephemeral,
+            TrapType::Interrupt(kind @ (InterruptKind::Jump | InterruptKind::Restart)),
+        ) => Some(TrapType::Error {
+            error: AgentError::InternalError(format!(
+                "ephemeral agent cannot be restarted in process ({kind:?})"
+            )),
+            retry_from,
+            semantic_trap_retry_override: None,
+        }),
+        _ => None,
+    }
+}
+
+fn ephemeral_terminal_decision(mode: AgentMode, decision: RetryDecision) -> RetryDecision {
+    match (mode, decision) {
+        (
+            AgentMode::Ephemeral,
+            RetryDecision::Immediate | RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits,
+        ) => RetryDecision::None,
+        (_, decision) => decision,
+    }
+}
+
 fn store_is_live(
     entity_execution_mode: Option<InvocationExecutionMode>,
     local_live_tail: bool,
@@ -7617,6 +7667,72 @@ mod tests {
     fn replay_recovery_branch_rejects_ordinary_host_failure() {
         let result = Err(WorkerExecutorError::runtime("host task failed"));
         assert!(selected_recovery_error(None, AgentMode::Durable, &result).is_none());
+    }
+
+    #[test]
+    fn ephemeral_restart_interrupts_become_invocation_failures() {
+        let start_index = OplogIndex::from_u64(37);
+        for (kind, message) in [
+            (
+                InterruptKind::Jump,
+                "ephemeral agent cannot be restarted in process (Jump)",
+            ),
+            (
+                InterruptKind::Restart,
+                "ephemeral agent cannot be restarted in process (Restart)",
+            ),
+        ] {
+            let trap = TrapType::Interrupt(kind);
+            assert!(ephemeral_terminal_trap(AgentMode::Durable, &trap, start_index).is_none());
+            let converted = ephemeral_terminal_trap(AgentMode::Ephemeral, &trap, start_index)
+                .expect("ephemeral restart is terminal");
+            assert!(matches!(&converted,
+                TrapType::Error { error: AgentError::InternalError(error), retry_from,
+                    semantic_trap_retry_override: None }
+                if error == message && *retry_from == start_index));
+            assert!(matches!(converted.as_golem_error(""),
+                Some(WorkerExecutorError::InvocationFailed { error: AgentError::InternalError(error), .. })
+                if error == message));
+        }
+        for trap in [
+            TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())),
+            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc())),
+            TrapType::Interrupt(InterruptKind::ShardLost),
+            TrapType::Exit,
+            TrapType::Error {
+                error: AgentError::OutOfMemory,
+                retry_from: start_index,
+                semantic_trap_retry_override: None,
+            },
+        ] {
+            assert!(ephemeral_terminal_trap(AgentMode::Ephemeral, &trap, start_index).is_none());
+        }
+    }
+
+    #[test]
+    fn ephemeral_restart_decisions_are_terminal() {
+        for (decision, ephemeral) in [
+            (RetryDecision::Immediate, RetryDecision::None),
+            (
+                RetryDecision::Delayed(Duration::from_millis(37)),
+                RetryDecision::None,
+            ),
+            (RetryDecision::ReacquirePermits, RetryDecision::None),
+            (RetryDecision::None, RetryDecision::None),
+            (
+                RetryDecision::TryStop(Timestamp::from(1234)),
+                RetryDecision::TryStop(Timestamp::from(1234)),
+            ),
+        ] {
+            assert_eq!(
+                ephemeral_terminal_decision(AgentMode::Durable, decision.clone()),
+                decision
+            );
+            assert_eq!(
+                ephemeral_terminal_decision(AgentMode::Ephemeral, decision),
+                ephemeral
+            );
+        }
     }
 
     #[test]
