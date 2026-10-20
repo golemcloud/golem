@@ -5,12 +5,14 @@ use bash_shell::commands::CommandDescriptor;
 use bash_shell::commands::{CommandFuture, CommandInvoker, CommandOutput, PreparedCommand};
 #[cfg(target_arch = "wasm32")]
 use bash_shell::session::Session;
+use golem_schema::TypedSchemaValue;
 use golem_schema::tool::{
-    ProcessExitStatus, Tool,
-    argv::{self, ParsedToolArguments},
-    process::{process_status_type, render_custom_error, render_result},
+    Tool,
+    process::{
+        ParsedProcessCommand, parse_command, process_status_type, render_custom_error,
+        render_result,
+    },
 };
-use golem_schema::{IntoSchema, SchemaType, TypedSchemaValue};
 use std::collections::{BTreeMap, HashMap};
 #[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
@@ -49,7 +51,7 @@ impl Catalog {
             .tools
             .get(name)
             .ok_or_else(|| failure(127, "tool is not bound"))?;
-        let parsed = argv::parse_with_variables(tool, args, variables).map_err(|message| {
+        let parsed = parse_command(tool, args, variables).map_err(|message| {
             // The shared parser forbids constructing opaque capabilities from text.
             let message = if message.contains("capabilit") || message.contains("secret") {
                 format!("secret and other capability arguments are unsupported: {message}")
@@ -59,40 +61,29 @@ impl Catalog {
             failure(2, message)
         })?;
         match parsed {
-            ParsedToolArguments::Help(text) => Err(CommandOutput {
+            ParsedProcessCommand::Help(text) => Err(CommandOutput {
                 stdout: text.into_bytes(),
                 stderr: vec![],
                 exit_code: 0,
             }),
-            ParsedToolArguments::Invoke {
+            ParsedProcessCommand::Invoke {
                 command_path,
                 input,
-            } => {
-                let index = tool
-                    .command_index_by_path(&command_path)
-                    .ok_or_else(|| failure(2, "unknown command path"))?;
-                let body = tool.commands.nodes[index]
-                    .body
-                    .as_ref()
-                    .ok_or_else(|| failure(2, "command has no body"))?;
-                Ok(Invocation {
-                    name: name.into(),
-                    path: command_path,
-                    input: *input,
-                    stdin: body.stdin.is_some(),
-                    stdout: body.stdout.is_some(),
-                    stderr: body.stderr.is_some(),
-                    result_is_status: body
-                            .result
-                            .as_ref()
-                            .is_some_and(|result| matches!(&result.type_, SchemaType::Ref { id, .. } if *id == ProcessExitStatus::type_id())),
-                    errors: body
-                        .errors
-                        .iter()
-                        .map(|error| (error.name.clone(), error.exit_code))
-                        .collect(),
-                })
-            }
+                stdin,
+                stdout,
+                stderr,
+                result_is_status,
+                errors,
+            } => Ok(Invocation {
+                name: name.into(),
+                path: command_path,
+                input: *input,
+                stdin,
+                stdout,
+                stderr,
+                result_is_status,
+                errors,
+            }),
         }
     }
 }

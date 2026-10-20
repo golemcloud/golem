@@ -9,10 +9,69 @@
 //! A named [`ProcessExitStatus`] controls the process status. Other structured
 //! results become redacted text only when the command has no stdout stream.
 
-use super::ProcessExitStatus;
+use super::argv::{self, ParsedToolArguments};
+use super::{ProcessExitStatus, Tool};
 use crate::schema::render::json_value::to_json_value_redacted;
 use crate::{IntoSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+
+/// Canonical arguments and the attachment policy of the selected tool command.
+#[derive(Debug)]
+pub enum ParsedProcessCommand {
+    Help(String),
+    Invoke {
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+        result_is_status: bool,
+        errors: BTreeMap<String, u8>,
+    },
+}
+
+/// Prepare a process invocation with the same argument grammar as other tool callers.
+/// Only the supplied variables participate in environment-backed argument binding.
+pub fn parse_command(
+    tool: &Tool,
+    args: &[String],
+    variables: &HashMap<String, String>,
+) -> Result<ParsedProcessCommand, String> {
+    match argv::parse_with_variables(tool, args, variables)? {
+        ParsedToolArguments::Help(text) => Ok(ParsedProcessCommand::Help(text)),
+        ParsedToolArguments::Invoke {
+            command_path,
+            input,
+        } => {
+            let index = tool
+                .command_index_by_path(&command_path)
+                .ok_or("unknown command path")?;
+            let body = tool.commands.nodes[index]
+                .body
+                .as_ref()
+                .ok_or("command has no body")?;
+            let result_is_status = body
+                .result
+                .as_ref()
+                .map(|result| process_status_type(&tool.schema, &result.type_))
+                .transpose()?
+                .unwrap_or(false);
+            Ok(ParsedProcessCommand::Invoke {
+                command_path,
+                input,
+                stdin: body.stdin.is_some(),
+                stdout: body.stdout.is_some(),
+                stderr: body.stderr.is_some(),
+                result_is_status,
+                errors: body
+                    .errors
+                    .iter()
+                    .map(|error| (error.name.clone(), error.exit_code))
+                    .collect(),
+            })
+        }
+    }
+}
 
 /// Validate the cross-language named process-status contract.
 pub fn process_status_type(graph: &SchemaGraph, root: &SchemaType) -> Result<bool, String> {

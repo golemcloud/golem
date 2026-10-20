@@ -65,7 +65,10 @@ remain recoverable in Git history, not in this fixture tree.
 
 Keep this proof separate from a complete process adapter. The remaining work is:
 
-- Reuse the canonical CLI parser and redacted result rendering in guest code.
+- Connect `golem_schema::tool::process::parse_command` and the shared result
+  renderer to the guest bridge. The preparation helper is used by Bash and
+  supplies canonical input, declared I/O, named exit status, and error codes.
+  This fixture still prepares its test input through SDK reflection.
 - Replace the JavaScript adapter's obsolete host facade. Do not infer dispatch
   admission or body execution from error tags or readiness.
 - Test concurrent async children alongside synchronous calls before choosing the
