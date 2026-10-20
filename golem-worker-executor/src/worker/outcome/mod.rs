@@ -14,10 +14,11 @@
 
 use crate::model::TrapType;
 use crate::services::golem_config::GolemConfig;
-use crate::services::resource_limits::MonthlyResourceExhaustion;
+use crate::services::resource_limits::{MonthlyResourceCapacityError, MonthlyResourceExhaustion};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::oplog::{AgentError, EphemeralCannotSuspendError};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 
 #[cfg(test)]
@@ -28,7 +29,21 @@ pub(super) fn monthly_failure<Ctx: WorkerCtx>(
     mode: AgentMode,
     accepted: &Option<(InterruptKind, MonthlyResourceExhaustion)>,
     config: &GolemConfig,
+    policy_unavailable: bool,
+    retry_from: OplogIndex,
 ) -> Option<TrapType> {
+    if mode == AgentMode::Ephemeral
+        && policy_unavailable
+        && matches!(trap, TrapType::Interrupt(InterruptKind::Suspend(_)))
+    {
+        return Some(TrapType::Error {
+            error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                reason: MonthlyResourceCapacityError::UNAVAILABLE_REASON.to_string(),
+            }),
+            retry_from,
+            semantic_trap_retry_override: None,
+        });
+    }
     match trap {
         TrapType::Interrupt(kind) => {
             monthly_interrupt_error(*kind, mode, accepted, config).map(|error| {

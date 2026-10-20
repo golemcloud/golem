@@ -395,7 +395,9 @@ async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_de
                 &trap,
                 mode,
                 &owner.monthly.lock().unwrap(),
-                &crate::services::golem_config::GolemConfig::default()
+                &crate::services::golem_config::GolemConfig::default(),
+                false,
+                golem_common::model::OplogIndex::INITIAL,
             )
             .is_none()
         );

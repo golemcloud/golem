@@ -1138,6 +1138,178 @@ async fn ephemeral_agent_fails_terminally_instead_of_restarting_after_live_metho
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
+async fn ephemeral_agent_fails_terminally_when_active_memory_limit_is_lowered(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use crate::api::MutableResourceLimitsRegistry;
+    use golem_common::model::AgentStatus;
+    use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
+    use golem_common::model::oplog::PublicAgentInvocation;
+    use golem_service_base::model::MonthlyResourcePolicy;
+    use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
+    use golem_worker_executor::services::resource_limits::ResourceLimitsGrpc;
+    use golem_worker_executor_test_utils::start_with_resource_limits_and_configure;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    const ALLOCATION: u32 = 16 * 1024 * 1024;
+    const METHOD: &str = "allocate_memory_and_busy_for";
+    let registry = Arc::new(MutableResourceLimitsRegistry::new(MonthlyResourcePolicy {
+        period: AccountUsagePeriod::current(),
+        mode: MonthlyUsageMode::HardLimit,
+        available_fuel: u64::MAX,
+        available_memory_gb_seconds: u64::MAX,
+        available_memory_byte_nanoseconds_remainder: 0,
+        available_durable_storage_byte_seconds: u64::MAX,
+        available_durable_storage_byte_nanoseconds_remainder: 0,
+        available_ephemeral_storage_byte_seconds: u64::MAX,
+        available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+    }));
+    let shutdown = CancellationToken::new();
+    let _cancel_on_drop = shutdown.clone().drop_guard();
+    let metering = ResourceUsageMeteringConfig::default();
+    let limits = ResourceLimitsGrpc::new(
+        registry.clone(),
+        Duration::from_millis(10),
+        Duration::ZERO,
+        metering,
+        shutdown,
+    );
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_resource_limits_and_configure(
+        deps,
+        &context,
+        limits,
+        Arc::new(move |config| config.resource_usage_metering = metering),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = agent_id!("EphemeralCounter", "active-memory-limit");
+    let key = IdempotencyKey::fresh();
+    let worker = AgentId::from_agent_id(
+        component.id,
+        &agent
+            .with_ephemeral_invocation_phantom(&key)
+            .map_err(anyhow::Error::msg)?,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let invocation = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent,
+        &key,
+        METHOD,
+        data_value!(ALLOCATION, 60_000u32),
+    );
+    let lower_limit = async {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Ok(oplog) = executor.get_oplog(&worker, OplogIndex::INITIAL).await
+                    && let Some(start) = oplog.iter().find(|entry| {
+                        matches!(&entry.entry,
+                            PublicOplogEntry::AgentInvocationStarted(started)
+                                if matches!(&started.invocation,
+                                    PublicAgentInvocation::AgentMethodInvocation(method)
+                                        if method.method_name == METHOD))
+                    })
+                    && oplog.iter().any(|entry| {
+                        entry.oplog_index > start.oplog_index
+                            && matches!(entry.entry, PublicOplogEntry::GrowMemory(_))
+                    })
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        // The guest has grown its memory inside the active method, not just its constructor.
+        registry.set_max_memory_per_worker(u64::from(ALLOCATION / 2));
+        anyhow::Ok(())
+    };
+    let (result, lowered) = tokio::join!(invocation, lower_limit);
+    lowered?;
+    let error = result.expect_err("active ephemeral suspension must fail the caller");
+    assert!(
+        error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("cannot suspend"),
+        "{error:#}"
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned).await
+            || crate::oplog_sweep::ephemeral_layer_rows(deps, &context, &worker).await? != 0
+        {
+            tokio::task::yield_now().await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    assert_eq!(
+        executor.get_worker_metadata(&worker).await?.status,
+        AgentStatus::Failed
+    );
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let starts: Vec<_> = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == METHOD))
+        })
+        .map(|entry| entry.oplog_index)
+        .collect();
+    assert_eq!(starts.len(), 1, "{oplog:#?}");
+    assert!(
+        oplog.iter().any(|entry| entry.oplog_index > starts[0]
+            && matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "{oplog:#?}"
+    );
+    assert!(
+        !oplog.iter().any(|entry| entry.oplog_index > starts[0]
+            && matches!(entry.entry, PublicOplogEntry::Suspend(_))),
+        "{oplog:#?}"
+    );
+    let cached = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            METHOD,
+            data_value!(ALLOCATION, 60_000u32),
+        )
+        .await
+        .expect_err("same-key invocation must return the recorded failure");
+    assert!(
+        cached
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("cannot suspend"),
+        "{cached:#}"
+    );
+    assert!(
+        executor
+            .get_oplog(&worker, oplog.last().unwrap().oplog_index.next())
+            .await?
+            .is_empty(),
+        "same-key invocation must not append to the archived oplog"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
 async fn fork_publication_retry_preserves_independent_state_across_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

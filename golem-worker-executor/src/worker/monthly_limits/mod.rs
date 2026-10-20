@@ -6,7 +6,7 @@ use crate::services::resource_usage_metering::{
 };
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
-use golem_common::model::Timestamp;
+use golem_common::model::{OplogIndex, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -561,15 +561,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn monthly_failure(
         &self,
         trap: &crate::model::TrapType,
+        retry_from: OplogIndex,
     ) -> Option<crate::model::TrapType> {
         if self.agent_mode() != golem_common::model::agent::AgentMode::Ephemeral {
             return None;
         }
+        let policy_unavailable = self.monthly_policy_is_unavailable();
         super::outcome::monthly_failure::<Ctx>(
             trap,
             self.agent_mode(),
             &self.monthly_stop.lock().unwrap(),
             &self.config(),
+            policy_unavailable,
+            retry_from,
         )
     }
 
