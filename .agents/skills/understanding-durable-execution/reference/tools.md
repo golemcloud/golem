@@ -378,11 +378,20 @@ one invocation does not seal its siblings. Registration destruction is the sole 
 Explicit failure release requests disposal and joins cleanup before completing its permit. If
 the observer drops the completion resources, retained cleanup owns that permit until drainage
 finishes. A canceled destruction join keeps its handle; a completed join removes it even on error.
-Normal settlement never runs on the disposed Store. These guarantees start at the finished-body
-handoff, not active-body cancellation, executor shutdown or a retained callback's Rust panic.
-Body abort, pre-failure arbitration, owner-fatal guest traps and retry decisions are unchanged.
+Normal settlement never runs on the disposed Store. Executor shutdown and a retained callback's
+Rust panic can bypass asynchronous drainage. Owner-fatal guest traps and retry decisions are
+unchanged.
 Disposal records no entity terminal or EOF and does not turn a stuck synchronous destructor into
 success.
+
+Before component construction starts, the invocation task owns the body's filesystem scope.
+Canceling construction or an active body drops its context or Store before closing admission and
+joining admitted calls and descriptor closes. Native construction/setup failures and active
+cancellation follow the same order. The task retains its registration and lane permit throughout
+drainage. A body abort cancels a child token without tearing the drain task; lifecycle fencing
+cancels its parent and therefore both body and retained Store. A late body abort leaves completed
+resources available for preparation and settlement. Queued cancellation withdraws lane acquisition
+without waiting for a grant. These paths do not convert a guest trap into a tool result.
 
 The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task.
 Destroying a healthy ancestor Store may drop its result observer but cannot drop the global

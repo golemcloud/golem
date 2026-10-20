@@ -2905,11 +2905,28 @@ async fn owner_cleanup_notification_follows_retained_store_destruction() {
 
 #[test]
 #[timeout("30s")]
+async fn body_abort_after_completion_keeps_retained_preparation_and_settlement_alive() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    let abort = handle.abort_handle();
+    let completion = handle.join_completion().await.unwrap();
+    let (result, mut resources) = completion.into_parts();
+    result.unwrap();
+    abort.abort();
+    resources.prepare_parent_end().await.unwrap();
+    assert!(destroyed.try_recv().is_err());
+    resources.settle_after_parent_end().await.unwrap();
+    destroyed.await.unwrap();
+    assert_eq!(slot.active_invocation_count(), 0);
+}
+
+#[test]
+#[timeout("30s")]
 async fn shutdown_reclaims_unpolled_entity_completion_output() {
     let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
     let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
     // Direct polling of the production task handle establishes completion without taking output.
-    while !handle.abort_handle().is_finished() {
+    while !handle.is_finished() {
         tokio::task::yield_now().await;
     }
     assert!(destroyed.try_recv().is_err());

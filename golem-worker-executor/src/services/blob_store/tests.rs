@@ -2118,7 +2118,7 @@ async fn caller_loss_retains_mutation(copy: bool, fail: bool, entity: bool) {
     let abort = registration.cancellation();
     let mut caller = Box::pin(async {
         if entity {
-            await_component_entity_body(abort, work).await
+            await_component_entity_body(abort, None, work).await
         } else {
             work.await
         }

@@ -96,6 +96,13 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
         host_tool_id: host_tool_id.clone(),
         implementation_version: implementation_version.clone(),
     };
+    let (filesystem, drain) = match worker
+        .owner_runtime_resources()
+        .filesystem_generation_handle()
+    {
+        Ok(filesystem) => filesystem.for_invocation(),
+        Err(error) => return (Err(error), None),
+    };
     let mut ctx = match await_native_entity_body(
         &runner_abort,
         worker.create_entity_context(
@@ -107,12 +114,16 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
             owner_component_metadata,
             scope.authority_wallet().to_vec(),
             Some(scope.invocation_id().start_index()),
+            filesystem,
         ),
     )
     .await
     {
         Ok(ctx) => ctx,
-        Err(error) => return (Err(error), None),
+        Err(error) => {
+            drain.close_and_drain().await;
+            return (Err(error), None);
+        }
     };
     if let Err(error) = registration
         .attach_linear_memory(ctx.durable_ctx().linear_memory_tracker())
@@ -122,6 +133,8 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
                 .set_entity_tool_operation(operation.clone())
         })
     {
+        drop(ctx);
+        drain.close_and_drain().await;
         return (Err(error), None);
     }
     if let Some(cancellation) = cancellation.clone()
@@ -129,13 +142,19 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
             .durable_ctx_mut()
             .set_entity_cancellation(cancellation.clone())
     {
+        drop(ctx);
+        drain.close_and_drain().await;
         return (Err(error), None);
     }
     ctx.durable_ctx_mut()
         .set_invocation_principal(Some(invocation.principal.clone()));
     let tasks = match crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks) {
         Ok(tasks) => tasks,
-        Err(error) => return (Err(error), None),
+        Err(error) => {
+            drop(ctx);
+            drain.close_and_drain().await;
+            return (Err(error), None);
+        }
     };
     let spawner = tasks.spawner();
     let monitor = tasks.monitor();
@@ -178,7 +197,11 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
         .transpose()
     {
         Ok(stdin) => stdin,
-        Err(error) => return (Err(error.into()), None),
+        Err(error) => {
+            drop(retained);
+            drain.close_and_drain().await;
+            return (Err(error.into()), None);
+        }
     };
     let native_invocation = NativeToolInvocation {
         command_path: invocation.command_path,
@@ -242,6 +265,9 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
     })
     .await;
     let completed = completed.unwrap_or_else(|error| (Err(error), None));
+    if completed.1.is_none() {
+        drain.close_and_drain().await;
+    }
     if completed
         .0
         .as_ref()

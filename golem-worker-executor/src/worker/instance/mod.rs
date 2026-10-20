@@ -918,19 +918,38 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
     }
 
     pub async fn instantiate_entity(&self) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
-        self.instantiate_entity_with_scope(None).await
+        let (filesystem, _) = self.create_entity_filesystem()?;
+        self.instantiate_entity_with_scope(None, filesystem).await
     }
 
     pub async fn instantiate_entity_scoped(
         &self,
         scope: &EntityInvocationScope,
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
-        self.instantiate_entity_with_scope(Some(scope)).await
+        let (filesystem, _) = self.create_entity_filesystem()?;
+        self.instantiate_entity_with_scope(Some(scope), filesystem)
+            .await
     }
 
-    async fn instantiate_entity_with_scope(
+    pub(crate) fn create_entity_filesystem(
+        &self,
+    ) -> Result<
+        (
+            FilesystemGenerationHandle,
+            crate::services::agent_filesystem::FilesystemInvocation,
+        ),
+        WorkerExecutorError,
+    > {
+        Ok(self
+            .owner_resources
+            .filesystem_generation_handle()?
+            .for_invocation())
+    }
+
+    pub(crate) async fn instantiate_entity_with_scope(
         &self,
         scope: Option<&EntityInvocationScope>,
+        filesystem: FilesystemGenerationHandle,
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
         if !matches!(&self.runtime, OwnerRuntime::Entity(_)) {
             return Err(WorkerExecutorError::runtime(
@@ -981,6 +1000,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     .expect("Entity instance host must pin its owner component metadata"),
                 authority_wallet,
                 scope.map(|scope| scope.invocation_id().start_index()),
+                filesystem,
             )
             .await?;
         if let Some(scope) = scope {

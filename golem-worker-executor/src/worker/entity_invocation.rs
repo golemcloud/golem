@@ -25,7 +25,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, debug, info_span};
 use wasmtime::Store;
@@ -86,7 +85,17 @@ pub struct EntityInvocationHandle<R> {
     lane: OwnerLane,
     executor_tasks: crate::services::active_agents::InvocationLoops,
     lane_await_required: bool,
+    abort: tokio_util::sync::CancellationToken,
     task: Option<JoinHandle<Option<EntityInvocationCompletion<R>>>>,
+}
+
+/// Aborts the body without tearing down its filesystem drain or completion resources.
+pub struct EntityInvocationAbortHandle(tokio_util::sync::CancellationToken);
+
+impl EntityInvocationAbortHandle {
+    pub fn abort(&self) {
+        self.0.cancel();
+    }
 }
 
 pub(crate) struct EntityInvocationCompletion<R> {
@@ -246,6 +255,7 @@ pub(crate) trait EntityInvocationRunner<R>: Send + 'static {
 
 pub(crate) async fn await_component_entity_body<R>(
     abort: tokio_util::sync::CancellationToken,
+    filesystem: Option<crate::services::agent_filesystem::FilesystemInvocation>,
     body: impl Future<
         Output = (
             Result<R, WorkerExecutorError>,
@@ -256,13 +266,23 @@ pub(crate) async fn await_component_entity_body<R>(
     Result<R, WorkerExecutorError>,
     Option<Box<dyn RetainedEntityStore>>,
 ) {
-    tokio::select! {
-        result = body => result,
-        _ = abort.cancelled() => (
-            Err(WorkerExecutorError::runtime("Entity body was cancelled")),
-            None,
-        ),
+    let result = {
+        tokio::select! {
+            result = body => result,
+            _ = abort.cancelled() => (
+                Err(WorkerExecutorError::runtime("Entity body was cancelled")),
+                None,
+            ),
+        }
+    };
+    // The body (and its Store) is gone before closing admission. A retained Store owns its
+    // own drain; an interrupted body has no retained owner to join abandoned filesystem calls.
+    if result.1.is_none()
+        && let Some(filesystem) = filesystem
+    {
+        filesystem.close_and_drain().await;
     }
+    result
 }
 
 struct ComponentEntityRunner<Ctx: WorkerCtx, F> {
@@ -294,8 +314,16 @@ where
     > {
         Box::pin(async move {
             let invocation = OwnerInvocationId::Entity(scope.invocation_id().clone());
-            await_component_entity_body(_abort, async move {
-                match self.host.instantiate_entity_scoped(&scope).await {
+            let (filesystem, drain) = match self.host.create_entity_filesystem() {
+                Ok(filesystem) => filesystem,
+                Err(error) => return (Err(error), None),
+            };
+            await_component_entity_body(_abort, Some(drain), async move {
+                match self
+                    .host
+                    .instantiate_entity_with_scope(Some(&scope), filesystem)
+                    .await
+                {
                     Ok(hosted_instance) => {
                         let (result, retained) = hosted_instance
                             .invoke_scoped_registered_retained(scope, registration, self.body)
@@ -613,14 +641,14 @@ impl<R: Send + 'static> EntityInvocationHandle<R> {
         self.mode
     }
 
-    /// Returns a task abort capability used by durable cancellation and owner lifecycle fencing.
-    /// Aborting drops the transient Store; it never creates independently recoverable entity
-    /// state.
-    pub fn abort_handle(&self) -> AbortHandle {
-        self.task
-            .as_ref()
-            .expect("entity invocation handle has not been joined")
-            .abort_handle()
+    /// Requests body disposal while keeping the invocation task alive to join its filesystem
+    /// work. Executor shutdown still abandons the complete task for ordinary reconstruction.
+    pub fn abort_handle(&self) -> EntityInvocationAbortHandle {
+        EntityInvocationAbortHandle(self.abort.clone())
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     /// Waits for a result and makes a deferred capable body causally eligible at this await point.
@@ -933,8 +961,9 @@ where
     Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
-    let cancellation = tokio_util::sync::CancellationToken::new();
-    let registration = slot.register(&scope, cancellation.clone())?;
+    let lifecycle_cancellation = tokio_util::sync::CancellationToken::new();
+    let registration = slot.register(&scope, lifecycle_cancellation.clone())?;
+    let cancellation = lifecycle_cancellation.child_token();
     let participant = suspension.register_entity(scope.invocation_id().clone());
     let invocation_id = scope.invocation_id().clone();
     let invocation = OwnerInvocationId::Entity(invocation_id.clone());
@@ -955,6 +984,7 @@ where
         execution_mode = ?scope.mode(),
     );
     let task_executor = executor_tasks.clone();
+    let abort = cancellation.clone();
     let task = executor_tasks.spawn_entity(
         async move {
             let _participant = participant;
@@ -968,12 +998,18 @@ where
                 ))
             } else {
                 permit = match ticket {
-                    Some(ticket) => match ticket.acquire().await {
+                    Some(ticket) => match tokio::select! {
+                        biased;
+                        _ = cancellation.cancelled() => Err(WorkerExecutorError::runtime(
+                            "Entity body was cancelled before lane acquisition",
+                        )),
+                        acquired = ticket.acquire() => acquired.map_err(|error| {
+                            WorkerExecutorError::runtime(error.to_string())
+                        }),
+                    } {
                         Ok(permit) => Some(permit),
                         Err(error) => {
-                            let result =
-                                finalize(Err(WorkerExecutorError::runtime(error.to_string())))
-                                    .await;
+                            let result = finalize(Err(error)).await;
                             metrics.finish(&result);
                             return EntityInvocationCompletion {
                                 result,
@@ -1023,6 +1059,7 @@ where
         lane,
         executor_tasks,
         lane_await_required,
+        abort,
         task: Some(task),
     })
 }
@@ -1039,26 +1076,123 @@ mod tests {
 
     #[test]
     async fn component_body_still_observes_latched_cancellation() {
+        use crate::services::agent_filesystem as fs;
+
+        let (filesystem, control) = fs::resident_for_unload_test().await;
+        let (_, drain) = fs::resident_generation_handle(&filesystem).for_invocation();
         let abort = tokio_util::sync::CancellationToken::new();
         abort.cancel();
         let (result, retained) =
-            await_component_entity_body::<u8>(abort, std::future::pending()).await;
+            await_component_entity_body::<u8>(abort, Some(drain), std::future::pending()).await;
         assert_eq!(
             result.unwrap_err().to_string(),
             "Runtime error: Entity body was cancelled"
         );
         assert!(retained.is_none());
+        control.push_delete_and_verify(Ok(()));
+        fs::delete(fs::seal(filesystem)).await.unwrap();
     }
 
     #[test]
     async fn component_body_completion_keeps_its_result_without_cancellation() {
+        use crate::services::agent_filesystem as fs;
+
+        let (filesystem, control) = fs::resident_for_unload_test().await;
+        let (_, drain) = fs::resident_generation_handle(&filesystem).for_invocation();
         let (result, retained) = await_component_entity_body(
             tokio_util::sync::CancellationToken::new(),
+            Some(drain),
             std::future::ready((Ok(17), None)),
         )
         .await;
         assert_eq!(result.unwrap(), 17);
         assert!(retained.is_none());
+        control.push_delete_and_verify(Ok(()));
+        fs::delete(fs::seal(filesystem)).await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn cancelled_active_body_drains_its_write_and_close_before_releasing_the_lane() {
+        use crate::sandbox_filesystem::{SandboxOpened, SandboxWriteAttempt};
+        use crate::services::agent_filesystem as fs;
+        use futures::FutureExt;
+
+        let (filesystem, control) = fs::resident_for_unload_test().await;
+        let generation = fs::resident_generation_handle(&filesystem);
+        let (body_filesystem, drain) = generation.for_invocation();
+        control.push_open(Ok(SandboxOpened::scripted_file(706)));
+        let file = fs::open(
+            &body_filesystem,
+            fs::PathTarget::at_root(&body_filesystem, "active").unwrap(),
+            fs::OpenOptions::Existing {
+                expected: fs::ObjectKind::File,
+                access: fs::AccessMode::ReadWrite,
+                follow: fs::Follow::Yes,
+            },
+        )
+        .unwrap()
+        .await
+        .unwrap();
+        let fs::OpenNode::File(file) = file.node else {
+            panic!("scripted open returned a directory");
+        };
+        control.push_write(Ok(SandboxWriteAttempt::completed(4)));
+        control.push_close(Ok(()));
+        let write = control.block("write");
+        let close = control.block("close");
+        let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "active-cleanup".into(),
+            },
+        ));
+        let permit = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let next = lane
+            .enter_primary(OplogIndex::from_u64(2))
+            .unwrap()
+            .acquire();
+        tokio::pin!(next);
+        let abort = tokio_util::sync::CancellationToken::new();
+        let cancelled = abort.clone();
+        let task = tokio::spawn(async move {
+            let result = await_component_entity_body::<()>(cancelled, Some(drain), async move {
+                fs::write(
+                    &body_filesystem,
+                    &file,
+                    fs::WritePlacement::At(3),
+                    bytes::Bytes::from_static(b"data"),
+                )
+                .unwrap()
+                .await
+                .unwrap();
+                std::future::pending().await
+            })
+            .await;
+            permit.complete();
+            result
+        });
+        write.wait_started().await;
+        abort.cancel();
+        close.wait_started().await;
+        assert!(next.as_mut().now_or_never().is_none());
+        write.release();
+        write.wait_completed().await;
+        assert!(next.as_mut().now_or_never().is_none());
+        close.release();
+        let (result, retained) = task.await.unwrap();
+        assert!(result.is_err());
+        assert!(retained.is_none());
+        next.await.unwrap().complete();
+
+        control.push_delete_and_verify(Ok(()));
+        fs::delete(fs::seal(filesystem)).await.unwrap();
     }
 
     fn completed_handle(
@@ -1084,6 +1218,7 @@ mod tests {
             lane,
             executor_tasks,
             lane_await_required,
+            abort: tokio_util::sync::CancellationToken::new(),
             task: Some(task),
         }
     }
