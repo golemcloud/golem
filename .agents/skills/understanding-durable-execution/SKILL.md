@@ -2508,6 +2508,10 @@ non-accessor host returns do not use this gate. Native guest write completions a
 instrumented by this rule. Every bash script has a time limit and blocks with recorded
 `wait-for(0)` every 1024 yields so a computing script can observe its stop request or time limit.
 
+Before the blocked-wait gate, a replayed native read waits for every earlier retained Start of
+its invocation, including host-internal descendants, to be claimed or adopted as replay-inert;
+reserving an import's ordinal alone does not release the read.
+
 `Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
 the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock reads and monotonic `now` remain
 exclusive because concurrent bindings cannot run during synchronous core initialization.

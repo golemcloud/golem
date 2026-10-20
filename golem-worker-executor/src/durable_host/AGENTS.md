@@ -151,7 +151,9 @@ not add a feature-specific recovery path or immediate restart.
   observer, not at host take time. Its oplog position is the guest boundary; there is no extra
   durable call or delivery marker. After cursor/source readiness, guest observations wait for
   a fresh blocked wait and share the Store's one-event-per-block gate with accessor completions,
-  live and replay alike. Host-side takes do not use this gate. Packed bytes record only the consumed portion. A crash before
+  live and replay alike. Replay first claims every earlier retained Start of the consuming
+  invocation, including host-internal descendants; import issuance alone does not release a read.
+  Host-side takes do not use this gate. Packed bytes record only the consumed portion. A crash before
   consumption leaves no record and recovery re-reads the source by offset. Host projections keep
   take-time journaling. A zero-progress native read cancellation retains the producer's receive
   and prepared observation for the next read; only dropping the readable end cancels the durable

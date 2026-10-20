@@ -194,18 +194,6 @@ impl ReplayState {
         self.await_delivery_boundary(None, index, order).await
     }
 
-    pub(in crate::durable_host) fn record_deferred_import(
-        &self,
-        order: &GuestReadOrder,
-        ordinal: u64,
-    ) {
-        // Ordinal reservation checks the increment before returning the id.
-        let next = ordinal + 1;
-        if order.issued.fetch_max(next, Ordering::AcqRel) < next {
-            self.cursor.progress.notify_waiters();
-        }
-    }
-
     async fn await_delivery_boundary(
         &self,
         start_index: Option<OplogIndex>,

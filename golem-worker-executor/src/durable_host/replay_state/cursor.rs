@@ -286,6 +286,7 @@ impl RetainedClaims<'_> {
         }
         self.publish_retained_count();
         self.st.custom_subtrees.insert(root, members);
+        *self.notify_progress = true;
     }
 }
 
@@ -766,15 +767,17 @@ impl CursorTx<'_> {
             let (read_idx, entry) = self.raw_read_next_oplog_entry().await?;
 
             if self.is_stream_observation(read_idx) {
+                // A native read waits for every earlier retained Start of its invocation,
+                // including host-internal children. Live host calls run those children eagerly
+                // before the guest can observe the read; reserving an import is not enough.
                 let unreached_guest_call = guest_order.is_some_and(|order| {
-                    let issued = order.issued.load(Ordering::Acquire);
                     self.st
                         .retained_starts
                         .range(..read_idx)
                         .any(|(_, retained)| {
                             matches!(&retained.entry, OplogEntry::Start {
                             invocation_id: Some(id), ..
-                        } if id.anchor == order.anchor && id.ordinal >= issued)
+                        } if id.anchor == order.anchor)
                         })
                 });
                 if expected_delivery == Some((None, read_idx)) && !unreached_guest_call {
