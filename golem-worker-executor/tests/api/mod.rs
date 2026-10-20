@@ -117,7 +117,7 @@ enum IntegrationExhaustion {
     EphemeralStorage,
 }
 
-struct MutableResourceLimitsRegistry {
+pub(super) struct MutableResourceLimitsRegistry {
     limits: Mutex<golem_service_base::model::ResourceLimits>,
     delayed_policy: Mutex<Option<DelayedPolicy>>,
     applied_updates: Mutex<Vec<ResourceUsageUpdate>>,
@@ -131,7 +131,7 @@ struct DelayedPolicy {
 }
 
 impl MutableResourceLimitsRegistry {
-    fn new(policy: MonthlyResourcePolicy) -> Self {
+    pub(super) fn new(policy: MonthlyResourcePolicy) -> Self {
         Self {
             limits: Mutex::new(resource_limits_response(policy, 0)),
             delayed_policy: Mutex::new(None),
@@ -150,7 +150,7 @@ impl MutableResourceLimitsRegistry {
         limits.monthly_policy_revision += 1;
     }
 
-    fn set_max_memory_per_worker(&self, max_memory_per_worker: u64) {
+    pub(super) fn set_max_memory_per_worker(&self, max_memory_per_worker: u64) {
         self.limits.lock().unwrap().max_memory_per_worker = max_memory_per_worker;
     }
 

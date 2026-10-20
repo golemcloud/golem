@@ -42,5 +42,22 @@ fn monthly_mapping_requires_exact_accepted_kind_and_ephemeral_mode() {
             &config, exhaustion,
         );
         assert_eq!(actual, expected);
+        let trap = monthly_failure::<crate::workerctx::default::Context>(
+            &TrapType::Interrupt(kind),
+            AgentMode::Ephemeral,
+            &accepted,
+            &config,
+        )
+        .expect("monthly exhaustion converts the accepted suspension");
+        assert!(
+            crate::durable_host::ephemeral_suspend_trap(
+                AgentMode::Ephemeral,
+                &trap,
+                OplogIndex::from_u64(37)
+            )
+            .is_none(),
+            "the active-suspend fallback must not replace the monthly error"
+        );
+        assert_eq!(trap.as_golem_error(""), Some(expected));
     }
 }

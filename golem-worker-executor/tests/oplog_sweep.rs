@@ -47,7 +47,7 @@ const SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Rows the ephemeral compressed layers hold for one agent, read from the executor's
 /// indexed-storage database directly.
-async fn ephemeral_layer_rows(
+pub(super) async fn ephemeral_layer_rows(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     agent_id: &AgentId,
