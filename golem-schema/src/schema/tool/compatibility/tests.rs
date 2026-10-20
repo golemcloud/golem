@@ -1,3 +1,5 @@
+use super::compiler::{compile_plan, dynamic_plan};
+use super::equality::strictly_equal;
 use super::*;
 use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::NamedFieldType;

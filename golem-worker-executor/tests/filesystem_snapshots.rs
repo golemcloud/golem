@@ -21,11 +21,11 @@ use anyhow::{Context as _, anyhow};
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
     MultipartPartData, OplogEntry, OplogPayload, PublicOplogEntry, PublicSnapshotData,
 };
-use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId,
 };

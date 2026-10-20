@@ -572,35 +572,35 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // worker
             (
                 "AgentFileSystemNode",
-                "golem_common::model::worker::AgentFileSystemNode",
+                "golem_common::model::agent::AgentFileSystemNode",
             ),
             (
                 "AgentFileSystemNodeKind",
-                "golem_common::model::worker::AgentFileSystemNodeKind",
+                "golem_common::model::agent::AgentFileSystemNodeKind",
             ),
             (
                 "TypedAgentConfigEntry",
-                "golem_common::model::worker::TypedAgentConfigEntry",
+                "golem_common::model::agent::TypedAgentConfigEntry",
             ),
             (
                 "RevertWorkerTarget",
-                "golem_common::model::worker::RevertWorkerTarget",
+                "golem_common::model::agent::RevertWorkerTarget",
             ),
             (
                 "AgentCreationRequest",
-                "golem_common::model::worker::AgentCreationRequest",
+                "golem_common::model::agent::AgentCreationRequest",
             ),
             (
                 "AgentConfigEntryDto",
-                "golem_common::model::worker::AgentConfigEntryDto",
+                "golem_common::model::agent::AgentConfigEntryDto",
             ),
             (
                 "AgentMetadataDto",
-                "golem_common::model::worker::AgentMetadataDto",
+                "golem_common::model::agent::AgentMetadataDto",
             ),
             (
                 "AgentUpdateMode",
-                "golem_common::model::worker::AgentUpdateMode",
+                "golem_common::model::agent::AgentUpdateMode",
             ),
             (
                 "SerializableToolRpcError",

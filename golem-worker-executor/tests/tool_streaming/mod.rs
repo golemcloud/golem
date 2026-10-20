@@ -298,7 +298,7 @@ async fn run_single_store_http_probe(
     prefix: SingleStoreProbePrefix,
     gate: SingleStoreProbeGate,
 ) -> anyhow::Result<()> {
-    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+    use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
 
     let _single_store_probe_permit = SINGLE_STORE_PROBE_PERMIT
         .acquire()
@@ -5371,8 +5371,8 @@ async fn native_tool_config_uses_owner_binding_without_host_privilege(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent_config::CanonicalAgentConfigPath;
-    use golem_common::model::worker::AgentConfigEntryDto;
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -8367,10 +8367,10 @@ async fn retained_tool_output_fork(
 ) -> anyhow::Result<()> {
     use crate::fork::start_with_local_resume_and;
     use golem_common::model::AgentId;
+    use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
     use golem_common::model::durable_stream::StreamConsumerObservation;
     use golem_common::model::oplog::attachment::ToolAttachmentReadObservation;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
-    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -9487,7 +9487,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         );
     }
     for (cut, retained_controls) in [(first_control, 1), (end, 0)] {
-        use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+        use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
         let before_repair = executor.stored_oplog(&overflow_worker).await.len();
         executor
             .revert(

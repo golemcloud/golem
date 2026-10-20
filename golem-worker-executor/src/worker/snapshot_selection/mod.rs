@@ -754,3 +754,138 @@ pub(crate) fn names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapsho
 
 #[cfg(test)]
 mod tests;
+
+use crate::worker::*;
+
+impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Whether this executor restores filesystem snapshots.
+    pub(in crate::worker) fn filesystem_snapshots_enabled(&self) -> bool {
+        self.agent_filesystem_snapshots().is_enabled()
+    }
+    /// The selection of a start of `status` under the exclusions that this incarnation holds in
+    /// memory now. It reads no storage, so it does not see the rejections that another executor
+    /// stored since the last [`Worker::select_start`]. A start selects with
+    /// [`Worker::select_start`].
+    pub(in crate::worker) fn selection_in_memory(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> StartSelection {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.read_exclusions(|exclusions| StartSelection::of(status, exclusions, enabled))
+    }
+    /// Selects the start of `status`, as [`Worker::decide_start`] does, without the decision on
+    /// the head of the queue.
+    pub(in crate::worker) async fn select_start(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> Result<StartSelection, WorkerExecutorError> {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.with_persisted_exclusions(status, |exclusions| {
+            StartSelection::of(status, exclusions, enabled)
+        })
+        .await
+    }
+    /// Decides the start of `status`, as [`snapshot_selection::decide_start`] does, under the
+    /// exclusions of the agent with the rejected entries that storage keeps for the incarnation.
+    pub(in crate::worker) async fn decide_start(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> Result<StartDecision, WorkerExecutorError> {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.with_persisted_exclusions(status, |exclusions| {
+            snapshot_selection::decide_start(status, exclusions, enabled)
+        })
+        .await
+    }
+    /// Decides the start of `status` as [`Worker::decide_start`] does, under the exclusions that
+    /// this incarnation holds in memory, without a read of storage. A start decides with it again
+    /// after it wrote a strategy entry: its first decision already added the stored rejections.
+    pub(in crate::worker) fn decide_start_in_memory(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> StartDecision {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.read_exclusions(|exclusions| {
+            snapshot_selection::decide_start(status, exclusions, enabled)
+        })
+    }
+    /// Loads the rejected entries that storage keeps for the incarnation, adds them to the
+    /// exclusions of the agent for a start of `status`, and gives `read` of the exclusions.
+    pub(in crate::worker) async fn with_persisted_exclusions<T>(
+        &self,
+        status: &AgentStatusRecord,
+        read: impl FnOnce(&SnapshotExclusions) -> T,
+    ) -> Result<T, WorkerExecutorError> {
+        let persisted = self
+            .worker_service()
+            .get_rejected_periodic_snapshots(
+                &self.owned_agent_id,
+                self.initial_worker_metadata.fingerprint,
+            )
+            .await?;
+        Ok(self.update_exclusions(
+            |exclusions| exclusions.with_persisted(persisted, status),
+            read,
+        ))
+    }
+    /// Settles the exclusions after the agent prepared with success: it stores the rejected
+    /// entries for the incarnation, when there are any, and ends the skips of unavailable
+    /// entries.
+    pub(crate) async fn settle_exclusions_after_prepare(&self) -> Result<(), WorkerExecutorError> {
+        if let Some(rejected) = self.read_exclusions(SnapshotExclusions::persisted_rejections) {
+            let status = self.get_last_known_status().await;
+            self.worker_service()
+                .reject_periodic_snapshots(
+                    &self.owned_agent_id,
+                    self.initial_worker_metadata.fingerprint,
+                    &status,
+                    &rejected,
+                )
+                .await?;
+        }
+        self.clear_unavailable_periodic();
+        Ok(())
+    }
+    /// Rejects the automatic snapshot entry at `index` for the starts of this incarnation: its
+    /// application snapshot did not load, or the replay after it diverged.
+    pub(crate) fn reject_periodic(&self, index: OplogIndex) {
+        let status = self.last_known_status.load();
+        self.update_exclusions(|exclusions| exclusions.rejecting(index, &status), |_| ());
+    }
+    /// Skips the automatic snapshot entry at `index` until a start prepares the agent with
+    /// success, or until a new startup attempt begins: its payload or its filesystem snapshot
+    /// could not be read.
+    pub(crate) fn mark_periodic_unavailable(&self, index: OplogIndex) {
+        self.update_exclusions(|exclusions| exclusions.with_unavailable(index), |_| ());
+    }
+    /// Ends the skips of unavailable automatic snapshot entries.
+    pub(in crate::worker) fn clear_unavailable_periodic(&self) {
+        self.update_exclusions(SnapshotExclusions::without_unavailable, |_| ());
+    }
+    /// Gives what `read` gives for the exclusions of the agent now, under their lock.
+    pub(in crate::worker) fn read_exclusions<T>(
+        &self,
+        read: impl FnOnce(&SnapshotExclusions) -> T,
+    ) -> T {
+        read(
+            &self
+                .snapshot_exclusions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+    /// Replaces the exclusions of the agent with what `next` gives for them, and gives what
+    /// `read` gives for the new exclusions, both under one hold of their lock.
+    pub(in crate::worker) fn update_exclusions<T>(
+        &self,
+        next: impl FnOnce(SnapshotExclusions) -> SnapshotExclusions,
+        read: impl FnOnce(&SnapshotExclusions) -> T,
+    ) -> T {
+        let mut exclusions = self
+            .snapshot_exclusions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *exclusions = next(std::mem::take(&mut *exclusions));
+        read(&exclusions)
+    }
+}

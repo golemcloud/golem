@@ -24,6 +24,7 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
 use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
@@ -32,7 +33,6 @@ use golem_common::model::component::{
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
-use golem_common::model::worker::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;

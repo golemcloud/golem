@@ -14,6 +14,15 @@
 
 #[macro_export]
 macro_rules! oplog_entry {
+    (@metadata ($d:tt); $($entries:tt)*) => {
+        /// Supplies the declared oplog variants and fields to a concrete adapter.
+        #[macro_export]
+        macro_rules! oplog_entry_metadata {
+            ($d callback:ident; $d($d context:tt)*) => {
+                $d callback! { [$($entries)*] $d($d context)* }
+            };
+        }
+    };
     (
         $($(#[$casemeta:meta])* $case:ident {
           hint: $hint:literal
@@ -27,6 +36,15 @@ macro_rules! oplog_entry {
           }
       }),* $(,)?
     ) => {
+        $crate::oplog_entry!(@metadata ($);
+            $($case {
+                wit_raw_type: $wit_raw_type
+                wit_public_type: $wit_public_type
+                raw { $($field: $typ),* }
+                public { $($pubfield: $pubtyp),* }
+            })*
+        );
+
         #[cfg(feature = "full")]
         #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
         pub enum OplogEntry {

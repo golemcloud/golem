@@ -16,7 +16,7 @@ use super::TestContext;
 use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
-use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};

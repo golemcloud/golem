@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::TypedAgentConfigEntry;
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::durable_stream::{
     AttachmentId, AttemptId, SessionStreamRole, StreamExportForkInitializedRecord,
@@ -21,7 +22,6 @@ use crate::model::durable_stream::{
 };
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
-use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
     AgentStatus, AgentStatusRecord, ComponentId, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,

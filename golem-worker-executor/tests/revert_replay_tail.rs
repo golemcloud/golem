@@ -14,10 +14,10 @@
 
 use crate::Tracing;
 use async_trait::async_trait;
+use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::card::{CardId, StoredCard, parse_polymorphic_permission};
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::oplog::payload::HostRequestGolemApiRevertAgent;
-use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::schema::FromSchema;
 use golem_common::{agent_id, data_value};

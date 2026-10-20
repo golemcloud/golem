@@ -323,3 +323,186 @@ async fn wait_for_result<T: Clone>(
 
 #[cfg(test)]
 mod tests;
+
+use crate::worker::*;
+
+impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
+        Arc::new(WorkerDurableStreamConsumerJournal {
+            state_actor: self.state_actor.clone(),
+            status: self.last_known_status.clone(),
+            worker_service: self.worker_service(),
+            owner: self.owned_agent_id.clone(),
+            mode: self.agent_mode(),
+            fingerprint: self.initial_worker_metadata.fingerprint,
+        })
+    }
+    pub(crate) async fn durable_stream_producer(
+        &self,
+    ) -> Result<Arc<DurableStreamStore>, WorkerExecutorError> {
+        self.load_durable_stream_producer()
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+    }
+    /// Fences an idle producer before cache eviction; admitted mutations keep the owner resident.
+    pub fn try_retire_durable_stream_producer(&self) -> bool {
+        self.durable_stream_producer.try_retire_quiescent()
+    }
+    pub(crate) fn retire_durable_stream_producer(
+        &self,
+    ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static {
+        let retirement = self
+            .durable_stream_producer
+            .retire(self.durable_stream_commit());
+        async move {
+            retirement
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+        }
+    }
+    pub(in crate::worker) async fn durable_stream_producer_for(
+        &self,
+        data: &ResolvedWorkerData<Ctx>,
+    ) -> Result<Arc<DurableStreamStore>, WorkerExecutorError> {
+        let commit = Self::durable_stream_commit_for(data);
+        let oplog = data.oplog.clone();
+        let owner = self.owned_agent_id.clone();
+        let fingerprint = data.initial_worker_metadata.fingerprint;
+        let capacity = self
+            .deps
+            .config()
+            .limits
+            .live_stream_event_broadcast_capacity
+            .get();
+        let service = self.worker_service();
+        let mode = data.initial_worker_metadata.agent_mode;
+        let tasks = data.tasks.clone();
+        let published_horizon = Self::durable_stream_published_horizon_for(data);
+        data.durable_stream_producer
+            .get_or_load(commit.clone(), move || async move {
+                let producer = DurableStreamStore::load_indexed_with_commit(
+                    oplog,
+                    owner,
+                    fingerprint,
+                    Some(capacity),
+                    commit,
+                    service,
+                    mode,
+                )
+                .await?;
+                producer.set_worker_tasks(tasks);
+                producer.set_published_horizon(published_horizon);
+                Ok(producer)
+            })
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+    }
+    pub(in crate::worker) fn durable_stream_commit_for(
+        data: &ResolvedWorkerData<Ctx>,
+    ) -> DurableStreamCommit {
+        let state_actor = data.state_actor.clone();
+        Arc::new(move |committed| {
+            let state_actor = state_actor.clone();
+            Box::pin(async move {
+                // Refusals reach the producer through the receipt; publication and retirement
+                // remain owned by the actor even if this producer disappears.
+                let _ = if let Some(committed) = committed {
+                    state_actor
+                        .commit_and_update_state_notifying(
+                            CommitLevel::Always,
+                            state_actor::CommitReceipt::Refusable(committed),
+                        )
+                        .await
+                } else {
+                    state_actor
+                        .commit_and_update_state(CommitLevel::Always)
+                        .await
+                };
+            })
+        })
+    }
+    /// The status task publishes a durable agent's status only after it folds a successful commit
+    /// that flushed every entry through the status index. An ephemeral agent's weaker commit levels
+    /// fold without reaching storage, and a detached status is not a fold of the oplog.
+    pub(in crate::worker) fn durable_stream_published_horizon_for(
+        data: &ResolvedWorkerData<Ctx>,
+    ) -> DurableStreamPublishedHorizon {
+        let durable = data.initial_worker_metadata.agent_mode == AgentMode::Durable;
+        let status = data.last_known_status.clone();
+        let detached = data.last_known_status_detached.clone();
+        Arc::new(move || {
+            (durable && !detached.load(Ordering::Acquire)).then(|| status.load().oplog_idx)
+        })
+    }
+    pub(in crate::worker) fn durable_stream_commit(&self) -> DurableStreamCommit {
+        Self::durable_stream_commit_for(self)
+    }
+    pub(in crate::worker) async fn load_durable_stream_producer(
+        &self,
+    ) -> Result<Arc<DurableStreamStore>, crate::durable_host::durable_stream::StreamStoreError>
+    {
+        let data: &ResolvedWorkerData<Ctx> = self;
+        let commit = Self::durable_stream_commit_for(data);
+        let oplog = data.oplog.clone();
+        let owner = self.owned_agent_id.clone();
+        let fingerprint = data.initial_worker_metadata.fingerprint;
+        let capacity = self
+            .deps
+            .config()
+            .limits
+            .live_stream_event_broadcast_capacity
+            .get();
+        let service = self.worker_service();
+        let mode = data.initial_worker_metadata.agent_mode;
+        let tasks = data.tasks.clone();
+        let published_horizon = Self::durable_stream_published_horizon_for(data);
+        data.durable_stream_producer
+            .get_or_load(commit.clone(), move || async move {
+                let producer = DurableStreamStore::load_indexed_with_commit(
+                    oplog,
+                    owner,
+                    fingerprint,
+                    Some(capacity),
+                    commit,
+                    service,
+                    mode,
+                )
+                .await?;
+                producer.set_worker_tasks(tasks);
+                producer.set_published_horizon(published_horizon);
+                Ok(producer)
+            })
+            .await
+    }
+}
+
+#[async_trait::async_trait]
+impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsumerJournal<Ctx> {
+    #[tracing::instrument(name = "durable_stream.consumer.commit", level = "debug", skip_all)]
+    async fn commit(&self) -> Result<(), SessionError> {
+        self.state_actor
+            .commit_and_update_state(CommitLevel::Always)
+            .await
+            .map_err(|refusal| SessionError::from(OplogError::from(refusal)))?;
+        Ok(())
+    }
+
+    async fn committed_finished_index(
+        &self,
+        session: &StreamSessionKey,
+    ) -> Result<Option<OplogIndex>, SessionError> {
+        let status = self.status.load_full();
+        self.worker_service
+            .lookup_durable_stream_session(
+                &self.owner,
+                self.mode,
+                self.fingerprint,
+                &status,
+                &session.idempotency_key,
+            )
+            .await
+            .map(|session| session.and_then(|session| session.finished))
+    }
+}
+
+pub(in crate::worker) mod attachments;

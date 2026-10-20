@@ -41,6 +41,9 @@ use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
+};
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
@@ -51,9 +54,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::tool::{ToolBindingInput, ToolName};
-use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
-};
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::AgentTypeSchema;

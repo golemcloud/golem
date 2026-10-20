@@ -1,7 +1,7 @@
 # RPC suspension and admission
 
 Owned async RPC tasks register an activity when dispatched, including the interval before their
-result is consumed (`durable_host/wasm_rpc/mod.rs::spawn_rpc_task_with_retry` and accessor result
+result is consumed (`durable_host/rpc/mod.rs::spawn_rpc_task_with_retry` and accessor result
 waits). After `rpc_suspend_after` (default 30s), that activity may permit automatic suspension,
 but only through the shared `OwnerSuspension` authority (`worker/suspension.rs`). Borrowed
 synchronous RPC and preparation remain unclassified vetoes: raw sync RPC does not auto-suspend.

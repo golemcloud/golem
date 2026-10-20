@@ -275,7 +275,7 @@ async fn guest_span_reconstructs_completed_and_incomplete_operations(
     #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+    use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
 
     for cut in 0..7 {
         let context = TestContext::new(last_unique_id);

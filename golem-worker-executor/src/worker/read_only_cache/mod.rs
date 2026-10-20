@@ -257,3 +257,156 @@ pub fn build_read_only_cache_key(
 
 #[cfg(test)]
 mod tests;
+
+use crate::worker::*;
+
+impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Extracts the read-only context for `invocation` by looking up the
+    /// method's `read_only` config on the currently-loaded component
+    /// metadata. Returns `None` for non-`AgentMethod` invocations and for
+    /// methods that are not declared `#[read_only]`.
+    pub(in crate::worker) fn read_only_context_for(
+        &self,
+        invocation: &AgentInvocation,
+    ) -> Option<ReadOnlyContext> {
+        let AgentInvocation::AgentMethod {
+            method_name,
+            input,
+            principal,
+            scope_card,
+            ..
+        } = invocation
+        else {
+            return None;
+        };
+
+        let snapshot = self.current_component.load();
+        let component_revision = snapshot.revision;
+        let metadata = &snapshot.metadata;
+        let agent_type_opt = self.parsed_agent_id.as_ref().map(|p| p.agent_type.clone());
+
+        let agent_type = agent_type_opt.as_ref()?;
+        let method = read_only_cache::resolve_read_only_method(metadata, agent_type, method_name)?;
+        let cfg = method.read_only.as_ref()?;
+
+        Some(ReadOnlyContext {
+            method_name: method_name.clone(),
+            input: input.clone(),
+            principal: principal.clone(),
+            cfg: cfg.clone(),
+            component_revision,
+            cacheable: scope_card.is_none(),
+        })
+    }
+    /// Bumps the read-only cache epoch, lazily invalidating all cached entries
+    /// (the epoch is part of the cache key). Called from
+    /// `DurableWorkerCtx::on_agent_invocation_success` immediately after a
+    /// mutating invocation's `AgentInvocationFinished` is committed, so a
+    /// cached read-only result keeps serving while the mutation is queued /
+    /// running. Also called from
+    /// `enqueue_update`/`revert` where the change is effectively in flight.
+    pub(crate) fn bump_read_only_cache_epoch(&self) {
+        self.read_only_cache_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+    /// Classifies a just-completed `AgentMethod` invocation by `method_name`
+    /// against the worker's in-memory component snapshot.
+    ///
+    /// Returns `true` for any invocation that should invalidate cached
+    /// read-only results: a non-read-only method, an unknown method (safe
+    /// default), or an `AgentMethod` on a worker with no `parsed_agent_id`.
+    /// Returns `false` only when the method is explicitly `read_only`.
+    ///
+    /// Used by `DurableWorkerCtx::on_agent_invocation_success` to decide
+    /// whether to bump the read-only cache epoch on successful completion
+    pub fn agent_method_invalidates_read_only_cache(&self, method_name: &str) -> bool {
+        let snapshot = self.current_component.load();
+        let metadata = &snapshot.metadata;
+        let Some(parsed) = self.parsed_agent_id.as_ref() else {
+            return true;
+        };
+        match read_only_cache::resolve_read_only_method(metadata, &parsed.agent_type, method_name) {
+            Some(method) => method.read_only.is_none(),
+            None => true,
+        }
+    }
+}
+
+/// Inserts `output` into the cache under `epoch`, which must be the value
+/// captured at enqueue (see
+/// [`Worker::enqueue_worker_invocation_with_effect`]).
+///
+/// Performs a final epoch recheck against `read_only_cache_epoch` before
+/// inserting and drops the populate if a mutating invocation has completed
+/// in the meantime. This is the populate-time guard
+/// for the "epoch is bumped on mutating completion, not enqueue" semantics.
+///
+/// Free function so the observer task does not pin the worker.
+pub(in crate::worker) async fn populate_read_only_cache(
+    cache: &golem_common::cache::Cache<
+        read_only_cache::ReadOnlyCacheKey,
+        read_only_cache::PendingReadOnlyCacheEntry,
+        Arc<read_only_cache::ReadOnlyCacheEntry>,
+        WorkerExecutorError,
+    >,
+    read_only_cache_epoch: &AtomicU64,
+    ro: &ReadOnlyContext,
+    epoch: u64,
+    output: AgentInvocationOutput,
+) {
+    // Stale-populate guard: if a mutating invocation has completed (and bumped
+    // the epoch) between the read-only enqueue and now, do not store this
+    // result. It would otherwise sit under the pre-mutation epoch and be
+    // unreachable, but storing it would still let a future epoch wrap hit it
+    // (defensive).
+    if read_only_cache_epoch.load(Ordering::SeqCst) != epoch {
+        return;
+    }
+
+    let principal_ref = if ro.cfg.uses_principal {
+        Some(&ro.principal)
+    } else {
+        None
+    };
+    let key = read_only_cache::build_read_only_cache_key(
+        &ro.method_name,
+        &ro.input,
+        principal_ref,
+        ro.component_revision,
+        epoch,
+    );
+    let entry = build_read_only_cache_entry(ro, output);
+    // First-writer-wins.
+    let _ = cache
+        .get_or_insert(
+            &key,
+            || read_only_cache::PendingReadOnlyCacheEntry::Immediate,
+            async move |_| Ok::<_, WorkerExecutorError>(entry),
+        )
+        .await;
+}
+
+/// Builds a [`ReadOnlyCacheEntry`] for the given [`AgentInvocationOutput`]
+/// using `ro.cfg.cache_policy` to derive the optional TTL expiry. Shared by
+/// the detached observer (see [`populate_read_only_cache`]) and the
+/// `invoke_and_await` coalescing path so both produce identical entries.
+pub(in crate::worker) fn build_read_only_cache_entry(
+    ro: &ReadOnlyContext,
+    output: AgentInvocationOutput,
+) -> Arc<read_only_cache::ReadOnlyCacheEntry> {
+    let expires_at = match &ro.cfg.cache_policy {
+        CachePolicy::Ttl(ttl) => {
+            tokio::time::Instant::now().checked_add(Duration::from_nanos(ttl.duration_nanos))
+        }
+        CachePolicy::UntilWrite(_) | CachePolicy::NoCache(_) => None,
+    };
+    Arc::new(read_only_cache::ReadOnlyCacheEntry { output, expires_at })
+}
+
+/// `Ttl(0)` is folded in as it is equivalent to `NoCache`.
+pub(in crate::worker) fn is_no_cache(policy: &CachePolicy) -> bool {
+    match policy {
+        CachePolicy::NoCache(_) => true,
+        CachePolicy::Ttl(ttl) => ttl.duration_nanos == 0,
+        CachePolicy::UntilWrite(_) => false,
+    }
+}

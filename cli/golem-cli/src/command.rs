@@ -1592,9 +1592,9 @@ pub mod worker {
     use clap::{Subcommand, ValueEnum};
     use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
+    use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use golem_common::model::worker::AgentConfigEntryDto;
     use uuid::Uuid;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

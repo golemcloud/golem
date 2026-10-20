@@ -32,12 +32,12 @@ use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentStatusRecord;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
     RetryConfig, ScheduleId, ScheduledAction, ShardAssignment, ShardEpoch, ShardId,

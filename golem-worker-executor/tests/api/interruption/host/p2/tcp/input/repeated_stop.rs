@@ -1,6 +1,5 @@
 use super::*;
 use golem_common::model::Timestamp;
-use test_r::test;
 
 macro_rules! repeated_stop_case {
     ($name:ident, $mode:ident, $user_stop:expr) => {

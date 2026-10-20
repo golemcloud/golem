@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use std::io::Write;
 use test_r::test;
 
 #[test]
@@ -3365,7 +3366,7 @@ fn deferred_followed_permissions_preserve_raw_terminal_errno() {
     );
     assert!(error.is_terminal_failure());
 
-    let source = include_str!("mod.rs");
+    let source = include_str!("namespace.rs");
     assert!(source.contains(concat!("raw_os_error: error.", "raw_os_error()")));
     assert!(source.contains(concat!("std::io::Error::from_", "raw_os_error")));
 }
@@ -3749,7 +3750,7 @@ async fn following_a_symlink_loop_fails_and_a_dangling_symlink_is_not_read_only(
 
 #[test]
 fn namespace_resolution_final_identity_probe_is_metadata_only() {
-    let source = include_str!("mod.rs");
+    let source = include_str!("namespace.rs");
     let resolver = source
         .split_once("fn resolve_host_namespace_target(")
         .unwrap()

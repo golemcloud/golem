@@ -26,11 +26,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::StreamExt;
 use golem_common::model::RetryConfig;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, IdempotencyKey, OwnedAgentId, ScheduleId, ScheduledAction,
     ShardId,

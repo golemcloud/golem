@@ -21,11 +21,11 @@ use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentInvocationOutput, InvocationStatus, OwnedAgentId,
 };

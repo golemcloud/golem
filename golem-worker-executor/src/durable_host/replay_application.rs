@@ -419,3 +419,55 @@ pub(super) fn apply<Ctx: WorkerCtx>(
     ctx.state.replay_applications.pop_front();
     true
 }
+
+mod context {
+    use crate::durable_host::*;
+
+    impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+        pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
+            loop {
+                replay_application::reserve(self)?;
+                let Some(application) = self.state.replay_applications.front().cloned() else {
+                    if let Some(entity) = &self.state.entity_replay_wallet {
+                        let generation = entity.receipt().result.await?.wallet.generation;
+                        self.state.wallet_generation = self.state.wallet_generation.max(generation);
+                    }
+                    return Ok(());
+                };
+                let prepared = application.result.clone().await?;
+                replay_application::apply(self, &application, &prepared);
+            }
+        }
+
+        pub(in crate::durable_host) async fn check_post_replay_wallet_liveness(
+            &mut self,
+        ) -> Result<(), WorkerExecutorError> {
+            let interested_card_ids = self.interested_card_ids();
+            if interested_card_ids.is_empty() || !self.state.card_interest_index.authority_is_open()
+            {
+                return Ok(());
+            }
+            let card_states = self
+                .state
+                .card_service
+                .check_cards(interested_card_ids)
+                .await?;
+            self.state.invocation_scope_root_cards = live_scope_root_cards_from_states(
+                self.state.invocation_scope_card.as_ref(),
+                &card_states,
+            )?;
+            let revoked_card_ids = card_states
+                .into_iter()
+                .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
+                .collect::<Vec<_>>();
+            if !revoked_card_ids.is_empty() {
+                self.state.authority_initialized = false;
+            }
+            self.public_state
+                .worker()
+                .queue_card_revocations_locked(&revoked_card_ids)
+                .await?;
+            Ok(())
+        }
+    }
+}

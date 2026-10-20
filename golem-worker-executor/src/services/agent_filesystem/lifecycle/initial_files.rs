@@ -1188,6 +1188,230 @@ pub(super) fn declaration_view<'a>(
         .collect()
 }
 
+/// The error of a failed load of the initial-file source that an install or a start seeds at
+/// `path`: [`Error::InitialFileUnavailable`] when a later load can pass,
+/// [`Error::InitialFileRefused`] when the blob storage refuses the executor, and
+/// [`Error::Sandbox`] for every other failure.
+pub(super) fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
+    let failure = error.failure;
+    let source = FilesystemStorageError::io(
+        "load verified initial-file source",
+        path,
+        std::io::Error::other(error),
+    );
+    match failure {
+        InitialFileLoadFailure::Unavailable => Error::InitialFileUnavailable(source),
+        InitialFileLoadFailure::Refused(refusal) => Error::InitialFileRefused { refusal, source },
+        InitialFileLoadFailure::Failed => Error::Sandbox(source),
+    }
+}
+
+/// Validates initial-file targets and resolves their verified content sources before materialization.
+///
+/// Worker startup calls this before materialization. Targets are relative to the agent filesystem
+/// root and must be unique; duplicate targets, inconsistent sizes for one content hash, and loader
+/// failures return `Error::Sandbox` without changing the filesystem lifecycle.
+pub(crate) async fn prepare_initial_files(
+    file_loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    files: &[InitialAgentFile],
+) -> Result<PreparedInitialFiles, Error> {
+    let mut targets = HashSet::new();
+    for file in files {
+        let target = PathBuf::from(file.path.to_rel_string());
+        if !targets.insert(target.clone()) {
+            return Err(Error::Sandbox(FilesystemStorageError::verification(
+                "prepare unique initial-file target",
+                &target,
+            )));
+        }
+    }
+
+    let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
+    let mut prepared = Vec::with_capacity(files.len());
+    for file in files {
+        let target = PathBuf::from(file.path.to_rel_string());
+        let source = match sources.get(&file.content_hash) {
+            Some(source) if source.size() == file.size => source.clone(),
+            Some(_) => {
+                return Err(Error::Sandbox(FilesystemStorageError::verification(
+                    "verify consistent initial-file source size",
+                    &target,
+                )));
+            }
+            None => {
+                let source = file_loader
+                    .get_source(environment_id, file.content_hash, file.size)
+                    .await
+                    .map_err(|error| load_error(error, &target))?;
+                sources
+                    .entry(file.content_hash)
+                    .or_insert_with(|| source.clone())
+                    .clone()
+            }
+        };
+        prepared.push(PreparedInitialFile {
+            source: source.clone(),
+            target,
+            initial_file: file.clone(),
+        });
+    }
+    Ok(PreparedInitialFiles {
+        files: prepared,
+        loader: file_loader,
+        environment_id,
+    })
+}
+
+/// Starts to check whether `target`, the object that a stat at the generation-relative `path`
+/// reads, is the read-only initial file of the declaration at `path`.
+///
+/// Gives `None`, and reads nothing, when no component or entity-provisioned declaration at `path`
+/// is read-only. Otherwise the call gives whether the object is Golem's file: a regular file
+/// without write permission whose content equals the declaration. The object that an install put
+/// at `path` passes without a read of its content (`InstalledFile`). Any other object passes only
+/// when it is the object at `path` and its content has the declared hash. Nothing at `target`
+/// gives `false`.
+///
+/// The agent can delete and rename a read-only initial file and put its own file at `path`, so
+/// the declaration alone does not tell what is there. The answer reads only the tree and the
+/// declarations, so a replay gives the answer of the live call. Host adapters use this check when
+/// they decide whether volatile file timestamps can be removed and the remaining metadata derived
+/// without an oplog entry.
+pub(crate) fn is_immutable_initial_file<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    path: &std::path::Path,
+    target: Target<'_>,
+) -> Result<Option<FilesystemCall<bool>>, AccessError> {
+    let generation = admit(generation_handle)?;
+    let state = generation.initial_files.lock().unwrap().clone();
+    let Some(declared) = [&state.initial, &state.provisioned]
+        .into_iter()
+        .filter_map(|declarations| declarations.get(path))
+        .find(|file| file.permissions == AgentFilePermissions::ReadOnly)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let installed = state.installed.get(path).cloned();
+    let target = sandbox_target(&generation, target)?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let path: Box<Path> = path.into();
+    Ok(Some(FilesystemCall::new(lease, async move {
+        let sandbox = generation.sandbox.read().await;
+        let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
+        holds_golems_file(
+            sandbox.as_ref(),
+            &path,
+            &declared,
+            installed.as_ref(),
+            target,
+        )
+        .await
+        .map_err(|source| classify_query_error(&generation, source))
+    })))
+}
+
+/// Tells whether `target` is the initial file of `declared` at the root-relative `path`
+/// (`is_immutable_initial_file`). Nothing at `target`, or a file above it, gives `false`.
+async fn holds_golems_file<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+    declared: &InitialAgentFile,
+    installed: Option<&initial_files::InstalledFile>,
+    target: AttributeTarget,
+) -> Result<bool, FilesystemStorageError> {
+    let attributes = match read_sandbox_attributes(sandbox, target).await {
+        Ok(attributes) => attributes,
+        Err(error)
+            if matches!(
+                error.io_kind(),
+                Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory)
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    match initial_files::initial_file_match(declared, installed, &attributes) {
+        initial_files::InitialFileMatch::Differs => Ok(false),
+        initial_files::InitialFileMatch::Matches => Ok(true),
+        // The content is read at `path`, so it tells about `target` only when `target` is the
+        // object at `path`.
+        initial_files::InitialFileMatch::MatchesIfContentHash(expected) => {
+            let at_path = initial_files::read_path(sandbox, path).await?;
+            if at_path.is_some_and(|at_path| at_path.object == attributes.object) {
+                initial_files::content_hash(sandbox, path)
+                    .await
+                    .map(|hash| hash == *expected)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// Adds activation-provisioned files to an active owner filesystem.
+///
+/// Entity Stores call this inside their owner invocation scope before guest execution. Identical
+/// declarations are idempotent, while a path already owned by another initial-file declaration
+/// must describe the same file. Provisioned declarations remain part of the generation across
+/// component initial-file updates. The new files follow the initial-file rule, as in
+/// [`update_initial_files`].
+pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    file_loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    files: Vec<InitialAgentFile>,
+) -> Result<FilesystemCall<()>, Error> {
+    let generation = admit(generation_handle).map_err(Error::Access)?;
+    let lease = generation
+        .registry
+        .lease_call(CallEffect::Installs)
+        .map_err(Error::Access)?;
+    Ok(FilesystemCall::new(lease, async move {
+        initial_files::provision(
+            &generation,
+            InitialFileSources::new(file_loader, environment_id),
+            files,
+        )
+        .await
+    }))
+}
+
+/// Starts to apply the initial files of a new component revision to a generation.
+///
+/// Update handling calls this through a valid generation handle. The call applies the initial-file
+/// rule from the current declarations to the declarations of the new revision and the provisioned
+/// declarations. At a path whose declaration changes, the call expects the initial file of the
+/// current declaration where the current declarations have the path, and nothing where they do
+/// not. It puts the new file there, or removes the initial file of the current declaration. An
+/// empty path that the new declarations do not have stays empty. Anything else at such a path is a
+/// conflict. A conflict fails the call with an [`Error::InitialFileConflict`] that names the path
+/// and what is at it, and changes nothing. A failure after the plan passes and the sources load
+/// invalidates the generation. Admission errors are immediate, and loading or sandbox failures are
+/// produced by the returned call.
+pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    file_loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    files: Vec<InitialAgentFile>,
+) -> Result<FilesystemCall<()>, Error> {
+    let generation = admit(generation_handle).map_err(Error::Access)?;
+    let lease = generation
+        .registry
+        .lease_call(CallEffect::Installs)
+        .map_err(Error::Access)?;
+    Ok(FilesystemCall::new(lease, async move {
+        initial_files::update(
+            &generation,
+            InitialFileSources::new(file_loader, environment_id),
+            files,
+        )
+        .await
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

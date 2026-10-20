@@ -1110,3 +1110,323 @@ pub(crate) fn reverted_snapshot_names(
 
 #[cfg(test)]
 mod tests;
+
+use crate::worker::*;
+
+impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Writes the confirmation record of the filesystem snapshot `name` as `who`, when
+    /// [`filesystem_snapshots::owner_gate`] lets it: it reads the detached flag without a lock,
+    /// takes the owned instance lock, applies the gate, and sends one status job that carries the
+    /// guard. A confirmation of the running instance that gives `Confirmed` records the name in
+    /// the slot of the instance under the same guard. So a stop waits for at most the status jobs
+    /// already queued plus one confirm transaction. A `Confirmed` answer carries the filesystem
+    /// snapshot names that the agent still uses (`snapshot_selection::names_in_use`), from the
+    /// status that the worker holds after the append returned. A status job that folds an entry after the append, such as the
+    /// `SuccessfulUpdate` of an automatic update, can change those names before the read.
+    pub(crate) async fn confirm_as(
+        self: &Arc<Self>,
+        name: FilesystemSnapshotName,
+        who: filesystem_snapshots::Confirmer,
+    ) -> agent_filesystem_snapshots::Confirmation {
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return agent_filesystem_snapshots::Confirmation::Deferred;
+        }
+        let instance_guard = self.instance.clone().lock_owned().await;
+        let instance = match (&*instance_guard, &who) {
+            (WorkerInstance::Running(running), filesystem_snapshots::Confirmer::Running(mark)) => {
+                filesystem_snapshots::InstanceView::Running {
+                    generation_matches: running.filesystem_snapshot_slot.owns(*mark),
+                }
+            }
+            (WorkerInstance::Running(_), filesystem_snapshots::Confirmer::Start(_)) => {
+                filesystem_snapshots::InstanceView::Running {
+                    generation_matches: false,
+                }
+            }
+            (WorkerInstance::WaitingForPermit(waiting), _) => {
+                filesystem_snapshots::InstanceView::WaitingForPermit(waiting.start_attempt)
+            }
+            _ => filesystem_snapshots::InstanceView::Other,
+        };
+        let gate = filesystem_snapshots::owner_gate(
+            instance,
+            &who,
+            self.interrupt_signal.terminal_pending(),
+            self.last_known_status_detached.load(Ordering::Acquire),
+            self.owner_retirement_requested.is_cancelled(),
+        );
+        // The admission reads the clock and the shard assignment, so it is asked last, and only
+        // when the gate needs it.
+        let owner = filesystem_snapshots::admit_if_needed(gate, || {
+            self.shard_service()
+                .check_admission(&self.owned_agent_id.agent_id)
+                .is_ok()
+        });
+        if !owner {
+            return agent_filesystem_snapshots::Confirmation::Deferred;
+        }
+        let on_confirmed: state_actor::OnConfirmed = match who {
+            filesystem_snapshots::Confirmer::Running(mark) => {
+                let name = name.clone();
+                Box::new(move |instance| {
+                    if let WorkerInstance::Running(running) = instance {
+                        running.filesystem_snapshot_slot.record(Some(&name), mark);
+                    }
+                })
+            }
+            filesystem_snapshots::Confirmer::Start(_) => Box::new(|_| {}),
+        };
+        match self
+            .state_actor
+            .append_confirmation(name, instance_guard, on_confirmed)
+            .await
+        {
+            agent_filesystem_snapshots::ConfirmOutcome::Confirmed => {
+                agent_filesystem_snapshots::Confirmation::Confirmed {
+                    kept: snapshot_selection::names_in_use(&self.last_known_status.load()),
+                }
+            }
+            agent_filesystem_snapshots::ConfirmOutcome::Superseded => {
+                agent_filesystem_snapshots::Confirmation::Superseded
+            }
+            agent_filesystem_snapshots::ConfirmOutcome::Deferred => {
+                agent_filesystem_snapshots::Confirmation::Deferred
+            }
+        }
+    }
+    /// Confirms the filesystem snapshot of the last automatic snapshot record before a start, when
+    /// the start would select that record if it were confirmed.
+    ///
+    /// The service waits for an upload of the snapshot on this executor and asks the store, as
+    /// [`agent_filesystem_snapshots::AgentFilesystemSnapshots::prepare_start`] says. When the store
+    /// holds the whole snapshot, the start writes the confirmation record as the owner of the
+    /// agent: while the instance waits for its permits with this start attempt, no terminal
+    /// interrupt waits, the status is attached, no retirement of the owner is requested, and the
+    /// shard admits the agent. This start holds no slot, no memory and no lock while it waits.
+    pub(in crate::worker) async fn confirm_filesystem_snapshot_before_start(
+        self: &Arc<Self>,
+        start_attempt: Uuid,
+    ) {
+        let status = self.last_known_status.load_full();
+        let Some(name) = self.selection_in_memory(&status).candidate else {
+            return;
+        };
+        let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.initial_worker_metadata.fingerprint,
+        );
+        if self
+            .agent_filesystem_snapshots()
+            .prepare_start(&agent_snapshots, &name, self.terminal_interrupt())
+            .await
+            != agent_filesystem_snapshots::StartCheck::Stored
+        {
+            return;
+        }
+        let outcome = self
+            .confirm_as(name, filesystem_snapshots::Confirmer::Start(start_attempt))
+            .await;
+        debug!(?outcome, "Confirmed a filesystem snapshot before a start");
+    }
+    /// The name of the newest record whose upload a loaded agent waits for before it ends its
+    /// generation to start the automatic update at the head of its queue: the record that the
+    /// update selects once confirmed. `None` when no unselected automatic update is at the head or
+    /// its record is confirmed.
+    pub(crate) fn upload_before_an_update(&self) -> Option<FilesystemSnapshotName> {
+        snapshot_selection::upload_before_an_automatic_update(
+            &self.last_known_status.load(),
+            self.filesystem_snapshots_enabled(),
+            || {
+                self.snapshot_exclusions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            },
+        )
+    }
+    /// Waits, before a loaded agent ends the generation with `mark` to start the automatic update
+    /// at the head of its queue, for the upload of the record `name` that
+    /// [`Self::upload_before_an_update`] gives, as a start of an unloaded agent does before it
+    /// takes its permits. The upload confirms its record as the generation that took it. When the
+    /// store holds the whole snapshot, the generation with `mark` confirms it too, which changes
+    /// nothing when the upload already did. The wait ends at `confirmation_wait` or at a terminal
+    /// interrupt; the invocation loop that awaits the call also ends it at a requested retirement
+    /// or a stop. When no upload of the record runs, the call asks the store once, for at most
+    /// `store_check_limit`.
+    pub(crate) async fn confirm_filesystem_snapshot_before_an_update(
+        self: &Arc<Self>,
+        name: FilesystemSnapshotName,
+        mark: crate::services::agent_filesystem::TreeMark,
+    ) {
+        let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.initial_worker_metadata.fingerprint,
+        );
+        if self
+            .agent_filesystem_snapshots()
+            .prepare_start(&agent_snapshots, &name, self.terminal_interrupt())
+            .await
+            != agent_filesystem_snapshots::StartCheck::Stored
+        {
+            return;
+        }
+        let outcome = self
+            .confirm_as(name, filesystem_snapshots::Confirmer::Running(mark))
+            .await;
+        debug!(
+            ?outcome,
+            "Confirmed a filesystem snapshot before an automatic update"
+        );
+    }
+    /// The baselines of a start now: the periodic record that it selects under the exclusions of
+    /// this incarnation in memory, and the index of the authoritative baseline of the status.
+    pub(crate) fn start_baselines_now(&self) -> filesystem_snapshots::StartBaselines {
+        let status = self.last_known_status.load();
+        let enabled = self.filesystem_snapshots_enabled();
+        filesystem_snapshots::StartBaselines {
+            periodic: self.read_exclusions(|exclusions| {
+                snapshot_selection::periodic_baseline(&status, exclusions, enabled)
+            }),
+            authoritative: status
+                .authoritative_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.index),
+        }
+    }
+}
+
+impl StartFilesystem {
+    /// Plans the baseline of `selection` for a start of `status` with the hydrated pending update
+    /// `head`, as [`filesystem_snapshots::plan_start`] does, and loads what the restore needs: the
+    /// manual-update record, the initial files of its source revision, the restore of the store.
+    pub(in crate::worker) async fn load_and_plan<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        status: &AgentStatusRecord,
+        selection: StartSelection,
+        head: Option<&HydratedUpdate>,
+    ) -> Result<Self, StartFilesystemError> {
+        let manual_name = match &selection.baseline {
+            snapshot_selection::SelectedBaseline::ManualPending { head: pending, .. } => {
+                match head.map(|head| &head.description) {
+                    Some(UpdateDescription::SnapshotBased {
+                        filesystem_snapshot,
+                        ..
+                    }) => filesystem_snapshot.clone(),
+                    _ => {
+                        return Err(StartFilesystemError::Other(WorkerExecutorError::unknown(
+                            format!(
+                                "Expected a snapshot-based PendingUpdate oplog entry at index {}",
+                                pending.oplog_index
+                            ),
+                        )));
+                    }
+                }
+            }
+            snapshot_selection::SelectedBaseline::ManualPromoted { index } => {
+                match parent.oplog.read(*index).await? {
+                    OplogEntry::PendingUpdate {
+                        description:
+                            UpdateDescription::SnapshotBased {
+                                filesystem_snapshot,
+                                ..
+                            },
+                        ..
+                    } => filesystem_snapshot,
+                    other => {
+                        return Err(StartFilesystemError::Other(WorkerExecutorError::unknown(
+                            format!(
+                                "Expected a snapshot-based PendingUpdate oplog entry at index {index}, but found {other:?}"
+                            ),
+                        )));
+                    }
+                }
+            }
+            _ => None,
+        };
+        let snapshots = parent.agent_filesystem_snapshots();
+        let plan = filesystem_snapshots::plan_start(
+            &selection.baseline,
+            manual_name.as_ref(),
+            snapshots.is_enabled(),
+        )
+        .map_err(|_| StartFilesystemError::Disabled)?;
+        let restore = match &plan.source {
+            filesystem_snapshots::TreeSource::InitialFiles => None,
+            filesystem_snapshots::TreeSource::Store(name) => {
+                let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+                    &parent.owned_agent_id,
+                    parent.initial_worker_metadata.fingerprint,
+                );
+                Some(filesystem_snapshots::StartRestore::Store(
+                    snapshots
+                        .restore(&agent_snapshots, name)
+                        .map_err(|_| StartFilesystemError::Disabled)?,
+                ))
+            }
+            filesystem_snapshots::TreeSource::SourceFiles(source) => {
+                let source_revision = match source {
+                    filesystem_snapshots::SourceRevision::Current => status.component_revision,
+                    filesystem_snapshots::SourceRevision::Before(index) => {
+                        RunningWorker::revision_before(parent, status, *index).await?
+                    }
+                };
+                let source_files = RunningWorker::initial_files_of(parent, source_revision)
+                    .await
+                    .map_err(StartFilesystemError::Other)?;
+                crate::services::agent_filesystem::InitialFilesRestore::of_read_only(source_files)
+                    .map(filesystem_snapshots::StartRestore::InitialFiles)
+            }
+        };
+        Ok(Self {
+            selection,
+            plan,
+            restore,
+        })
+    }
+
+    /// The replay inputs of the plan.
+    pub(in crate::worker) fn replay(&self) -> &filesystem_snapshots::ReplayBaseline {
+        &self.plan.replay
+    }
+
+    /// The component revision at the start of the replay.
+    pub(in crate::worker) fn replay_revision(&self) -> ComponentRevision {
+        self.selection.replay_revision
+    }
+
+    /// Materializes the baseline into `reconstructing` with the initial files `prepared`. On
+    /// success it starts the filesystem snapshots of the generation in `slot`, with the mark of
+    /// the tree before any call runs and the named snapshot that it restored, and gives the
+    /// filesystem with the replay inputs of the plan.
+    pub(in crate::worker) async fn materialize(
+        self,
+        reconstructing: ReconstructingFilesystem,
+        prepared: crate::services::agent_filesystem::PreparedInitialFiles,
+        slot: &filesystem_snapshots::SnapshotSlot,
+    ) -> Result<
+        (
+            ReconstructingFilesystem,
+            filesystem_snapshots::ReplayBaseline,
+        ),
+        StartFilesystemFailure,
+    > {
+        let restored = self.plan.restored();
+        let replay = self.plan.replay;
+        match materialize_baseline(reconstructing, prepared, self.restore).await {
+            Ok(reconstructing) => {
+                slot.start(tree_mark(&reconstructing), restored);
+                Ok((reconstructing, replay))
+            }
+            Err(failure) => Err(StartFilesystemFailure {
+                filesystem: failure.filesystem,
+                error: failure.source,
+                replay,
+            }),
+        }
+    }
+}
+
+impl From<UnreadableOplog> for StartFilesystemError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Other(error.into())
+    }
+}

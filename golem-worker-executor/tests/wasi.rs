@@ -21,11 +21,11 @@ use bytes::Bytes;
 use futures::stream;
 use golem_common::agent_id;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
-use golem_common::model::worker::{
+use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, RevertToOplogIndex,
     RevertWorkerTarget,
 };
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;

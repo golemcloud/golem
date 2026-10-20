@@ -26,13 +26,13 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{OwnerKind, Principal};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey,
     RetryConfig, ShardEpoch, ShardLeaseRevision, Timestamp,

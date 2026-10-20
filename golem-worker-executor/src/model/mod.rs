@@ -16,6 +16,7 @@ use crate::worker::filesystem_snapshots::ReplayBaseline;
 use crate::workerctx::WorkerCtx;
 use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
 use golem_common::model::card::StoredCard;
@@ -28,7 +29,6 @@ use golem_common::model::oplog::{
     UpdateDescription,
 };
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
     AgentId, AgentInvocationOutput, OplogIndex, PendingUpdateRef, ShardAssignment, ShardId,
     Timestamp,

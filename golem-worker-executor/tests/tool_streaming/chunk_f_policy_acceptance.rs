@@ -1,6 +1,6 @@
 use super::*;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
-use golem_common::model::worker::AgentConfigEntryDto;
 use test_r::{test, timeout};
 
 #[test]
