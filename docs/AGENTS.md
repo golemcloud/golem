@@ -74,7 +74,7 @@ The auto-generated content always targets the unreleased `next` version. Older v
 
 - Each page is an `.mdx` file under `src/content/<version>/`. The file path (relative to the version directory) determines the URL.
 - Sidebar order and titles are controlled by `_meta.js` files in each directory.
-- Use Nextra built-in components (`Callout`, `Tabs`, `Cards`, `Steps`, etc.) — import from `nextra/components`.
+- Use Nextra built-in components (`Callout`, `Cards`, `Steps`, etc.) — import from `nextra/components`. Import `Tabs` from `@/components/tabs` instead: it keeps Nextra's API but, when a tab is chosen, updates only that group and the groups after it, so content above the reader never resizes.
 - Use the custom `<MultiPlatformCommand>` component for commands that differ by OS/platform.
 - Icons come from `lucide-react`.
 

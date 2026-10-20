@@ -9,7 +9,7 @@
 export const meta = {
   title: "Golem: the durable runtime for AI agents",
   description:
-    "Golem runs AI agents, their tools and their artifacts: pages, files and live output. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
 };
 
 // =============================================================================
@@ -26,7 +26,7 @@ export const hero = {
   },
   heading: "The durable runtime for AI agents",
   subhead:
-    "Golem runs AI agents, their tools and their artifacts: pages, files and live output. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
   ctas: {
     primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
@@ -66,8 +66,8 @@ export const customerLogos = {
 export const coreVm = {
   eyebrow: "The core of Golem",
   heading: "A lightweight, durable VM with permissions agents can't bypass",
-  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can be rebuilt anywhere.",
-  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem rebuilds the agent on node 2 from the oplog. It resumes at the exact instruction with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
+  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can resume anywhere.",
+  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2 from the oplog. It resumes where it left off, with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
   vm: { name: "Agent", where: "node 1", sub: "in its own WebAssembly VM" },
   golem: { name: "Golem", sub: "the VM's only way out" },
   calls: [
@@ -80,27 +80,27 @@ export const coreVm = {
     sub: "a log of every call, stored off the node",
     entries: [{ name: "Orders API", value: "result" }],
   },
-  rebuilt: "rebuilt after a restart, a crash or an idle wait",
+  rebuilt: "restored after a restart, a crash or an idle wait",
   restored: {
-    name: "Agent, rebuilt",
+    name: "Agent, recovered",
     where: "node 2",
-    state: "Resumes at the exact instruction",
+    state: "Resumes where it left off",
     sub: "memory, call stack, files and environment restored",
     reused: "Orders API not called again: the recorded result is used",
   },
   caption: "You don't write save or checkpoint code, design state tables or run a workflow engine.",
   explanations: [
     {
-      title: "WebAssembly, not a Linux VM",
-      body: "Each agent has private memory, files and environment, without a guest OS. Compiled code can be as small as tens of kilobytes. Agent cold start takes about 2 ms; starts can be under 1 ms in the best cases.",
+      title: "Lightweight",
+      body: "WebAssembly, not Linux: each VM has private memory, files and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
     },
     {
-      title: "Exactly-once tool and agent calls",
-      body: "Rebuilding a VM re-runs code using recorded results, without repeating completed calls. Interrupted external requests retry with idempotency keys Golem adds, taking effect once if the service honors them, as Stripe does.",
+      title: "Durable",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, without repeating completed calls.",
     },
     {
-      title: "No way around the checks",
-      body: "A VM can't access files, the network, secrets or other agents directly. Golem runs your policy checks on every tool call, including calls that run AI-generated code.",
+      title: "Secure",
+      body: "A VM can't reach files, the network, secrets or other VMs directly. Every call out goes through Golem's permission checks, which no code, including AI-generated code, can bypass.",
     },
   ],
 };
@@ -125,42 +125,201 @@ export const metricBar = {
 export interface ChapterItem {
   title: string;
   body: string;
-  examples?: { label: string; value: string }[];
 }
+
+export const codeLanguages = [
+  { id: "ts", label: "TypeScript", shiki: "typescript" },
+  { id: "effect", label: "Effect", shiki: "typescript" },
+  { id: "rust", label: "Rust", shiki: "rust" },
+  { id: "scala", label: "Scala", shiki: "scala" },
+  { id: "moonbit", label: "MoonBit", shiki: "moonbit" },
+  { id: "go", label: "Go", shiki: "go" },
+] as const;
+
+export type CodeLanguage = (typeof codeLanguages)[number]["id"];
+
+export interface ChapterCode {
+  filename: string;
+  code: string;
+  highlight: number[];
+}
+
+export type ChapterFigure = Record<CodeLanguage, ChapterCode>;
 
 export const agentsChapter = {
   eyebrow: "Agents",
-  heading: "Agents are code, not prompts",
+  heading: "Agents are your own arbitrary code, not prompts",
   lead: "Each agent's VM keeps its whole execution durable.",
   figure: {
-    filename: "support-agent.ts",
-    highlightLine: 11,
-    code: `export const SupportImpl = Support.implement({
+    ts: {
+      filename: "support-agent.ts",
+      highlight: [11, 12],
+      code: `export const SupportImpl = Support.implement({
   init: () => ({ history: [] as Message[] }),
   methods: {
     async handle({ message, orderId }) {
       this.history.push({ role: 'user', content: message })
-      // lookupOrder can reach only the orders API; Golem checks each call
-      const reply = await llm.run({ history: this.history, tools: [lookupOrder] })
+      // Golem lets lookupOrder reach only the orders API:
+      const reply = await llm.run(this.history, [lookupOrder])
       if (reply.refundRequested) {
         const approval = createWebhook()
         await notifyReviewer(approval.getUrl(), reply)
-        const { approved } = (await approval).json<Approval>() // waits here for days if needed, using no CPU or memory
-        if (approved) await refundOrder(orderId, reply.amount) // refunded once if the payment API honors idempotency keys
+        // waits here for days if needed, using no CPU or memory:
+        const { approved } = (await approval).json<Approval>()
+        // refunded once if the payment API honors idempotency keys:
+        if (approved) await refundOrder(orderId, reply.amount)
       }
       return reply.text
     },
   },
 })`,
-  },
+    },
+    effect: {
+      filename: "support-agent.ts",
+      highlight: [11, 12, 13],
+      code: `export const SupportImpl = Support.implement({
+  init: () => Effect.succeed({ history: [] as Message[] }),
+  methods: (state) => ({
+    handle: ({ message, orderId }) => Effect.gen(function* () {
+      state.history.push({ role: "user", content: message })
+      // Golem lets lookupOrder reach only the orders API:
+      const reply = yield* llm.run(state.history, [lookupOrder])
+      if (reply.refundRequested) {
+        const approval = yield* Webhook.create
+        yield* notifyReviewer(approval.url, reply)
+        // waits here for days if needed, using no CPU or memory:
+        const payload = yield* approval.await
+        const { approved } = yield* payload.decode(Approval)
+        // refunded once if the payment API honors idempotency keys:
+        if (approved) yield* refundOrder(orderId, reply.amount)
+      }
+      return reply.text
+    }).pipe(Effect.orDie),
+  }),
+})`,
+    },
+    rust: {
+      filename: "support_agent.rs",
+      highlight: [18, 19],
+      code: `#[agent_implementation]
+impl Support for SupportImpl {
+  fn new() -> Self {
+    Self { history: vec![] }
+  }
+
+  async fn handle(
+    &mut self,
+    message: String,
+    order_id: String,
+  ) -> String {
+    self.history.push(Message::user(message));
+    // Golem lets lookup_order reach only the orders API:
+    let reply = llm::run(&self.history, &[lookup_order]).await;
+    if reply.refund_requested {
+      let approval = create_webhook().unwrap();
+      notify_reviewer(approval.url(), &reply).await;
+      // waits here for days if needed, using no CPU or memory:
+      let Approval { approved } = approval.await.json().unwrap();
+      // refunded once if the payment API honors idempotency keys:
+      if approved {
+        refund_order(order_id, reply.amount).await;
+      }
+    }
+    reply.text
+  }
+}`,
+    },
+    scala: {
+      filename: "SupportAgent.scala",
+      highlight: [16, 17],
+      code: `@agentImplementation()
+final class SupportAgentImpl(id: String) extends SupportAgent:
+  private val history = ArrayBuffer.empty[Message]
+
+  def handle(message: String, orderId: String): Future[String] =
+    history += Message("user", message)
+    // Golem lets lookupOrder reach only the orders API:
+    llm.run(history.toList, List(lookupOrder)).flatMap: reply =>
+      if reply.refundRequested then refund(orderId, reply)
+      else Future.successful(reply.text)
+
+  private def refund(orderId: String, reply: Reply) =
+    val approval = HostApi.createWebhook()
+    for
+      _ <- notifyReviewer(approval.url, reply)
+      // waits here for days if needed, using no CPU or memory:
+      payload <- approval.await()
+      approved = payload.json[Approval]().approved
+      // refunded once if the payment API honors idempotency keys:
+      _ <- if approved then refundOrder(orderId, reply.amount)
+           else Future.unit
+    yield reply.text`,
+    },
+    moonbit: {
+      filename: "support_agent.mbt",
+      highlight: [16, 17, 18],
+      code: `fn SupportAgent::new() -> SupportAgent {
+  { history: [] }
+}
+
+pub async fn SupportAgent::handle(
+  self : Self,
+  message : String,
+  order_id : String,
+) -> String {
+  self.history.push({ role: "user", content: message })
+  // Golem lets lookup_order reach only the orders API:
+  let reply = llm.run(self.history, [lookup_order])
+  if reply.refund_requested {
+    let approval = @webhook.create()
+    notify_reviewer(approval.url(), reply)
+    // waits here for days if needed, using no CPU or memory:
+    let body = @json.parse(approval.wait().text())
+    let { approved } : Approval = @json.from_json(body)
+    // refunded once if the payment API honors idempotency keys:
+    if approved { refund_order(order_id, reply.amount) }
+  }
+  reply.text
+}`,
+    },
+    go: {
+      filename: "support_agent.go",
+      highlight: [17, 18],
+      code: `type state struct{ history []Message }
+
+var impl = Support.Implement(func(SupportID) *state {
+    return &state{}
+})
+
+var _ = impl.Handle(Handle, func(
+    ctx *golem.Context[state], in HandleIn,
+) string {
+    s := ctx.State
+    s.history = append(s.history, Message{"user", in.Message})
+    // Golem lets lookupOrder reach only the orders API:
+    reply := llm.Run(s.history, lookupOrder)
+    if reply.RefundRequested {
+        approval := golem.NewWebhook[Approval]()
+        notifyReviewer(approval.URL(), reply)
+        // waits here for days if needed, using no CPU or memory:
+        decision := approval.MustAwait()
+        // refunded once if the payment API honors idempotency keys:
+        if decision.Approved {
+            refundOrder(in.OrderID, reply.Amount)
+        }
+    }
+    return reply.Text
+})`,
+    },
+  } as ChapterFigure,
   items: [
     {
       title: "Your language",
-      body: "Write agents in TypeScript, Effect, Rust, Scala, MoonBit or Go, with the same guarantees in each.",
+      body: "Write agents as ordinary, typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, with the same guarantees and primitives in each.",
     },
     {
       title: "Awaitable webhooks, timers and schedules",
-      body: "Incoming events, like a human approval or a payment callback, become promises your code awaits. Durable sleeps, timers and scheduled calls that fire on time across restarts, with no idle cost.",
+      body: "Approvals and payment callbacks become promises your code awaits. Sleeps, timers and scheduled calls fire on time across restarts, with no idle cost.",
     },
     {
       title: "Agents working together",
@@ -172,73 +331,380 @@ export const agentsChapter = {
     },
     {
       title: "Embedded SQLite",
-      body: "TypeScript, Effect and Rust agents can each have their own SQLite database, with no server to run.",
+      body: "TypeScript, Effect and Rust agents can each have their own SQLite database, embedded in the agent, with no database server to run or connect to.",
     },
   ] as ChapterItem[],
 };
 
 export const toolsChapter = {
   eyebrow: "Tools",
-  heading: "Every tool call in its own VM, exactly once",
-  lead: "After a node restart or crash, rebuilding a tool call's VM re-runs its code using recorded results, without repeating completed calls.",
+  heading: "Every tool call in its own VM, executed exactly once",
+  lead: "After a node restart or crash, restoring a tool call's state replays its code using recorded results, without repeating completed effects.",
   figure: {
-    title: "Sandboxed tools and AI-generated code",
-    terminal: [
-      { cmd: "git status", result: "clean" },
-      { cmd: "npm test", result: "42 passed" },
-      { cmd: "node fix.js", result: "AI-generated code ran in a fresh VM" },
-    ],
-    caption:
-      "Bundled tools include shell, Git, Node.js and npm. Build tools with any Golem SDK; no separate sandbox service needed.",
+    ts: {
+      filename: "refund-tool.ts",
+      highlight: [13, 14, 15],
+      code: `export const refund = toolDefinition('refund')
+  .version('1.0.0')
+  .body((body) =>
+    body
+      .positional('charge', z.string())
+      .positional('amount', z.number().int())
+      .returns(z.object({ id: z.string(), status: z.string() })),
+  )
+
+refund.implement({
+  // each call runs in a fresh WebAssembly VM:
+  refund: async ({ charge, amount }) => {
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    const res = await fetch('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      body: new URLSearchParams({ charge, amount: String(amount) }),
+    })
+    return ok(await res.json())
   },
+})`,
+    },
+    effect: {
+      filename: "refund-tool.ts",
+      highlight: [18, 19, 20, 21],
+      code: `const Refund = Schema.Struct({
+  id: Schema.String,
+  status: Schema.String,
+})
+
+export const refund = Tool.toolDefinition("refund", {
+  version: "1.0.0",
+}).body((body) =>
+  body
+    .positional("charge", Schema.String)
+    .positional("amount", Schema.Int)
+    .returns(Refund),
+)
+
+refund.implement({
+  // each call runs in a fresh WebAssembly VM:
+  refund: ({ charge, amount }) =>
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    pipe(
+      HttpClientRequest.post("https://api.stripe.com/v1/refunds"),
+      HttpClientRequest.bodyUrlParams({ charge, amount }),
+      HttpClient.execute,
+      Effect.flatMap(HttpClientResponse.schemaBodyJson(Refund)),
+      Effect.provide(FetchHttpClient.layer),
+      Effect.orDie,
+    ),
+})`,
+    },
+    rust: {
+      filename: "refund_tool.rs",
+      highlight: [18, 19, 20],
+      code: `#[derive(Schema, Deserialize)]
+struct Receipt {
+  id: String,
+  status: String,
+}
+
+#[tool_definition(version = "1.0.0")]
+trait Refund {
+  async fn refund(&self, charge: String, amount: u64) -> Receipt;
+}
+
+struct RefundImpl;
+
+#[tool_implementation]
+impl Refund for RefundImpl {
+  // each call runs in a fresh WebAssembly VM:
+  async fn refund(&self, charge: String, amount: u64) -> Receipt {
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    let req = Request::post("https://api.stripe.com/v1/refunds")
+      .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+      .body(format!("charge={charge}&amount={amount}").into())
+      .unwrap();
+    let res = http::send(req).await.unwrap();
+    http::response_json(res).await.unwrap()
+  }
+}`,
+    },
+    scala: {
+      filename: "RefundTool.scala",
+      highlight: [15, 16, 17],
+      code: `final case class Refund(id: String, status: String) derives Schema
+
+@toolDefinition(name = "refund", version = "1.0.0")
+trait RefundTool:
+  def refund(charge: String, amount: Int): Future[Refund]
+
+@toolImplementation()
+final class RefundToolImpl extends RefundTool:
+  // each call runs in a fresh WebAssembly VM:
+  def refund(charge: String, amount: Int): Future[Refund] =
+    val init = new RequestInit:
+      method = HttpMethod.POST
+      body = new URLSearchParams(js.Dictionary(
+        "charge" -> charge, "amount" -> amount.toString))
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    fetch("https://api.stripe.com/v1/refunds", init).toFuture
+      .flatMap(_.text().toFuture)
+      .map(Schema[Refund].jsonCodec.decode(_).toTry.get)`,
+    },
+    moonbit: {
+      filename: "refund_tool.mbt",
+      highlight: [19, 20, 21],
+      code: `#derive.tool("refund", version="1.0.0")
+struct Refund {}
+
+#derive.golem_schema
+pub(all) struct RefundResult {
+  id : String
+  status : String
+} derive(FromJson)
+
+// each call runs in a fresh WebAssembly VM:
+#derive.arg("charge", scope="positional")
+#derive.arg("amount", scope="positional")
+pub async fn Refund::refund(
+  charge : String,
+  amount : Int,
+) -> RefundResult {
+  let url = "https://api.stripe.com/v1/refunds"
+  let form = [("charge", charge), ("amount", amount.to_string())]
+  // Golem checks this request against the caller's permissions
+  // and adds an idempotency key, so a retry refunds once:
+  let res = @http.send(form_post(url, form)).unwrap()
+  @json.from_json(@json.parse(read_text(res)))
+}`,
+    },
+    go: {
+      filename: "refund_tool.go",
+      highlight: [22, 23, 24],
+      code: `type Refund struct{}
+
+var Tool = tool.DefineTool[Refund]("refund",
+    tool.Spec{Version: "1.0.0"})
+
+type Args struct {
+    Charge string
+    Amount int64
+}
+
+type Result struct{ ID, Status string }
+
+var Body = Tool.Body[Args, Result](
+    func(a *Args, s *tool.CommandSpec) {
+        s.Positional(&a.Charge)
+        s.Positional(&a.Amount)
+    })
+
+// each call runs in a fresh WebAssembly VM:
+var _ = Body.Handle(func(_ *tool.Context, a Args) (Result, error) {
+    amount := strconv.FormatInt(a.Amount, 10)
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    res := golem.Must(http.PostForm(
+        "https://api.stripe.com/v1/refunds",
+        url.Values{"charge": {a.Charge}, "amount": {amount}}))
+    defer res.Body.Close()
+    var out Result
+    return out, json.NewDecoder(res.Body).Decode(&out)
+})`,
+    },
+  } as ChapterFigure,
   items: [
+    {
+      title: "Bundled and custom tools",
+      body: "Shell, Git, Node.js, npm and TypeScript come bundled. Build your own tools with any Golem SDK; no separate sandbox service needed.",
+    },
     {
       title: "External requests",
       body: "Interrupted external requests retry with idempotency keys Golem adds, taking effect once if the service honors them, as Stripe does.",
     },
     {
       title: "Permissions you can scope and share",
-      body: "Give agents or tools narrower permissions. Set expiries; revoking a permission revokes every permission delegated from it.",
-      examples: [
-        { label: "Share", value: "Orders API only" },
-        { label: "Expire", value: "After one hour" },
-        { label: "Revoke", value: "Delegated access revoked too" },
-      ],
+      body: "Give agents or tools narrower permissions, such as the orders API only, for one hour. Revoking a permission revokes every permission delegated from it.",
     },
     {
       title: "Secrets",
-      body: "Agents use API keys without seeing them. Values are revealed only where granted, and logged.",
+      body: "Agents pass API keys to tools as opaque handles. Revealing a value takes a grant and is recorded, and a binding can stop a tool from revealing any.",
     },
     {
       title: "Tool publishing, plus MCP",
-      body: "Publish a tool as an immutable, versioned release and grant it to other environments and accounts. Expose agents and tools as MCP servers, and call external MCP servers with the same guarantees as other tool calls.",
+      body: "Publish tools as immutable, versioned releases for other accounts. Expose agents and tools over MCP, and call MCP servers with the same guarantees.",
     },
   ] as ChapterItem[],
 };
 
 export const artifactsChapter = {
   eyebrow: "Artifacts",
-  heading: "Artifacts your agents deploy",
+  heading: "Securely expose artifacts your agents build and deploy",
   lead: "Pages, files and live output, with each artifact in its own WebAssembly VM.",
   figure: {
-    title: "Durable streaming",
-    before: "agent output",
-    seam: "client reloads",
-    payoff:
-      "Clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
+    ts: {
+      filename: "site-agent.ts",
+      highlight: [4, 5, 6, 7],
+      code: `export const SiteAgent = defineAgent({
+  name: 'SiteAgent',
+  id: { project: z.string() },
+  // serve this agent's /public directory at /sites/{project}/:
+  http: http.mount('/sites/{project}', {
+    exposeFiles: [{ route: '/*', path: '/public/$1' }],
+  }),
+  methods: { publish: method({ input: {}, returns: z.void() }) },
+})
+
+export const SiteAgentImpl = SiteAgent.implement({
+  init: () => ({}),
+  methods: {
+    publish() {
+      // copy in the site the agent built; its URLs serve it at once:
+      fs.cpSync('/workspace/dist', '/public', { recursive: true })
+    },
   },
+})`,
+    },
+    effect: {
+      filename: "site-agent.ts",
+      highlight: [4, 5, 6, 7],
+      code: `export const SiteAgent = defineAgent({
+  name: "SiteAgent",
+  id: { project: Schema.String },
+  // serve this agent's /public directory at /sites/{project}/:
+  http: Http.mount("/sites/{project}", {
+    exposeFiles: [{ route: "/*", path: "/public/$1" }],
+  }),
+  methods: { publish: method({ input: {}, success: Schema.Void }) },
+})
+
+const publish = () =>
+  Effect.sync(() => {
+    // copy in the site the agent built; its URLs serve it at once:
+    fs.cpSync("/workspace/dist", "/public", { recursive: true })
+  })
+
+export const SiteAgentImpl = SiteAgent.implement({
+  init: () => Effect.void,
+  methods: () => ({ publish }),
+})`,
+    },
+    rust: {
+      filename: "site_agent.rs",
+      highlight: [1, 2, 3, 4, 5],
+      code: `// serve this agent's /public directory at /sites/{project}/:
+#[agent_definition(
+  mount = "/sites/{project}",
+  filesystem_bindings = [("/*", "/public/$1")]
+)]
+pub trait SiteAgent {
+  fn new(project: String) -> Self;
+  fn publish(&self);
+}
+
+struct SiteAgentImpl;
+
+#[agent_implementation]
+impl SiteAgent for SiteAgentImpl {
+  fn new(_project: String) -> Self {
+    Self
+  }
+
+  fn publish(&self) {
+    // copy in the site the agent built; its URLs serve it at once:
+    copy_dir_all("/workspace/dist", "/public").unwrap();
+  }
+}`,
+    },
+    scala: {
+      filename: "SiteAgent.scala",
+      highlight: [1, 2, 3, 4, 5],
+      code: `@agentDefinition(
+  // serve this agent's /public directory at /sites/{project}/:
+  mount = "/sites/{project}",
+  exposeFiles = Array(("/*", "/public/$1"))
+)
+trait SiteAgent extends BaseAgent:
+  class Id(val project: String)
+  def publish(): Unit
+
+@agentImplementation()
+final class SiteAgentImpl(project: String) extends SiteAgent:
+  def publish(): Unit =
+    // copy in the site the agent built; its URLs serve it at once:
+    Fs.cpSync("/workspace/dist", "/public",
+      js.Dynamic.literal(recursive = true))`,
+    },
+    moonbit: {
+      filename: "site_agent.mbt",
+      highlight: [2, 3, 4],
+      code: `#derive.agent
+// serve this agent's /public directory at /sites/{project}/:
+#derive.mount("/sites/{project}")
+#derive.expose_files("/*", "/public/$1")
+struct SiteAgent {
+  project : String
+}
+
+fn SiteAgent::new(project : String) -> SiteAgent {
+  SiteAgent::{ project }
+}
+
+pub async fn SiteAgent::publish(_self : Self) -> Unit {
+  // copy in the site the agent built; its URLs serve it at once:
+  copy_dir("/workspace/dist", "/public")
+}`,
+    },
+    go: {
+      filename: "site_agent.go",
+      highlight: [5, 6, 7, 8, 9, 10, 11],
+      code: `type SiteID struct{ Project string }
+
+var SiteAgent = golem.DefineAgent[SiteID](golem.Spec{
+    Name: "SiteAgent",
+    // serve this agent's /public directory at /sites/{project}/:
+    HTTP: &golem.Mount{
+        Path: "/sites/{project}",
+        ExposeFiles: []golem.FileMapping{
+            {Route: "/*", Path: "/public/$1"},
+        },
+    },
+})
+
+var Publish = SiteAgent.Method[golem.Unit, golem.Unit]("publish")
+
+type state struct{}
+
+var impl = SiteAgent.Implement(func(SiteID) *state {
+    return &state{}
+})
+
+var _ = impl.Handle(Publish, func(
+    _ *golem.Context[state], _ golem.Unit,
+) golem.Unit {
+    // copy in the site the agent built; its URLs serve it at once:
+    golem.Must0(os.CopyFS("/public", os.DirFS("/workspace/dist")))
+    return golem.Unit{}
+})`,
+    },
+  } as ChapterFigure,
   items: [
     {
       title: "Routes and files",
       body: "Agents deploy front-ends and back ends under the permissions you grant. HTTP routes are declared in agent code; static files are served directly from storage.",
     },
     {
+      title: "Durable streaming",
+      body: "Streaming methods become resumable streams: clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
+    },
+    {
       title: "Front-end login",
-      body: "Single-page front-ends sign users in with OAuth2 and PKCE, using short-lived tokens Golem issues.",
+      body: "Single-page front-ends sign users in with OAuth2 and PKCE, using short-lived tokens Golem issues. A mount can turn away callers without a valid login.",
     },
     {
       title: "Read-only methods",
-      body: "Methods marked read-only can't change state. The runtime enforces it, and responses can be cached.",
+      body: "Methods marked read-only can't change state; the runtime enforces it. Responses are cached until the agent next writes, served without waking it.",
     },
   ] as ChapterItem[],
 };
@@ -329,12 +795,12 @@ export const deployment = {
     {
       visual: "selfhost",
       title: "Self-hosted",
-      body: "Run the open source platform on your own Docker or Kubernetes infrastructure, in production.",
+      body: "Run the full open source platform in production, on your own Docker or Kubernetes infrastructure.",
     },
     {
       visual: "cloud",
       title: "Golem Cloud",
-      body: "Deploy to the managed service and let us run it. Free during the Developer Preview.",
+      body: "Deploy to the managed service and let us run it, with no servers of your own. Free during the Developer Preview.",
     },
   ],
   sharedLabel: "In every deployment",
@@ -345,11 +811,11 @@ export const deployment = {
     },
     {
       title: "Live updates and rollback",
-      body: "Update running agents after a compatibility check. Roll an agent back to an earlier point, or clone it to try a different approach.",
+      body: "Update running agents after a compatibility check. Roll an agent back to an earlier point, or clone it to try another approach.",
     },
     {
       title: "Quotas",
-      body: "Rate, capacity and concurrency limits that throttle, reject or stop runaway agents and tools.",
+      body: "Rate, capacity and concurrency limits throttle, reject or stop runaway agents and tools, and can change without a redeploy.",
     },
   ],
 };

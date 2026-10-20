@@ -17,6 +17,7 @@ use crate::sharding::model::ExecutorId;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::repo::RepoError;
+use std::error::Error as _;
 use std::fmt::Debug;
 
 #[derive(thiserror::Error, Debug)]
@@ -194,6 +195,30 @@ fn tls_error(err: &etcd_client::Error) -> Option<TlsError<'_>> {
     None
 }
 
+/// Whether an etcd error is a request that hyper dropped before handing it to a connection: the
+/// connection closed, or was not ready, between the request's dispatch and its send. This is the
+/// usual failure of a request sent as its connection dies - after a reconnect that etcd closes at
+/// once, such as for a refused client certificate. tonic reports it as `CANCELLED`, the code of a
+/// request its caller gave up on, with hyper's error as the status's source; a `CANCELLED` from
+/// etcd, or from the request timeout, has no such source. etcd never received the request, and
+/// the next request opens a new connection, so a retry is the ordinary recovery.
+pub(crate) fn dropped_before_sending(err: &etcd_client::Error) -> bool {
+    let etcd_client::Error::GRpcStatus(status) = err else {
+        return false;
+    };
+    if status.code() != tonic::Code::Cancelled {
+        return false;
+    }
+    let mut source = status.source();
+    while let Some(error) = source {
+        if let Some(hyper) = error.downcast_ref::<hyper::Error>() {
+            return hyper.is_canceled();
+        }
+        source = error.source();
+    }
+    false
+}
+
 /// Whether an etcd error is a refused certificate: one that etcd rejected, or one of etcd's that
 /// this replica rejected. Other TLS errors - a damaged record, a non-TLS reply from a proxy during
 /// an outage - are network faults like any other, and stay retriable.
@@ -278,6 +303,8 @@ impl IsRetriableError for ShardManagerError {
             // `TlsHandshakeFailed` instead, and a watch stops a replica whose files changed.
             ShardManagerError::EtcdError(err) => match err {
                 etcd_client::Error::GRpcStatus(status) if is_denied_by_election(status) => false,
+                // `CANCELLED` is otherwise final: the caller gave the request up.
+                etcd_client::Error::GRpcStatus(_) if dropped_before_sending(err) => true,
                 etcd_client::Error::GRpcStatus(status) => status.is_retriable(),
                 etcd_client::Error::TransportError(_)
                 | etcd_client::Error::IoError(_)
@@ -361,9 +388,10 @@ mod tests {
     use test_r::test;
 
     use super::{
-        ShardManagerError, etcd_certificate_not_valid_now, is_certificate_failure,
-        is_stale_auth_token,
+        ShardManagerError, dropped_before_sending, etcd_certificate_not_valid_now,
+        is_certificate_failure, is_stale_auth_token,
     };
+    use crate::sharding::etcd_retry::never_reached_etcd;
     use crate::sharding::model::ExecutorId;
     use golem_common::retriable_error::IsRetriableError;
 
@@ -565,6 +593,50 @@ mod tests {
             tonic::Status::new(tonic::Code::Unknown, "h2 protocol error"),
         ));
         assert!(other_unknown.is_retriable());
+    }
+
+    #[test]
+    // A request queued on a connection that closes before taking it fails as `CANCELLED`, which
+    // otherwise means that the caller gave the request up and is not retried. The connection
+    // dropped it unsent, so it is retried, and as a write it may be sent again.
+    async fn a_request_dropped_by_a_closing_connection_is_retried() {
+        use hyper_util::rt::{TokioExecutor, TokioIo};
+
+        // An HTTP/2 connection over a pipe that nothing reads. hyper buffers the first request
+        // until the connection task takes it; dropping the task first drops the request unsent,
+        // as a connection that closes right after a reconnect does.
+        let (client_io, _server_io) = tokio::io::duplex(4096);
+        let (mut send_request, connection) =
+            hyper::client::conn::http2::handshake::<_, _, tonic::body::Body>(
+                TokioExecutor::new(),
+                TokioIo::new(client_io),
+            )
+            .await
+            .expect("The client side of the handshake needs no answer");
+        let response = send_request.send_request(
+            http::Request::builder()
+                .uri("http://etcd/etcdserverpb.Lease/LeaseGrant")
+                .body(tonic::body::Body::empty())
+                .unwrap(),
+        );
+        drop(connection);
+        let hyper_error = response
+            .await
+            .expect_err("A request dropped with its connection must fail");
+        assert!(hyper_error.is_canceled(), "{hyper_error:?}");
+        // tonic maps the error to a status with the error as its source, as the channel does.
+        let dropped =
+            etcd_client::Error::GRpcStatus(tonic::Status::from_error(Box::new(hyper_error)));
+
+        assert!(dropped_before_sending(&dropped), "{dropped:?}");
+        assert!(never_reached_etcd(&dropped), "{dropped:?}");
+        assert!(ShardManagerError::EtcdError(dropped).is_retriable());
+
+        // The same code from etcd, or from the request timeout, has no hyper error under it.
+        let given_up = etcd_client::Error::GRpcStatus(tonic::Status::cancelled("Timeout expired"));
+        assert!(!dropped_before_sending(&given_up));
+        assert!(!never_reached_etcd(&given_up));
+        assert!(!ShardManagerError::EtcdError(given_up).is_retriable());
     }
 
     #[test]
