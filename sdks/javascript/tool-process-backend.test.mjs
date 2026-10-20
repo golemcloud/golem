@@ -58,7 +58,6 @@ function fixture(overrides = {}) {
           collect(...args) {
             calls.push(["collect", ...args]);
             return {
-              bodyExecuted: true,
               result: { tag: "ok", val: {} },
               stdout: { bytes: [0, 255] },
               stderr: { bytes: [128] },
@@ -159,7 +158,7 @@ test("help and unknown commands do not allocate attachments or dispatch work", (
   assert.deepEqual(f.calls, []);
 });
 
-test("admission failure cleans resources and cannot start a child effect", () => {
+test("local output setup failure cleans resources without dispatching a child effect", () => {
   const f = fixture({
     createCollectedOutput() {
       throw { tag: "resource-exhausted", val: "pressure" };
@@ -208,12 +207,11 @@ test("collection failure cancels accepted work before dropping the observer", ()
   assert.deepEqual(f.calls.slice(-2), [["cancel"], ["dispose-future"]]);
 });
 
-test("a denied spawn is not a started command with a nonzero exit status", () => {
+test("a tool denial is a command result, not evidence of a spawn refusal", () => {
   const f = fixture();
   f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
     collect() {
       return {
-        bodyExecuted: false,
         result: {
           tag: "err",
           val: { tag: "denied", val: "permission denied" },
@@ -223,9 +221,9 @@ test("a denied spawn is not a started command with a nonzero exit status", () =>
   });
   f.prepared.renderResult = () => ({ exitCode: 3, stdout: [], stderr: [100] });
   const result = f.backend.spawnSync("tsc", [], {});
-  assert.equal(result.error.code, "EACCES");
-  assert.equal(result.pid, 0);
-  assert.equal(result.status, null);
+  assert.equal(result.error, undefined);
+  assert.equal(result.pid, 1);
+  assert.equal(result.status, 3);
   assert.equal(result.stderr.toString(), "d");
 });
 
@@ -234,7 +232,6 @@ test("host output overflow retains the prefix and reports ENOBUFS", () => {
   f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
     collect() {
       return {
-        bodyExecuted: true,
         result: { tag: "ok", val: {} },
         stdout: { bytes: [0, 255], overflow: true },
       };
@@ -246,37 +243,32 @@ test("host output overflow retains the prefix and reports ENOBUFS", () => {
   assert.deepEqual([...result.stdout], [0, 255]);
 });
 
-test("the recorded execution fact, not the error tag, distinguishes spawn refusal", () => {
-  for (const [tag, code] of [
-    ["resource-exhausted", "ENOMEM"],
-    ["denied", "EACCES"],
+test("RPC error tags do not reveal whether a tool body executed", () => {
+  for (const [tag, status] of [
+    ["resource-exhausted", 1],
+    ["denied", 3],
+    ["not-found", 127],
   ]) {
-    for (const bodyExecuted of [false, true]) {
+    for (const bytes of [[], [111]]) {
       const f = fixture();
       f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
         collect() {
           return {
-            bodyExecuted,
             result: { tag: "err", val: { tag, val: "failed" } },
-            stdout: {
-              bytes: bodyExecuted ? [111] : [],
-              failure: bodyExecuted
-                ? undefined
-                : { tag: "failed", val: "refused" },
-            },
+            stdout: { bytes },
           };
         },
       });
       f.prepared.renderResult = () => ({
-        exitCode: 1,
+        exitCode: status,
         stdout: [],
         stderr: [100],
       });
       const result = f.backend.spawnSync("tsc", [], {});
-      assert.equal(result.status, bodyExecuted ? 1 : null);
-      assert.equal(result.pid, bodyExecuted ? 1 : 0);
-      assert.equal(result.error?.code, bodyExecuted ? undefined : code);
-      assert.equal(result.stdout.toString(), bodyExecuted ? "o" : "");
+      assert.equal(result.status, status);
+      assert.equal(result.pid, 1);
+      assert.equal(result.error, undefined);
+      assert.deepEqual([...result.stdout], bytes);
       assert.equal(result.stderr.toString(), "d");
     }
   }
@@ -307,7 +299,6 @@ test("sync deadlines reach the host and preserve bounded output and the selected
       timeout = deadline;
       return {
         result: { tag: "err", val: { tag: "cancelled" } },
-        bodyExecuted: false,
         timedOut: true,
         stdout: { bytes: [0, 255], failure: { tag: "cancelled" } },
         stderr: { bytes: [128], failure: { tag: "cancelled" } },
@@ -337,7 +328,6 @@ test("a deadline cannot replace overflow or an ordinary terminal winner", () => 
           result: overflow
             ? { tag: "err", val: { tag: "cancelled" } }
             : { tag: "ok", val: {} },
-          bodyExecuted: true,
           timedOut: true,
           stdout: { bytes: [1], overflow },
         };
@@ -427,7 +417,7 @@ function bashFixture(
   f.host.ToolRpc.prototype.asyncInvokeAndAwait = (...args) => {
     f.calls.push(["invoke", ...args]);
     return {
-      collect: () => ({ bodyExecuted: true, result: { tag: "ok", val: {} } }),
+      collect: () => ({ result: { tag: "ok", val: {} } }),
       [Symbol.dispose]() {
         f.closed.push("future");
       },
@@ -539,7 +529,7 @@ test("Bash output obeys independent byte limits, including UTF-8 and nonzero sta
   assert.equal(output.stderr.toString(), "123");
 });
 
-test("host projection and tool admission failures keep their original shell outcome", () => {
+test("result projection and tool RPC failures keep their original shell outcome", () => {
   const f = bashFixture();
   f.prepared.renderResult = () => ({
     exitCode: 1,
@@ -551,7 +541,6 @@ test("host projection and tool admission failures keep their original shell outc
   assert.equal(output.stderr.toString(), "invalid typed result\n");
   f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
     collect: () => ({
-      bodyExecuted: false,
       result: { tag: "err", val: { tag: "denied" } },
     }),
   });
@@ -561,9 +550,8 @@ test("host projection and tool admission failures keep their original shell outc
     stderr: Buffer.from("denied\n"),
   });
   output = f.backend.spawnSync("echo ok", [], { shell: true });
-  assert.equal(output.status, null);
-  assert.equal(output.error.code, "EACCES");
-  assert.equal(output.error.path, "echo ok");
+  assert.equal(output.status, 3);
+  assert.equal(output.error, undefined);
   assert.equal(output.stderr.toString(), "denied\n");
 });
 
@@ -574,11 +562,7 @@ test("invalid shell options cannot discover or dispatch tools", () => {
   assert.deepEqual(f.calls, []);
 });
 
-function asyncFixture({
-  admitted = true,
-  completeOnEof = false,
-  blockedWrite = false,
-} = {}) {
+function asyncFixture({ completeOnEof = false, blockedWrite = false } = {}) {
   const f = fixture();
   const completion = deferred();
   const consumerClosed = deferred();
@@ -610,7 +594,6 @@ function asyncFixture({
     writeReady.resolve();
     consumerClosed.resolve();
     completion.resolve({
-      bodyExecuted: true,
       result: { tag: "ok", val: {} },
       stdout: { bytes: [0, 255] },
       stderr: { bytes: [128] },
@@ -665,9 +648,6 @@ function asyncFixture({
   };
   const future = {
     ...resource("future"),
-    admitted() {
-      return admitted;
-    },
     collect() {
       assert.fail("async spawn called the synchronous collector");
     },
@@ -679,7 +659,6 @@ function asyncFixture({
       f.calls.push(["cancel"]);
       cancelled = true;
       complete({
-        bodyExecuted: false,
         result: { tag: "err", val: { tag: "cancelled" } },
         stdout: { bytes: [], failure: { tag: "cancelled" } },
         stderr: { bytes: [], failure: { tag: "cancelled" } },
@@ -1110,23 +1089,23 @@ test(
 );
 
 test(
-  "an immutable dispatch refusal never emits spawn or accepts kill",
+  "a dispatched tool denial preserves the local spawn event and command status",
   { timeout: 2000 },
   async () => {
-    const f = asyncFixture({ admitted: false });
+    const f = asyncFixture();
+    f.prepared.renderResult = () => ({ exitCode: 3, stdout: [], stderr: [] });
     const child = f.backend.spawn("tsc", []);
     const observed = observe(child);
-    assert.equal(child.kill(0), false);
-    assert.equal(child.kill(), false);
+    assert.equal(child.kill(0), true);
     f.complete({
-      bodyExecuted: false,
       result: { tag: "err", val: { tag: "denied" } },
     });
     await observed.closed;
-    assert.equal(observed.errors[0].code, "EACCES");
+    assert.deepEqual(observed.errors, []);
+    assert.equal(child.exitCode, 3);
     assert.equal(
       observed.events.some(([name]) => name === "spawn"),
-      false,
+      true,
     );
     assert.equal(f.cancelled, false);
   },

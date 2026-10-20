@@ -271,23 +271,6 @@ function project(
     method,
     modes,
   );
-  if (collected.bodyExecuted === false && collected.result.tag === "err") {
-    const code = {
-      denied: "EACCES",
-      "not-found": "ENOENT",
-      "resource-exhausted": "ENOMEM",
-    }[collected.result.val.tag];
-    if (code) {
-      result.error ??= processError(
-        code,
-        command,
-        collected.result.val.tag,
-        method,
-      );
-      result.pid = 0;
-      result.status = null;
-    }
-  }
   for (const [index, channel] of [
     [1, "stdout"],
     [2, "stderr"],
@@ -477,7 +460,7 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   let abortError;
   let stdinError;
   let cancellationRequested = false;
-  let admitted = prepared.tag === "output";
+  let started = prepared.tag === "output";
   const cancel = () => {
     if (!future || cancellationRequested) return;
     future.cancel();
@@ -499,9 +482,9 @@ function spawnTool(host, runtimeProcess, command, args, options) {
     child.kill(defaultSignal);
   };
   child.kill = (requested = "SIGTERM") => {
-    if (requested === 0) return admitted && !completed && !!future;
+    if (requested === 0) return started && !completed && !!future;
     const normalized = killSignal(requested);
-    if (completed || !admitted || !future) return false;
+    if (completed || !started || !future) return false;
     cancel();
     signal ??= normalized;
     child.killed = true;
@@ -598,22 +581,23 @@ function spawnTool(host, runtimeProcess, command, args, options) {
         transfer(stderr?.[0]),
       );
       resources.add(future);
-      admitted = future.admitted();
       collection = future.collectAsync(
         transfer(stdout?.[1]),
         transfer(stderr?.[1]),
         undefined,
       );
+      // This marks a local process handle, not remote permission or execution.
+      started = true;
     }
-    if (future && admitted && options.signal) {
+    if (future && started && options.signal) {
       options.signal.addEventListener("abort", abort, { once: true });
       if (options.signal.aborted) abort();
     }
-    if (future && admitted && options.timeout > 0) {
+    if (future && started && options.timeout > 0) {
       timer = setTimeout(() => child.kill(defaultSignal), options.timeout);
     }
   } catch (error) {
-    admitted = false;
+    started = false;
     const code =
       error?.code ?? (error?.tag === "resource-exhausted" ? "ENOMEM" : "EIO");
     terminal = failed(
@@ -629,17 +613,17 @@ function spawnTool(host, runtimeProcess, command, args, options) {
     }
   }
   child.stdio = [child.stdin, child.stdout, child.stderr];
-  if (admitted) child.pid = 1;
-  const started = new Promise((resolve) => {
+  if (started) child.pid = 1;
+  const startup = new Promise((resolve) => {
     nextTick(() => {
-      if (admitted) child.emit("spawn");
+      if (started) child.emit("spawn");
       resolve();
     });
   });
   // Collection starts at dispatch. Observe failures until startup has delivered
   // its event; the completion task still awaits the original result below.
   collection?.catch(() => {});
-  started.then(async () => {
+  startup.then(async () => {
     try {
       if (collection) {
         const collected = await collection;

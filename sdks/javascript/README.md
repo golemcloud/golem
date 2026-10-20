@@ -3,10 +3,13 @@
 This adapter is under development. The SDK templates do not register it.
 
 `tool-process-backend.js` and its mock tests describe the Node-facing behavior.
-The private transport facade still describes the removed host prototype. In
-particular, the existing tool API does not expose dispatch admission or whether
-the tool body ran. Do not infer those facts from a result error or from readiness.
-Replace that contract before wiring the adapter into a runtime template.
+The private transport facade still needs guest-side attachment creation and
+collection before the SDK templates can register it. The adapter does not ask
+the transport for dispatch admission or whether the tool body ran: the existing
+tool API exposes neither fact. Once a local process handle exists, a tool RPC
+failure becomes a command result, not a retroactive spawn refusal. The `spawn`
+event marks that local handle; it does not confirm remote permission or execution.
+Local setup failures still report process errors without a `spawn` event.
 
 The [guest bridge fixture](../../golem-common/tests/fixtures/node-tool-processes/README.md)
 tests a replacement transport over the existing tool API, without WIT or executor
