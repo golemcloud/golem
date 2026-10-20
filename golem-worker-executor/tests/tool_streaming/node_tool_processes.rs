@@ -24,11 +24,39 @@ async fn node_guest_tool_process_bridge(
         std::path::PathBuf::from(std::env::var("GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM")?)
             .canonicalize()?;
     let cases = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_CASES")?;
+    let execution = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_EXECUTION")
+        .unwrap_or_else(|_| "all".to_string());
+    anyhow::ensure!(matches!(
+        execution.as_str(),
+        "all"
+            | "main-sync"
+            | "main-async"
+            | "main-both"
+            | "main-overlap"
+            | "main-cancel"
+            | "main-native-cancel"
+            | "fresh-sync"
+            | "fresh-async"
+            | "fresh-native-cancel"
+            | "fresh-sdk-overflow"
+            | "fresh-stream-control"
+    ));
     let replay_probe = std::env::var_os("GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE").is_some();
     anyhow::ensure!(cases.split(',').all(|mode| matches!(
         mode,
         "streams-collect" | "streams-echo-collect" | "streams-pressure-collect"
     )));
+    anyhow::ensure!(
+        !matches!(
+            execution.as_str(),
+            "fresh-stream-control"
+                | "main-overlap"
+                | "main-cancel"
+                | "main-native-cancel"
+                | "fresh-native-cancel"
+                | "fresh-sdk-overflow"
+        ) || cases == "streams-collect"
+    );
     let context = TestContext::new(last_unique_id);
     let environment = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
@@ -119,12 +147,18 @@ async fn node_guest_tool_process_bridge(
         .as_ref()
         .map(|(port, _, _)| format!("http://127.0.0.1:{port}"));
     for mode in cases.split(',') {
-        println!("node-tool-stream starting mode={mode}");
+        println!("node-tool-stream starting mode={mode} execution={execution}");
         let started = Instant::now();
-        let mut args = vec![mode];
-        if let Some(url) = &effect_url {
-            args.push(url);
-        }
+        let args = vec![
+            mode,
+            effect_url.as_deref().unwrap_or(""),
+            execution.as_str(),
+        ];
+        let label = if execution == "all" {
+            mode.to_string()
+        } else {
+            format!("{mode}[{execution}]")
+        };
         let result = tokio::time::timeout(
             Duration::from_secs(30),
             invoke_cli_tool(
@@ -140,10 +174,10 @@ async fn node_guest_tool_process_bridge(
         .map_err(|_| anyhow::anyhow!("guest bridge timed out: {mode}"))??;
         assert_eq!(result.exit_code, 0, "{mode}: {result:?}");
         assert!(result.stderr.is_empty(), "{mode}: {result:?}");
-        if mode == "streams-pressure-collect" {
+        if mode == "streams-pressure-collect" || execution == "fresh-sdk-overflow" {
             assert_eq!(
                 String::from_utf8(result.stdout)?,
-                "streams-pressure-collect:overflow:4096\n"
+                format!("{label}:overflow:4096\n")
             );
             println!(
                 "node-tool-stream completed mode={mode} elapsed_us={}",
@@ -158,7 +192,7 @@ async fn node_guest_tool_process_bridge(
         };
         assert_eq!(
             String::from_utf8(result.stdout)?,
-            format!("{mode}:{bytes}:{checksum}:{stderr_bytes}:{stderr_checksum}\n")
+            format!("{label}:{bytes}:{checksum}:{stderr_bytes}:{stderr_checksum}\n")
         );
         println!(
             "node-tool-stream completed mode={mode} elapsed_us={}",
@@ -167,7 +201,7 @@ async fn node_guest_tool_process_bridge(
     }
     if let Some((_, effects, server)) = effect_probe.as_mut() {
         for mode in cases.split(',') {
-            for runtime in if mode.contains("echo") {
+            for runtime in if mode.contains("echo") || execution.starts_with("main-") {
                 ["main"].as_slice()
             } else {
                 ["main", "job"].as_slice()

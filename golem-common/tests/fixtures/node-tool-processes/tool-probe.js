@@ -1,57 +1,351 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
-import { collectSync } from 'golem-tool-process-bridge';
-import { runJavaScript } from 'wasm-rquickjs:execution';
-import { ok, processExitStatusSchema, toolDefinition } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs';
-import { getToolType } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/toolReflection.mjs';
-import { typedSchemaValueToWit } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/internal/schema-model/wit.mjs';
-import { z } from '../../../../sdks/ts/packages/golem-ts-sdk/node_modules/zod/v4/index.js';
+import * as native from "golem-tool-process-bridge";
+import { createToolProcessBackend } from "golem-tool-process-backend";
+import { createToolProcessHost } from "golem-tool-process-host";
+import { sdkOverflowControl } from "golem-tool-process-sdk-control";
+import process from "node:process";
+import { runJavaScript } from "wasm-rquickjs:execution";
+import {
+  ok,
+  processExitStatusSchema,
+  toolDefinition,
+  z,
+} from "golem-tool-process-sdk-control";
 
-export { golemTool010Guest, golemTool010Guest as guest } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs';
-export { guest as golemAgent200Guest, toolMiddlewareGuest, toolMiddlewareGuest as golemTool010ToolMiddlewareGuest, saveSnapshot, loadSnapshot } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/emptyGuest.mjs';
+export {
+  golemTool010Guest,
+  golemTool010Guest as guest,
+} from "golem-tool-process-sdk-control";
+export {
+  golemAgent200Guest,
+  toolMiddlewareGuest,
+  toolMiddlewareGuest as golemTool010ToolMiddlewareGuest,
+  saveSnapshot,
+  loadSnapshot,
+} from "golem-tool-process-sdk-control";
 
-const probe = toolDefinition('node-tool-probe', { requiresFilesystem: true })
-    .version('0.0.1')
-    .body(body => body.option('cwd', z.string(), { default: '/workspace' })
-        .tail('args', z.string(), { separator: '--', verbatim: true })
-        .stdout({ required: true }).stderr({ required: true })
-        .returns(processExitStatusSchema));
+const probe = toolDefinition("node-tool-probe", { requiresFilesystem: true })
+  .version("0.0.1")
+  .body((body) =>
+    body
+      .option("cwd", z.string(), { default: "/workspace" })
+      .tail("args", z.string(), { separator: "--", verbatim: true })
+      .stdout({ required: true })
+      .stderr({ required: true })
+      .returns(processExitStatusSchema),
+  );
+
+function startCapture(backend, args, options = {}) {
+  const child = backend.spawn("streaming", args, {
+    maxBuffer: 4096,
+    ...options,
+  });
+  const stdout = [];
+  const stderr = [];
+  let error;
+  let first;
+  const firstOutput = new Promise((resolve) => {
+    first = resolve;
+  });
+  child.stdout.on("data", (bytes) => {
+    stdout.push(...bytes);
+    first();
+  });
+  child.stderr.on("data", (bytes) => stderr.push(...bytes));
+  child.on("error", (failure) => {
+    error ??= failure;
+  });
+  const done = new Promise((resolve) =>
+    child.once("close", (status, signal) => {
+      first();
+      resolve({
+        status,
+        signal,
+        error,
+        stdout: Uint8Array.from(stdout),
+        stderr: Uint8Array.from(stderr),
+      });
+    }),
+  );
+  return { child, done, firstOutput, stdout };
+}
+
+async function cancelNative(native) {
+  const prepared = native.prepareCommand(
+    "streaming",
+    ["run", "marker-echo"],
+    [],
+  );
+  if (prepared?.tag !== "invoke")
+    throw new Error("Native command not prepared");
+  const stdin = native.createInput(undefined);
+  const stdout = native.createOutput(4096);
+  let child;
+  let pending;
+  let closed;
+  let tail;
+  try {
+    child = native.invoke(prepared.val.input, stdin, stdout, undefined);
+    pending = native.collectAsync(child);
+    pending.catch(() => {});
+    closed = native.waitInputClosed(stdin);
+    closed.catch(() => {});
+    const marker = await native.readOutput(stdout);
+    if (new TextDecoder().decode(marker) !== "marker:")
+      throw new Error("Native child did not reach its input wait");
+    tail = native.readOutput(stdout);
+    tail.catch(() => {});
+    native.cancel(child);
+    const result = await pending;
+    if (result.result?.tag !== "err" || result.result.val?.tag !== "cancelled")
+      throw new Error("Native cancellation did not settle");
+    const [output] = await Promise.allSettled([tail, closed]);
+    if (output.status === "fulfilled" && output.value !== undefined)
+      throw new Error("Native child wrote after cancellation");
+  } finally {
+    try {
+      if (child) {
+        native.cancel(child);
+        await Promise.allSettled([pending, tail, closed]);
+      }
+    } finally {
+      native.disposeInput(stdin, "writer");
+      native.disposeInput(stdin, "source");
+      native.disposeInput(stdin, "closed");
+      native.disposeOutput(stdout, true);
+      native.disposeOutput(stdout, false);
+      if (child) native.disposeProcess(child);
+    }
+  }
+}
 
 probe.implement({
-    async 'node-tool-probe'(input, context) {
-        const [mode, effectUrl] = input.args;
-        const echo = mode.includes('echo');
-        const pressure = mode.includes('pressure');
-        const path = [echo ? 'run' : pressure ? 'produce' : 'dual-reconstruct'];
-        const command = getToolType('streaming').command(path);
-        const wire = typedSchemaValueToWit({
-            graph: command.inputSchema.graph,
-            value: command.packJson(echo ? { mode: 'echo' } : pressure
-                ? { 'chunk-count': 512, 'chunk-size': 65536 }
-                : { mode: 'redaction-terminals' }),
-        });
-        if (effectUrl) {
-            const response = await fetch(`${effectUrl}/${mode}-main`, { method: 'POST' });
-            await response.arrayBuffer();
-        }
-        const bytes = echo ? new Uint8Array([0, 255, 1, 128, 0, 13, 10, 254]) : new Uint8Array();
-        const value = collectSync('streaming', path, wire, bytes, echo, !echo && !pressure, 4096);
-        if (value && typeof value.then === 'function') throw new Error('Expected synchronous guest bridge');
-        if (!echo) {
-            const job = await runJavaScript({ source: `
-                const { collectSync } = await import('golem-tool-process-bridge');
-                if (${JSON.stringify(effectUrl)} !== undefined) {
+  async "node-tool-probe"(input, context) {
+    const [mode, effectUrl, execution = "all"] = input.args;
+    const control = execution === "fresh-stream-control";
+    const nativeControl = execution.endsWith("native-cancel");
+    const sdkControl = execution === "fresh-sdk-overflow";
+    const synchronous = [
+      "all",
+      "main-sync",
+      "main-both",
+      "fresh-sync",
+    ].includes(execution);
+    const asynchronous = [
+      "all",
+      "main-async",
+      "main-both",
+      "fresh-async",
+    ].includes(execution);
+    const extra = execution === "all";
+    const fresh = extra || execution.startsWith("fresh-");
+    const echo = mode.includes("echo");
+    const pressure = mode.includes("pressure");
+    const args = echo
+      ? ["run", "echo"]
+      : pressure
+        ? ["produce", "512", "65536"]
+        : ["dual-reconstruct", "redaction-terminals"];
+    if (effectUrl) {
+      const response = await fetch(`${effectUrl}/${mode}-main`, {
+        method: "POST",
+      });
+      await response.arrayBuffer();
+    }
+    const bytes = echo
+      ? new Uint8Array([0, 255, 1, 128, 0, 13, 10, 254])
+      : new Uint8Array();
+    const backend = createToolProcessBackend(
+      createToolProcessHost(native),
+      process,
+    );
+    const summarize = (result) => {
+      if (result.error?.code === "ENOBUFS")
+        return `overflow:${result.stdout.length}`;
+      if (result.error || result.status !== 0)
+        throw new Error(
+          `process failure: ${result.error?.message ?? result.stderr.toString()}`,
+        );
+      const sum = (bytes) => [...bytes].reduce((sum, byte) => sum + byte, 0);
+      return `${result.stdout.length}:${sum(result.stdout)}:${result.stderr.length}:${sum(result.stderr)}`;
+    };
+    let value =
+      control ||
+      nativeControl ||
+      execution === "main-cancel" ||
+      execution === "main-overlap"
+        ? "7:700:14:1455"
+        : undefined;
+    if (nativeControl) await cancelNative(native);
+    if (sdkControl) value = await sdkOverflowControl();
+    if (synchronous) {
+      value = summarize(
+        backend.spawnSync("streaming", args, {
+          input: bytes,
+          maxBuffer: 4096,
+        }),
+      );
+    }
+    if (asynchronous) {
+      const child = startCapture(backend, args);
+      child.child.stdin?.end(bytes);
+      const result = summarize(await child.done);
+      value ??= result;
+      if (result !== value) throw new Error("Async process differs");
+    }
+    if (echo && extra) {
+      const large = Uint8Array.from(
+        { length: 131089 },
+        (_, index) => index % 256,
+      );
+      const options = { maxBuffer: large.length };
+      const matches = (result) =>
+        !result.error &&
+        result.status === 0 &&
+        result.stderr.length === 0 &&
+        result.stdout.length === large.length &&
+        large.every((byte, index) => result.stdout[index] === byte);
+      const synchronous = backend.spawnSync("streaming", args, {
+        ...options,
+        input: large,
+      });
+      if (!matches(synchronous))
+        throw new Error("Large synchronous stdin differs");
+      const asynchronous = startCapture(backend, args, options);
+      asynchronous.child.stdin.end(large);
+      if (!matches(await asynchronous.done))
+        throw new Error("Large asynchronous stdin differs");
+    }
+    if (!echo && !pressure && (extra || execution === "main-overlap")) {
+      const overlap = startCapture(backend, ["run", "marker-echo"]);
+      try {
+        await overlap.firstOutput;
+        if (
+          new TextDecoder().decode(Uint8Array.from(overlap.stdout)) !==
+          "marker:"
+        )
+          throw new Error("Async child did not reach its input wait");
+        if (
+          summarize(
+            backend.spawnSync("streaming", args, { maxBuffer: 4096 }),
+          ) !== value
+        )
+          throw new Error("Overlapping synchronous process differs");
+        overlap.child.stdin.end(new Uint8Array([0, 255, 128]));
+        const result = await overlap.done;
+        if (
+          result.error ||
+          result.status !== 0 ||
+          result.stdout.length !== 10 ||
+          result.stdout[8] !== 255 ||
+          result.stdout[9] !== 128
+        )
+          throw new Error("Async child did not survive synchronous execution");
+      } finally {
+        overlap.child.kill();
+        await overlap.done;
+      }
+    }
+    if (!echo && !pressure && (extra || execution === "main-cancel")) {
+      const cancelled = startCapture(backend, ["run", "marker-echo"]);
+      try {
+        await cancelled.firstOutput;
+        if (!cancelled.child.kill())
+          throw new Error("Child cancellation refused");
+        const stopped = await cancelled.done;
+        if (
+          stopped.error ||
+          stopped.status !== null ||
+          stopped.signal !== "SIGTERM"
+        )
+          throw new Error("Child cancellation did not settle");
+      } finally {
+        cancelled.child.kill();
+        await cancelled.done;
+      }
+      if (summarize(backend.spawnSync("streaming", args)) !== value)
+        throw new Error("Follow-up process after cancellation differs");
+    }
+    if (!echo && fresh) {
+      const job = await runJavaScript({
+        source: sdkControl
+          ? `
+                const { sdkOverflowControl } = await import('golem-tool-process-sdk-control');
+                if (${JSON.stringify(effectUrl)}) {
                     const response = await fetch(${JSON.stringify(effectUrl)} + '/' + ${JSON.stringify(mode)} + '-job', { method: 'POST' });
                     await response.arrayBuffer();
                 }
-                return collectSync('streaming', ${JSON.stringify(path)}, ${JSON.stringify(wire)}, new Uint8Array(), false, ${!pressure}, 4096);
-            `, cwd: '/', timeoutMs: 10000, maxBytes: 4096 });
-            if (job.value !== value || job.stdout || job.stderr || job.overflowed) throw new Error('Fresh runtime differs');
-        }
-        const writer = context.stdout.getWriter();
-        try { await writer.write(new TextEncoder().encode(`${mode}:${value}\n`)); }
-        finally { writer.releaseLock(); }
-        return ok({ exit_code: 0 });
-    },
+                return await sdkOverflowControl();
+            `
+          : control
+            ? `
+                const { PassThrough } = await import('node:stream');
+                const { finished } = await import('node:stream/promises');
+                const stdout = new PassThrough();
+                const stderr = new PassThrough();
+                const result = { stdout: [], stderr: [] };
+                stdout.on('data', bytes => result.stdout.push(...bytes));
+                stderr.on('data', bytes => result.stderr.push(...bytes));
+                const done = Promise.all([finished(stdout), finished(stderr)]);
+                if (${JSON.stringify(effectUrl)}) {
+                    const response = await fetch(${JSON.stringify(effectUrl)} + '/' + ${JSON.stringify(mode)} + '-job', { method: 'POST' });
+                    await response.arrayBuffer();
+                }
+                stdout.end(new Uint8Array([100, 100, 100, 100, 100, 100, 100]));
+                stderr.end(new Uint8Array([103, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104]));
+                await done;
+                const summarize = ${summarize.toString()};
+                return summarize({ status: 0, ...result });
+            `
+            : nativeControl
+              ? `
+                const native = await import('golem-tool-process-bridge');
+                if (${JSON.stringify(effectUrl)}) {
+                    const response = await fetch(${JSON.stringify(effectUrl)} + '/' + ${JSON.stringify(mode)} + '-job', { method: 'POST' });
+                    await response.arrayBuffer();
+                }
+                const cancelNative = ${cancelNative.toString()};
+                await cancelNative(native);
+                return '7:700:14:1455';
+            `
+              : `
+                const native = await import('golem-tool-process-bridge');
+                const { createToolProcessBackend } = await import('golem-tool-process-backend');
+                const { createToolProcessHost } = await import('golem-tool-process-host');
+                const { default: process } = await import('node:process');
+                if (${JSON.stringify(effectUrl)}) {
+                    const response = await fetch(${JSON.stringify(effectUrl)} + '/' + ${JSON.stringify(mode)} + '-job', { method: 'POST' });
+                    await response.arrayBuffer();
+                }
+                const backend = createToolProcessBackend(createToolProcessHost(native), process);
+                const summarize = ${summarize.toString()};
+                const startCapture = ${startCapture.toString()};
+                let value;
+                if (${synchronous}) value = summarize(backend.spawnSync('streaming', ${JSON.stringify(args)}, { maxBuffer: 4096 }));
+                if (${asynchronous}) {
+                    const child = startCapture(backend, ${JSON.stringify(args)});
+                    const result = summarize(await child.done);
+                    value ??= result;
+                    if (result !== value) throw new Error('Fresh async process differs');
+                }
+                return value;
+            `,
+        cwd: "/",
+        timeoutMs: 10000,
+        maxBytes: 4096,
+      });
+      if (job.value !== value || job.stdout || job.stderr || job.overflowed)
+        throw new Error("Fresh runtime differs");
+    }
+    const writer = context.stdout.getWriter();
+    try {
+      const label = execution === "all" ? mode : `${mode}[${execution}]`;
+      await writer.write(new TextEncoder().encode(`${label}:${value}\n`));
+    } finally {
+      writer.releaseLock();
+    }
+    return ok({ exit_code: 0 });
+  },
 });
