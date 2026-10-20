@@ -66,6 +66,7 @@ async fn idle_mcp_stream(keep_alive: bool) -> (bool, Vec<u8>) {
 
     let mut config = mcp_http_transport_config(&McpConfig {
         sse_keep_alive_interval: INTERVAL,
+        ..McpConfig::default()
     });
     if !keep_alive {
         config = config.with_sse_keep_alive(None);

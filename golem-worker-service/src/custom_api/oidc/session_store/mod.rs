@@ -15,7 +15,10 @@
 mod db;
 mod redis;
 
-pub use db::{DbSessionStore, PostgresSessionStore, SqliteSessionStore};
+pub use db::{
+    DbSessionStore, PostgresSessionStore, SqliteSessionStore, migrated_postgres_pool,
+    migrated_sqlite_pool,
+};
 pub use redis::RedisSessionStore;
 
 use super::model::{

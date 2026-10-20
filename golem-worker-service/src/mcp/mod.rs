@@ -15,3 +15,4 @@ mod endpoint;
 mod invoke;
 mod mcp_capabilities_lookup;
 mod schema;
+pub mod session;

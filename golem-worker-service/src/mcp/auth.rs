@@ -888,18 +888,19 @@ mod tests {
         let routes = oauth_proxy_routes(
             Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
             Arc::new(
-                crate::custom_api::oidc::session_store::SqliteSessionStore::configured(
-                    &crate::config::SqliteSessionStoreConfig {
-                        pending_login_expiration: std::time::Duration::from_secs(60),
-                        cleanup_interval: std::time::Duration::from_secs(60),
-                        sqlite_config: golem_common::config::DbSqliteConfig {
+                crate::custom_api::oidc::session_store::SqliteSessionStore::new(
+                    crate::custom_api::oidc::session_store::migrated_sqlite_pool(
+                        &golem_common::config::DbSqliteConfig {
                             database: db.path().to_string_lossy().into_owned(),
                             max_connections: 1,
                             foreign_keys: false,
                         },
-                    },
+                    )
+                    .await
+                    .unwrap(),
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_secs(60),
                 )
-                .await
                 .unwrap(),
             ),
         );

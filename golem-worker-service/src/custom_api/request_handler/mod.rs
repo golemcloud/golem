@@ -472,18 +472,20 @@ mod mounted_tests {
         use golem_common::schema::{AgentConstructorSchema, InputSchema, SchemaValue};
         use golem_service_base::custom_api::{RouteBehaviour, RouterFileIndexEntry};
         let db = tempfile::NamedTempFile::new().unwrap();
-        let session_store =
-            SqliteSessionStore::configured(&crate::config::SqliteSessionStoreConfig {
-                pending_login_expiration: std::time::Duration::from_secs(60),
-                cleanup_interval: std::time::Duration::from_secs(60),
-                sqlite_config: golem_common::config::DbSqliteConfig {
+        let session_store = SqliteSessionStore::new(
+            crate::custom_api::oidc::session_store::migrated_sqlite_pool(
+                &golem_common::config::DbSqliteConfig {
                     database: db.path().to_string_lossy().into_owned(),
                     max_connections: 1,
                     foreign_keys: false,
                 },
-            })
+            )
             .await
-            .unwrap();
+            .unwrap(),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(60),
+        )
+        .unwrap();
         let oidc = Arc::new(OidcHandler::new(
             Arc::new(session_store),
             Arc::new(DefaultIdentityProvider),
