@@ -153,8 +153,20 @@ export const agentsChapter = {
   figure: {
     ts: {
       filename: "support-agent.ts",
-      highlight: [11, 12],
-      code: `export const SupportImpl = Support.implement({
+      highlight: [23, 24],
+      code: `export const Support = defineAgent({
+  name: 'SupportAgent',
+  id: { customer: z.string() },
+  http: http.mount('/support/{customer}'),
+  methods: {
+    handle: method({
+      input: { message: z.string(), orderId: z.string() },
+      returns: z.string(),
+    }),
+  },
+})
+
+export const SupportImpl = Support.implement({
   init: () => ({ history: [] as Message[] }),
   methods: {
     async handle({ message, orderId }) {
@@ -176,8 +188,20 @@ export const agentsChapter = {
     },
     effect: {
       filename: "support-agent.ts",
-      highlight: [11, 12, 13],
-      code: `export const SupportImpl = Support.implement({
+      highlight: [23, 24, 25],
+      code: `export const Support = defineAgent({
+  name: "SupportAgent",
+  id: { customer: Schema.String },
+  http: Http.mount("/support/{customer}"),
+  methods: {
+    handle: method({
+      input: { message: Schema.String, orderId: Schema.String },
+      success: Schema.String,
+    }),
+  },
+})
+
+export const SupportImpl = Support.implement({
   init: () => Effect.succeed({ history: [] as Message[] }),
   methods: (state) => ({
     handle: ({ message, orderId }) => Effect.gen(function* () {
@@ -200,18 +224,26 @@ export const agentsChapter = {
     },
     rust: {
       filename: "support_agent.rs",
-      highlight: [18, 19],
-      code: `#[agent_implementation]
+      highlight: [26, 27],
+      code: `#[agent_definition(mount = "/support")]
+pub trait Support {
+  fn new() -> Self;
+  async fn handle(&mut self, message: String, order_id: String)
+    -> String;
+}
+
+struct SupportImpl {
+  history: Vec<Message>,
+}
+
+#[agent_implementation]
 impl Support for SupportImpl {
   fn new() -> Self {
     Self { history: vec![] }
   }
 
-  async fn handle(
-    &mut self,
-    message: String,
-    order_id: String,
-  ) -> String {
+  async fn handle(&mut self, message: String, order_id: String)
+    -> String {
     self.history.push(Message::user(message));
     // Golem lets lookup_order reach only the orders API:
     let reply = llm::run(&self.history, &[lookup_order]).await;
@@ -231,8 +263,13 @@ impl Support for SupportImpl {
     },
     scala: {
       filename: "SupportAgent.scala",
-      highlight: [16, 17],
-      code: `@agentImplementation()
+      highlight: [21, 22],
+      code: `@agentDefinition(mount = "/support/{id}")
+trait SupportAgent extends BaseAgent:
+  class Id(val id: String)
+  def handle(message: String, orderId: String): Future[String]
+
+@agentImplementation()
 final class SupportAgentImpl(id: String) extends SupportAgent:
   private val history = ArrayBuffer.empty[Message]
 
@@ -257,8 +294,14 @@ final class SupportAgentImpl(id: String) extends SupportAgent:
     },
     moonbit: {
       filename: "support_agent.mbt",
-      highlight: [16, 17, 18],
-      code: `fn SupportAgent::new() -> SupportAgent {
+      highlight: [22, 23, 24],
+      code: `#derive.agent
+#derive.mount("/support")
+struct SupportAgent {
+  history : Array[Message]
+}
+
+fn SupportAgent::new() -> SupportAgent {
   { history: [] }
 }
 
