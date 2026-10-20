@@ -327,8 +327,22 @@ pub async fn SupportAgent::handle(
     },
     go: {
       filename: "support_agent.go",
-      highlight: [17, 18],
-      code: `type state struct{ history []Message }
+      highlight: [31, 32],
+      code: `type SupportID struct{ Customer string }
+
+type HandleIn struct {
+    Message string
+    OrderID string
+}
+
+var Support = golem.DefineAgent[SupportID](golem.Spec{
+    Name: "SupportAgent",
+    HTTP: &golem.Mount{Path: "/support/{customer}"},
+})
+
+var Handle = Support.Method[HandleIn, string]("handle")
+
+type state struct{ history []Message }
 
 var impl = Support.Implement(func(SupportID) *state {
     return &state{}
