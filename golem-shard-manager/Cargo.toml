@@ -38,6 +38,7 @@ futures = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
+hyper = { workspace = true }
 include_dir = { workspace = true }
 indoc = { workspace = true }
 itertools = { workspace = true }
@@ -73,6 +74,7 @@ base64 = { workspace = true }
 figment = { workspace = true }
 golem-test-framework = { workspace = true }
 h2 = { workspace = true }
+hyper-util = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }
 rsa = { workspace = true }
 test-r = { workspace = true }

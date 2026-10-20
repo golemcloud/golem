@@ -19,7 +19,7 @@ const logosByFile = Object.fromEntries(
   Object.entries(logoModules).map(([path, mod]) => [path.split("/").pop()!, mod.default])
 );
 
-const { eyebrow, heading, testimonials, showAtLaunch } = customerStories;
+const { heading, testimonials } = customerStories;
 const isFeatured = testimonials.length === 1;
 // 2 testimonials → 2-up grid (avoids an empty slot in a 3-col).
 // 4 testimonials → reuses the 2-col grid, producing a clean 2x2 layout.
@@ -33,16 +33,24 @@ const gridClass =
 ---
 
 {
-  showAtLaunch && testimonials.length > 0 && (
+  testimonials.length > 0 && (
     <section class="customer-stories">
       <div class="container">
         <header class="cs-header">
-          <span class="eyebrow">{eyebrow}</span>
           <h2 class="section-heading">{heading}</h2>
         </header>
         <div class={isFeatured ? "featured-wrap" : gridClass}>
           {testimonials.map((s) => (
             <article class={isFeatured ? "story-card story-featured" : "story-card"}>
+              {s.productLogo && (
+                <Image
+                  class="product-logo"
+                  src={logosByFile[s.productLogo.filename]}
+                  alt={s.productLogo.alt}
+                  widths={[130, 260]}
+                  sizes="130px"
+                />
+              )}
               <blockquote>
                 <p>"{s.quote}"</p>
               </blockquote>
@@ -63,15 +71,6 @@ const gridClass =
                   <div class="story-role muted">{s.role}</div>
                   <div class="story-company muted">{s.company}</div>
                 </div>
-                {s.productLogo && (
-                  <Image
-                    class="product-logo"
-                    src={logosByFile[s.productLogo.filename]}
-                    alt={s.productLogo.alt}
-                    widths={[130, 260]}
-                    sizes="130px"
-                  />
-                )}
               </footer>
             </article>
           ))}
@@ -108,19 +107,18 @@ const gridClass =
     .stories-grid:not(.stories-grid-2):not(.stories-grid-5) {
       grid-template-columns: repeat(3, 1fr);
     }
-    /* 5 cards: 6-col grid where row 1 = 3 cards (span 2 each), row 2 = 2
-       cards (span 2 each) centered via offset placement. */
+    /* 5 cards: bento. The first card is featured and spans both rows on the
+       left; the other four form a 2x2 grid on the right. */
     .stories-grid-5 {
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: 1.25fr 1fr 1fr;
     }
-    .stories-grid-5 > article:nth-child(-n + 3) {
-      grid-column: span 2;
+    .stories-grid-5 > article:first-child {
+      grid-row: span 2;
     }
-    .stories-grid-5 > article:nth-child(4) {
-      grid-column: 2 / span 2;
-    }
-    .stories-grid-5 > article:nth-child(5) {
-      grid-column: 4 / span 2;
+    .stories-grid-5 > article:first-child blockquote p {
+      font-size: 1.25rem;
+      line-height: 1.5;
+      color: var(--text);
     }
   }
 
@@ -197,6 +195,9 @@ const gridClass =
   .story-company {
     font-size: 0.78rem;
     line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .story-featured .story-name {
     font-size: 0.98rem;
@@ -206,18 +207,19 @@ const gridClass =
     font-size: 0.85rem;
   }
 
-  /* Product logo: tucked to the right of the attribution row. Authored as
-     white-on-transparent marks; no filter needed. */
+  /* Product logo: top-left of the card, so the attribution row keeps one
+     line each for name, role and company. */
   .product-logo {
-    flex-shrink: 0;
-    height: 44px;
+    align-self: flex-start;
+    height: 30px;
     width: auto;
-    max-width: 110px;
+    max-width: 130px;
     object-fit: contain;
     opacity: 0.85;
   }
+  .stories-grid-5 > article:first-child .product-logo,
   .story-featured .product-logo {
-    height: 56px;
-    max-width: 130px;
+    height: 40px;
+    max-width: 160px;
   }
 </style>

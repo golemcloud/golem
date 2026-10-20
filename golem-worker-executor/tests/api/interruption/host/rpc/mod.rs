@@ -11,7 +11,7 @@ use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::services::{HasOplog, HasPromiseService, UsesAllDeps};
+use golem_worker_executor::services::{HasActiveAgents, HasOplog, HasPromiseService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor_test_utils::{RecordingRpc, start_with_resource_limits_and_overrides};
 use test_r::test;
@@ -654,11 +654,18 @@ async fn pending_rpc_scenario(
             history::settled(&target_entries)?;
             info!(?original, ?attempts_before, ?after, value, "Caller repaired one RPC Start; completed reconstruction dispatched only the fresh logical increment");
         } else {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while worker.active_agents().try_get_active_agent(&owned).await.is_some() {
+                    tokio::task::yield_now().await;
+                }
+            }).await.context("terminal ephemeral caller must leave the active-agent cache")?;
+            ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
             ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await?.is_err());
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(history::caller(&failed, &key, &target_id, asynchronous, false, 0)? == Some(original.clone()));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
+            ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
             ensure!(dispatches.lock().unwrap().as_slice() == [Some(original.target_key)]);
             executor.invoke_and_await_agent(&component, &target_name_id, "inc_by", data_value!(1u64)).await?;
             ensure!(executor.invoke_and_await_agent(&component, &target_name_id, "get_value", data_value!()).await?.into_typed::<u64>()? == 8);

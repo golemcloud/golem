@@ -1,0 +1,344 @@
+---
+import { Code } from "astro:components";
+import {
+  agentsChapter,
+  toolsChapter,
+  artifactsChapter,
+  codeLanguages,
+  type ChapterCode,
+  type ChapterItem,
+} from "../data/homepage";
+
+interface Props {
+  kind: "agents" | "tools" | "artifacts";
+}
+
+const { kind } = Astro.props;
+const chapter = { agents: agentsChapter, tools: toolsChapter, artifacts: artifactsChapter }[kind];
+const { eyebrow, heading, lead, figure } = chapter;
+const items: ChapterItem[] = chapter.items;
+const id = `ch-${kind}`;
+
+const codeLines = ({ code, highlight }: ChapterCode) => ({
+  line(node: any, line: number) {
+    const hang = code.split("\n")[line - 1].search(/\S|$/) + 2;
+    node.properties.style = `padding-left:${hang}ch;text-indent:-${hang}ch`;
+    for (const span of node.children) {
+      const text = span.children?.[0];
+      if (text?.type !== "text") continue;
+      span.children = text.value
+        .split(/(?<=[(.])/)
+        .flatMap((part: string) => [
+          { type: "text", value: part },
+          ...(/[(.]$/.test(part)
+            ? [{ type: "element", tagName: "wbr", properties: {}, children: [] }]
+            : []),
+        ]);
+    }
+    if (highlight.includes(line)) this.addClassToHast(node, "hl");
+  },
+});
+---
+
+<section
+  class:list={["chapter", `chapter-${kind}`, { band: kind === "tools" }]}
+  aria-labelledby={id}
+>
+  <div class="container grid">
+    <header class="head">
+      <span class="eyebrow">{eyebrow}</span>
+      <h2 class="section-heading" id={id}>{heading}</h2>
+    </header>
+    <p class="lead">{lead}</p>
+
+    <figure class="fig code-block" data-code-switcher>
+      <div class="code-header">
+        <div class="tabs" role="tablist" aria-label="Language">
+          {
+            codeLanguages.map((l) => (
+              <button
+                type="button"
+                role="tab"
+                class="tab mono"
+                id={`${id}-tab-${l.id}`}
+                aria-controls={`${id}-code-${l.id}`}
+                aria-selected={l.id === "ts" ? "true" : "false"}
+                tabindex={l.id === "ts" ? 0 : -1}
+                data-lang={l.id}
+              >
+                {l.label}
+              </button>
+            ))
+          }
+        </div>
+        {
+          codeLanguages.map((l) => (
+            <span class="code-filename mono" data-variant={l.id} hidden={l.id !== "ts"}>
+              {figure[l.id].filename}
+            </span>
+          ))
+        }
+      </div>
+      {
+        codeLanguages.map((l) => (
+          <div
+            role="tabpanel"
+            id={`${id}-code-${l.id}`}
+            aria-labelledby={`${id}-tab-${l.id}`}
+            data-variant={l.id}
+            hidden={l.id !== "ts"}
+          >
+            <Code
+              code={figure[l.id].code}
+              lang={l.shiki}
+              theme="github-dark-default"
+              wrap
+              transformers={[codeLines(figure[l.id])]}
+            />
+          </div>
+        ))
+      }
+    </figure>
+
+    <ul class="points">
+      {
+        items.map((item) => (
+          <li>
+            <strong>{item.title}</strong>
+            <span>{item.body}</span>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</section>
+
+<script>
+  const KEY = "golem-code-lang";
+  const figures = [...document.querySelectorAll<HTMLElement>("[data-code-switcher]")];
+
+  function select(lang: string, from = 0) {
+    for (const fig of figures.slice(from)) {
+      for (const tab of fig.querySelectorAll<HTMLElement>("[role=tab]")) {
+        const on = tab.dataset.lang === lang;
+        tab.setAttribute("aria-selected", String(on));
+        tab.tabIndex = on ? 0 : -1;
+      }
+      for (const el of fig.querySelectorAll<HTMLElement>("[data-variant]")) {
+        el.hidden = el.dataset.variant !== lang;
+      }
+    }
+  }
+
+  // Only the chosen figure and those below it change, so nothing above the
+  // reader's position resizes.
+  function choose(fig: HTMLElement, tab: HTMLElement) {
+    const lang = tab.dataset.lang!;
+    select(lang, figures.indexOf(fig));
+    try {
+      localStorage.setItem(KEY, lang);
+    } catch {}
+  }
+
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(KEY);
+  } catch {}
+  if (stored && document.querySelector(`[role=tab][data-lang="${stored}"]`)) select(stored);
+
+  for (const fig of figures) {
+    const tabs = [...fig.querySelectorAll<HTMLElement>("[role=tab]")];
+    tabs.forEach((tab, i) => {
+      tab.addEventListener("click", () => choose(fig, tab));
+      tab.addEventListener("keydown", (e) => {
+        const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+        if (!step) return;
+        e.preventDefault();
+        const next = tabs[(i + step + tabs.length) % tabs.length];
+        choose(fig, next);
+        next.focus();
+      });
+    });
+  }
+</script>
+
+<style>
+  .chapter {
+    padding: 2.5rem 0;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .head .section-heading {
+    max-width: none;
+    margin-bottom: 0.75rem;
+  }
+  .lead {
+    font-size: 1.05rem;
+    max-width: 60ch;
+    margin: 0 0 1.5rem;
+  }
+  .fig {
+    margin: 0 0 1.75rem;
+    min-width: 0;
+  }
+
+  .code-block {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--code-bg);
+  }
+  .code-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    column-gap: 1rem;
+    padding: 0 1.25rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+    font-size: 0.78rem;
+  }
+  .tabs {
+    display: flex;
+    gap: 0.9rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tab {
+    padding: 0.6rem 0 calc(0.6rem - 2px);
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--text-muted);
+    font-size: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .tab:hover {
+    color: var(--text);
+  }
+  .tab[aria-selected="true"] {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .code-filename {
+    color: var(--text-muted);
+    padding: 0.6rem 0;
+  }
+  .code-filename[hidden],
+  [role="tabpanel"][hidden] {
+    display: none;
+  }
+  .code-block :global(pre) {
+    border: 0 !important;
+    border-radius: 0 !important;
+    margin: 0;
+    padding: 1rem 1.25rem;
+    font-size: 13px;
+    line-height: 21px;
+    overflow-wrap: break-word;
+  }
+  .code-block :global(pre code) {
+    display: flex;
+    flex-direction: column;
+  }
+  .code-block :global(.line) {
+    min-height: 21px;
+  }
+  .code-block :global(.line.hl) {
+    background: var(--accent-dim);
+    box-shadow:
+      -1.25rem 0 0 var(--accent-dim),
+      1.25rem 0 0 var(--accent-dim);
+  }
+  @media (max-width: 400px) {
+    .code-header {
+      padding: 0 0.875rem;
+    }
+    .tabs {
+      gap: 0.65rem;
+    }
+    .code-block :global(pre) {
+      padding: 1rem 0.875rem;
+    }
+    .code-block :global(.line.hl) {
+      box-shadow:
+        -0.875rem 0 0 var(--accent-dim),
+        0.875rem 0 0 var(--accent-dim);
+    }
+  }
+
+  .points {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .points li {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .points li:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .points strong {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .points span {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+
+  @media (min-width: 1100px) {
+    .chapter {
+      padding: 3rem 0;
+    }
+    .grid {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      grid-template-rows: auto auto 1fr;
+      column-gap: 48px;
+    }
+    .head {
+      grid-column: 1 / -1;
+      grid-row: 1;
+      margin-bottom: 0.75rem;
+    }
+    .lead {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    .points {
+      grid-column: 1;
+      grid-row: 3;
+    }
+    .fig {
+      grid-column: 2;
+      grid-row: 2 / span 2;
+      align-self: start;
+      margin: 0;
+    }
+    .chapter-tools .grid {
+      grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    }
+    .chapter-tools .lead,
+    .chapter-tools .points {
+      grid-column: 2;
+    }
+    .chapter-tools .fig {
+      grid-column: 1;
+    }
+  }
+</style>

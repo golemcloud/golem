@@ -1,0 +1,63 @@
+---
+import { faq } from "../data/homepage";
+
+const { heading, items } = faq;
+---
+
+<section class="faq">
+  <div class="container faq-inner">
+    <h2 class="section-heading">{heading}</h2>
+    <div class="items">
+      {
+        items.map((it) => (
+          <details>
+            <summary>{it.q}</summary>
+            <p set:html={it.aHtml} />
+          </details>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .faq-inner {
+    max-width: 860px;
+  }
+  .faq .section-heading {
+    margin-bottom: 1.5rem;
+  }
+  details {
+    border-top: 1px solid var(--border);
+  }
+  details:last-child {
+    border-bottom: 1px solid var(--border);
+  }
+  summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 1rem 2rem 1rem 0;
+    font-weight: 500;
+    color: var(--text);
+    position: relative;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::after {
+    content: "+";
+    position: absolute;
+    right: 0.25rem;
+    color: var(--accent);
+    font-family: var(--font-mono);
+  }
+  details[open] summary::after {
+    content: "–";
+  }
+  details p {
+    margin: 0 0 1.1rem;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    max-width: 70ch;
+  }
+</style>

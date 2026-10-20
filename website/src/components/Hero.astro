@@ -1,36 +1,19 @@
 ---
 import { Image } from "astro:assets";
 import { hero } from "../data/homepage";
-import heroArt from "../assets/hero/golem-thinker.png";
+import heroArt from "../assets/home/golem-hero.png";
 
-const { eyebrow, headingLines, expanderHtml, ctas, images } = hero;
-const heroImage = images[0];
+const { eyebrow, heading, subhead, ctas, artAlt } = hero;
 ---
 
 <section class="hero">
   <div class="container hero-inner">
     <div class="hero-text">
-      <div class="hero-top">
-        {
-          eyebrow && (
-            <a href={eyebrow.href} class="hero-eyebrow">
-              {eyebrow.label}
-              <span aria-hidden="true">→</span>
-            </a>
-          )
-        }
-        <h1 class="hero-heading">
-          {
-            headingLines.map((line, i) => (
-              <>
-                {i > 0 && <br />}
-                {line}
-              </>
-            ))
-          }
-        </h1>
-        <p class="hero-expander" set:html={expanderHtml} />
-      </div>
+      <a href={eyebrow.href} class="hero-eyebrow"
+        >{eyebrow.label} <span aria-hidden="true">→</span></a
+      >
+      <h1 class="hero-heading">{heading}</h1>
+      <p class="hero-subhead">{subhead}</p>
       <div class="hero-ctas">
         <a href={ctas.primary.href} class="btn btn-primary">{ctas.primary.label}</a>
         <a href={ctas.secondary.href} class="btn btn-secondary">
@@ -43,24 +26,23 @@ const heroImage = images[0];
         </a>
       </div>
     </div>
-    {
-      heroImage && (
-        <div class="hero-art">
-          <Image
-            src={heroArt}
-            alt={heroImage.alt}
-            widths={[460, 920]}
-            sizes="(min-width: 880px) 460px, 100vw"
-          />
-        </div>
-      )
-    }
+
+    <div class="hero-visual">
+      <Image
+        class="hero-art"
+        src={heroArt}
+        alt={artAlt}
+        widths={[560, 1024]}
+        sizes="(min-width: 960px) 560px, 90vw"
+        loading="eager"
+      />
+    </div>
   </div>
 </section>
 
 <style>
   .hero {
-    padding: clamp(4rem, 9vw, 7.5rem) 0 clamp(3.5rem, 7vw, 5.5rem);
+    padding: clamp(3.5rem, 7vw, 5.5rem) 0 clamp(3rem, 6vw, 4.5rem);
     position: relative;
     overflow: hidden;
   }
@@ -68,11 +50,11 @@ const heroImage = images[0];
     content: "";
     position: absolute;
     top: -30%;
-    left: 70%;
+    left: 72%;
     width: 900px;
     height: 700px;
     transform: translateX(-50%);
-    background: radial-gradient(ellipse, rgba(245, 176, 62, 0.1), transparent 60%);
+    background: radial-gradient(ellipse, rgba(245, 176, 62, 0.08), transparent 60%);
     pointer-events: none;
     z-index: -1;
   }
@@ -80,114 +62,68 @@ const heroImage = images[0];
     display: grid;
     grid-template-columns: 1fr;
     gap: 2.5rem;
-    align-items: start;
+    align-items: center;
   }
-  @media (min-width: 880px) {
+  @media (min-width: 960px) {
     .hero-inner {
-      grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 3rem;
-      align-items: stretch;
     }
-    .hero-text {
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
-  }
-  .hero-text {
-    text-align: left;
-  }
-  .hero-top {
-    display: flex;
-    flex-direction: column;
   }
   .hero-eyebrow {
-    align-self: flex-start;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
+    display: inline-block;
     font-family: var(--font-mono);
     font-size: 0.74rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    letter-spacing: 0.04em;
     color: var(--accent);
     background: var(--accent-dim);
     border: 1px solid var(--accent-border);
     border-radius: 999px;
     padding: 0.3rem 0.8rem;
-    margin-bottom: 0.9rem;
+    margin-bottom: 1.1rem;
     transition:
       border-color 120ms ease,
       color 120ms ease;
-  }
-  @media (max-width: 480px) {
-    .hero-eyebrow {
-      font-size: 0.66rem;
-      letter-spacing: 0.03em;
-    }
   }
   .hero-eyebrow:hover {
     color: var(--accent-hover);
     border-color: var(--accent);
   }
   .hero-heading {
-    font-size: clamp(2.4rem, 5vw, 3.75rem);
+    font-size: clamp(2.3rem, 4.6vw, 3.5rem);
     font-weight: 600;
     letter-spacing: -0.025em;
-    line-height: 1.05;
-    margin-bottom: 1.5rem;
-    margin-top: 0.65rem;
+    line-height: 1.06;
+    margin-bottom: 1.4rem;
+    max-width: 14ch;
     background: linear-gradient(to bottom, #ffffff 30%, #b0b0bc 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
   }
-  .hero-expander {
-    font-size: clamp(1.02rem, 1.5vw, 1.18rem);
-    line-height: 1.55;
+  .hero-subhead {
+    font-size: clamp(1.02rem, 1.4vw, 1.15rem);
+    line-height: 1.6;
     color: var(--text-secondary);
     margin: 0 0 2rem;
-    max-width: 580px;
-  }
-  .hero-expander :global(strong) {
-    color: var(--text);
-    font-weight: 500;
-  }
-  .hero-expander :global(.closer) {
-    display: inline-block;
-    margin-top: 0.4em;
-    color: var(--accent);
-    font-weight: 500;
+    max-width: 560px;
   }
   .hero-ctas {
     display: flex;
-    justify-content: flex-start;
     gap: 0.85rem;
     flex-wrap: wrap;
   }
-  .hero-art {
+
+  .hero-visual {
+    position: relative;
     display: flex;
     justify-content: center;
-    align-items: center;
   }
-  .hero-art img {
-    max-width: 100%;
-    width: 100%;
+  .hero-art {
+    width: min(560px, 100%);
     height: auto;
     display: block;
-    border-radius: 12px;
-  }
-  @media (min-width: 880px) {
-    .hero-art img {
-      max-width: 460px;
-    }
-  }
-  .break-on-md {
-    display: none;
-  }
-  @media (min-width: 720px) {
-    :global(.break-on-md) {
-      display: inline;
-    }
+    -webkit-mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 82%, transparent 100%);
+    mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 82%, transparent 100%);
   }
 </style>
