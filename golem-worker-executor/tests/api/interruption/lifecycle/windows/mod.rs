@@ -343,23 +343,11 @@ mod activation {
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let key = IdempotencyKey::fresh();
         let mut outcome = executor.gate_next_invocation_started(&owned).await?;
-        let invocation = tokio::spawn({
-            let executor = executor.clone();
-            let component = component.clone();
-            let name = name.clone();
-            let key = key.clone();
-            async move {
-                executor
-                    .invoke_and_await_agent_with_key(
-                        &component,
-                        &name,
-                        &key,
-                        "increment",
-                        data_value!(),
-                    )
-                    .await
-            }
-        });
+        // Finish scheduling before suspending so an outstanding caller or retry
+        // cannot issue a startup request during teardown.
+        executor
+            .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
+            .await?;
         outcome.entered().await;
         assert!(matches!(
             &*worker
@@ -406,9 +394,22 @@ mod activation {
             .filter(|e| matches!(e, OplogEntry::Suspend { .. }))
             .count();
         assert_eq!(suspends_before, 1);
-        assert!(!invocation.is_finished());
+        assert!(matches!(
+            worker.lookup_invocation_result(&key).await,
+            golem_worker_executor::model::LookupResult::Pending
+        ));
         executor.resume(&id, false).await?;
-        let result = tokio::time::timeout(Duration::from_secs(10), invocation).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.invoke_and_await_agent_with_key(
+                &component,
+                &name,
+                &key,
+                "increment",
+                data_value!(),
+            ),
+        )
+        .await;
         let entries = worker
             .oplog()
             .read_exact(
@@ -427,7 +428,7 @@ mod activation {
             suspends_after, 1,
             "one accepted stop must produce only one Suspend across reconstruction"
         );
-        assert_eq!(result???.into_typed::<u32>()?, 2);
+        assert_eq!(result??.into_typed::<u32>()?, 2);
         assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
         assert_eq!(
             entries

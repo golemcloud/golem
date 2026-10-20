@@ -903,21 +903,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 final_decision = Some(decision);
             }
 
-            if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
-                // An external owner cannot reconstruct accepted execution after losing its Store.
-                // Record terminal interruption instead of leaving the accepted key pending behind
-                // a retry marker or starting a replacement component instance.
-                if matches!(
-                    final_decision,
-                    Some(
-                        RetryDecision::Immediate
-                            | RetryDecision::Delayed(_)
-                            | RetryDecision::ReacquirePermits
-                            | RetryDecision::TryStop(_)
-                    )
-                ) {
-                    final_interrupt = Some(InterruptKind::Interrupt(Timestamp::now_utc()));
-                }
+            let terminal_ephemeral_restart = should_terminally_interrupt_ephemeral(
+                self.parent.initial_worker_metadata.owner_kind,
+                self.parent.agent_mode(),
+                final_decision.as_ref(),
+            );
+            if terminal_ephemeral_restart {
+                // Ephemeral execution cannot reconstruct after losing its Store. Traps normally
+                // fail in on_invocation_failure; storage and protocol retries stop here instead.
+                final_interrupt = Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+            }
+            if terminal_ephemeral_restart
+                || self.parent.initial_worker_metadata.owner_kind
+                    == OwnerKind::EphemeralExternalTool
+            {
                 final_decision = Some(RetryDecision::None);
                 cleanup_ephemeral_worker = true;
             }
@@ -4415,6 +4414,20 @@ impl InnerInvocationLoopResult {
     }
 }
 
+fn should_terminally_interrupt_ephemeral(
+    owner_kind: OwnerKind,
+    agent_mode: AgentMode,
+    decision: Option<&RetryDecision>,
+) -> bool {
+    match decision {
+        Some(
+            RetryDecision::Immediate | RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits,
+        ) => agent_mode == AgentMode::Ephemeral,
+        Some(RetryDecision::TryStop(_)) => owner_kind == OwnerKind::EphemeralExternalTool,
+        None | Some(RetryDecision::None) => false,
+    }
+}
+
 fn successful_agent_invocation_outcome(
     agent_mode: AgentMode,
     is_agent_component: bool,
@@ -4799,9 +4812,9 @@ mod tests {
         infrastructure_failure_outcome, measured_capture, monthly_resource_admission,
         monthly_resource_admission_for_capacity, periodic_failure_outcome,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
-        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
-        successful_agent_invocation_outcome, unload_resident_agent_ownership,
-        wait_for_resident_wakeup, with_end,
+        should_terminally_interrupt_ephemeral, snapshot_action_at, snapshot_baseline_timestamp,
+        spawn_module_owned_unload, successful_agent_invocation_outcome,
+        unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
     };
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
@@ -4838,7 +4851,7 @@ mod tests {
     };
     use crate::workerctx::default::Context;
     use golem_common::model::AgentInvocationKind;
-    use golem_common::model::agent::AgentMode;
+    use golem_common::model::agent::{AgentMode, OwnerKind};
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -4848,6 +4861,44 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use test_r::{test, timeout};
+
+    #[test]
+    fn ephemeral_outer_loop_restarts_become_terminal_interruptions() {
+        for decision in [
+            RetryDecision::Immediate,
+            RetryDecision::Delayed(Duration::from_millis(37)),
+            RetryDecision::ReacquirePermits,
+        ] {
+            assert!(should_terminally_interrupt_ephemeral(
+                OwnerKind::ComponentAgent,
+                AgentMode::Ephemeral,
+                Some(&decision),
+            ));
+            assert!(!should_terminally_interrupt_ephemeral(
+                OwnerKind::ComponentAgent,
+                AgentMode::Durable,
+                Some(&decision),
+            ));
+        }
+        let stop = RetryDecision::TryStop(Timestamp::from(1234));
+        assert!(!should_terminally_interrupt_ephemeral(
+            OwnerKind::ComponentAgent,
+            AgentMode::Ephemeral,
+            Some(&stop),
+        ));
+        assert!(should_terminally_interrupt_ephemeral(
+            OwnerKind::EphemeralExternalTool,
+            AgentMode::Ephemeral,
+            Some(&stop),
+        ));
+        for decision in [None, Some(&RetryDecision::None)] {
+            assert!(!should_terminally_interrupt_ephemeral(
+                OwnerKind::ComponentAgent,
+                AgentMode::Ephemeral,
+                decision,
+            ));
+        }
+    }
 
     #[test]
     async fn published_idle_stop_does_not_poll_a_ready_permit_acquisition() {
