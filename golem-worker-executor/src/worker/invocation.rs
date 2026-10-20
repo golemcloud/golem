@@ -523,6 +523,21 @@ fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
     error.downcast_ref::<wasmtime::WasmBacktrace>().is_some()
 }
 
+/// The interruption that unwound a guest execution, when `error` is one. The epoch deadline
+/// callback traps with a bare `InterruptKind`; a durable host call that observed the worker's
+/// interrupt signal, or the fencing of its entity bodies, fails with
+/// `WorkerExecutorError::Interrupted`. Both are the root cause of the trap that Wasmtime reports.
+pub(crate) fn interrupt_kind_in(error: &wasmtime::Error) -> Option<InterruptKind> {
+    let root_cause = error.root_cause();
+    if let Some(kind) = root_cause.downcast_ref::<InterruptKind>() {
+        return Some(*kind);
+    }
+    match root_cause.downcast_ref::<WorkerExecutorError>() {
+        Some(WorkerExecutorError::Interrupted { kind }) => Some(*kind),
+        _ => None,
+    }
+}
+
 /// The oplog that a host call could not read, in the chain of `error`, with the agent it belongs
 /// to: either already a `WorkerExecutorError`, or the read failure itself. The error is
 /// `OplogFailed` for good, or `RecoveryRequired` when a later read can pass.
@@ -553,13 +568,7 @@ fn classify_guest_call_settlement<R>(
         ));
     }
     result.map_err(|error| {
-        if interrupted
-            || error.root_cause().downcast_ref::<InterruptKind>().is_some()
-            || matches!(
-                error.root_cause().downcast_ref::<WorkerExecutorError>(),
-                Some(WorkerExecutorError::Interrupted { .. })
-            )
-        {
+        if interrupted || interrupt_kind_in(&error).is_some() {
             GuestCallSettlementError::Interrupted(error)
         } else if let Some((agent_id, unreadable)) = unreadable_oplog_in(&error) {
             // The oplog of this agent is a failure of the agent. The oplog of another agent that

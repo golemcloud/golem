@@ -2,41 +2,33 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Nav from "../components/Nav.astro";
 import Hero from "../components/Hero.astro";
-import CodeSection from "../components/CodeSection.astro";
-import TriadSection from "../components/TriadSection.astro";
-import CodingAgentSection from "../components/CodingAgentSection.astro";
-import ArtifactsSection from "../components/ArtifactsSection.astro";
 import CustomerLogos from "../components/CustomerLogos.astro";
-import ThreeCommitments from "../components/ThreeCommitments.astro";
-import FrameworkVsRuntime from "../components/FrameworkVsRuntime.astro";
+import CoreVm from "../components/CoreVm.astro";
 import MetricBar from "../components/MetricBar.astro";
-import BringYourStack from "../components/BringYourStack.astro";
-import OpenSource from "../components/OpenSource.astro";
-import UseCasesTeaser from "../components/UseCasesTeaser.astro";
-import TableStakes from "../components/TableStakes.astro";
+import Chapter from "../components/Chapter.astro";
 import CustomerStories from "../components/CustomerStories.astro";
-import Quickstart from "../components/Quickstart.astro";
+import Deployment from "../components/Deployment.astro";
+import Faq from "../components/Faq.astro";
+import FinalCta from "../components/FinalCta.astro";
 import Footer from "../components/Footer.astro";
+import { meta } from "../data/homepage";
 ---
 
-<BaseLayout title="Golem — Agents, tools, and artifacts on one durable runtime">
+<BaseLayout title={meta.title} description={meta.description}>
   <Nav />
   <main>
     <Hero />
     <CustomerLogos />
-    <TriadSection />
-    <CodeSection />
-    <CodingAgentSection />
-    <ThreeCommitments />
-    <ArtifactsSection />
-    <FrameworkVsRuntime />
+    <CoreVm />
     <MetricBar />
-    <BringYourStack />
-    <TableStakes />
-    <UseCasesTeaser />
-    <OpenSource />
+    <Chapter kind="agents" />
+    <Chapter kind="tools" />
+    <Chapter kind="artifacts" />
+    <hr class="divider" />
     <CustomerStories />
-    <Quickstart />
+    <Deployment />
+    <Faq />
+    <FinalCta />
   </main>
   <Footer />
 </BaseLayout>

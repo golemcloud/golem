@@ -4511,6 +4511,8 @@ dependencies = [
  "hex",
  "http 1.5.0",
  "humantime-serde",
+ "hyper",
+ "hyper-util",
  "include_dir",
  "indoc",
  "itertools 0.14.0",

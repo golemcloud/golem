@@ -1,731 +1,716 @@
 // Homepage copy — single source of truth for all visitor-facing prose on /
 //
+// Source copy: research/golem-homepage-copy-draft.md.
+//
 // Editing notes:
 //   - Plain strings are rendered as-is.
-//   - HTML strings (paragraphs in cards, hero expander, etc.) are rendered via
-//     `set:html` in the components. Use <strong>, <em>, and <code>.
+//   - Fields ending in `Html` are rendered via `set:html`. Use <strong>, <em>, and <code>.
+
+export const meta = {
+  title: "Golem: the durable runtime for AI agents",
+  description:
+    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+};
 
 // =============================================================================
-// SECTION 1 — Hero
+// Hero
 // =============================================================================
+
+export type Status = "ok" | "wait" | "fail";
 
 export const hero = {
-  // Small release line above the headline. Update with each major release.
+  // Release pill above the H1. Update with each major release.
   eyebrow: {
-    label: "Golem 1.6 · Agents, Tools, and Artifacts",
+    label: "Golem 1.6 is out: see what's new",
     href: "/blog/golem-1-6-agents-tools-and-artifacts",
   },
-  // headingLines render as <br>-separated lines inside the same <h1>.
-  headingLines: ["Agents that never fail.", "Policies that never bend."],
-  // expander is HTML (uses <strong>, <br>).
-  expanderHtml: `Deploy <strong>agents, their tools, and their artifacts</strong> to one durable runtime. State persists automatically, every tool call executes exactly once, and the host enforces every policy — whoever, or whatever, wrote the code.`,
+  heading: "The durable runtime for AI agents",
+  subhead:
+    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
   ctas: {
-    primary: { label: "Get started →", href: "https://learn.golem.cloud/quickstart" },
+    primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
   },
-  // Right-column hero imagery. Currently a single image imported directly
-  // in Hero.astro; only the alt text comes from here.
-  images: [{ alt: "Golem thinker — stone figure in contemplation" }],
+  artAlt: "",
 };
 
 // =============================================================================
-// SECTION 2 — Code (the M1 proof)
-// =============================================================================
-
-export const codeSection = {
-  eyebrow: "Code-first",
-  heading: "Agents are code, not prompts.",
-  lead: "Typed agents in TypeScript, Effect, Rust, Go, Scala, or MoonBit. State survives crashes and redeploys. Tool calls never fire twice. Your code — and the host — decide what's allowed.",
-  defaultLang: "typescript" as const,
-  tabs: [
-    { id: "typescript", label: "TypeScript", filename: "orders-agent.ts", lang: "typescript" },
-    { id: "effect", label: "Effect", filename: "orders-agent.ts", lang: "typescript" },
-    { id: "rust", label: "Rust", filename: "orders_agent.rs", lang: "rust" },
-    { id: "go", label: "Go", filename: "orders.go", lang: "go" },
-    { id: "scala", label: "Scala", filename: "OrdersAgent.scala", lang: "scala" },
-    { id: "moonbit", label: "MoonBit", filename: "orders_agent.mbt", lang: "moonbit" },
-  ],
-  snippets: {
-    typescript: `export const Orders = defineAgent({
-  name: 'Orders',
-  id: { customerId: z.string() },
-  http: http.mount('/orders/{customerId}'),
-  config: { systemPrompt: z.string() },
-  methods: {
-    handle: method({
-      input: { request: z.string(), orderId: z.string() },
-      returns: z.object({ resolved: z.boolean() }),
-    }),
-  },
-})
-
-export const OrdersImpl = Orders.implement({
-  init: () => ({ history: [] as Message[] }),
-  methods: {
-    async handle({ request, orderId }) {
-      // No DB writes — this push survives crashes, deploys, host migrations
-      this.history.push({ role: 'user', content: request })
-
-      // LLM sees full conversation; system prompt comes from typed config
-      const outcome = await llm.run({
-        prompt: this.config.systemPrompt, history: this.history,
-        tools: [cancelOrder, changeAddress], context: { orderId },
-      })
-      this.history.push({ role: 'assistant', content: outcome.message })
-
-      // Refunds aren't in the LLM's toolset — agent code gates them via HITL
-      if (outcome.needsRefund) {
-        // This await can sit for days at zero cost — no queue, no cron, no state table
-        const webhook = createWebhook()
-        await notifyApprover(webhook.getUrl(), outcome)
-        const { approved } = (await webhook).json()
-        if (approved) {
-          // Crash, retry, restart — still one charge. No silent double-charges.
-          const result = await refundOrder({ orderId, amount: outcome.refundAmount })
-          this.history.push({ role: 'tool', content: JSON.stringify(result) })
-        }
-      }
-      return { resolved: true }
-    },
-  },
-})`,
-
-    effect: `class OrdersConfig extends defineConfig("Orders.Config", {
-  systemPrompt: Schema.String,
-}) {}
-
-export const Orders = defineAgent({
-  name: "Orders",
-  id: { customerId: Schema.String },
-  http: Http.mount("/orders/{customerId}"),
-  config: OrdersConfig,
-  methods: {
-    handle: method({
-      input: { request: Schema.String, orderId: Schema.String },
-      success: Schema.Struct({ resolved: Schema.Boolean }),
-    }),
-  },
-}).implement<Ref.Ref<Message[]>>({
-  init: () => Ref.make<Message[]>([]),
-  methods: (history) => ({
-    handle: ({ request, orderId }) =>
-      Effect.gen(function* () {
-        // No DB writes — this update survives crashes, deploys, host migrations
-        yield* Ref.update(history, (h) => [...h, { role: "user", content: request }])
-
-        // LLM sees full conversation; system prompt comes from typed config
-        const config = yield* OrdersConfig
-        const outcome = yield* llm.run({
-          prompt: yield* config.systemPrompt, history: yield* Ref.get(history),
-          tools: [cancelOrder, changeAddress], context: { orderId },
-        })
-        yield* Ref.update(history, (h) => [...h, { role: "assistant", content: outcome.message }])
-
-        // Refunds aren't in the LLM's toolset — agent code gates them via HITL
-        if (outcome.needsRefund) {
-          // This await can sit for days at zero cost — no queue, no cron, no state table
-          const webhook = yield* Webhook.create
-          yield* notifyApprover(webhook.url, outcome)
-          const { approved } = yield* (yield* webhook.await).decode(Approval)
-          if (approved) {
-            // Crash, retry, restart — still one charge. No silent double-charges.
-            const result = yield* refundOrder({ orderId, amount: outcome.refundAmount })
-            yield* Ref.update(history, (h) => [...h, { role: "tool", content: JSON.stringify(result) }])
-          }
-        }
-        return { resolved: true }
-      }),
-  }),
-})`,
-
-    rust: `#[derive(ConfigSchema)]
-pub struct OrdersConfig { pub system_prompt: String }
-
-#[agent_definition(mount = "/orders/{customer_id}")]
-pub trait Orders {
-    fn new(customer_id: String, #[agent_config] config: Config<OrdersConfig>) -> Self;
-    async fn handle(&mut self, request: String, order_id: String) -> bool;
-}
-
-struct OrdersImpl { config: Config<OrdersConfig>, history: Vec<Message> }
-
-#[agent_implementation]
-impl Orders for OrdersImpl {
-    fn new(_customer_id: String, #[agent_config] config: Config<OrdersConfig>) -> Self {
-        Self { config, history: Vec::new() }
-    }
-
-    async fn handle(&mut self, request: String, order_id: String) -> bool {
-        // No DB writes — this push survives crashes, deploys, host migrations
-        self.history.push(Message::user(request));
-
-        // LLM sees full conversation; system prompt comes from typed config
-        let system_prompt = self.config.get().expect("config").system_prompt;
-        let outcome = llm::run(
-            &system_prompt, &self.history,
-            vec![cancel_order(), change_address()], order_id.clone(),
-        ).await;
-        self.history.push(Message::assistant(outcome.message.clone()));
-
-        // Refunds aren't in the LLM's toolset — agent code gates them via HITL
-        if outcome.needs_refund {
-            // This await can sit for days at zero cost — no queue, no cron, no state table
-            let webhook = create_webhook().expect("webhook");
-            notify_approver(webhook.url(), &outcome).await;
-            let approval: Approval = webhook.await.json().expect("approval");
-            if approval.approved {
-                // Crash, retry, restart — still one charge. No silent double-charges.
-                let result = refund_order(order_id, outcome.refund_amount).await;
-                self.history.push(Message::tool(result.to_string()));
-            }
-        }
-        true
-    }
-}`,
-
-    go: `type ID struct{ Customer string }
-type Config struct{ SystemPrompt string }
-type HandleIn struct{ Request, OrderID string }
-
-var Orders = golem.DefineConfiguredAgent[ID, Config](golem.Spec{
-	Name: "Orders",
-	HTTP: &golem.Mount{Path: "/orders/{customer}"},
-})
-
-var Handle = Orders.Method[HandleIn, bool]("handle")
-
-type state struct{ history []Message }
-
-func (s *state) add(role, content string) {
-	s.history = append(s.history, Message{role, content})
-}
-
-var agent = Orders.Implement(func(ID) *state { return &state{} })
-
-func init() {
-	agent.Handle(Handle, func(ctx *golem.Context[state], in HandleIn) bool {
-		// No DB writes — this append survives crashes, deploys, host migrations
-		ctx.State.add("user", in.Request)
-
-		// LLM sees full conversation; system prompt comes from typed config
-		outcome := llm.Run(ctx.Config(Orders).SystemPrompt, ctx.State.history,
-			[]Tool{cancelOrder, changeAddress}, in.OrderID)
-		ctx.State.add("assistant", outcome.Message)
-
-		// Refunds aren't in the LLM's toolset — agent code gates them via HITL
-		if outcome.NeedsRefund {
-			// This await can sit for days at zero cost — no queue, no cron, no state table
-			webhook := golem.NewWebhook[Approval]()
-			notifyApprover(webhook.URL(), outcome)
-			if webhook.MustAwait().Approved {
-				// Crash, retry, restart — still one charge. No silent double-charges.
-				result := refundOrder(in.OrderID, outcome.RefundAmount)
-				ctx.State.add("tool", result.String())
-			}
-		}
-		return true
-	})
-}`,
-
-    scala: `final case class OrdersConfig(systemPrompt: String) derives Schema
-
-@agentDefinition(mount = "/orders/{customerId}")
-trait Orders extends BaseAgent with AgentConfig[OrdersConfig]:
-  class Id(val customerId: String)
-  def handle(request: String, orderId: String): Future[Boolean]
-
-@agentImplementation()
-final class OrdersImpl(customerId: String, config: Config[OrdersConfig]) extends Orders:
-  private var history: Vector[Message] = Vector.empty
-
-  override def handle(request: String, orderId: String): Future[Boolean] =
-    // No DB writes — this append survives crashes, deploys, host migrations
-    history = history :+ Message("user", request)
-
-    for
-      // LLM sees full conversation; system prompt comes from typed config
-      outcome <- llm.run(
-        prompt = config.value.systemPrompt, history = history,
-        tools = Seq(cancelOrder, changeAddress), context = Map("orderId" -> orderId))
-      _ = history = history :+ Message("assistant", outcome.message)
-
-      // Refunds aren't in the LLM's toolset — agent code gates them via HITL.
-      // This await can sit for days at zero cost — no queue, no cron, no state table
-      approved <-
-        if outcome.needsRefund then awaitApproval(HostApi.createWebhook(), outcome)
-        else Future.successful(false)
-
-      // Crash, retry, restart — still one charge. No silent double-charges.
-      _ <-
-        if approved then refundOrder(orderId, outcome.refundAmount)
-          .map(result => history = history :+ Message("tool", result.toString))
-        else Future.unit
-    yield true`,
-
-    moonbit: `#derive.config
-pub(all) struct OrdersConfig { system_prompt : String }
-
-#derive.agent
-#derive.mount("/orders/{customer_id}")
-struct Orders {
-  config : @config.Config[OrdersConfig]
-  mut history : Array[Message]
-}
-
-fn Orders::new(customer_id : String, config : @config.Config[OrdersConfig]) -> Orders {
-  let _ = customer_id
-  { config, history: [] }
-}
-
-pub async fn Orders::handle(self : Self, request : String, order_id : String) -> Bool {
-  // No DB writes — this push survives crashes, deploys, host migrations
-  self.history.push({ role: "user", content: request })
-
-  // LLM sees full conversation; system prompt comes from typed config
-  let outcome = @llm.run(
-    prompt = self.config.value.system_prompt, history = self.history,
-    tools = [cancel_order(), change_address()], context = { "order_id": order_id },
-  )
-  self.history.push({ role: "assistant", content: outcome.message })
-
-  // Refunds aren't in the LLM's toolset — agent code gates them via HITL
-  if outcome.needs_refund {
-    // This await can sit for days at zero cost — no queue, no cron, no state table
-    let webhook = @webhook.create()
-    notify_approver(webhook.url(), outcome)
-    if webhook.wait().text() == "approved" {
-      // Crash, retry, restart — still one charge. No silent double-charges.
-      let result = refund_order(order_id, outcome.refund_amount)
-      self.history.push({ role: "tool", content: result.to_json().stringify() })
-    }
-  }
-  true
-}`,
-  } as Record<string, string>,
-};
-
-// =============================================================================
-// SECTION 2.5 — One runtime: agents, tools, artifacts
-// =============================================================================
-
-export interface TriadPillar {
-  id: "agents" | "tools" | "artifacts";
-  title: string;
-  bodyHtml: string;
-}
-
-export const triad = {
-  eyebrow: "One runtime",
-  heading: "Deploy agents, their tools, and their artifacts.",
-  pillars: [
-    {
-      id: "agents",
-      title: "Agents",
-      bodyHtml: `Typed, durable agents in six SDKs. Streaming methods, read-only methods, reflection, and state that survives anything.`,
-    },
-    {
-      id: "tools",
-      title: "Tools",
-      bodyHtml: `Typed tools with host-enforced middleware, a built-in toolkit — shell, files, git, Node, npm, TypeScript, web fetch — and MCP in both directions.`,
-    },
-    {
-      id: "artifacts",
-      title: "Artifacts",
-      bodyHtml: `The apps, pages, and files agents ship to people — served by Golem, backed by the agent, with login and resumable streams built in.`,
-    },
-  ] as TriadPillar[],
-  closerHtml: `The harness chooses what an agent does. <strong>The runtime decides what it can do.</strong>`,
-};
-
-// =============================================================================
-// SECTION 2.7 — Business coding agents
-// =============================================================================
-
-export const codingAgent = {
-  eyebrow: "Business coding agents",
-  heading: "A coding agent, entirely in Golem.",
-  paragraphsHtml: [
-    `The coding agents that matter most are the ones business users never see: the support bot that writes a script to reconcile an account, the assistant that builds the report from three systems.`,
-    `On Golem, the shell, files, git, Node, npm, and TypeScript run inside the sandbox as isolated tool calls — under a path policy the agent can't bypass and a permission card that names the only hosts it may reach. No Linux VM to boot, sync, or pay for. Kill the server mid-task and the agent picks up where it stopped.`,
-  ],
-  toolkitLabel: "Built-in toolkit",
-  toolkit: [
-    "bash",
-    "read-file",
-    "write-file",
-    "edit-file",
-    "ls",
-    "grep",
-    "git",
-    "node",
-    "npm",
-    "npx",
-    "tsc",
-    "web-fetch",
-    "path-policy",
-  ],
-  terminal: {
-    label: "golem ssh",
-    lines: [
-      { kind: "cmd", text: `golem ssh 'ReportAgent("q3")'` },
-      { kind: "prompt", text: "npm install csv-parse" },
-      { kind: "out", text: "added 1 package in 2s" },
-      { kind: "prompt", text: "node build-report.js && ls reports" },
-      { kind: "out", text: "q3-summary.html" },
-    ],
-  },
-  noteHtml: `Harness inside or outside the sandbox — your choice. The guarantees come from the host, not from where the loop runs.`,
-  cta: { label: "Read the 1.6 announcement →", href: "/blog/golem-1-6-agents-tools-and-artifacts" },
-};
-
-// =============================================================================
-// SECTION 4.2 — Artifacts
-// =============================================================================
-
-export const artifacts = {
-  eyebrow: "Artifacts",
-  heading: "Agents ship things people use.",
-  leadHtml: `Front-ends, reports, live output — served by the same runtime that runs the agent, from the same deployment, under the same authority, with the same audit trail.`,
-  points: [
-    { title: "HTTP routers", body: "Mount any Fetch-compatible framework, and publish OpenAPI." },
-    {
-      title: "Static assets",
-      body: "Versioned with the deployment, served without waking an agent.",
-    },
-    { title: "Live files", body: "Agents publish what they write — reports, builds, workspaces." },
-    {
-      title: "Front-end login",
-      body: "OAuth2 with PKCE for single-page apps, tokens issued by Golem.",
-    },
-    {
-      title: "Durable Streams",
-      body: "Stream to the browser; a reload picks up where it left off.",
-    },
-    {
-      title: "Subdomains",
-      body: "A real URL from the first golem deploy, locally and in the cloud.",
-    },
-  ],
-  filename: "router.ts",
-  snippet: `export const AppRouter =
-  defineHttpRouter('AppRouter')
-    .mount('/app')
-    .implement((req) => app.fetch(req))`,
-};
-
-// =============================================================================
-// SECTION 3 — Customer logos (GATED at launch)
+// Projects using Golem
 // =============================================================================
 
 export interface CustomerLogo {
-  kind: "image" | "placeholder";
-  // For kind: "image" — filename under src/assets/logo/. Resolved to an
-  // imported ImageMetadata in the CustomerLogos component, which lets Astro
-  // emit responsive WebP/AVIF at build time.
-  filename?: string;
-  alt?: string;
-  name?: string;
-  // Set true for black/dark marks that need inversion to read on the dark
-  // logo-bar background. Authored-for-dark logos (white text) leave this off.
+  // Filename under src/assets/logo/, resolved in the CustomerLogos component
+  // so Astro can emit optimized variants at build time.
+  filename: string;
+  alt: string;
+  // Set true for black/dark marks that need inversion on the dark background.
   invertOnDarkBg?: boolean;
 }
 
 export const customerLogos = {
-  label: "Builders shipping on Golem",
-  // Real logos use kind: "image"; placeholder text entries use kind: "placeholder".
-  // Add invertOnDarkBg: true for black-on-transparent marks.
-  showAtLaunch: true,
-  placeholders: [
-    { kind: "image", filename: "ziverge.png", alt: "Ziverge" },
-    { kind: "image", filename: "golem-social.png", alt: "Golem Social" },
-    { kind: "image", filename: "warpmind.png", alt: "WarpMind" },
-    { kind: "image", filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
-    { kind: "image", filename: "golem-journai.png", alt: "JournAI" },
-    { kind: "image", filename: "johnethel-lms.png", alt: "Johnethel LMS" },
+  label: "Built on Golem",
+  logos: [
+    { filename: "ziverge.png", alt: "Ziverge" },
+    { filename: "golem-social.png", alt: "Golem Social" },
+    { filename: "warpmind.png", alt: "WarpMind" },
+    { filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
+    { filename: "golem-journai.png", alt: "JournAI" },
+    { filename: "johnethel-lms.png", alt: "Johnethel LMS" },
   ] as CustomerLogo[],
 };
 
 // =============================================================================
-// SECTION 4 — Three commitments + W3 sidebar
+// Core: the lightweight, durable VM
 // =============================================================================
 
-export interface Commitment {
-  id: string;
-  icon: "journal" | "exchange" | "shield";
-  title: string;
-  paragraphsHtml: string[];
-  closer?: string; // accent-colored last line in the card
-}
-
-export const commitments: Commitment[] = [
-  {
-    id: "persists-state",
-    icon: "journal",
-    title: "Automatically persists state.",
-    paragraphsHtml: [
-      `State changes and effects are captured automatically, without serialization, state machines, or annotations. Agents suspend for days or weeks at zero compute and zero memory cost, resuming with the same memory, locals, and call stack.`,
-    ],
-    closer: "Treat memory as durable.",
+export const coreVm = {
+  eyebrow: "The core of Golem",
+  heading: "A lightweight, durable VM with permissions agents can't bypass",
+  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can resume anywhere.",
+  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2 from the oplog. It resumes where it left off, with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
+  vm: { name: "Agent", where: "node 1", sub: "in its own WebAssembly VM" },
+  golem: { name: "Golem", sub: "the VM's only way out" },
+  calls: [
+    { status: "allowed", target: "Orders API" },
+    { status: "denied", target: "Admin API" },
+  ],
+  recorded: "recorded",
+  oplog: {
+    title: "Oplog",
+    sub: "a log of every call, stored off the node",
+    entries: [{ name: "Orders API", value: "result" }],
   },
-  {
-    id: "executes-transactionally",
-    icon: "exchange",
-    title: "Executes transactionally.",
-    paragraphsHtml: [
-      `Code keeps running exactly once through any interruption, as if nothing happened. A tool call that crashed mid-execution completes; a workflow paused for days picks up where it stopped. This is transactional code execution.`,
-    ],
-    closer: "Ship code that runs exactly once.",
+  rebuilt: "restored after a restart, a crash or an idle wait",
+  restored: {
+    name: "Agent, recovered",
+    where: "node 2",
+    state: "Resumes where it left off",
+    sub: "memory, call stack, files and environment restored",
+    reused: "Orders API not called again: the recorded result is used",
   },
-  {
-    id: "enforces-policy",
-    icon: "shield",
-    title: "Enforces every policy.",
-    paragraphsHtml: [
-      `Every agent and every tool call runs in its own WebAssembly instance — its own memory, no system calls. Authority comes from <strong>permission cards</strong> the runtime mints: they narrow, never widen, and revocation cascades. Tool middleware runs in the host on every call, secrets are opaque handles, and every decision is journaled.`,
-    ],
-    closer: "Turn policies into guarantees.",
-  },
-];
-
-// =============================================================================
-// SECTION 4.5 — Framework vs runtime comparison
-// =============================================================================
-
-export interface ComparisonRow {
-  icon: "cells" | "stack" | "cycle" | "bounded" | "gate" | "brackets";
-  framework: string;
-  golem: string;
-  why: string;
-}
-
-export const frameworkVsRuntime = {
-  eyebrow: "Why not LangChain?",
-  heading: "LangChain leaves you the hard parts.",
-  leadHtml: `Tool calls firing twice. State lost mid-node. SQL checkpointers under load. These aren't problems LangChain solves — they're runtime problems. Golem solves them as runtime guarantees.`,
-  columns: {
-    framework: "AI Framework",
-    golem: "Golem Runtime",
-    why: "Why it matters",
-  },
-  rows: [
+  caption: "You don't write save or checkpoint code, design state tables or run a workflow engine.",
+  explanations: [
     {
-      icon: "cells",
-      framework:
-        "Agents share host resources; tenant isolation depends on developer-enforced discipline",
-      golem: "Each agent owns its own memory, filesystem, and environment",
-      why: "Cross-tenant leaks become structurally impossible",
+      title: "Lightweight",
+      body: "WebAssembly, not Linux: each VM has private memory, files and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
     },
     {
-      icon: "stack",
-      framework:
-        "Durability is opt-in and coarse — recovery restarts from last boundary, losing in-flight state",
-      golem:
-        "No checkpoints, steps, or annotations — the whole agent resumes mid-execution, after any failure or suspension",
-      why: "No state is ever lost to failure or suspension",
+      title: "Durable",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, without repeating completed calls.",
     },
     {
-      icon: "cycle",
-      framework:
-        "Auto-retry only works for idempotent tools; the rest require developer-managed safety logic",
-      golem:
-        "Agent logic and tools — internal or external — execute durably with exactly-once semantics",
-      why: "Infrastructure failures never cause partial or duplicate work",
+      title: "Secure",
+      body: "A VM can't reach files, the network, secrets or other VMs directly. Every call out goes through Golem's permission checks, which no code, including AI-generated code, can bypass.",
     },
-    {
-      icon: "bounded",
-      framework:
-        "Authority enforced by developer-written code and LLM prompts; both fail when their authors do",
-      golem:
-        "Authority carried by permission cards the runtime mints — code can only do what its cards and imports allow",
-      why: "Buggy or malicious code can't exceed what it was granted",
-    },
-    {
-      icon: "gate",
-      framework: "Guardrails run in-process; generated code can route around them",
-      golem: "Tool middleware enforced by the host on every call",
-      why: "Policies hold even for code the model wrote",
-    },
-    {
-      icon: "brackets",
-      framework:
-        "Waits, retries, and HITL require explicit state-machine code at framework boundaries",
-      golem: "Any flow is just code — suspension, retries, and resumption are runtime behaviors",
-      why: "No state-machine code to write or maintain",
-    },
-  ] as ComparisonRow[],
-  closer: "Runtimes deliver what frameworks can't even promise.",
+  ],
 };
 
 // =============================================================================
-// SECTION 4.7 — Substrate metric bar (between FvR and What You Build)
+// Metric bar
 // =============================================================================
 
 export const metricBar = {
   metrics: [
     { value: "10,000+", label: "Active agents per node" },
     { value: "2 ms", label: "Agent cold start" },
-    { value: "1 MB", label: "Min sandbox memory" },
-    { value: "0 CPU/RAM", label: "Idle resource cost" },
+    { value: "1 MB", label: "Min memory per agent" },
+    { value: "0 CPU/RAM", label: "While waiting" },
   ],
 };
 
 // =============================================================================
-// SECTION 5 — Bring your stack
+// Tour: agents, tools, artifacts
 // =============================================================================
 
-export const bringStack = {
-  eyebrow: "Bring your stack",
-  heading: "Your libraries. Our runtime.",
-  paragraphsHtml: [
-    `Bring your favorite LLM SDKs, your tool libraries, your utilities — anything that's just code. They run on Golem, and your agent logic and tool primitives inherit the runtime's guarantees, without modification.`,
-    `Use Golem's lightweight SDKs only when you want runtime-specific features: durability hooks, forking, rollbacks, agent and tool discovery. MCP servers you import inherit the same durability and middleware. Frameworks that bring their own runtime aren't officially supported today.`,
-  ],
-};
-
-export const frameworks: string[] = [
-  "OpenAI & Anthropic SDKs",
-  "Vercel AI SDK",
-  "TanStack AI",
-  "Effect AI",
-  "Zod, Valibot, ArkType",
-  "Many other libraries & frameworks",
-];
-
-export const frameworksLabel = "Tested to work with";
-export const frameworksNote = "Subject to WASM compatibility per language.";
-
-// =============================================================================
-// SECTION 7 — Open source. Your cloud. Your language.
-// =============================================================================
-
-export const openSource = {
-  eyebrow: "Open source. Your cloud. Your language.",
-  heading: "Run it where you want. Write it how you like.",
-  blocks: [
-    {
-      title: "BUSL‑1.1 → Apache‑2.0",
-      body: "The runtime source is auditable, the WASM components are inspectable, and the license transitions to Apache‑2.0 — staying out of your way today, fully permissive tomorrow.",
-    },
-    {
-      title: "Your cloud.",
-      body: "Run Golem where you run everything else — on a laptop, in Docker, in Kubernetes, on any cloud, or on-prem.",
-    },
-    {
-      title: "Your language.",
-      body: "Same runtime, same capabilities, same guarantees, same operational behavior across supported languages. ",
-    },
-  ],
-  pedigreeHtml: `Built by the wizards behind <a href="https://zio.dev" target="_blank" rel="noopener"><strong>ZIO</strong></a> — the open-source effect system running in production at companies across fintech, ad tech, and AI infrastructure for the better part of a decade.`,
-};
-
-export const languages = [
-  { name: "TypeScript", note: "Strongest surface" },
-  { name: "Effect", note: "Effect-native TypeScript" },
-  { name: "Rust", note: "Substrate-credible" },
-  { name: "Go", note: "Idiomatic, generics-first" },
-  { name: "Scala", note: "Effects-friendly" },
-  { name: "MoonBit", note: "Small WASM" },
-];
-
-export const deployments = [
-  { icon: "▸", label: "Laptop", note: "golem server run — the whole platform in one process" },
-  { icon: "◇", label: "Docker", note: "Compose stacks, Postgres-backed" },
-  { icon: "⬢", label: "Kubernetes", note: "Published service images, etcd-backed HA" },
-  { icon: "☁", label: "Any cloud", note: "AWS, GCP, Azure, on-prem" },
-  { icon: "★", label: "Golem Cloud", note: "Managed — when you want it" },
-];
-
-// =============================================================================
-// SECTION 8 — Table-stakes strip
-// =============================================================================
-
-export interface TableStakeItem {
-  icon: string;
-  label: string;
-  note: string;
+export interface ChapterItem {
+  title: string;
+  body: string;
 }
 
-export const tableStakes = {
-  eyebrow: "The full package",
-  heading: "Bundled into the runtime.",
+export const codeLanguages = [
+  { id: "ts", label: "TypeScript", shiki: "typescript" },
+  { id: "effect", label: "Effect", shiki: "typescript" },
+  { id: "rust", label: "Rust", shiki: "rust" },
+  { id: "scala", label: "Scala", shiki: "scala" },
+  { id: "moonbit", label: "MoonBit", shiki: "moonbit" },
+  { id: "go", label: "Go", shiki: "go" },
+] as const;
+
+export type CodeLanguage = (typeof codeLanguages)[number]["id"];
+
+export interface ChapterCode {
+  filename: string;
+  code: string;
+  highlight: number[];
+}
+
+export type ChapterFigure = Record<CodeLanguage, ChapterCode>;
+
+export const agentsChapter = {
+  eyebrow: "Agents",
+  heading: "Agents are your own arbitrary code, not prompts",
+  lead: "Each agent's VM keeps its whole execution durable.",
+  figure: {
+    ts: {
+      filename: "support-agent.ts",
+      highlight: [11, 12],
+      code: `export const SupportImpl = Support.implement({
+  init: () => ({ history: [] as Message[] }),
+  methods: {
+    async handle({ message, orderId }) {
+      this.history.push({ role: 'user', content: message })
+      // Golem lets lookupOrder reach only the orders API:
+      const reply = await llm.run(this.history, [lookupOrder])
+      if (reply.refundRequested) {
+        const approval = createWebhook()
+        await notifyReviewer(approval.getUrl(), reply)
+        // waits here for days if needed, using no CPU or memory:
+        const { approved } = (await approval).json<Approval>()
+        // refunded once if the payment API honors idempotency keys:
+        if (approved) await refundOrder(orderId, reply.amount)
+      }
+      return reply.text
+    },
+  },
+})`,
+    },
+    effect: {
+      filename: "support-agent.ts",
+      highlight: [11, 12, 13],
+      code: `export const SupportImpl = Support.implement({
+  init: () => Effect.succeed({ history: [] as Message[] }),
+  methods: (state) => ({
+    handle: ({ message, orderId }) => Effect.gen(function* () {
+      state.history.push({ role: "user", content: message })
+      // Golem lets lookupOrder reach only the orders API:
+      const reply = yield* llm.run(state.history, [lookupOrder])
+      if (reply.refundRequested) {
+        const approval = yield* Webhook.create
+        yield* notifyReviewer(approval.url, reply)
+        // waits here for days if needed, using no CPU or memory:
+        const payload = yield* approval.await
+        const { approved } = yield* payload.decode(Approval)
+        // refunded once if the payment API honors idempotency keys:
+        if (approved) yield* refundOrder(orderId, reply.amount)
+      }
+      return reply.text
+    }).pipe(Effect.orDie),
+  }),
+})`,
+    },
+    rust: {
+      filename: "support_agent.rs",
+      highlight: [18, 19],
+      code: `#[agent_implementation]
+impl Support for SupportImpl {
+  fn new() -> Self {
+    Self { history: vec![] }
+  }
+
+  async fn handle(
+    &mut self,
+    message: String,
+    order_id: String,
+  ) -> String {
+    self.history.push(Message::user(message));
+    // Golem lets lookup_order reach only the orders API:
+    let reply = llm::run(&self.history, &[lookup_order]).await;
+    if reply.refund_requested {
+      let approval = create_webhook().unwrap();
+      notify_reviewer(approval.url(), &reply).await;
+      // waits here for days if needed, using no CPU or memory:
+      let Approval { approved } = approval.await.json().unwrap();
+      // refunded once if the payment API honors idempotency keys:
+      if approved {
+        refund_order(order_id, reply.amount).await;
+      }
+    }
+    reply.text
+  }
+}`,
+    },
+    scala: {
+      filename: "SupportAgent.scala",
+      highlight: [16, 17],
+      code: `@agentImplementation()
+final class SupportAgentImpl(id: String) extends SupportAgent:
+  private val history = ArrayBuffer.empty[Message]
+
+  def handle(message: String, orderId: String): Future[String] =
+    history += Message("user", message)
+    // Golem lets lookupOrder reach only the orders API:
+    llm.run(history.toList, List(lookupOrder)).flatMap: reply =>
+      if reply.refundRequested then refund(orderId, reply)
+      else Future.successful(reply.text)
+
+  private def refund(orderId: String, reply: Reply) =
+    val approval = HostApi.createWebhook()
+    for
+      _ <- notifyReviewer(approval.url, reply)
+      // waits here for days if needed, using no CPU or memory:
+      payload <- approval.await()
+      approved = payload.json[Approval]().approved
+      // refunded once if the payment API honors idempotency keys:
+      _ <- if approved then refundOrder(orderId, reply.amount)
+           else Future.unit
+    yield reply.text`,
+    },
+    moonbit: {
+      filename: "support_agent.mbt",
+      highlight: [16, 17, 18],
+      code: `fn SupportAgent::new() -> SupportAgent {
+  { history: [] }
+}
+
+pub async fn SupportAgent::handle(
+  self : Self,
+  message : String,
+  order_id : String,
+) -> String {
+  self.history.push({ role: "user", content: message })
+  // Golem lets lookup_order reach only the orders API:
+  let reply = llm.run(self.history, [lookup_order])
+  if reply.refund_requested {
+    let approval = @webhook.create()
+    notify_reviewer(approval.url(), reply)
+    // waits here for days if needed, using no CPU or memory:
+    let body = @json.parse(approval.wait().text())
+    let { approved } : Approval = @json.from_json(body)
+    // refunded once if the payment API honors idempotency keys:
+    if approved { refund_order(order_id, reply.amount) }
+  }
+  reply.text
+}`,
+    },
+    go: {
+      filename: "support_agent.go",
+      highlight: [17, 18],
+      code: `type state struct{ history []Message }
+
+var impl = Support.Implement(func(SupportID) *state {
+    return &state{}
+})
+
+var _ = impl.Handle(Handle, func(
+    ctx *golem.Context[state], in HandleIn,
+) string {
+    s := ctx.State
+    s.history = append(s.history, Message{"user", in.Message})
+    // Golem lets lookupOrder reach only the orders API:
+    reply := llm.Run(s.history, lookupOrder)
+    if reply.RefundRequested {
+        approval := golem.NewWebhook[Approval]()
+        notifyReviewer(approval.URL(), reply)
+        // waits here for days if needed, using no CPU or memory:
+        decision := approval.MustAwait()
+        // refunded once if the payment API honors idempotency keys:
+        if decision.Approved {
+            refundOrder(in.OrderID, reply.Amount)
+        }
+    }
+    return reply.Text
+})`,
+    },
+  } as ChapterFigure,
   items: [
     {
-      icon: "⌘",
-      label: "MCP, both directions",
-      note: "Export agents and tools; import any MCP server durably",
+      title: "Your language",
+      body: "Write agents as ordinary, typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, with the same guarantees and primitives in each.",
     },
     {
-      icon: "⌥",
-      label: "Built-in toolkit",
-      note: "Shell, files, git, Node, npm, TypeScript, web fetch — in the sandbox",
+      title: "Awaitable webhooks, timers and schedules",
+      body: "Approvals and payment callbacks become promises your code awaits. Sleeps, timers and scheduled calls fire on time across restarts, with no idle cost.",
     },
     {
-      icon: "⛨",
-      label: "Tool middleware",
-      note: "Policies and guardrails, enforced by the host on every call",
+      title: "Agents working together",
+      body: "Typed calls between agents, across languages, right away or scheduled for later. Agents can discover what other agents and tools offer.",
     },
     {
-      icon: "⚷",
-      label: "Permission cards",
-      note: "Runtime-minted authority that narrows, never widens",
+      title: "Any model, with your libraries",
+      body: "Call any model through common LLM SDKs. Keep using the OpenAI and Anthropic SDKs, Vercel AI SDK, TanStack AI, Effect AI, Zod and more.",
     },
     {
-      icon: "⚿",
-      label: "First-class secrets",
-      note: "Opaque handles; reveal only where granted, always journaled",
+      title: "Embedded SQLite",
+      body: "TypeScript, Effect and Rust agents can each have their own SQLite database, embedded in the agent, with no database server to run or connect to.",
+    },
+  ] as ChapterItem[],
+};
+
+export const toolsChapter = {
+  eyebrow: "Tools",
+  heading: "Every tool call in its own VM, executed exactly once",
+  lead: "After a node restart or crash, restoring a tool call's state replays its code using recorded results, without repeating completed effects.",
+  figure: {
+    ts: {
+      filename: "refund-tool.ts",
+      highlight: [13, 14, 15],
+      code: `export const refund = toolDefinition('refund')
+  .version('1.0.0')
+  .body((body) =>
+    body
+      .positional('charge', z.string())
+      .positional('amount', z.number().int())
+      .returns(z.object({ id: z.string(), status: z.string() })),
+  )
+
+refund.implement({
+  // each call runs in a fresh WebAssembly VM:
+  refund: async ({ charge, amount }) => {
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    const res = await fetch('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      body: new URLSearchParams({ charge, amount: String(amount) }),
+    })
+    return ok(await res.json())
+  },
+})`,
+    },
+    effect: {
+      filename: "refund-tool.ts",
+      highlight: [18, 19, 20, 21],
+      code: `const Refund = Schema.Struct({
+  id: Schema.String,
+  status: Schema.String,
+})
+
+export const refund = Tool.toolDefinition("refund", {
+  version: "1.0.0",
+}).body((body) =>
+  body
+    .positional("charge", Schema.String)
+    .positional("amount", Schema.Int)
+    .returns(Refund),
+)
+
+refund.implement({
+  // each call runs in a fresh WebAssembly VM:
+  refund: ({ charge, amount }) =>
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    pipe(
+      HttpClientRequest.post("https://api.stripe.com/v1/refunds"),
+      HttpClientRequest.bodyUrlParams({ charge, amount }),
+      HttpClient.execute,
+      Effect.flatMap(HttpClientResponse.schemaBodyJson(Refund)),
+      Effect.provide(FetchHttpClient.layer),
+      Effect.orDie,
+    ),
+})`,
+    },
+    rust: {
+      filename: "refund_tool.rs",
+      highlight: [18, 19, 20],
+      code: `#[derive(Schema, Deserialize)]
+struct Receipt {
+  id: String,
+  status: String,
+}
+
+#[tool_definition(version = "1.0.0")]
+trait Refund {
+  async fn refund(&self, charge: String, amount: u64) -> Receipt;
+}
+
+struct RefundImpl;
+
+#[tool_implementation]
+impl Refund for RefundImpl {
+  // each call runs in a fresh WebAssembly VM:
+  async fn refund(&self, charge: String, amount: u64) -> Receipt {
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    let req = Request::post("https://api.stripe.com/v1/refunds")
+      .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+      .body(format!("charge={charge}&amount={amount}").into())
+      .unwrap();
+    let res = http::send(req).await.unwrap();
+    http::response_json(res).await.unwrap()
+  }
+}`,
+    },
+    scala: {
+      filename: "RefundTool.scala",
+      highlight: [15, 16, 17],
+      code: `final case class Refund(id: String, status: String) derives Schema
+
+@toolDefinition(name = "refund", version = "1.0.0")
+trait RefundTool:
+  def refund(charge: String, amount: Int): Future[Refund]
+
+@toolImplementation()
+final class RefundToolImpl extends RefundTool:
+  // each call runs in a fresh WebAssembly VM:
+  def refund(charge: String, amount: Int): Future[Refund] =
+    val init = new RequestInit:
+      method = HttpMethod.POST
+      body = new URLSearchParams(js.Dictionary(
+        "charge" -> charge, "amount" -> amount.toString))
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    fetch("https://api.stripe.com/v1/refunds", init).toFuture
+      .flatMap(_.text().toFuture)
+      .map(Schema[Refund].jsonCodec.decode(_).toTry.get)`,
+    },
+    moonbit: {
+      filename: "refund_tool.mbt",
+      highlight: [19, 20, 21],
+      code: `#derive.tool("refund", version="1.0.0")
+struct Refund {}
+
+#derive.golem_schema
+pub(all) struct RefundResult {
+  id : String
+  status : String
+} derive(FromJson)
+
+// each call runs in a fresh WebAssembly VM:
+#derive.arg("charge", scope="positional")
+#derive.arg("amount", scope="positional")
+pub async fn Refund::refund(
+  charge : String,
+  amount : Int,
+) -> RefundResult {
+  let url = "https://api.stripe.com/v1/refunds"
+  let form = [("charge", charge), ("amount", amount.to_string())]
+  // Golem checks this request against the caller's permissions
+  // and adds an idempotency key, so a retry refunds once:
+  let res = @http.send(form_post(url, form)).unwrap()
+  @json.from_json(@json.parse(read_text(res)))
+}`,
+    },
+    go: {
+      filename: "refund_tool.go",
+      highlight: [22, 23, 24],
+      code: `type Refund struct{}
+
+var Tool = tool.DefineTool[Refund]("refund",
+    tool.Spec{Version: "1.0.0"})
+
+type Args struct {
+    Charge string
+    Amount int64
+}
+
+type Result struct{ ID, Status string }
+
+var Body = Tool.Body[Args, Result](
+    func(a *Args, s *tool.CommandSpec) {
+        s.Positional(&a.Charge)
+        s.Positional(&a.Amount)
+    })
+
+// each call runs in a fresh WebAssembly VM:
+var _ = Body.Handle(func(_ *tool.Context, a Args) (Result, error) {
+    amount := strconv.FormatInt(a.Amount, 10)
+    // Golem checks this request against the caller's permissions
+    // and adds an idempotency key, so a retry refunds once:
+    res := golem.Must(http.PostForm(
+        "https://api.stripe.com/v1/refunds",
+        url.Values{"charge": {a.Charge}, "amount": {amount}}))
+    defer res.Body.Close()
+    var out Result
+    return out, json.NewDecoder(res.Body).Decode(&out)
+})`,
+    },
+  } as ChapterFigure,
+  items: [
+    {
+      title: "Bundled and custom tools",
+      body: "Shell, Git, Node.js, npm and TypeScript come bundled. Build your own tools with any Golem SDK; no separate sandbox service needed.",
     },
     {
-      icon: "◰",
-      label: "Artifact hosting",
-      note: "HTTP routers, static and live files, PKCE login",
+      title: "External requests",
+      body: "Interrupted external requests retry with idempotency keys Golem adds, taking effect once if the service honors them, as Stripe does.",
     },
     {
-      icon: "∿",
-      label: "Durable Streams",
-      note: "Resumable streams to any client, protocol-compatible URLs",
+      title: "Permissions you can scope and share",
+      body: "Give agents or tools narrower permissions, such as the orders API only, for one hour. Revoking a permission revokes every permission delegated from it.",
     },
     {
-      icon: "◎",
-      label: "Read-only methods",
-      note: "Enforced at runtime, cached at the HTTP edge",
-    },
-    { icon: "⇄", label: "Tool-calling protocols", note: "MCP, HTTP, RPC — all exactly-once" },
-    {
-      icon: "⇶",
-      label: "Webhook primitives",
-      note: "Incoming events like HITL become awaitable promises",
+      title: "Secrets",
+      body: "Agents pass API keys to tools as opaque handles. Revealing a value takes a grant and is recorded, and a binding can stop a tool from revealing any.",
     },
     {
-      icon: "◷",
-      label: "Scheduled execution",
-      note: "Durable timers and scheduled invocations at zero idle cost",
+      title: "Tool publishing, plus MCP",
+      body: "Publish tools as immutable, versioned releases for other accounts. Expose agents and tools over MCP, and call MCP servers with the same guarantees.",
+    },
+  ] as ChapterItem[],
+};
+
+export const artifactsChapter = {
+  eyebrow: "Artifacts",
+  heading: "Securely expose artifacts your agents build and deploy",
+  lead: "Pages, files and live output, with each artifact in its own WebAssembly VM.",
+  figure: {
+    ts: {
+      filename: "site-agent.ts",
+      highlight: [4, 5, 6, 7],
+      code: `export const SiteAgent = defineAgent({
+  name: 'SiteAgent',
+  id: { project: z.string() },
+  // serve this agent's /public directory at /sites/{project}/:
+  http: http.mount('/sites/{project}', {
+    exposeFiles: [{ route: '/*', path: '/public/$1' }],
+  }),
+  methods: { publish: method({ input: {}, returns: z.void() }) },
+})
+
+export const SiteAgentImpl = SiteAgent.implement({
+  init: () => ({}),
+  methods: {
+    publish() {
+      // copy in the site the agent built; its URLs serve it at once:
+      fs.cpSync('/workspace/dist', '/public', { recursive: true })
+    },
+  },
+})`,
+    },
+    effect: {
+      filename: "site-agent.ts",
+      highlight: [4, 5, 6, 7],
+      code: `export const SiteAgent = defineAgent({
+  name: "SiteAgent",
+  id: { project: Schema.String },
+  // serve this agent's /public directory at /sites/{project}/:
+  http: Http.mount("/sites/{project}", {
+    exposeFiles: [{ route: "/*", path: "/public/$1" }],
+  }),
+  methods: { publish: method({ input: {}, success: Schema.Void }) },
+})
+
+const publish = () =>
+  Effect.sync(() => {
+    // copy in the site the agent built; its URLs serve it at once:
+    fs.cpSync("/workspace/dist", "/public", { recursive: true })
+  })
+
+export const SiteAgentImpl = SiteAgent.implement({
+  init: () => Effect.void,
+  methods: () => ({ publish }),
+})`,
+    },
+    rust: {
+      filename: "site_agent.rs",
+      highlight: [1, 2, 3, 4, 5],
+      code: `// serve this agent's /public directory at /sites/{project}/:
+#[agent_definition(
+  mount = "/sites/{project}",
+  filesystem_bindings = [("/*", "/public/$1")]
+)]
+pub trait SiteAgent {
+  fn new(project: String) -> Self;
+  fn publish(&self);
+}
+
+struct SiteAgentImpl;
+
+#[agent_implementation]
+impl SiteAgent for SiteAgentImpl {
+  fn new(_project: String) -> Self {
+    Self
+  }
+
+  fn publish(&self) {
+    // copy in the site the agent built; its URLs serve it at once:
+    copy_dir_all("/workspace/dist", "/public").unwrap();
+  }
+}`,
+    },
+    scala: {
+      filename: "SiteAgent.scala",
+      highlight: [1, 2, 3, 4, 5],
+      code: `@agentDefinition(
+  // serve this agent's /public directory at /sites/{project}/:
+  mount = "/sites/{project}",
+  exposeFiles = Array(("/*", "/public/$1"))
+)
+trait SiteAgent extends BaseAgent:
+  class Id(val project: String)
+  def publish(): Unit
+
+@agentImplementation()
+final class SiteAgentImpl(project: String) extends SiteAgent:
+  def publish(): Unit =
+    // copy in the site the agent built; its URLs serve it at once:
+    Fs.cpSync("/workspace/dist", "/public",
+      js.Dynamic.literal(recursive = true))`,
+    },
+    moonbit: {
+      filename: "site_agent.mbt",
+      highlight: [2, 3, 4],
+      code: `#derive.agent
+// serve this agent's /public directory at /sites/{project}/:
+#derive.mount("/sites/{project}")
+#derive.expose_files("/*", "/public/$1")
+struct SiteAgent {
+  project : String
+}
+
+fn SiteAgent::new(project : String) -> SiteAgent {
+  SiteAgent::{ project }
+}
+
+pub async fn SiteAgent::publish(_self : Self) -> Unit {
+  // copy in the site the agent built; its URLs serve it at once:
+  copy_dir("/workspace/dist", "/public")
+}`,
+    },
+    go: {
+      filename: "site_agent.go",
+      highlight: [5, 6, 7, 8, 9, 10, 11],
+      code: `type SiteID struct{ Project string }
+
+var SiteAgent = golem.DefineAgent[SiteID](golem.Spec{
+    Name: "SiteAgent",
+    // serve this agent's /public directory at /sites/{project}/:
+    HTTP: &golem.Mount{
+        Path: "/sites/{project}",
+        ExposeFiles: []golem.FileMapping{
+            {Route: "/*", Path: "/public/$1"},
+        },
+    },
+})
+
+var Publish = SiteAgent.Method[golem.Unit, golem.Unit]("publish")
+
+type state struct{}
+
+var impl = SiteAgent.Implement(func(SiteID) *state {
+    return &state{}
+})
+
+var _ = impl.Handle(Publish, func(
+    _ *golem.Context[state], _ golem.Unit,
+) golem.Unit {
+    // copy in the site the agent built; its URLs serve it at once:
+    golem.Must0(os.CopyFS("/public", os.DirFS("/workspace/dist")))
+    return golem.Unit{}
+})`,
+    },
+  } as ChapterFigure,
+  items: [
+    {
+      title: "Routes and files",
+      body: "Agents deploy front-ends and back ends under the permissions you grant. HTTP routes are declared in agent code; static files are served directly from storage.",
     },
     {
-      icon: "⊟",
-      label: "User-defined quotas",
-      note: "Rate, capacity, concurrency — throttle, reject, or terminate",
+      title: "Durable streaming",
+      body: "Streaming methods become resumable streams: clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
     },
     {
-      icon: "▭",
-      label: "OpenTelemetry built-in",
-      note: "Every step traced, every metric auto-emitted",
+      title: "Front-end login",
+      body: "Single-page front-ends sign users in with OAuth2 and PKCE, using short-lived tokens Golem issues. A mount can turn away callers without a valid login.",
     },
     {
-      icon: "⊜",
-      label: "Complete audit log",
-      note: "Every action and authorization decision, recorded and replayable",
+      title: "Read-only methods",
+      body: "Methods marked read-only can't change state; the runtime enforces it. Responses are cached until the agent next writes, served without waking it.",
     },
-    {
-      icon: "⌬",
-      label: "Sandboxed by construction",
-      note: "Every agent and tool call runs in its own WebAssembly instance",
-    },
-    { icon: "⇆", label: "Model-agnostic", note: "Any model via HTTP — routing stays in your code" },
-  ] as TableStakeItem[],
+  ] as ChapterItem[],
 };
 
 // =============================================================================
-// SECTION 9 — Customer stories (GATED at launch)
+// Testimonials
 // =============================================================================
 
 export interface Testimonial {
@@ -741,10 +726,17 @@ export interface Testimonial {
 }
 
 export const customerStories = {
-  eyebrow: "In their own words",
-  heading: "From teams shipping on Golem.",
-  showAtLaunch: true,
+  heading: "From developers building on Golem",
   testimonials: [
+    {
+      quote:
+        "Tried Temporal, Dapr, Restate, and Fermyon Spin. Golem gives me what I'd given up on finding: code-level customizability with no-code-level operational simplicity.",
+      name: "Samuel Iyeh",
+      role: "AI Software Engineer",
+      company: "Building Johnethel LMS",
+      avatar: { filename: "samuel-iyeh.jpg", alt: "Samuel Iyeh" },
+      productLogo: { filename: "johnethel-lms.png", alt: "Johnethel LMS" },
+    },
     {
       quote:
         "I tried Akka event sourcing and Step Functions first. What I love about Golem is clean code — durable state and automatic retry built in.",
@@ -784,20 +776,104 @@ export const customerStories = {
       avatar: { filename: "daniele-torelli.png", alt: "Daniele Torelli" },
       productLogo: { filename: "golem-journai.png", alt: "JournAI" },
     },
-    {
-      quote:
-        "Tried Temporal, Dapr, Restate, and Fermyon Spin. Golem gives me what I'd given up on finding: code-level customizability with no-code-level operational simplicity.",
-      name: "Samuel Iyeh",
-      role: "AI Software Engineer",
-      company: "Building Johnethel LMS",
-      avatar: { filename: "samuel-iyeh.jpg", alt: "Samuel Iyeh" },
-      productLogo: { filename: "johnethel-lms.png", alt: "Johnethel LMS" },
-    },
   ] as Testimonial[],
 };
 
 // =============================================================================
-// SECTION 10 — Quickstart
+// Deployment
+// =============================================================================
+
+export const deployment = {
+  eyebrow: "Operations",
+  heading: "Run it locally, self-hosted or managed",
+  options: [
+    {
+      visual: "local",
+      title: "Local",
+      body: "One binary runs the whole platform on your laptop. Stop it, restart it, and your agents are still there.",
+    },
+    {
+      visual: "selfhost",
+      title: "Self-hosted",
+      body: "Run the full open source platform in production, on your own Docker or Kubernetes infrastructure.",
+    },
+    {
+      visual: "cloud",
+      title: "Golem Cloud",
+      body: "Deploy to the managed service and let us run it, with no servers of your own. Free during the Developer Preview.",
+    },
+  ],
+  sharedLabel: "In every deployment",
+  shared: [
+    {
+      title: "Observability and audit",
+      body: "OpenTelemetry traces and metrics. Each agent's oplog records its external interactions and permission decisions for audit.",
+    },
+    {
+      title: "Live updates and rollback",
+      body: "Update running agents after a compatibility check. Roll an agent back to an earlier point, or clone it to try another approach.",
+    },
+    {
+      title: "Quotas",
+      body: "Rate, capacity and concurrency limits throttle, reject or stop runaway agents and tools, and can change without a redeploy.",
+    },
+  ],
+};
+
+// =============================================================================
+// FAQ
+// =============================================================================
+
+export const faq = {
+  heading: "Questions developers ask",
+  items: [
+    {
+      q: "Do I still need my database?",
+      aHtml:
+        "Probably not. Each agent's whole execution is durable, and each agent has its own file system and can have its own database. Golem Social, a whole social network, runs on Golem with no external database. The same holds for your agents and tools, and for the artifacts your agents deploy. Keep existing databases where other systems share the data.",
+    },
+    {
+      q: "Can I keep my agent framework?",
+      aHtml:
+        "Yes. A framework shapes the agent loop and usually saves the conversation between turns. It runs inside a Golem agent, which keeps the agent's whole execution durable, in-progress tool calls included, and enforces permissions in the runtime.",
+    },
+    {
+      q: "How is this different from an actor platform?",
+      aHtml:
+        "Actor platforms persist each entity's state. Golem keeps the agent's whole execution durable, including its call stack, files and environment, so it continues in the middle of a call. Tool calls run exactly once, and the runtime enforces permissions.",
+    },
+    {
+      q: "How does it compare with a workflow engine?",
+      aHtml:
+        "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM and runtime-checked permissions.",
+    },
+    {
+      q: "Is Golem open source?",
+      aHtml:
+        "Yes. Golem has a BSL license that converts to Apache 2.0, and is available for self-hosting for production workloads.",
+    },
+    {
+      q: "What happens to running agents when I deploy?",
+      aHtml: `They stay on their current version until you update them. Golem checks that the new code is compatible before it moves a running agent over. <a href="https://learn.golem.cloud">Read the docs →</a>`,
+    },
+  ],
+};
+
+// =============================================================================
+// Final CTA
+// =============================================================================
+
+export const finalCta = {
+  heading: "Build your first durable agent",
+  body: "Install one binary and run the platform locally.",
+  ctas: {
+    primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
+    secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
+  },
+};
+
+// =============================================================================
+// Quickstart (used by /cloud and /use-cases)
 // =============================================================================
 
 export const quickstart = {

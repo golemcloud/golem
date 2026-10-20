@@ -1,0 +1,39 @@
+---
+import { finalCta } from "../data/homepage";
+
+const { heading, body, ctas } = finalCta;
+---
+
+<section class="final-cta">
+  <div class="container inner">
+    <h2>{heading}</h2>
+    <p>{body}</p>
+    <div class="ctas">
+      <a href={ctas.primary.href} class="btn btn-primary">{ctas.primary.label}</a>
+      <a href={ctas.secondary.href} class="btn btn-secondary">{ctas.secondary.label}</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .final-cta {
+    border-top: 1px solid var(--border);
+    background: radial-gradient(ellipse at 50% 0%, rgba(245, 176, 62, 0.07), transparent 60%);
+  }
+  .inner {
+    text-align: center;
+  }
+  h2 {
+    font-size: clamp(1.7rem, 3vw, 2.3rem);
+    margin-bottom: 0.7rem;
+  }
+  p {
+    margin: 0 0 1.75rem;
+  }
+  .ctas {
+    display: flex;
+    gap: 0.85rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+</style>

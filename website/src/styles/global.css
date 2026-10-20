@@ -237,6 +237,17 @@ pre.astro-code {
   border: 1px solid var(--border);
 }
 
+/* Alternating section band */
+.band {
+  background: #17171f;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.band .card {
+  background: var(--bg);
+}
+
 /* Section divider */
 .divider {
   border: 0;

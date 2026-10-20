@@ -1,0 +1,185 @@
+---
+import { Image } from "astro:assets";
+import { deployment } from "../data/homepage";
+import golemLogo from "../assets/logo/golem-horizontal-white.png";
+import dockerSvg from "../assets/logo/docker.svg?raw";
+import kubernetesSvg from "../assets/logo/kubernetes.svg?raw";
+
+const { eyebrow, heading, options, sharedLabel, shared } = deployment;
+---
+
+<section class="deployment band">
+  <div class="container">
+    <span class="eyebrow">{eyebrow}</span>
+    <h2 class="section-heading">{heading}</h2>
+    <div class="options">
+      {
+        options.map((o) => (
+          <div class="card option">
+            <div class="visual" aria-hidden="true">
+              {o.visual === "local" && (
+                <div class="term mono">
+                  <span class="prompt">$</span> golem server run
+                </div>
+              )}
+              {o.visual === "selfhost" && (
+                <div class="brands">
+                  <span class="brand">
+                    <span class="brand-icon" set:html={dockerSvg} />
+                    Docker
+                  </span>
+                  <span class="brand">
+                    <span class="brand-icon" set:html={kubernetesSvg} />
+                    Kubernetes
+                  </span>
+                </div>
+              )}
+              {o.visual === "cloud" && (
+                <Image
+                  class="golem-logo"
+                  src={golemLogo}
+                  alt=""
+                  widths={[180, 360]}
+                  sizes="180px"
+                />
+              )}
+            </div>
+            <h3>{o.title}</h3>
+            <p>{o.body}</p>
+          </div>
+        ))
+      }
+    </div>
+    <div class="shared">
+      <span class="eyebrow">{sharedLabel}</span>
+      <ul>
+        {
+          shared.map((s) => (
+            <li>
+              <strong>{s.title}</strong>
+              <span>{s.body}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </div>
+</section>
+
+<style>
+  .deployment {
+    padding: 2.5rem 0;
+  }
+  @media (min-width: 1100px) {
+    .deployment {
+      padding: 3rem 0;
+    }
+  }
+  .deployment .section-heading {
+    margin-bottom: 1.75rem;
+  }
+  .options {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+  @media (min-width: 1100px) {
+    .options {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  .option {
+    display: flex;
+    flex-direction: column;
+  }
+  .visual {
+    height: 64px;
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--border);
+    border-top-color: var(--accent-border);
+    border-radius: 10px;
+    background: var(--bg-card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .term {
+    font-size: 0.95rem;
+    color: var(--text);
+  }
+  .term .prompt {
+    color: var(--accent);
+  }
+  .brands {
+    display: flex;
+    gap: 2rem;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 500;
+  }
+  .brand-icon {
+    display: flex;
+    width: 30px;
+    height: 30px;
+  }
+  .brand-icon :global(svg) {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+  }
+  .golem-logo {
+    height: 34px;
+    width: auto;
+  }
+  .card h3 {
+    font-size: 1.08rem;
+    margin-bottom: 0.45rem;
+  }
+  .card p {
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+  .shared {
+    margin-top: 1.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+  }
+  .shared .eyebrow {
+    margin-bottom: 1rem;
+  }
+  .shared ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  @media (min-width: 1100px) {
+    .shared ul {
+      grid-template-columns: repeat(3, 1fr);
+      column-gap: 1.25rem;
+    }
+  }
+  .shared li {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .shared strong {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .shared li span {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+</style>
