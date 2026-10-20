@@ -15,4 +15,5 @@ mod endpoint;
 mod invoke;
 mod mcp_capabilities_lookup;
 mod schema;
+pub mod serving;
 pub mod session;

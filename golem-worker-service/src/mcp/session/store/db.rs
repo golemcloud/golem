@@ -16,8 +16,7 @@
 //! moves the expiry forward only when [`expiry_write`] asks for it, so a busy session costs at
 //! most one write per slack period.
 
-use super::{McpSessionId, McpSessionRecord, McpSessionStore, millis};
-use crate::custom_api::oidc::session_store::SessionStoreError;
+use super::{McpSessionId, McpSessionRecord, McpSessionStore, McpSessionStoreError, millis};
 use async_trait::async_trait;
 use chrono::Utc;
 use conditional_trait_gen::trait_gen;
@@ -108,7 +107,7 @@ impl DbMcpSessionStore<SqlitePool> {
         id: McpSessionId,
         now_ms: i64,
         expires_at: i64,
-    ) -> Result<bool, SessionStoreError> {
+    ) -> Result<bool, McpSessionStoreError> {
         let result = self
             .pool
             .with_rw(SVC_NAME, "extend")
@@ -134,7 +133,7 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
         id: McpSessionId,
         record: &McpSessionRecord,
         ttl: Duration,
-    ) -> Result<bool, SessionStoreError> {
+    ) -> Result<bool, McpSessionStoreError> {
         let result = self
             .pool
             .with_rw(SVC_NAME, "create")
@@ -155,7 +154,7 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
         &self,
         id: McpSessionId,
         extend: Option<Duration>,
-    ) -> Result<Option<McpSessionRecord>, SessionStoreError> {
+    ) -> Result<Option<McpSessionRecord>, McpSessionStoreError> {
         let now_ms = now_millis();
         let row = self
             .pool
@@ -184,7 +183,7 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
         &self,
         id: McpSessionId,
         record: &McpSessionRecord,
-    ) -> Result<bool, SessionStoreError> {
+    ) -> Result<bool, McpSessionStoreError> {
         let result = self
             .pool
             .with_rw(SVC_NAME, "replace")
@@ -200,7 +199,7 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn delete(&self, id: McpSessionId) -> Result<(), SessionStoreError> {
+    async fn delete(&self, id: McpSessionId) -> Result<(), McpSessionStoreError> {
         self.pool
             .with_rw(SVC_NAME, "delete")
             .execute(sqlx::query("DELETE FROM mcp_session WHERE session_id = $1").bind(id.uuid()))

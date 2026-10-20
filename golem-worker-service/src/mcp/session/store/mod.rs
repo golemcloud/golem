@@ -22,19 +22,37 @@ mod redis;
 pub use db::{DbMcpSessionStore, PostgresMcpSessionStore, SqliteMcpSessionStore};
 pub use redis::RedisMcpSessionStore;
 
-use crate::custom_api::oidc::session_store::SessionStoreError;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
+use golem_common::error_forwarding;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::redis::RedisError;
+use golem_service_base::repo::RepoError;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::time::Duration;
 use uuid::Uuid;
+
+/// A failed MCP session store operation: the backend could not be reached, or a stored record
+/// could not be read.
+#[derive(Debug, thiserror::Error)]
+pub enum McpSessionStoreError {
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
+}
+
+error_forwarding!(McpSessionStoreError, RepoError);
+
+impl From<RedisError> for McpSessionStoreError {
+    fn from(value: RedisError) -> Self {
+        Self::InternalError(anyhow::Error::from(value).context("RedisError"))
+    }
+}
 
 /// Whole milliseconds of `duration`, saturating at `i64::MAX`.
 fn millis(duration: Duration) -> i64 {
@@ -51,7 +69,7 @@ pub trait McpSessionStore: Send + Sync {
         id: McpSessionId,
         record: &McpSessionRecord,
         ttl: Duration,
-    ) -> Result<bool, SessionStoreError>;
+    ) -> Result<bool, McpSessionStoreError>;
 
     /// The live record. With `Some(idle)` the record stays live for at least `idle` from now;
     /// the record itself is not changed.
@@ -59,17 +77,17 @@ pub trait McpSessionStore: Send + Sync {
         &self,
         id: McpSessionId,
         extend: Option<Duration>,
-    ) -> Result<Option<McpSessionRecord>, SessionStoreError>;
+    ) -> Result<Option<McpSessionRecord>, McpSessionStoreError>;
 
     /// Replaces the live record and keeps its expiry. `false` when it is not live.
     async fn replace(
         &self,
         id: McpSessionId,
         record: &McpSessionRecord,
-    ) -> Result<bool, SessionStoreError>;
+    ) -> Result<bool, McpSessionStoreError>;
 
     /// Removes the record. Removing a missing record is not an error.
-    async fn delete(&self, id: McpSessionId) -> Result<(), SessionStoreError>;
+    async fn delete(&self, id: McpSessionId) -> Result<(), McpSessionStoreError>;
 }
 
 /// What a session is bound to: the domain and environment it was opened for, and the
@@ -83,12 +101,12 @@ pub struct McpSessionRecord {
 }
 
 impl McpSessionRecord {
-    fn encode(&self) -> Result<Vec<u8>, SessionStoreError> {
+    fn encode(&self) -> Result<Vec<u8>, McpSessionStoreError> {
         golem_common::serialization::serialize(self)
             .map_err(|e| anyhow!("McpSessionRecord serialization error: {e}").into())
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, SessionStoreError> {
+    fn decode(bytes: &[u8]) -> Result<Self, McpSessionStoreError> {
         golem_common::serialization::deserialize(bytes)
             .map_err(|e| anyhow!("McpSessionRecord deserialization error: {e}").into())
     }

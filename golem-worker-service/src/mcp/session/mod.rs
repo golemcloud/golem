@@ -12,7 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! The MCP session layer: session records in a shared store, and the per-replica state (response
+//! events, running calls, GET streams) of the requests this replica serves.
+
+mod calls;
+mod event_store;
+mod middleware;
+mod replica;
+mod rules;
+mod sharded;
 pub mod store;
+mod streams;
+#[cfg(test)]
+mod tests;
+
+/// Session IDs shared by the tests of this module.
+#[cfg(test)]
+mod test_ids {
+    use super::store::McpSessionId;
+
+    /// The text form of [`session`].
+    pub(super) const SESSION: &str = "0123456789abcdef0123456789abcdef";
+
+    pub(super) fn session() -> McpSessionId {
+        SESSION.parse().unwrap()
+    }
+
+    pub(super) fn other_session() -> McpSessionId {
+        "fedcba9876543210fedcba9876543210".parse().unwrap()
+    }
+}
+
+pub use middleware::McpSessionLayer;
+pub use replica::McpReplica;
+pub(crate) use replica::SSE_RETRY_MILLIS;
 
 use crate::config::{SessionStoreConfig, with_session_store_schema};
 use golem_common::SafeDisplay;

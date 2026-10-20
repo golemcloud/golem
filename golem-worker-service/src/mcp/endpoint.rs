@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::auth::no_mcp_deployment_response;
+use super::session::store::McpSessionStore;
+use super::session::{McpReplica, McpSessionLayer, SSE_RETRY_MILLIS};
 use super::{
     GolemAgentMcpServer, McpBearerAuth, McpCapabilitiesLookupError, McpCapabilityLookup,
     oauth_proxy_routes,
@@ -28,9 +30,11 @@ use golem_service_base::mcp::CompiledMcp;
 use poem::endpoint::{BoxEndpoint, TowerCompatExt};
 use poem::middleware::Cors;
 use poem::{Endpoint, EndpointExt, IntoResponse, Request, Response, Result, http};
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::ServerHandler;
+use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// The MCP deployment that serves a request, and the public origin the request arrived at.
 ///
@@ -77,6 +81,7 @@ pub fn make_mcp_endpoint(services: &Services, max_body_size: usize) -> BoxEndpoi
         services.worker_service.clone(),
         services.identity_provider.clone(),
         services.session_store.clone(),
+        services.mcp_session_store.clone(),
         &services.mcp_config,
         max_body_size,
     )
@@ -87,23 +92,20 @@ pub(crate) fn mcp_endpoint(
     worker_service: Arc<WorkerService>,
     identity_provider: Arc<dyn IdentityProvider>,
     session_store: Arc<dyn SessionStore>,
+    mcp_session_store: Arc<dyn McpSessionStore>,
     config: &crate::config::McpConfig,
     max_body_size: usize,
 ) -> BoxEndpoint<'static> {
-    let service = StreamableHttpService::new(
-        move || {
-            Ok(GolemAgentMcpServer::new(
-                mcp_capability_lookup.clone(),
-                worker_service.clone(),
-            ))
-        },
-        LocalSessionManager::default().into(),
-        mcp_http_transport_config(config),
+    let replica = McpReplica::new(mcp_session_store, config);
+    let service = mcp_transport(
+        move || GolemAgentMcpServer::new(mcp_capability_lookup.clone(), worker_service.clone()),
+        replica,
+        config,
     );
 
     let oauth_routes = oauth_proxy_routes(identity_provider.clone(), session_store);
 
-    let mcp_with_auth = service.compat().with(McpBearerAuth::new(identity_provider));
+    let mcp_with_auth = service.with(McpBearerAuth::new(identity_provider));
 
     // OAuth routes use .at() so they take priority over .nest("/mcp", ...)
     oauth_routes
@@ -119,6 +121,7 @@ pub(crate) fn mcp_endpoint(
                     "Mcp-Session-Id",
                     "Accept",
                     "Last-Event-ID",
+                    "MCP-Protocol-Version",
                 ])
                 .expose_headers(vec!["Mcp-Session-Id"]),
         )
@@ -126,13 +129,38 @@ pub(crate) fn mcp_endpoint(
         .boxed()
 }
 
+/// The stateless rmcp service for `handler`s behind the session layer of `replica`. Requests
+/// must carry the request's `Arc<CompiledMcp>` and an `McpServing` extension.
+pub(crate) fn mcp_transport<S, H>(
+    handler: H,
+    replica: Arc<McpReplica>,
+    config: &crate::config::McpConfig,
+) -> impl Endpoint<Output = Response> + use<S, H>
+where
+    S: ServerHandler + Send + 'static,
+    H: Fn() -> S + Send + Sync + 'static,
+{
+    let sessions = NeverSessionManager::default().with_event_store(replica.event_store());
+    StreamableHttpService::new(
+        move || Ok(handler()),
+        Arc::new(sessions),
+        mcp_http_transport_config(config),
+    )
+    .compat()
+    .with(McpSessionLayer::new(replica))
+}
+
 pub(crate) fn mcp_http_transport_config(
     config: &crate::config::McpConfig,
 ) -> StreamableHttpServerConfig {
     // Export hosts are deployment domains, not a static loopback allowlist.
     // Export request limits are independent of the bounded outbound import client.
+    // Sessions are kept by the session layer, so rmcp serves every request statelessly.
     StreamableHttpServerConfig::default()
         .with_sse_keep_alive(Some(config.sse_keep_alive_interval))
+        .with_sse_retry(Some(Duration::from_millis(SSE_RETRY_MILLIS)))
+        .with_legacy_session_mode(false)
+        .with_json_response(false)
         .disable_allowed_hosts()
         .with_max_request_body_bytes(usize::MAX)
 }

@@ -17,6 +17,7 @@ use crate::custom_api::oidc::model::{McpPendingAuth, McpProxyCodeEntry};
 use crate::custom_api::oidc::session_store::SessionStore;
 use crate::ingress::PublicOrigin;
 use crate::mcp::McpRequest;
+use crate::mcp::serving::{McpServing, StatelessServing};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -172,7 +173,9 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
             }
         }
 
+        let serving: Arc<dyn McpServing> = Arc::new(StatelessServing(compiled.clone()));
         req.extensions_mut().insert(compiled);
+        req.extensions_mut().insert(serving);
         self.inner.call(req).await.map(|resp| resp.into_response())
     }
 }

@@ -360,26 +360,31 @@ async fn real_mcp_endpoint_with_body_limit(
         },
         vec![],
     );
+    let pool = crate::custom_api::oidc::session_store::migrated_sqlite_pool(
+        &golem_common::config::DbSqliteConfig {
+            database: db.path().to_string_lossy().into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        },
+    )
+    .await
+    .unwrap();
     let endpoint = mcp_endpoint(
         Arc::new(McpDomains::default()),
         harness.worker_service.clone(),
         Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
         Arc::new(
             crate::custom_api::oidc::session_store::SqliteSessionStore::new(
-                crate::custom_api::oidc::session_store::migrated_sqlite_pool(
-                    &golem_common::config::DbSqliteConfig {
-                        database: db.path().to_string_lossy().into_owned(),
-                        max_connections: 1,
-                        foreign_keys: false,
-                    },
-                )
-                .await
-                .unwrap(),
+                pool.clone(),
                 std::time::Duration::from_secs(60),
                 std::time::Duration::from_secs(60),
             )
             .unwrap(),
         ),
+        Arc::new(crate::mcp::session::store::SqliteMcpSessionStore::new(
+            pool,
+            std::time::Duration::from_secs(60),
+        )),
         &Default::default(),
         max_body_size,
     );
@@ -460,6 +465,50 @@ async fn mcp_body_above_the_limit_gets_413_with_cors_headers() {
             "https://app.example.com"
         );
     }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn mcp_other_methods_get_405_with_allow() {
+    let (mcp, _db) = real_mcp_endpoint().await;
+    let (endpoint, _) = dispatcher(mcp);
+    let put = request("10.0.0.2", TOOLS, "/mcp")
+        .method(Method::PUT)
+        .finish();
+    let options = request("10.0.0.2", TOOLS, "/mcp")
+        .method(Method::OPTIONS)
+        .finish();
+    let responses = [
+        endpoint.get_response(put).await,
+        endpoint.get_response(options).await,
+    ];
+    responses.iter().for_each(|response| {
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.headers()["Allow"], "GET, POST, DELETE");
+    });
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn mcp_cors_allows_the_protocol_version_header() {
+    let (mcp, _db) = real_mcp_endpoint().await;
+    let (endpoint, _) = dispatcher(mcp);
+    let preflight = request("10.0.0.2", TOOLS, "/mcp")
+        .method(Method::OPTIONS)
+        .header("Origin", "https://app.example.com")
+        .header("Access-Control-Request-Method", "POST")
+        .header(
+            "Access-Control-Request-Headers",
+            "mcp-protocol-version, mcp-session-id",
+        )
+        .finish();
+    let response = endpoint.get_response(preflight).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let allowed = response.headers()["Access-Control-Allow-Headers"]
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(allowed.contains("mcp-protocol-version"), "{allowed}");
 }
 
 #[test]

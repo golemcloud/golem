@@ -14,8 +14,7 @@
 
 //! Each record is one key, `mcp_session:<id>`, whose Redis expiry is the session's expiry.
 
-use super::{McpSessionId, McpSessionRecord, McpSessionStore, millis};
-use crate::custom_api::oidc::session_store::SessionStoreError;
+use super::{McpSessionId, McpSessionRecord, McpSessionStore, McpSessionStoreError, millis};
 use async_trait::async_trait;
 use bytes::Bytes;
 use fred::types::{Expiration, SetOptions};
@@ -46,7 +45,7 @@ impl McpSessionStore for RedisMcpSessionStore {
         id: McpSessionId,
         record: &McpSessionRecord,
         ttl: Duration,
-    ) -> Result<bool, SessionStoreError> {
+    ) -> Result<bool, McpSessionStoreError> {
         let stored: Option<String> = self
             .redis
             .with(SVC_NAME, "create")
@@ -65,7 +64,7 @@ impl McpSessionStore for RedisMcpSessionStore {
         &self,
         id: McpSessionId,
         extend: Option<Duration>,
-    ) -> Result<Option<McpSessionRecord>, SessionStoreError> {
+    ) -> Result<Option<McpSessionRecord>, McpSessionStoreError> {
         let bytes: Option<Bytes> = match extend {
             Some(idle) => {
                 self.redis
@@ -84,7 +83,7 @@ impl McpSessionStore for RedisMcpSessionStore {
         &self,
         id: McpSessionId,
         record: &McpSessionRecord,
-    ) -> Result<bool, SessionStoreError> {
+    ) -> Result<bool, McpSessionStoreError> {
         let stored: Option<String> = self
             .redis
             .with(SVC_NAME, "replace")
@@ -99,7 +98,7 @@ impl McpSessionStore for RedisMcpSessionStore {
         Ok(stored.is_some())
     }
 
-    async fn delete(&self, id: McpSessionId) -> Result<(), SessionStoreError> {
+    async fn delete(&self, id: McpSessionId) -> Result<(), McpSessionStoreError> {
         let _: i64 = self.redis.with(SVC_NAME, "delete").del(key(id)).await?;
         Ok(())
     }

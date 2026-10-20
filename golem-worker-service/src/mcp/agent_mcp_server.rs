@@ -16,9 +16,9 @@ use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_prompt::{AgentMcpPrompt, PromptRegistry};
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, McpResourceUri, ResourceRegistry};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
+use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, Serving};
 use crate::mcp::{McpCapabilityLookup, invoke};
 use crate::service::worker::WorkerService;
-use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::schema::AgentTypeKind;
 use golem_service_base::mcp::CompiledMcp;
@@ -28,17 +28,62 @@ use rmcp::{
     model::*, service::RequestContext,
 };
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
+/// Serves the MCP requests of one deployment domain. It keeps no state between requests: every
+/// request is served with the deployment that the [`McpServing`] in its extensions names.
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
-    tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
-    tools: Arc<DashMap<String, Tool>>,
-    resources: Arc<RwLock<ResourceRegistry>>,
-    prompts: Arc<RwLock<PromptRegistry>>,
-    deployment: Arc<RwLock<Option<Arc<CompiledMcp>>>>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
     worker_service: Arc<WorkerService>,
+}
+
+/// The tools, resources and prompts of one deployment.
+struct ServedCapabilities {
+    router: ToolRouter<GolemAgentMcpServer>,
+    tools: Vec<Tool>,
+    resources: ResourceRegistry,
+    prompts: PromptRegistry,
+}
+
+impl ServedCapabilities {
+    fn of(compiled: &CompiledMcp) -> Result<Self, ErrorData> {
+        let capabilities = agent_capabilities_from_deployment(compiled);
+        let router = capabilities
+            .tools
+            .into_iter()
+            .fold(ToolRouter::new(), |router, tool| router.with_route(tool));
+        let tools = router
+            .list_all()
+            .into_iter()
+            .map(Ok)
+            .chain(
+                compiled
+                    .tools
+                    .iter()
+                    .map(invoke::native_tool::tool_metadata),
+            )
+            .collect::<Result<Vec<_>, _>>()?;
+        let resources = capabilities.resources.into_iter().fold(
+            ResourceRegistry::default(),
+            |mut registry, resource| {
+                registry.insert(resource);
+                registry
+            },
+        );
+        let prompts = capabilities.prompts.into_iter().fold(
+            PromptRegistry::default(),
+            |mut registry, prompt| {
+                registry.insert(prompt);
+                registry
+            },
+        );
+        Ok(Self {
+            router,
+            tools,
+            resources,
+            prompts,
+        })
+    }
 }
 
 impl GolemAgentMcpServer {
@@ -47,11 +92,6 @@ impl GolemAgentMcpServer {
         worker_service: Arc<WorkerService>,
     ) -> Self {
         Self {
-            tool_router: Arc::new(RwLock::new(None)),
-            tools: Arc::new(DashMap::new()),
-            resources: Arc::new(RwLock::new(ResourceRegistry::default())),
-            prompts: Arc::new(RwLock::new(PromptRegistry::default())),
-            deployment: Arc::new(RwLock::new(None)),
             mcp_definitions_lookup,
             worker_service,
         }
@@ -65,90 +105,121 @@ impl GolemAgentMcpServer {
         invoke::tool::invoke_tool(args_map, mcp_tool, &self.worker_service).await
     }
 
-    async fn build_capabilities(
+    async fn run_tool(
         &self,
-        compiled: &CompiledMcp,
-    ) -> (
-        ToolRouter<GolemAgentMcpServer>,
-        Vec<AgentMcpResource>,
-        Vec<AgentMcpPrompt>,
-    ) {
-        let capabilities = agent_capabilities_from_deployment(compiled);
-
-        let mut router = ToolRouter::<GolemAgentMcpServer>::new();
-
-        for tool in capabilities.tools {
-            router = router.with_route(tool);
-        }
-
-        (router, capabilities.resources, capabilities.prompts)
-    }
-
-    async fn refresh_tools(&self, compiled: Arc<CompiledMcp>) -> Result<Vec<Tool>, ErrorData> {
-        let mut pinned = self.deployment.write().await;
-        if let Some(previous) = pinned.as_ref()
-            && (previous.domain != compiled.domain
-                || previous.environment_id != compiled.environment_id)
+        request: CallToolRequestParams,
+        compiled: Arc<CompiledMcp>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        if let Some(export) = compiled
+            .tools
+            .iter()
+            .find(|tool| tool.mcp_name == request.name)
         {
-            return Err(ErrorData::invalid_params(
-                "MCP session belongs to another deployment domain",
-                None,
-            ));
+            let (input, stdin) = export
+                .parse_arguments(request.arguments.unwrap_or_default())
+                .map_err(|error| ErrorData::invalid_params(error, None))?;
+            let result = invoke::native_tool::invoke(
+                &self.worker_service,
+                &compiled,
+                export,
+                input,
+                stdin,
+                context.ct.clone(),
+            )
+            .await;
+            if result.is_err() {
+                self.mcp_definitions_lookup
+                    .invalidate(&compiled.domain)
+                    .await;
+                if let Ok(current) = self.mcp_definitions_lookup.get(&compiled.domain).await
+                    && !same_deployment(&compiled, &current)
+                {
+                    let _ = context.peer.notify_tool_list_changed().await;
+                    return Err(changed_tool_set());
+                }
+            }
+            return result.map(Into::into);
         }
-        let (router, resources, prompts) = self.build_capabilities(&compiled).await;
-        let mut tools = router.list_all();
-        for export in &compiled.tools {
-            tools.push(invoke::native_tool::tool_metadata(export)?);
-        }
-        self.tools.clear();
-        for tool in &tools {
-            self.tools.insert(tool.name.to_string(), tool.clone());
-        }
-        let mut resource_registry = ResourceRegistry::default();
-        for resource in resources {
-            resource_registry.insert(resource);
-        }
-        let mut prompt_registry = PromptRegistry::default();
-        for prompt in prompts {
-            prompt_registry.insert(prompt);
-        }
-        *self.resources.write().await = resource_registry;
-        *self.prompts.write().await = prompt_registry;
-        *self.tool_router.write().await = Some(router);
-        *pinned = Some(compiled);
-        Ok(tools)
+        let capabilities = ServedCapabilities::of(&compiled)?;
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        capabilities.router.call(tcc).await
     }
 
-    async fn require_pinned_deployment(
+    async fn run_resource(
         &self,
-        context: &RequestContext<RoleServer>,
-    ) -> Result<Arc<CompiledMcp>, ErrorData> {
-        let authenticated = authenticated_deployment(context)?;
-        let compiled = self
-            .deployment
-            .read()
-            .await
-            .clone()
-            .ok_or_else(changed_tool_set)?;
-        if !same_deployment(&compiled, &authenticated) {
-            let _ = context.peer.notify_tool_list_changed().await;
-            return Err(changed_tool_set());
+        uri: String,
+        compiled: &CompiledMcp,
+    ) -> Result<ReadResourceResponse, McpError> {
+        let resource_registry = ServedCapabilities::of(compiled)?.resources;
+
+        if let Some(resource) = resource_registry.get_static(&uri) {
+            return invoke::resource::invoke_resource(&self.worker_service, resource, &uri, None)
+                .await
+                .map(Into::into);
         }
-        Ok(compiled)
+
+        let parsed_resource_uri = McpResourceUri::parse(&uri)
+            .map_err(|e| McpError::invalid_params(format!("Invalid resource URI: {e}"), None))?;
+
+        if let Some((resource, params)) =
+            resource_registry.extract_mcp_resource_with_input(&parsed_resource_uri)
+        {
+            return invoke::resource::invoke_resource(
+                &self.worker_service,
+                resource,
+                &uri,
+                Some(params),
+            )
+            .await
+            .map(Into::into);
+        }
+
+        Err(McpError::invalid_params(
+            format!("Resource not found for URI: {}", uri),
+            None,
+        ))
     }
 }
 
-fn authenticated_deployment(
+/// The deployment to serve the request with, from the request's [`McpServing`]. A refusal is
+/// turned into the client's error here, the one place for every handler method.
+async fn serve(
     context: &RequestContext<RoleServer>,
-) -> Result<Arc<CompiledMcp>, ErrorData> {
-    context
+    kind: ServeKind,
+) -> Result<Serving, ErrorData> {
+    let serving = context
         .extensions
         .get::<http::request::Parts>()
-        .and_then(|parts| parts.extensions.get::<Arc<CompiledMcp>>())
+        .and_then(|parts| parts.extensions.get::<Arc<dyn McpServing>>())
         .cloned()
         .ok_or_else(|| {
             ErrorData::invalid_params("MCP request has no authenticated deployment", None)
-        })
+        })?;
+    match serving.serve(kind, &context.ct).await {
+        Ok(serving) => Ok(serving),
+        Err(ServeRefusal::ToolSetChanged) => {
+            let _ = context.peer.notify_tool_list_changed().await;
+            Err(changed_tool_set())
+        }
+        Err(ServeRefusal::Gone) => Err(ErrorData::invalid_request("MCP session ended", None)),
+        Err(ServeRefusal::Unavailable) => Err(ErrorData::internal_error(
+            "MCP session could not be read",
+            None,
+        )),
+    }
+}
+
+/// Runs `work` until it completes. The serving's `while_running` work runs next to it; it never
+/// completes.
+async fn while_serving<T>(
+    serving: Serving,
+    work: impl Future<Output = Result<T, ErrorData>>,
+) -> Result<T, ErrorData> {
+    tokio::select! {
+        result = work => result,
+        never = serving.while_running => match never {},
+    }
 }
 
 fn same_deployment(left: &CompiledMcp, right: &CompiledMcp) -> bool {
@@ -321,18 +392,13 @@ impl ServerHandler for GolemAgentMcpServer {
         std::borrow::Cow::Borrowed(ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_03_26))
     }
 
-    fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.tools.get(name).map(|ref_multi| ref_multi.clone())
-    }
-
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = self
-            .refresh_tools(authenticated_deployment(&context)?)
-            .await?;
+        let serving = serve(&context, ServeKind::List).await?;
+        let tools = ServedCapabilities::of(&serving.deployment)?.tools;
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -341,47 +407,9 @@ impl ServerHandler for GolemAgentMcpServer {
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
-        let compiled = self.require_pinned_deployment(&context).await?;
-        if let Some(export) = compiled
-            .tools
-            .iter()
-            .find(|tool| tool.mcp_name == request.name)
-        {
-            let (input, stdin) = export
-                .parse_arguments(request.arguments.unwrap_or_default())
-                .map_err(|error| ErrorData::invalid_params(error, None))?;
-            let result = invoke::native_tool::invoke(
-                &self.worker_service,
-                &compiled,
-                export,
-                input,
-                stdin,
-                context.ct.clone(),
-            )
-            .await;
-            if result.is_err() {
-                self.mcp_definitions_lookup
-                    .invalidate(&compiled.domain)
-                    .await;
-                if let Ok(current) = self.mcp_definitions_lookup.get(&compiled.domain).await
-                    && !same_deployment(&compiled, &current)
-                {
-                    let _ = context.peer.notify_tool_list_changed().await;
-                    return Err(changed_tool_set());
-                }
-            }
-            return result.map(Into::into);
-        }
-        let tool_router = self.tool_router.read().await;
-        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        if let Some(tool_router) = tool_router.as_ref() {
-            tool_router.call(tcc).await
-        } else {
-            Err(McpError::invalid_params(
-                "tool router not initialized",
-                None,
-            ))
-        }
+        let serving = serve(&context, ServeKind::Invoke).await?;
+        let compiled = serving.deployment.clone();
+        while_serving(serving, self.run_tool(request, compiled, context)).await
     }
 
     async fn list_resources(
@@ -389,10 +417,10 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
-        let registry = self.resources.read().await;
-        let resource_list = registry.list_static_resources();
+        let serving = serve(&context, ServeKind::List).await?;
+        let resource_list = ServedCapabilities::of(&serving.deployment)?
+            .resources
+            .list_static_resources();
 
         tracing::info!("Listing {} static resources", resource_list.len());
 
@@ -404,10 +432,10 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
-        let registry = self.resources.read().await;
-        let resource_templates = registry.list_resource_templates();
+        let serving = serve(&context, ServeKind::List).await?;
+        let resource_templates = ServedCapabilities::of(&serving.deployment)?
+            .resources
+            .list_resource_templates();
 
         tracing::info!("Listing {} resource templates", resource_templates.len());
 
@@ -421,10 +449,10 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
-        let registry = self.prompts.read().await;
-        let prompt_list = registry.list_prompts();
+        let serving = serve(&context, ServeKind::List).await?;
+        let prompt_list = ServedCapabilities::of(&serving.deployment)?
+            .prompts
+            .list_prompts();
 
         tracing::info!("Listing {} prompts", prompt_list.len());
 
@@ -436,15 +464,17 @@ impl ServerHandler for GolemAgentMcpServer {
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, McpError> {
-        self.require_pinned_deployment(&context).await?;
-        let registry = self.prompts.read().await;
-
-        registry
-            .get_by_name(&request.name)
-            .map(|p| p.get_prompt_result().into())
-            .ok_or_else(|| {
-                McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
-            })
+        let serving = serve(&context, ServeKind::Invoke).await?;
+        let prompts = ServedCapabilities::of(&serving.deployment)?.prompts;
+        let prompt = async {
+            prompts
+                .get_by_name(&request.name)
+                .map(|p| p.get_prompt_result().into())
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
+                })
+        };
+        while_serving(serving, prompt).await
     }
 
     async fn read_resource(
@@ -452,35 +482,9 @@ impl ServerHandler for GolemAgentMcpServer {
         ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        self.require_pinned_deployment(&context).await?;
-        let resource_registry = self.resources.read().await;
-
-        if let Some(resource) = resource_registry.get_static(&uri) {
-            return invoke::resource::invoke_resource(&self.worker_service, resource, &uri, None)
-                .await
-                .map(Into::into);
-        }
-
-        let parsed_resource_uri = McpResourceUri::parse(&uri)
-            .map_err(|e| McpError::invalid_params(format!("Invalid resource URI: {e}"), None))?;
-
-        if let Some((resource, params)) =
-            resource_registry.extract_mcp_resource_with_input(&parsed_resource_uri)
-        {
-            return invoke::resource::invoke_resource(
-                &self.worker_service,
-                resource,
-                &uri,
-                Some(params),
-            )
-            .await
-            .map(Into::into);
-        }
-
-        Err(McpError::invalid_params(
-            format!("Resource not found for URI: {}", uri),
-            None,
-        ))
+        let serving = serve(&context, ServeKind::Invoke).await?;
+        let compiled = serving.deployment.clone();
+        while_serving(serving, self.run_resource(uri, &compiled)).await
     }
 
     async fn initialize(
@@ -488,8 +492,7 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
+        serve(&context, ServeKind::Initialize).await?;
         Ok(self.get_info())
     }
 }
