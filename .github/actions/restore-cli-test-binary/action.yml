@@ -1,11 +1,11 @@
 name: 'Restore CLI Test Binary'
-description: 'Validate the CLI producer snapshot and install its Golem executable'
+description: 'Download the verified CLI artifact and install its Golem executable'
 inputs:
   run-id:
     description: 'GitHub run ID that published the executable'
     required: true
-  disk-key:
-    description: 'Exact sticky disk key exported by the CLI producer attempt'
+  artifact-id:
+    description: 'Exact GitHub artifact ID exported by the CLI producer attempt'
     required: true
   destination:
     description: 'Directory in which to install golem'
@@ -17,10 +17,10 @@ runs:
       uses: ./.github/actions/restore-binary-publication
       with:
         run-id: ${{ inputs.run-id }}
-        disk-key: ${{ inputs.disk-key }}
+        artifact-id: ${{ inputs.artifact-id }}
         path: tmp/cli-binary-publication
         file: golem-cli-test-binaries.tar.zst
-    - name: Extract CLI executable from validated snapshot
+    - name: Extract CLI executable from verified archive
       shell: bash
       env:
         DESTINATION: ${{ inputs.destination }}

@@ -1,14 +1,14 @@
 name: 'Restore Binary Publication'
-description: 'Mount an immutable producer snapshot and validate its identity and checksum'
+description: 'Download an exact producer artifact and verify its content digest'
 inputs:
   run-id:
     description: 'GitHub run ID that published the binary'
     required: true
-  disk-key:
-    description: 'Exact sticky disk key exported by the producer attempt'
+  artifact-id:
+    description: 'Exact GitHub artifact ID exported by the producer attempt'
     required: true
   path:
-    description: 'Sticky disk mount path'
+    description: 'Directory in which to install the archive'
     required: true
   file:
     description: 'Published binary or archive filename'
@@ -16,31 +16,34 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Mount binary publication
-      uses: useblacksmith/stickydisk@v1
-      with:
-        key: ${{ inputs.disk-key }}
-        path: ${{ inputs.path }}
-        commit: 'false'
-    - name: Validate binary publication
+    - name: Validate binary producer inputs
+      id: download
       shell: bash
       env:
-        DISK_KEY: ${{ inputs.disk-key }}
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
         PUBLICATION_RUN_ID: ${{ inputs.run-id }}
-        SOURCE_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ && "$PUBLICATION_RUN_ID" == "$GITHUB_RUN_ID" ]] || { echo 'Invalid binary producer inputs' >&2; exit 1; }
+        echo "path=$(mktemp -d "$RUNNER_TEMP/binary-publication.XXXXXX")" >> "$GITHUB_OUTPUT"
+    - name: Download binary publication
+      uses: actions/download-artifact@v8
+      with:
+        artifact-ids: ${{ inputs.artifact-id }}
+        path: ${{ steps.download.outputs.path }}
+        skip-decompress: true
+        digest-mismatch: error
+    - name: Install verified binary archive
+      shell: bash
+      env:
+        DOWNLOAD_PATH: ${{ steps.download.outputs.path }}
         PUBLICATION_PATH: ${{ inputs.path }}
         PUBLICATION_FILE: ${{ inputs.file }}
       run: |
         set -euo pipefail
-        mountpoint -q "$PUBLICATION_PATH" || { echo 'Binary publication sticky disk is not mounted' >&2; exit 1; }
-        cd "$PUBLICATION_PATH"
-        [[ -n "$DISK_KEY" && "$PUBLICATION_RUN_ID" == "$GITHUB_RUN_ID" ]] || { echo 'Invalid binary producer inputs' >&2; exit 1; }
-        for file in PUBLICATION SHA256SUMS "$PUBLICATION_FILE"; do
-          [[ -s "$file" && ! -L "$file" ]] || { echo "Missing binary publication: $file (snapshot may be absent or publication denied)" >&2; exit 1; }
-        done
-        printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$PUBLICATION_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" | cmp -s - PUBLICATION || { echo 'Binary publication identity mismatch' >&2; exit 1; }
-        read -r digest filename < SHA256SUMS
-        [[ $(wc -l < SHA256SUMS) -eq 1 && "$digest" =~ ^[0-9a-f]{64}$ && "$filename" == "$PUBLICATION_FILE" ]] || { echo 'Invalid binary checksum manifest' >&2; exit 1; }
-        echo "Checking publication $DISK_KEY ($PUBLICATION_FILE)"
-        time sha256sum --check --strict SHA256SUMS
-        printf 'Validated binary sha256=%s file=%s\n' "$digest" "$filename"
+        shopt -s nullglob
+        files=("$DOWNLOAD_PATH"/"$GITHUB_RUN_ID"-producer-attempt*-"$PUBLICATION_FILE")
+        [[ ${#files[@]} -eq 1 && -s "${files[0]}" && ! -L "${files[0]}" ]] || { echo "Missing or ambiguous binary publication: $PUBLICATION_FILE" >&2; exit 1; }
+        mkdir -p "$PUBLICATION_PATH"
+        mv -- "${files[0]}" "$PUBLICATION_PATH/$PUBLICATION_FILE"
+        rmdir "$DOWNLOAD_PATH"

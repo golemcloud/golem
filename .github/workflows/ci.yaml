@@ -38,7 +38,7 @@ env:
 jobs:
   build-and-store:
     outputs:
-      native-binaries-disk-key: ${{ steps.native-binaries-key.outputs.key }}
+      native-binaries-artifact-id: ${{ steps.publication.outputs.artifact-id }}
     env:
       CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
@@ -61,38 +61,19 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
         timeout-minutes: 30
-      - name: Identify native binary disk
-        id: native-binaries-key
-        run: echo "key=${GITHUB_REPOSITORY}-native-binaries-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      # Preserve snapshots for partial consumer reruns; inactive disks expire after seven days.
-      - name: Mount native binary producer disk
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ steps.native-binaries-key.outputs.key }}
-          path: tmp/native-binaries
-          commit: 'true'
-      - name: Validate native binary producer mount
-        run: |
-          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
-          rm -f tmp/native-binaries/PUBLICATION
       - name: Packaging all binaries with cargo-nextest
         run: |
-          cargo nextest -v archive --archive-file tmp/native-binaries/golem-binaries.tar.zst --zstd-level 1 --cargo-profile dev-ci
+          mkdir -p tmp/native-binaries
+          cargo nextest -v archive --archive-file "tmp/native-binaries/${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}-golem-binaries.tar.zst" --zstd-level 1 --cargo-profile dev-ci
         timeout-minutes: 5
-
       - name: Publish packaged binaries
-        env:
-          DISK_KEY: ${{ steps.native-binaries-key.outputs.key }}
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
-          cd tmp/native-binaries
-          test -s golem-binaries.tar.zst
-          sha256sum golem-binaries.tar.zst > SHA256SUMS
-          sha256sum --check --strict SHA256SUMS
-          stat -c 'Native archive bytes=%s' golem-binaries.tar.zst
-          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
+        id: publication
+        uses: actions/upload-artifact@v7
+        with:
+          path: tmp/native-binaries/${{ github.run_id }}-producer-attempt${{ github.run_attempt }}-golem-binaries.tar.zst
+          archive: false
+          if-no-files-found: error
+          retention-days: 2
 
   check-clippy-and-format:
     env:
@@ -133,7 +114,7 @@ jobs:
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       # Bun is needed by check-openapi (which depends on check-docs-openapi)
@@ -178,7 +159,7 @@ jobs:
           install-protoc: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - name: Check configs are up to date
@@ -202,7 +183,7 @@ jobs:
 
   builtin-artifacts:
     outputs:
-      artifacts-disk-key: ${{ steps.publication-key.outputs.key }}
+      artifacts-artifact-id: ${{ steps.publication.outputs.artifact-id }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     env:
       CARGO_BUILD_JOBS: 20
@@ -250,31 +231,20 @@ jobs:
           done < <(jq -r '.[].path' builtin-artifacts.json)
       - name: Test embedded local-install defaults and source overrides
         run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
-      - name: Identify built-in publication
-        id: publication-key
-        run: echo "key=${GITHUB_REPOSITORY}-builtin-artifacts-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      - name: Mount built-in producer disk
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ steps.publication-key.outputs.key }}
-          path: tmp/builtin-publication
-          commit: 'true'
-      - name: Publish built-in artifacts
-        env:
-          DISK_KEY: ${{ steps.publication-key.outputs.key }}
-          SOURCE_SHA: ${{ github.sha }}
+      - name: Package built-in artifacts
         run: |
           set -euo pipefail
-          mountpoint -q tmp/builtin-publication || { echo 'Built-in producer disk is not mounted' >&2; exit 1; }
-          rm -f tmp/builtin-publication/PUBLICATION
+          mkdir -p tmp/builtin-publication
           jq -r '.[].path' builtin-artifacts.json > tmp/builtin-artifact-paths
-          time tar --zstd -cf tmp/builtin-publication/builtin-artifacts.tar.zst -T tmp/builtin-artifact-paths
-          cd tmp/builtin-publication
-          sha256sum builtin-artifacts.tar.zst > SHA256SUMS
-          time sha256sum --check --strict SHA256SUMS
-          cat SHA256SUMS
-          stat -c 'Built-in archive bytes=%s' builtin-artifacts.tar.zst
-          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
+          time tar --zstd -cf "tmp/builtin-publication/${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}-builtin-artifacts.tar.zst" -T tmp/builtin-artifact-paths
+      - name: Publish built-in artifacts
+        id: publication
+        uses: actions/upload-artifact@v7
+        with:
+          path: tmp/builtin-publication/${{ github.run_id }}-producer-attempt${{ github.run_attempt }}-builtin-artifacts.tar.zst
+          archive: false
+          if-no-files-found: error
+          retention-days: 2
 
   worker-tests:
     env:
@@ -311,16 +281,16 @@ jobs:
           auto-start: false
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.merge-test-components.outputs.components-disk-key }}
+          artifact-id: ${{ needs.merge-test-components.outputs.components-artifact-id }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          artifact-id: ${{ needs.builtin-artifacts.outputs.artifacts-artifact-id }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -349,16 +319,16 @@ jobs:
           install-cargo-binstall: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.merge-test-components.outputs.components-disk-key }}
+          artifact-id: ${{ needs.merge-test-components.outputs.components-artifact-id }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          artifact-id: ${{ needs.builtin-artifacts.outputs.artifacts-artifact-id }}
       - name: Set up Lima
         id: lima
         env:
@@ -453,7 +423,7 @@ jobs:
 
   build-cli-test-bins:
     outputs:
-      cli-binary-disk-key: ${{ steps.cli-binary-key.outputs.key }}
+      cli-binary-artifact-id: ${{ steps.publication.outputs.artifact-id }}
     env:
       CARGO_BUILD_JOBS: 20
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
@@ -472,32 +442,19 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-cli-test-bins
         timeout-minutes: 20
-      - name: Identify CLI binary disk
-        id: cli-binary-key
-        run: echo "key=${GITHUB_REPOSITORY}-cli-binary-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      # Keep the producer snapshot for consumer-only reruns, as for native binaries.
-      - name: Mount CLI binary producer disk
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ steps.cli-binary-key.outputs.key }}
-          path: tmp/cli-binary-publication
-          commit: 'true'
-      - name: Publish CLI executable
-        env:
-          DISK_KEY: ${{ steps.cli-binary-key.outputs.key }}
-          SOURCE_SHA: ${{ github.sha }}
+      - name: Package CLI executables
         run: |
           set -euo pipefail
-          mountpoint -q tmp/cli-binary-publication || { echo 'CLI binary sticky disk is not mounted' >&2; exit 1; }
-          cd tmp/cli-binary-publication
-          rm -f PUBLICATION
-          time tar --zstd -cf golem-cli-test-binaries.tar.zst -C ../../target/dev-release-ci golem golem-cli
-          test -s golem-cli-test-binaries.tar.zst
-          sha256sum golem-cli-test-binaries.tar.zst > SHA256SUMS
-          time sha256sum --check --strict SHA256SUMS
-          cat SHA256SUMS
-          stat -c 'CLI archive bytes=%s' golem-cli-test-binaries.tar.zst
-          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
+          mkdir -p tmp/cli-binary-publication
+          time tar --zstd -cf "tmp/cli-binary-publication/${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}-golem-cli-test-binaries.tar.zst" -C target/dev-release-ci golem golem-cli
+      - name: Publish CLI executables
+        id: publication
+        uses: actions/upload-artifact@v7
+        with:
+          path: tmp/cli-binary-publication/${{ github.run_id }}-producer-attempt${{ github.run_attempt }}-golem-cli-test-binaries.tar.zst
+          archive: false
+          if-no-files-found: error
+          retention-days: 2
 
   it:
     env:
@@ -562,17 +519,17 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.merge-test-components.outputs.components-disk-key }}
+          artifact-id: ${{ needs.merge-test-components.outputs.components-artifact-id }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          artifact-id: ${{ needs.builtin-artifacts.outputs.artifacts-artifact-id }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -732,7 +689,7 @@ jobs:
         uses: ./.github/actions/restore-binary-publication
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.build-golem-scala.outputs.ivy-disk-key }}
+          artifact-id: ${{ needs.build-golem-scala.outputs.ivy-artifact-id }}
           path: tmp/scala-ivy-publication
           file: scala-sdk-ivy-local.tar.gz
       - name: Extract Scala SDK ivy local repo
@@ -773,14 +730,14 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
       - name: Restore CLI test binaries
         uses: ./.github/actions/restore-cli-test-binary
         with:
-          disk-key: ${{ needs.build-cli-test-bins.outputs.cli-binary-disk-key }}
+          artifact-id: ${{ needs.build-cli-test-bins.outputs.cli-binary-artifact-id }}
           run-id: ${{ github.run_id }}
           destination: target/dev-release-ci
 
@@ -790,11 +747,11 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           # Other jobs sharing these steps do not depend on the fixture producer.
-          disk-key: ${{ join(needs.*.outputs.components-disk-key, '') }}
+          artifact-id: ${{ join(needs.*.outputs.components-artifact-id, '') }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          artifact-id: ${{ needs.builtin-artifacts.outputs.artifacts-artifact-id }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -953,13 +910,13 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          artifact-id: ${{ needs.builtin-artifacts.outputs.artifacts-artifact-id }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8
@@ -980,7 +937,7 @@ jobs:
         uses: ./.github/actions/restore-binary-publication
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.build-golem-scala.outputs.ivy-disk-key }}
+          artifact-id: ${{ needs.build-golem-scala.outputs.ivy-artifact-id }}
           path: tmp/scala-ivy-publication
           file: scala-sdk-ivy-local.tar.gz
       - name: Extract Scala SDK ivy local repo
@@ -1041,7 +998,7 @@ jobs:
 
   build-golem-scala:
     outputs:
-      ivy-disk-key: ${{ steps.ivy-publication-key.outputs.key }}
+      ivy-artifact-id: ${{ steps.publication.outputs.artifact-id }}
     runs-on: blacksmith-8vcpu-ubuntu-2204
     timeout-minutes: 25
     steps:
@@ -1114,30 +1071,19 @@ jobs:
           overwrite: true
           retention-days: 7
 
-      - name: Identify Scala ivy publication
-        id: ivy-publication-key
-        run: echo "key=${GITHUB_REPOSITORY}-scala-ivy-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      - name: Mount Scala ivy producer disk
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ steps.ivy-publication-key.outputs.key }}
-          path: tmp/scala-ivy-publication
-          commit: 'true'
-      - name: Publish Scala SDK ivy local repo
-        env:
-          DISK_KEY: ${{ steps.ivy-publication-key.outputs.key }}
-          SOURCE_SHA: ${{ github.sha }}
+      - name: Package Scala SDK ivy local repo
         run: |
           set -euo pipefail
-          mountpoint -q tmp/scala-ivy-publication || { echo 'Scala ivy producer disk is not mounted' >&2; exit 1; }
-          cd tmp/scala-ivy-publication
-          rm -f PUBLICATION
-          time tar -czf scala-sdk-ivy-local.tar.gz -C ~/.ivy2 local
-          sha256sum scala-sdk-ivy-local.tar.gz > SHA256SUMS
-          time sha256sum --check --strict SHA256SUMS
-          cat SHA256SUMS
-          stat -c 'Scala ivy archive bytes=%s' scala-sdk-ivy-local.tar.gz
-          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
+          mkdir -p tmp/scala-ivy-publication
+          time tar -czf "tmp/scala-ivy-publication/${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}-scala-sdk-ivy-local.tar.gz" -C ~/.ivy2 local
+      - name: Publish Scala SDK ivy local repo
+        id: publication
+        uses: actions/upload-artifact@v7
+        with:
+          path: tmp/scala-ivy-publication/${{ github.run_id }}-producer-attempt${{ github.run_attempt }}-scala-sdk-ivy-local.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 2
 
   build-golem-moonbit:
     runs-on: blacksmith
@@ -1526,7 +1472,7 @@ jobs:
       - name: Restore CLI test binaries
         uses: ./.github/actions/restore-cli-test-binary
         with:
-          disk-key: ${{ needs.build-cli-test-bins.outputs.cli-binary-disk-key }}
+          artifact-id: ${{ needs.build-cli-test-bins.outputs.cli-binary-artifact-id }}
           run-id: ${{ github.run_id }}
           destination: tmp/golem-cli-test-binaries
 
@@ -1619,7 +1565,7 @@ jobs:
         uses: ./.github/actions/restore-binary-publication
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.build-golem-scala.outputs.ivy-disk-key }}
+          artifact-id: ${{ needs.build-golem-scala.outputs.ivy-artifact-id }}
           path: tmp/scala-ivy-publication
           file: scala-sdk-ivy-local.tar.gz
       - name: Extract Scala SDK ivy local repo
@@ -1705,7 +1651,7 @@ jobs:
 
   merge-test-components:
     outputs:
-      components-disk-key: ${{ steps.publication-key.outputs.key }}
+      components-artifact-id: ${{ steps.publication.outputs.artifact-id }}
     runs-on: blacksmith
     needs: build-test-components
     steps:
@@ -1726,30 +1672,19 @@ jobs:
           echo "Distinct v3/v4 update fixture hashes: $unique_update_hashes"
           test "$unique_update_hashes" -eq 2
 
-      - name: Identify fixture publication
-        id: publication-key
-        run: echo "key=${GITHUB_REPOSITORY}-test-components-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      - name: Mount fixture producer disk
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ steps.publication-key.outputs.key }}
-          path: tmp/test-components-publication
-          commit: 'true'
-      - name: Publish test components
-        env:
-          DISK_KEY: ${{ steps.publication-key.outputs.key }}
-          SOURCE_SHA: ${{ github.sha }}
+      - name: Package test components
         run: |
           set -euo pipefail
-          mountpoint -q tmp/test-components-publication || { echo 'Fixture producer disk is not mounted' >&2; exit 1; }
-          cd tmp/test-components-publication
-          rm -f PUBLICATION
-          time tar --zstd -cf test-components.tar.zst -C ../test-components-wasm .
-          sha256sum test-components.tar.zst > SHA256SUMS
-          time sha256sum --check --strict SHA256SUMS
-          cat SHA256SUMS
-          stat -c 'Fixture archive bytes=%s' test-components.tar.zst
-          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
+          mkdir -p tmp/test-components-publication
+          time tar --zstd -cf "tmp/test-components-publication/${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}-test-components.tar.zst" -C tmp/test-components-wasm .
+      - name: Publish test components
+        id: publication
+        uses: actions/upload-artifact@v7
+        with:
+          path: tmp/test-components-publication/${{ github.run_id }}-producer-attempt${{ github.run_attempt }}-test-components.tar.zst
+          archive: false
+          if-no-files-found: error
+          retention-days: 2
 
   detect-skill-changes:
     name: Detect golem-skills changes
@@ -1866,17 +1801,17 @@ jobs:
         run: cargo make --profile ci verify-shared-crates
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          artifact-id: ${{ needs.build-and-store.outputs.native-binaries-artifact-id }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-cli-test-binary
         with:
-          disk-key: ${{ needs.build-cli-test-bins.outputs.cli-binary-disk-key }}
+          artifact-id: ${{ needs.build-cli-test-bins.outputs.cli-binary-artifact-id }}
           run-id: ${{ github.run_id }}
           destination: target/dev-release-ci
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          artifact-id: ${{ needs.builtin-artifacts.outputs.artifacts-artifact-id }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/check-published-sdks
         with:

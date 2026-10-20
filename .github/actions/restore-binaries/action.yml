@@ -1,11 +1,11 @@
 name: 'Restore Build Binaries'
-description: 'Validate sticky disk publication and apply the binary archive'
+description: 'Download the verified producer artifact and apply the binary archive'
 inputs:
   run-id:
     description: 'GitHub run ID that published the binaries'
     required: true
-  disk-key:
-    description: 'Exact sticky disk key published by the producer attempt'
+  artifact-id:
+    description: 'Exact GitHub artifact ID published by the producer attempt'
     required: true
   copy-to-target:
     description: 'Whether to copy binaries to target/debug'
@@ -16,7 +16,7 @@ runs:
     - name: Restore native binary publication
       uses: ./.github/actions/restore-binary-publication
       with:
-        disk-key: ${{ inputs.disk-key }}
+        artifact-id: ${{ inputs.artifact-id }}
         run-id: ${{ inputs.run-id }}
         path: tmp/native-binaries
         file: golem-binaries.tar.zst

@@ -4,8 +4,8 @@ inputs:
   run-id:
     description: 'GitHub run ID that published the test components'
     required: true
-  disk-key:
-    description: 'Exact sticky disk key exported by the merge producer attempt'
+  artifact-id:
+    description: 'Exact GitHub artifact ID exported by the merge producer attempt'
     required: true
 runs:
   using: 'composite'
@@ -14,7 +14,7 @@ runs:
       uses: ./.github/actions/restore-binary-publication
       with:
         run-id: ${{ inputs.run-id }}
-        disk-key: ${{ inputs.disk-key }}
+        artifact-id: ${{ inputs.artifact-id }}
         path: tmp/test-components-publication
         file: test-components.tar.zst
     - name: Install test component WASMs
