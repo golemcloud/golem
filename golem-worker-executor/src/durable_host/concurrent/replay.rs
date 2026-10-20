@@ -105,23 +105,6 @@ pub enum ReconstructionReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     LiveAdmissionCancelled(DurableCallSession<Pair, P>),
 }
 
-pub(in crate::durable_host) struct ResolvedReconstructionTerminal {
-    pub(super) function_type: DurableFunctionType,
-    pub(super) begin_index: OplogIndex,
-    pub(super) delivery: CompletionDelivery,
-    pub(super) cancelled: bool,
-}
-
-impl ResolvedReconstructionTerminal {
-    pub(in crate::durable_host) fn cancelled(&self) -> bool {
-        self.cancelled
-    }
-
-    pub(in crate::durable_host) fn is_replay_at_marker(&self) -> bool {
-        self.delivery.is_replay_at_marker()
-    }
-}
-
 /// The result of [`DurableCallSession::replay_access_deferred`]: like [`CallReplayOutcome`], but each
 /// replayed response carries the [`CompletionDelivery`] token describing the recorded delivery
 /// status the caller must mirror.

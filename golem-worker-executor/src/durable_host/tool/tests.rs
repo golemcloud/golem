@@ -226,12 +226,12 @@ async fn pending_native_entity_setup_is_cancelled_by_runner_abort() {
         Poll::<Result<(), WorkerExecutorError>>::Pending
     });
 
-    let error = await_native_entity_body(&runner_abort, setup)
+    let outcome = await_native_entity_body(&runner_abort, None, Default::default(), setup)
         .await
-        .unwrap_err();
+        .unwrap();
     cancel.await.unwrap();
 
-    assert!(format!("{error}").contains("native entity body was aborted"));
+    assert!(matches!(outcome, super::EntityBodyOutcome::Cancelled));
 }
 
 #[test]
@@ -245,12 +245,52 @@ async fn pre_cancelled_runner_abort_does_not_poll_native_handler() {
         Poll::Ready(Ok::<_, WorkerExecutorError>(()))
     });
 
-    let error = await_native_entity_body(&runner_abort, handler)
+    let outcome = await_native_entity_body(&runner_abort, None, Default::default(), handler)
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert!(format!("{error}").contains("native entity body was aborted"));
+    assert!(matches!(outcome, super::EntityBodyOutcome::Cancelled));
     assert_eq!(handler_polls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+async fn started_native_failure_precedes_simultaneous_runner_abort() {
+    let runner_abort = tokio_util::sync::CancellationToken::new();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let expected = WorkerExecutorError::runtime("reconstruction failed");
+    let body = async { receive.await.unwrap() };
+    let mut run = Box::pin(await_native_entity_body(
+        &runner_abort,
+        None,
+        Default::default(),
+        body,
+    ));
+    assert!(futures::poll!(run.as_mut()).is_pending());
+    send.send(Err::<(), _>(expected.clone())).unwrap();
+    runner_abort.cancel();
+    assert_eq!(run.await.unwrap_err(), expected);
+}
+
+#[test]
+async fn observed_native_failure_survives_abort_while_election_is_pending() {
+    let abort = tokio_util::sync::CancellationToken::new();
+    let finalization = super::EntityBodyFinalization::default();
+    let body_finalization = finalization.clone();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let expected = WorkerExecutorError::recovery_required("native host failed");
+    let failure = expected.clone();
+    let body = async move {
+        body_finalization.begin();
+        gate.await.unwrap();
+        Err::<(), _>(failure)
+    };
+    let mut run = Box::pin(await_native_entity_body(&abort, None, finalization, body));
+    assert!(futures::poll!(run.as_mut()).is_pending());
+    abort.cancel();
+    assert!(futures::poll!(run.as_mut()).is_pending());
+    assert!(!release.is_closed());
+    release.send(()).unwrap();
+    assert_eq!(run.await.unwrap_err(), expected);
 }
 
 #[test]

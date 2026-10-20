@@ -40,6 +40,20 @@ anything in the second list.
 
 ## External effects
 
+Tool isolation is limited to the fixed Wasm instruction-trap allowlist in
+`worker/invocation.rs::permanent_tool_guest_trap`. A trapped tool records
+`body_execution: Trapped` with `RemoteInternalError`; typed quotas, policy exhaustion,
+`WorkerOutOfMemory`, infrastructure and lifecycle failures retain owner recovery even when
+their retry decision is exhausted. Destroy the physical Wasmtime Store but retain its original
+`Ctx` for cleanup. Independent supervisors settle failed parents and cancel their descendants
+without replacing selected outcomes or cancelling unrelated siblings. Replay re-executes trapped
+bodies and their recorded host calls to rebuild shared filesystem effects and partial stdout,
+then validates the exact terminal and descendants; completed external effects are not repeated.
+Stream completion is independent of the structured result: an already-completed stream stays
+completed. Allocation-dependent `memory.grow` backing refusal returning -1 and leading to panic
+is a separate, preexisting nondeterminism limitation, not a universal isolation guarantee or a
+reason to introduce fork/snapshot recovery.
+
 Recovery repairs an incomplete durable call at its own `Start`; it does not restart a group of
 completed effects. SDK sagas compensate completed steps and loop in guest code, appending new
 calls without deleting history. A deterministic guest trap fails the invocation; it is not a

@@ -38,7 +38,9 @@ use golem_common::model::entity::{
 };
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+#[cfg(feature = "test-utils")]
+use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component as ComponentMetadata;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
@@ -101,6 +103,10 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> StoreFuelGuard<Ctx> {
     fn into_inner(mut self) -> ObservedPrimaryStore<Store<Ctx>> {
         self.settle();
         self.store.take().unwrap()
+    }
+
+    fn into_data(self) -> ObservedPrimaryStore<Ctx> {
+        self.into_inner().map(Store::into_data)
     }
 }
 
@@ -1052,7 +1058,17 @@ pub trait EntityInvocationBody<Ctx: WorkerCtx, R>: Send + 'static {
         self,
         instance: &'a Instance,
         store: &'a mut Store<Ctx>,
-    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>;
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        super::entity_invocation::EntityBodyOutcome<R>,
+                        WorkerExecutorError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 }
 
 pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
@@ -1060,6 +1076,7 @@ pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
 impl<Ctx, R, F> EntityInvocationBody<Ctx, R> for ClosureEntityInvocationBody<F>
 where
     Ctx: WorkerCtx,
+    R: Send + 'static,
     F: Send + 'static,
     F: for<'a> FnOnce(
         &'a Instance,
@@ -1071,12 +1088,45 @@ where
         self,
         instance: &'a Instance,
         store: &'a mut Store<Ctx>,
-    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>> {
-        self.0(instance, store)
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        super::entity_invocation::EntityBodyOutcome<R>,
+                        WorkerExecutorError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.0(instance, store)
+                .await
+                .map(super::entity_invocation::EntityBodyOutcome::Completed)
+        })
     }
 }
 
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
+    pub(crate) fn set_entity_body_finalization(
+        &mut self,
+        finalization: super::entity_invocation::EntityBodyFinalization,
+    ) {
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .entity_body_finalization = finalization;
+    }
+
+    pub(crate) fn into_cleanup_context(self) -> ObservedPrimaryStore<Ctx> {
+        self.store
+            .data()
+            .durable_ctx()
+            .tool_trap_disposal
+            .store(true, Ordering::Release);
+        self.store.into_data()
+    }
+
     pub(crate) fn into_parts(self) -> (Instance, ObservedPrimaryStore<Store<Ctx>>) {
         (self.instance, self.store.into_inner())
     }
@@ -1143,7 +1193,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                     scope,
                     &registration,
                     ClosureEntityInvocationBody(invoke),
-                ) => result,
+                ) => result?.completed(),
                 _ = cancellation.cancelled() => {
                     Err(WorkerExecutorError::runtime("Entity body was cancelled"))
                 }
@@ -1164,7 +1214,10 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> (Result<R, WorkerExecutorError>, Self)
+    ) -> (
+        Result<super::entity_invocation::EntityBodyOutcome<R>, WorkerExecutorError>,
+        Self,
+    )
     where
         R: Send + 'static,
         F: EntityInvocationBody<Ctx, R>,
@@ -1180,7 +1233,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> Result<super::entity_invocation::EntityBodyOutcome<R>, WorkerExecutorError>
     where
         R: Send + 'static,
         F: EntityInvocationBody<Ctx, R>,
@@ -1194,7 +1247,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> Result<super::entity_invocation::EntityBodyOutcome<R>, WorkerExecutorError>
     where
         R: Send + 'static,
         F: EntityInvocationBody<Ctx, R>,
@@ -1249,7 +1302,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
             hook.before_completion(execution_mode).await;
         }
         if execution_mode == InvocationExecutionMode::ReplayingCompleted
-            && let Ok(Ok(response)) = &mut result
+            && let Ok(Ok(super::entity_invocation::EntityBodyOutcome::Completed(response))) =
+                &mut result
             && let Some(response) = (response as &mut dyn std::any::Any)
                 .downcast_mut::<golem_common::model::oplog::HostResponseEntityInvocation>(
             )
@@ -1257,7 +1311,16 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         {
             hook.mutate_completed_reconstruction_response(response);
         }
-        let cleanup = self.finish_scoped_invocation();
+        // A trapped or cancelled body keeps its scope through original-context host-only cleanup.
+        let retained_cleanup = matches!(
+            &result,
+            Ok(Ok(super::entity_invocation::EntityBodyOutcome::Cancelled))
+        ) || matches!(&result, Ok(Ok(super::entity_invocation::EntityBodyOutcome::Completed(response))) if super::entity_invocation::is_trapped_tool_response(response));
+        let cleanup = if retained_cleanup {
+            Ok(())
+        } else {
+            self.finish_scoped_invocation()
+        };
 
         match result {
             Ok(result) => {
@@ -1476,6 +1539,60 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
+        assert!(dropped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn trapped_store_into_data_retains_original_context_after_runtime_disposal()
+    -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m (func $init unreachable) (start $init))
+                (core instance (instantiate $m)))"#,
+        )?;
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
+        let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
+            &engine,
+            FuelTestContext {
+                borrowed: true,
+                returned_at: returned_at.clone(),
+                dropped: dropped.clone(),
+            },
+            None,
+        ));
+        store.as_context_mut().set_runtime_observer(runtime)?;
+        store.set_fuel(123)?;
+        store.set_epoch_deadline(1);
+        let error = Linker::new(&engine)
+            .instantiate_pre(&component)?
+            .instantiate_async(&mut *store)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::UnreachableCodeReached)
+        );
+        let remaining = store.get_fuel()?;
+        let mut context = store.into_data();
+        assert!(
+            observer.upgrade().is_none(),
+            "the runtime must already be destroyed"
+        );
+        assert!(!dropped.load(Ordering::Acquire));
+        assert!(Arc::ptr_eq(&context.returned_at, &returned_at));
+        assert_eq!(returned_at.load(Ordering::Acquire), remaining);
+        context.borrowed = false;
+        drop(context);
         assert!(dropped.load(Ordering::Acquire));
         Ok(())
     }

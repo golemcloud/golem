@@ -30,6 +30,38 @@ use tracing::{Instrument, debug, info_span};
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
+/// Once a guest result is observed, local abort must not discard its settlement or cleanup.
+#[derive(Clone, Default)]
+pub(crate) struct EntityBodyFinalization(Arc<std::sync::atomic::AtomicBool>);
+
+impl EntityBodyFinalization {
+    pub(crate) fn begin(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) async fn abortable(&self, abort: &tokio_util::sync::CancellationToken) {
+        abort.cancelled().await;
+        if self.0.load(std::sync::atomic::Ordering::Acquire) {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum EntityBodyOutcome<R> {
+    Completed(R),
+    Cancelled,
+}
+
+impl<R> EntityBodyOutcome<R> {
+    pub(crate) fn completed(self) -> Result<R, WorkerExecutorError> {
+        match self {
+            Self::Completed(value) => Ok(value),
+            Self::Cancelled => Err(WorkerExecutorError::runtime("Entity body was cancelled")),
+        }
+    }
+}
+
 struct EntityInvocationMetricsGuard {
     entity_kind: &'static str,
     execution_mode: &'static str,
@@ -52,11 +84,11 @@ impl EntityInvocationMetricsGuard {
         }
     }
 
-    fn finish<R>(&mut self, result: &Result<R, WorkerExecutorError>) {
-        self.outcome = if result.is_ok() {
-            "succeeded"
-        } else {
-            "failed"
+    fn finish<R>(&mut self, result: &Result<EntityBodyOutcome<R>, WorkerExecutorError>) {
+        self.outcome = match result {
+            Ok(EntityBodyOutcome::Completed(_)) => "succeeded",
+            Ok(EntityBodyOutcome::Cancelled) => "cancelled",
+            Err(_) => "failed",
         };
     }
 }
@@ -83,7 +115,6 @@ pub struct EntityInvocationHandle<R> {
     invocation: OwnerInvocationId,
     mode: EntityCallMode,
     lane: OwnerLane,
-    executor_tasks: crate::services::active_agents::InvocationLoops,
     lane_await_required: bool,
     abort: tokio_util::sync::CancellationToken,
     task: Option<JoinHandle<Option<EntityInvocationCompletion<R>>>>,
@@ -99,7 +130,7 @@ impl EntityInvocationAbortHandle {
 }
 
 pub(crate) struct EntityInvocationCompletion<R> {
-    result: Result<R, WorkerExecutorError>,
+    result: Result<EntityBodyOutcome<R>, WorkerExecutorError>,
     resources: EntityInvocationResources,
 }
 
@@ -236,7 +267,7 @@ type EntityInvocationFuture<'a, R> = Pin<
     Box<
         dyn Future<
                 Output = (
-                    Result<R, WorkerExecutorError>,
+                    Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                     Option<Box<dyn RetainedEntityStore>>,
                 ),
             > + Send
@@ -255,22 +286,35 @@ pub(crate) trait EntityInvocationRunner<R>: Send + 'static {
 
 pub(crate) async fn await_component_entity_body<R>(
     abort: tokio_util::sync::CancellationToken,
+    lifecycle: Option<tokio_util::sync::CancellationToken>,
     filesystem: Option<crate::services::agent_filesystem::FilesystemInvocation>,
+    finalization: EntityBodyFinalization,
     body: impl Future<
         Output = (
-            Result<R, WorkerExecutorError>,
+            Result<EntityBodyOutcome<R>, WorkerExecutorError>,
             Option<Box<dyn RetainedEntityStore>>,
         ),
     >,
 ) -> (
-    Result<R, WorkerExecutorError>,
+    Result<EntityBodyOutcome<R>, WorkerExecutorError>,
     Option<Box<dyn RetainedEntityStore>>,
 ) {
     let result = {
         tokio::select! {
+            biased;
             result = body => result,
-            _ = abort.cancelled() => (
-                Err(WorkerExecutorError::runtime("Entity body was cancelled")),
+            _ = async {
+                match lifecycle {
+                    Some(token) => token.cancelled().await,
+                    None => std::future::pending().await,
+                }
+            } => (Err(WorkerExecutorError::Interrupted {
+                kind: golem_service_base::error::worker_executor::InterruptKind::Interrupt(
+                    golem_common::model::Timestamp::now_utc(),
+                ),
+            }), None),
+            _ = finalization.abortable(&abort) => (
+                Ok(EntityBodyOutcome::Cancelled),
                 None,
             ),
         }
@@ -290,6 +334,20 @@ struct ComponentEntityRunner<Ctx: WorkerCtx, F> {
     body: F,
 }
 
+pub(crate) fn is_trapped_tool_response<R: 'static>(response: &R) -> bool {
+    use golem_common::model::oplog::HostResponseEntityInvocation;
+    use golem_common::model::oplog::payload::types::{
+        SerializableEntityBodyExecution, SerializableToolOperationTerminal,
+    };
+    use golem_common::schema::FromSchema;
+
+    (response as &dyn std::any::Any)
+        .downcast_ref::<HostResponseEntityInvocation>()
+        .and_then(|response| response.result.as_ref().ok())
+        .and_then(|value| SerializableToolOperationTerminal::from_value(value.value()).ok())
+        .is_some_and(|terminal| terminal.body_execution == SerializableEntityBodyExecution::Trapped)
+}
+
 impl<Ctx, R, F> EntityInvocationRunner<R> for ComponentEntityRunner<Ctx, F>
 where
     Ctx: WorkerCtx,
@@ -305,7 +363,7 @@ where
         Box<
             dyn Future<
                     Output = (
-                        Result<R, WorkerExecutorError>,
+                        Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                         Option<Box<dyn RetainedEntityStore>>,
                     ),
                 > + Send
@@ -314,20 +372,44 @@ where
     > {
         Box::pin(async move {
             let invocation = OwnerInvocationId::Entity(scope.invocation_id().clone());
+            let execution = self.host.owner_execution();
             let (filesystem, drain) = match self.host.create_entity_filesystem() {
                 Ok(filesystem) => filesystem,
                 Err(error) => return (Err(error), None),
             };
-            await_component_entity_body(_abort, Some(drain), async move {
+            let finalization = EntityBodyFinalization::default();
+            let body_finalization = finalization.clone();
+            await_component_entity_body(_abort, Some(registration.cancellation()), Some(drain), finalization, async move {
                 match self
                     .host
                     .instantiate_entity_with_scope(Some(&scope), filesystem)
                     .await
                 {
-                    Ok(hosted_instance) => {
+                    Ok(mut hosted_instance) => {
+                        hosted_instance.set_entity_body_finalization(body_finalization.clone());
                         let (result, retained) = hosted_instance
                             .invoke_scoped_registered_retained(scope, registration, self.body)
                             .await;
+                        body_finalization.begin();
+                        if matches!(&result, Ok(EntityBodyOutcome::Cancelled))
+                            || matches!(&result, Ok(EntityBodyOutcome::Completed(response)) if is_trapped_tool_response(response)) {
+                            let mut retained = RetainedDisposedContext {
+                                context: retained.into_cleanup_context(),
+                                execution,
+                                invocation,
+                                prepared: false,
+                            };
+                            // Cleanup host calls belong to the reconstructed body too. Join them
+                            // before validating its terminal or releasing its reconstruction fence.
+                            let result = match retained.prepare_parent_end().await {
+                                Ok(()) => result,
+                                Err(error) => Err(error),
+                            };
+                            return (
+                                result,
+                                Some(Box::new(retained) as Box<dyn RetainedEntityStore>),
+                            );
+                        }
                         (
                             result,
                             Some(Box::new(RetainedHostedInstance {
@@ -359,7 +441,7 @@ where
         Box<
             dyn Future<
                     Output = (
-                        Result<R, WorkerExecutorError>,
+                        Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                         Option<Box<dyn RetainedEntityStore>>,
                     ),
                 > + Send
@@ -376,7 +458,7 @@ where
         Box<
             dyn Future<
                     Output = (
-                        Result<R, WorkerExecutorError>,
+                        Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                         Option<Box<dyn RetainedEntityStore>>,
                     ),
                 > + Send
@@ -390,6 +472,69 @@ where
 struct RetainedHostedInstance<Ctx: WorkerCtx> {
     hosted: super::instance::HostedInstance<Ctx>,
     invocation: OwnerInvocationId,
+}
+
+struct RetainedDisposedContext<Ctx: WorkerCtx> {
+    context: super::ObservedPrimaryStore<Ctx>,
+    execution: Arc<super::instance::OwnerExecution>,
+    invocation: OwnerInvocationId,
+    prepared: bool,
+}
+
+impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
+    fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+        self.context
+            .durable_ctx()
+            .filesystem_generation_handle()
+            .invocation()
+    }
+
+    fn prepare_parent_end(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
+        Box::pin(async move {
+            if self.prepared {
+                return Ok(());
+            }
+            crate::durable_host::tool::prepare_tool_parent_end_owned(
+                &self.execution,
+                self.invocation.clone(),
+            )
+            .await?;
+            crate::durable_host::rdbms::cleanup_trapped_transactions(
+                self.context.durable_ctx_mut(),
+            )
+            .await
+            .map_err(WorkerExecutorError::from)?;
+            self.context
+                .durable_ctx_mut()
+                .dispose_trapped_guest_resources();
+            if let Some(filesystem) = self.filesystem_invocation() {
+                filesystem.close_and_drain().await;
+            }
+            crate::durable_host::tool::durability::finish_producer_disposals(
+                self.context.durable_ctx_mut(),
+            )
+            .await?;
+            self.context
+                .durable_ctx_mut()
+                .set_invocation_principal(None);
+            self.context.set_entity_invocation_scope(None)?;
+            self.prepared = true;
+            Ok(())
+        })
+    }
+
+    fn settle(
+        self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
+        Box::pin(async move {
+            crate::durable_host::tool::settle_tool_children_owned(&self.execution, self.invocation)
+                .await
+        })
+    }
 }
 
 pub(crate) struct RetainedNativeContext<Ctx: WorkerCtx> {
@@ -522,7 +667,12 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedHostedInstance<Ctx> {
 }
 
 impl<R> EntityInvocationCompletion<R> {
-    pub(crate) fn into_parts(self) -> (Result<R, WorkerExecutorError>, EntityInvocationResources) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Result<EntityBodyOutcome<R>, WorkerExecutorError>,
+        EntityInvocationResources,
+    ) {
         (self.result, self.resources)
     }
 }
@@ -629,10 +779,6 @@ impl EntityInvocationResources {
 }
 
 impl<R: Send + 'static> EntityInvocationHandle<R> {
-    pub(crate) fn executor_tasks(&self) -> crate::services::active_agents::InvocationLoops {
-        self.executor_tasks.clone()
-    }
-
     pub fn invocation(&self) -> &OwnerInvocationId {
         &self.invocation
     }
@@ -656,7 +802,7 @@ impl<R: Send + 'static> EntityInvocationHandle<R> {
         let completion = self.await_completion(caller).await?;
         let (result, resources) = completion.into_parts();
         resources.release().await?;
-        result
+        result?.completed()
     }
 
     pub(crate) async fn await_completion(
@@ -690,7 +836,7 @@ impl<R: Send + 'static> EntityInvocationHandle<R> {
         let completion = self.join_completion().await?;
         let (result, resources) = completion.into_parts();
         resources.release().await?;
-        result
+        result?.completed()
     }
 
     pub(crate) async fn join_completion(
@@ -735,8 +881,9 @@ where
         &'a mut Store<Ctx>,
     )
         -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
-    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    Finalize:
+        FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
 {
     let ticket = lane
         .register_entity(
@@ -778,19 +925,12 @@ pub(crate) fn start_registered_entity_invocation<Ctx, R, F, Finalize, Finalized>
 where
     Ctx: WorkerCtx,
     R: Send + 'static,
-    F: Send + 'static,
-    F: for<'a> FnOnce(
-        &'a Instance,
-        &'a mut Store<Ctx>,
-    )
-        -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
-    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    F: EntityInvocationBody<Ctx, R>,
+    Finalize:
+        FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
 {
-    let run = ComponentEntityRunner {
-        host,
-        body: ClosureEntityInvocationBody(invoke),
-    };
+    let run = ComponentEntityRunner { host, body: invoke };
     let mut handle = start_entity_invocation_inner(
         slot,
         lane,
@@ -824,8 +964,9 @@ where
     Ctx: WorkerCtx,
     R: Send + 'static,
     F: EntityInvocationBody<Ctx, R>,
-    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    Finalize:
+        FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
 {
     let run = ComponentEntityRunner { host, body: invoke };
     start_entity_invocation_inner(
@@ -863,15 +1004,16 @@ where
         Box<
             dyn Future<
                     Output = (
-                        Result<R, WorkerExecutorError>,
+                        Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                         Option<Box<dyn RetainedEntityStore>>,
                     ),
                 > + Send
                 + 'a,
         >,
     >,
-    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    Finalize:
+        FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
 {
     let ticket = parent
         .map(|parent| {
@@ -919,15 +1061,16 @@ where
         Box<
             dyn Future<
                     Output = (
-                        Result<R, WorkerExecutorError>,
+                        Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                         Option<Box<dyn RetainedEntityStore>>,
                     ),
                 > + Send
                 + 'a,
         >,
     >,
-    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    Finalize:
+        FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
 {
     let mut handle = start_entity_invocation_inner(
         slot,
@@ -958,12 +1101,13 @@ fn start_entity_invocation_inner<R, Run, Finalize, Finalized>(
 where
     R: Send + 'static,
     Run: EntityInvocationRunner<R>,
-    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    Finalize:
+        FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
 {
     let lifecycle_cancellation = tokio_util::sync::CancellationToken::new();
     let registration = slot.register(&scope, lifecycle_cancellation.clone())?;
-    let cancellation = lifecycle_cancellation.child_token();
+    let cancellation = tokio_util::sync::CancellationToken::new();
     let participant = suspension.register_entity(scope.invocation_id().clone());
     let invocation_id = scope.invocation_id().clone();
     let invocation = OwnerInvocationId::Entity(invocation_id.clone());
@@ -1000,9 +1144,21 @@ where
                 permit = match ticket {
                     Some(ticket) => match tokio::select! {
                         biased;
-                        _ = cancellation.cancelled() => Err(WorkerExecutorError::runtime(
-                            "Entity body was cancelled before lane acquisition",
-                        )),
+                        _ = lifecycle_cancellation.cancelled() => Err(WorkerExecutorError::Interrupted {
+                            kind: golem_service_base::error::worker_executor::InterruptKind::Interrupt(
+                                golem_common::model::Timestamp::now_utc(),
+                            ),
+                        }),
+                        _ = cancellation.cancelled() => {
+                            let result = finalize(Ok(EntityBodyOutcome::Cancelled)).await;
+                            metrics.finish(&result);
+                            return EntityInvocationCompletion {
+                                result,
+                                resources: EntityInvocationResources::from_finished_body(
+                                    hosted, registration, permit, suspension.clone(), task_executor,
+                                ),
+                            };
+                        },
                         acquired = ticket.acquire() => acquired.map_err(|error| {
                             WorkerExecutorError::runtime(error.to_string())
                         }),
@@ -1057,7 +1213,6 @@ where
         invocation,
         mode,
         lane,
-        executor_tasks,
         lane_await_required,
         abort,
         task: Some(task),
@@ -1075,6 +1230,40 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn only_encoded_trapped_tool_terminal_requests_physical_disposal() {
+        use golem_common::model::oplog::HostResponseEntityInvocation;
+        use golem_common::model::oplog::payload::types::{
+            SerializableEntityBodyExecution, SerializableToolOperationTerminal,
+            SerializableToolRpcError,
+        };
+        use golem_common::schema::IntoTypedSchemaValue;
+
+        for execution in [
+            SerializableEntityBodyExecution::Executed,
+            SerializableEntityBodyExecution::Skipped,
+            SerializableEntityBodyExecution::Trapped,
+        ] {
+            let response = HostResponseEntityInvocation {
+                result: Ok(SerializableToolOperationTerminal {
+                    body_execution: execution,
+                    result: Err(SerializableToolRpcError::Denied("denied".into())),
+                    admission_refusal: None,
+                }
+                .into_typed_schema_value()
+                .unwrap()),
+            };
+            assert_eq!(
+                is_trapped_tool_response(&response),
+                execution == SerializableEntityBodyExecution::Trapped
+            );
+        }
+        assert!(!is_trapped_tool_response(&HostResponseEntityInvocation {
+            result: Err("owner failure".into()),
+        }));
+        assert!(!is_trapped_tool_response(&17_u8));
+    }
+
+    #[test]
     async fn component_body_still_observes_latched_cancellation() {
         use crate::services::agent_filesystem as fs;
 
@@ -1082,12 +1271,15 @@ mod tests {
         let (_, drain) = fs::resident_generation_handle(&filesystem).for_invocation();
         let abort = tokio_util::sync::CancellationToken::new();
         abort.cancel();
-        let (result, retained) =
-            await_component_entity_body::<u8>(abort, Some(drain), std::future::pending()).await;
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Runtime error: Entity body was cancelled"
-        );
+        let (result, retained) = await_component_entity_body::<u8>(
+            abort,
+            None,
+            Some(drain),
+            Default::default(),
+            std::future::pending(),
+        )
+        .await;
+        assert_eq!(result.unwrap(), EntityBodyOutcome::Cancelled);
         assert!(retained.is_none());
         control.push_delete_and_verify(Ok(()));
         fs::delete(fs::seal(filesystem)).await.unwrap();
@@ -1101,14 +1293,88 @@ mod tests {
         let (_, drain) = fs::resident_generation_handle(&filesystem).for_invocation();
         let (result, retained) = await_component_entity_body(
             tokio_util::sync::CancellationToken::new(),
+            None,
             Some(drain),
-            std::future::ready((Ok(17), None)),
+            Default::default(),
+            std::future::ready((Ok(EntityBodyOutcome::Completed(17)), None)),
         )
         .await;
-        assert_eq!(result.unwrap(), 17);
+        assert_eq!(result.unwrap(), EntityBodyOutcome::Completed(17));
         assert!(retained.is_none());
         control.push_delete_and_verify(Ok(()));
         fs::delete(fs::seal(filesystem)).await.unwrap();
+    }
+
+    #[test]
+    async fn component_body_keeps_failure_and_lifecycle_distinct_from_local_abort() {
+        let abort = tokio_util::sync::CancellationToken::new();
+        abort.cancel();
+        let expected = WorkerExecutorError::InvocationFailed {
+            error: golem_common::model::oplog::AgentError::OutOfMemory,
+            stderr: String::new(),
+        };
+        let (result, retained) = await_component_entity_body::<()>(
+            abort.clone(),
+            None,
+            None,
+            Default::default(),
+            std::future::ready((Err(expected.clone()), None)),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), expected);
+        assert!(retained.is_none());
+
+        let lifecycle = tokio_util::sync::CancellationToken::new();
+        lifecycle.cancel();
+        let (result, retained) = await_component_entity_body::<()>(
+            abort,
+            Some(lifecycle),
+            None,
+            Default::default(),
+            std::future::pending(),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::Interrupted { .. })
+        ));
+        assert!(retained.is_none());
+    }
+
+    #[test]
+    async fn observed_component_failure_survives_abort_during_pending_finalization() {
+        for expected in [
+            WorkerExecutorError::InvocationFailed {
+                error: golem_common::model::oplog::AgentError::OutOfMemory,
+                stderr: String::new(),
+            },
+            WorkerExecutorError::recovery_required("trapped body cleanup failed"),
+        ] {
+            let abort = tokio_util::sync::CancellationToken::new();
+            let finalization = EntityBodyFinalization::default();
+            let body_finalization = finalization.clone();
+            let (release, gate) = tokio::sync::oneshot::channel();
+            let failure = expected.clone();
+            let body = async move {
+                body_finalization.begin();
+                gate.await.unwrap();
+                (Err::<EntityBodyOutcome<()>, _>(failure), None)
+            };
+            let mut run = Box::pin(await_component_entity_body(
+                abort.clone(),
+                None,
+                None,
+                finalization,
+                body,
+            ));
+            // The body changes phase in its first poll, before the abort branch is polled.
+            abort.cancel();
+            assert!(futures::poll!(run.as_mut()).is_pending());
+            assert!(!release.is_closed(), "abort discarded observed failure");
+            release.send(()).unwrap();
+            let (result, _) = run.await;
+            assert_eq!(result.unwrap_err(), expected);
+        }
     }
 
     #[test]
@@ -1162,18 +1428,24 @@ mod tests {
         let abort = tokio_util::sync::CancellationToken::new();
         let cancelled = abort.clone();
         let task = tokio::spawn(async move {
-            let result = await_component_entity_body::<()>(cancelled, Some(drain), async move {
-                fs::write(
-                    &body_filesystem,
-                    &file,
-                    fs::WritePlacement::At(3),
-                    bytes::Bytes::from_static(b"data"),
-                )
-                .unwrap()
-                .await
-                .unwrap();
-                std::future::pending().await
-            })
+            let result = await_component_entity_body::<()>(
+                cancelled,
+                None,
+                Some(drain),
+                Default::default(),
+                async move {
+                    fs::write(
+                        &body_filesystem,
+                        &file,
+                        fs::WritePlacement::At(3),
+                        bytes::Bytes::from_static(b"data"),
+                    )
+                    .unwrap()
+                    .await
+                    .unwrap();
+                    std::future::pending().await
+                },
+            )
             .await;
             permit.complete();
             result
@@ -1187,7 +1459,7 @@ mod tests {
         assert!(next.as_mut().now_or_never().is_none());
         close.release();
         let (result, retained) = task.await.unwrap();
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), EntityBodyOutcome::Cancelled);
         assert!(retained.is_none());
         next.await.unwrap().complete();
 
@@ -1204,7 +1476,7 @@ mod tests {
         );
         let task = executor_tasks.spawn_entity(async move {
             EntityInvocationCompletion {
-                result: Ok("completed"),
+                result: Ok(EntityBodyOutcome::Completed("completed")),
                 resources: EntityInvocationResources {
                     retained: None,
                     permit: None,
@@ -1216,7 +1488,6 @@ mod tests {
             invocation: OwnerInvocationId::Agent(OplogIndex::from_u64(2)),
             mode: EntityCallMode::Asynchronous,
             lane,
-            executor_tasks,
             lane_await_required,
             abort: tokio_util::sync::CancellationToken::new(),
             task: Some(task),
@@ -1238,7 +1509,10 @@ mod tests {
             .await_completion(&inactive_parent)
             .await
             .expect("pre-acquired body only joins its completion");
-        assert_eq!(completion.result.unwrap(), "completed");
+        assert_eq!(
+            completion.result.unwrap(),
+            EntityBodyOutcome::Completed("completed")
+        );
 
         let error = match completed_handle(lane, true)
             .await_completion(&inactive_parent)

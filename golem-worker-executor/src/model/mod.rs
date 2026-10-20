@@ -409,6 +409,9 @@ impl TrapType {
         };
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
+            Some(InterruptKind::EntityCancellation) => make_error(AgentError::InternalError(
+                "entity cancellation escaped its invocation boundary".to_string(),
+            )),
             Some(kind) => TrapType::Interrupt(*kind),
             None => match Ctx::is_exit(error) {
                 Some(_) => TrapType::Exit,
@@ -500,6 +503,11 @@ impl TrapType {
                             host_function: host_function.clone(),
                         })),
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+                            Some(WorkerExecutorError::Interrupted {
+                                kind: InterruptKind::EntityCancellation,
+                            }) => make_error(AgentError::InternalError(
+                                "entity cancellation escaped its invocation boundary".to_string(),
+                            )),
                             Some(WorkerExecutorError::Interrupted { kind }) => {
                                 TrapType::Interrupt(*kind)
                             }

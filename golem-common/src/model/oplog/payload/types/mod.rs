@@ -896,6 +896,7 @@ pub enum SerializableRpcError {
 pub enum SerializableEntityBodyExecution {
     Executed,
     Skipped,
+    Trapped,
 }
 
 #[derive(

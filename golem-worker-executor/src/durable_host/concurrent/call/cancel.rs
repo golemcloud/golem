@@ -14,6 +14,8 @@
 
 use super::*;
 impl DropPolicy for Cancellable {
+    const CANCEL_ON_TOOL_TRAP: bool = true;
+
     fn production_drop_sink(
         sink: Option<UnboundedSender<DropEvent>>,
     ) -> Option<UnboundedSender<DropEvent>> {
@@ -51,6 +53,8 @@ impl DropPolicy for LeaveIncompleteOnDrop {
 }
 
 impl DropPolicy for NotCancellable {
+    const CANCEL_ON_TOOL_TRAP: bool = true;
+
     fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>) {
         if let Some(sink) = sink {
             let _ = sink.send(DropEvent::UnfinishedNotCancellable { call });
@@ -102,6 +106,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             begin_index: self.begin_index(),
             function_type: self.retry.function_type().clone(),
             request_upload: self.request_upload.clone(),
+            entity_admission: self.entity_admission,
             trap_context: self.trap_context(),
             live_call_permit,
             span_observer: self.span_observer.clone(),
@@ -213,39 +218,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         if self.is_live {
             if self.persisted {
                 let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-                let mut guard = AccessTerminalGuard::<P>::new(
-                    self.dropped_call_snapshot(self.live_call_permit.clone()),
-                    self.drop_sink.clone(),
-                    self.cleanup_sink.clone(),
-                    self.teardown_probe(),
-                );
-                let result = async {
-                    guard
-                        .call()
-                        .expect("terminal guard is armed")
-                        .wait_request_upload()
-                        .await?;
-                    let partial_payload = upload_partial_response(&oplog, partial).await?;
-                    let call = guard.call().expect("terminal guard is armed").clone();
-                    let cancelled = OplogEntry::Cancelled {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: call.start_idx,
-                        partial: partial_payload,
-                        span_finished: call.span_finished.clone(),
-                    };
-                    call.notify_span_closed();
-                    // Reserve the cancellation in oplog order before spawning its waiter. A cut
-                    // accepted immediately afterward can then choose a horizon that includes it.
-                    let append = oplog.enqueue_add(cancelled);
-                    let terminal = tokio::spawn(async move {
-                        append.await?;
-                        Ok(())
-                    });
-                    // Cancellation terminal: never a discarded completion, no marker.
-                    guard.cleanup_after_terminal(terminal, None);
-                    guard.wait_terminal().await
-                }
-                .await;
+                let mut guard = self.terminal_guard();
+                let result = Self::persist_cancellation(oplog, &mut guard, partial).await;
                 if let Err(err) = result {
                     guard.disarm();
                     return Err(err);
@@ -266,6 +240,37 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             end_durable_function_access(store, get_ctx, function_type, begin_index, false).await?;
         }
         Ok(())
+    }
+
+    pub(super) async fn persist_cancellation(
+        oplog: Arc<dyn Oplog>,
+        guard: &mut AccessTerminalGuard<P>,
+        partial: Option<Pair::Resp>,
+    ) -> Result<(), WorkerExecutorError> {
+        guard
+            .call()
+            .expect("terminal guard is armed")
+            .wait_request_upload()
+            .await?;
+        let partial = upload_partial_response(&oplog, partial).await?;
+        let call = guard.call().expect("terminal guard is armed");
+        let cancelled = OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: call.start_idx,
+            partial,
+            span_finished: call.span_finished.clone(),
+        };
+        call.notify_span_closed();
+        // Reserve in oplog order before spawning the waiter; the guard retains the permit.
+        let append = oplog.enqueue_add(cancelled);
+        guard.cleanup_after_terminal(
+            tokio::spawn(async move {
+                append.await?;
+                Ok(())
+            }),
+            None,
+        );
+        guard.wait_terminal().await
     }
 }
 
@@ -317,6 +322,18 @@ async fn upload_partial_response<Resp: Into<HostResponse> + Send + 'static>(
 impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> {
     fn drop(&mut self) {
         if self.finished {
+            return;
+        }
+        if self.is_live
+            && self.persisted
+            && (P::CANCEL_ON_TOOL_TRAP || self.entity_admission)
+            && self.tool_trap_disposal.load(Ordering::Acquire)
+        {
+            let permit = self.live_call_permit.take();
+            Cancellable::unfinished_drop(
+                self.dropped_call_snapshot(permit),
+                self.cleanup_sink.as_ref(),
+            );
             return;
         }
         if self.teardown_probe().is_tearing_down() {

@@ -378,21 +378,33 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     });
                     (observer, Arc::new(activity))
                 });
-                let outcome = prepared
-                    .replay_state
-                    .claim_start_for_store_with_admission(
-                        claim.clone(),
-                        store_continued_live,
-                        move |index, entry| {
-                            if let Some((observer, _activity)) = &observer {
-                                observer.clone().started(index, entry, true);
-                            }
-                        },
-                        tool_operation
-                            .clone()
-                            .map(|operation| (operation, Pair::FQFN.to_string())),
-                    )
-                    .await?;
+                let claiming = prepared.replay_state.clone();
+                let admission = tool_operation
+                    .clone()
+                    .map(|operation| (operation, Pair::FQFN.to_string()));
+                let owned_claim = claim.clone();
+                let recorded_start_required = prepared.claim_options.require_recorded_start
+                    || (!prepared.replaying_incomplete_entity && !prepared.primary_runtime);
+                let outcome = claims::owned_access_claim(
+                    store,
+                    get_ctx,
+                    recorded_start_required,
+                    async move {
+                        claiming
+                            .claim_start_for_store_with_admission(
+                                owned_claim,
+                                store_continued_live,
+                                move |index, entry| {
+                                    if let Some((observer, _activity)) = &observer {
+                                        observer.clone().started(index, entry, true);
+                                    }
+                                },
+                                admission,
+                            )
+                            .await
+                    },
+                )
+                .await?;
                 match outcome {
                     ReplayStartClaimOutcome::Claimed { handle, .. } => break Some(handle),
                     outcome @ (ReplayStartClaimOutcome::ReplayEnded
@@ -645,8 +657,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let work = owner.synchronize(worker.clone(), inputs.clone(), false, true);
                 let oplog = prepared.oplog.clone();
                 let tasks = worker.tasks.clone();
+                let (marker, teardown, initiation_context) = store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    (
+                        ctx.tool_trap_disposal.clone(),
+                        TeardownProbe::new(
+                            ctx.public_state.worker().shutdown_token(),
+                            ctx.stream_runtime_teardown_probe(),
+                        ),
+                        ambient_trap_context(ctx),
+                    )
+                });
+                let initiation_permit = live_call_permit.clone();
+                let initiation_scope = execution_scope.clone();
+                let initiation_type = retry.function_type().clone();
+                let sink = prepared.drop_sink.clone();
+                let cleanup_sink = prepared.cleanup_sink.clone();
                 let (send, receive) = tokio::sync::oneshot::channel();
-                let _ = tasks.spawn_metadata(async move {
+                let (settled, settlement) = tokio::sync::oneshot::channel();
+                let initiation = tasks.spawn_metadata(async move {
                     let result = async {
                         let mut observation = work
                             .await?
@@ -717,14 +746,55 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         result
                     }
                     .await;
+                    let result =
+                        result.map(|(start_idx, request_upload)| AcceptedAccessStart::<P> {
+                            call: Some(DroppedCall {
+                                start_idx,
+                                begin_index: start_idx,
+                                function_type: initiation_type,
+                                request_upload: request_upload.clone(),
+                                entity_admission: Pair::HOST_FUNCTION_NAME
+                                    == golem_common::model::oplog::host_functions::GolemEntityInvoke::HOST_FUNCTION_NAME,
+                                span_finished: None,
+                                span_observer: None,
+                                trap_context: DurableCallTrapContext {
+                                    retry_from: initiation_scope
+                                        .finish(start_idx)
+                                        .trap_retry_point(),
+                                },
+                                live_call_permit: initiation_permit,
+                            }),
+                            result: Some((start_idx, request_upload)),
+                            marker,
+                            sink,
+                            cleanup_sink,
+                            teardown,
+                            _policy: PhantomData,
+                        });
+                    let completion = result.as_ref().map(|_| ()).map_err(Clone::clone);
                     let _ = send.send(result);
+                    let _ = settled.send(completion);
                 });
-                let (start_idx, request_upload) = receive
+                drop(initiation.map_err(WorkerExecutorError::runtime)?);
+                let mut cleanup = prepared.cleanup_sink.clone().map(|sink| {
+                    AccessDropEventDrainGuard::new(
+                        sink,
+                        vec![DropEvent::AwaitCompletionMarker {
+                            receipt: Some(MarkerReceipt::pending(settlement)),
+                            trap_context: initiation_context,
+                            live_call_permit: live_call_permit.clone(),
+                        }],
+                    )
+                });
+                let accepted = receive
                     .await
                     .map_err(|_| WorkerExecutorError::Interrupted {
                         kind: InterruptKind::Jump,
-                    })
-                    .and_then(|result| result)?;
+                    })?;
+                if let Some(cleanup) = &mut cleanup {
+                    cleanup.disarm();
+                }
+                let (start_idx, request_upload) = accepted?.take();
                 Ok(ExecutedAccessStart {
                     begin_index: start_idx,
                     start_idx,
@@ -786,6 +856,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             scope_replay_recovery: executed.scope_replay_recovery.into(),
             executor_shutdown: ctx.public_state.worker().shutdown_token(),
             runtime_teardown: ctx.stream_runtime_teardown_probe(),
+            tool_trap_disposal: ctx.tool_trap_disposal.clone(),
+            entity_admission: Pair::HOST_FUNCTION_NAME
+                == golem_common::model::oplog::host_functions::GolemEntityInvoke::HOST_FUNCTION_NAME,
             requires_agent_authority: executed.requires_agent_authority,
             agent_auth_ctx: executed.agent_auth_ctx,
             drop_sink: executed.drop_sink,
@@ -1132,6 +1205,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             scope_replay_recovery: ScopeReplayRecovery::default().into(),
             executor_shutdown: ctx.public_state.worker().shutdown_token(),
             runtime_teardown: ctx.stream_runtime_teardown_probe(),
+            tool_trap_disposal: ctx.tool_trap_disposal.clone(),
+            entity_admission: false,
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
@@ -1183,7 +1258,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                     let readiness = recovery.await_new_call_readiness::<Pair>().await;
                     if let Err(error) = readiness {
                         ctx.state.replay_state.abandon_replay_for_failure().await?;
-                        ctx.state.authoritative_replay_failure = true;
+                        ctx.state
+                            .authoritative_replay_failure
+                            .store(true, Ordering::Release);
                         return Err(error);
                     }
                     if !ctx
@@ -1264,6 +1341,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             scope_replay_recovery: ScopeReplayRecovery::default().into(),
             executor_shutdown: ctx.public_state.worker().shutdown_token(),
             runtime_teardown: ctx.stream_runtime_teardown_probe(),
+            tool_trap_disposal: ctx.tool_trap_disposal.clone(),
+            entity_admission: false,
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,

@@ -195,7 +195,9 @@ rather than replaced by a recorded result.
   `ReplayState` and share its cursor.
 - The entity `Start` index is the entity invocation id and its terminal is a plain `End` or
   `Cancelled`. Dropping before terminal selection leaves the `Start` incomplete
-  (`LeaveIncompleteOnDrop`); a trap appends no terminal. There is no outer `call-tool` durable
+  (`LeaveIncompleteOnDrop`). An allowlisted permanent guest instruction trap records an `End`
+  with `body_execution: Trapped` and `RemoteInternalError`; other trap paths leave recovery to
+  the owner. There is no outer `call-tool` durable
   call around the entity invocation.
 - Completed replay (`InvocationExecutionMode::ReplayingCompleted`) re-executes the body's guest
   export with its durable host calls replayed from the owner oplog, validates the claim, then
@@ -204,6 +206,13 @@ rather than replaced by a recorded result.
   `body_execution: Skipped` (admission rejected before the body ran), in which case
   `execute_recorded_skipped_tool_call` returns it without a body. Incomplete replay completes
   under the original `Start` index.
+- Trapped replay also rebuilds shared filesystem effects and partial stdout, then validates the
+  exact terminal and descendants. `permanent_tool_guest_trap` in `worker/invocation.rs` accepts
+  only fixed Wasm instruction traps, not typed quotas, exhausted host policy, OOM, infrastructure
+  or lifecycle failures, regardless of retry exhaustion. Physical Store destruction retains the
+  original `Ctx` for cleanup. Supervisors independent of the caller Store cancel a failed parent's
+  descendants, preserve selected outcomes and unrelated siblings, and settle before result release.
+  Stream completion is independent: a completed stream does not become failed with the result.
 - An entity Store's liveness is its own (`store_is_live`): `ReplayingCompleted` is never live;
   `ReplayingIncomplete`/`Live` become live when `PendingReplayToLive::finish_at` sets
   `local_live_tail`, which for incomplete tool entities first requires

@@ -367,6 +367,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     entity_invocation_scope: Option<EntityInvocationScope>,
     entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
     entity_cancellation: Option<tokio_util::sync::CancellationToken>,
+    pub(crate) entity_body_finalization: crate::worker::entity_invocation::EntityBodyFinalization,
+    pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
@@ -379,7 +381,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     filesystem_generation_handle: FilesystemGenerationHandle,
-    filesystem_preopen: AgentDescriptor,
+    filesystem_preopen: Option<AgentDescriptor>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     stream_runtime_teardown: Arc<AtomicBool>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
@@ -643,7 +645,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) fn filesystem_preopen(&self) -> AgentDescriptor {
-        self.filesystem_preopen.clone()
+        self.filesystem_preopen
+            .as_ref()
+            .expect("filesystem preopen requested after guest resource disposal")
+            .clone()
+    }
+
+    pub(crate) fn dispose_trapped_guest_resources(&mut self) {
+        *self.table.lock().unwrap() = ResourceTable::new();
+        drop(self.filesystem_preopen.take());
     }
 
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
@@ -1307,7 +1317,7 @@ struct PrivateDurableWorkerState {
     snapshot_replay_purpose: SnapshotReplayPurpose,
 
     /// A protocol refusal ended replay without granting live authority.
-    authoritative_replay_failure: bool,
+    authoritative_replay_failure: Arc<AtomicBool>,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.

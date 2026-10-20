@@ -373,7 +373,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             self.drop_sink.clone(),
             self.cleanup_sink.clone(),
             self.teardown_probe(),
-        );
+        )
+        .with_tool_trap_disposal(self.tool_trap_disposal.clone());
         let accepted = accept_access_terminal_effect(&response, &oplog, end, accept);
         let (reservation, append) = match accepted {
             Some(accepted) => accepted,
@@ -509,37 +510,60 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     }),
                 )
             });
-            let mut guard = AccessTerminalGuard::<P>::new(
-                self.dropped_call_snapshot(self.live_call_permit.clone()),
-                self.drop_sink.clone(),
-                self.cleanup_sink.clone(),
-                self.teardown_probe(),
-            );
-            self.finished = true;
-            let persist_result: Result<Pair::Resp, WorkerExecutorError> = if self.persisted {
-                Self::persist_access_terminal(
+            let (response, mut guard) = self
+                .persist_guarded_terminal(
                     oplog,
                     completion_marker_recorder,
-                    &mut guard,
-                    self.start_idx,
                     response,
                     span_finished,
                 )
-                .await
-            } else {
-                Ok(response)
-            };
-
-            let response = match persist_result {
-                Ok(response) => response,
-                Err(err) => {
-                    guard.disarm();
-                    return Err(err);
-                }
-            };
+                .await?;
             self.finish_terminal_scope(access, &mut guard).await?;
             Ok((response, guard))
         }
+    }
+
+    /// Common terminal guard ownership for Store-bound and owned internal completions.
+    pub(super) async fn persist_guarded_terminal(
+        &mut self,
+        oplog: Arc<dyn Oplog>,
+        recorder: Option<CompletionMarkerRecorder>,
+        response: Pair::Resp,
+        span: Option<golem_common::model::oplog::SpanFinished>,
+    ) -> Result<(Pair::Resp, AccessTerminalGuard<P>), WorkerExecutorError> {
+        let mut guard = self.terminal_guard();
+        let result = if self.persisted {
+            Self::persist_access_terminal(
+                oplog,
+                recorder,
+                &mut guard,
+                self.start_idx,
+                response,
+                span,
+            )
+            .await
+        } else {
+            Ok(response)
+        };
+        match result {
+            Ok(response) => Ok((response, guard)),
+            Err(error) => {
+                guard.disarm();
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn terminal_guard(&mut self) -> AccessTerminalGuard<P> {
+        let guard = AccessTerminalGuard::<P>::new(
+            self.dropped_call_snapshot(self.live_call_permit.clone()),
+            self.drop_sink.clone(),
+            self.cleanup_sink.clone(),
+            self.teardown_probe(),
+        )
+        .with_tool_trap_disposal(self.tool_trap_disposal.clone());
+        self.finished = true;
+        guard
     }
 
     async fn finish_terminal_scope<Ctx: WorkerCtx>(

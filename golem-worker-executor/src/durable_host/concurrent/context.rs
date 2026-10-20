@@ -13,8 +13,185 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
+
+/// The caller's real replay and liveness handles, retained independently of its Store.
+/// This is deliberately not a `DurableContext`: it cannot drain ambient caller resources or
+/// manufacture a context window. Entity settlement owns only its accepted call.
+pub(crate) struct EntitySettlementContext<Ctx: WorkerCtx> {
+    pub(crate) replay: ReplayState,
+    pub(crate) oplog: Arc<dyn Oplog>,
+    pub(crate) settlement_activity: Option<Arc<crate::worker::suspension::ExternalActivity>>,
+    pub(super) counter: Arc<AtomicUsize>,
+    pub(super) authoritative_failure: Arc<std::sync::atomic::AtomicBool>,
+    linear_memory: crate::services::linear_memory::LinearMemoryTracker,
+    public_state: PublicDurableWorkerState<Ctx>,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<std::sync::atomic::AtomicBool>,
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
+    suppressed: bool,
+    replay_application: Option<
+        tokio::sync::mpsc::UnboundedSender<oneshot::Sender<Result<(), WorkerExecutorError>>>,
+    >,
+}
+
+struct ApplyEntityReplay<T: 'static, Ctx: WorkerCtx> {
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    settlement_activity: Option<Arc<crate::worker::suspension::ExternalActivity>>,
+    requests:
+        tokio::sync::mpsc::UnboundedReceiver<oneshot::Sender<Result<(), WorkerExecutorError>>>,
+}
+
+impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx> wasmtime::component::AccessorTask<T, D>
+    for ApplyEntityReplay<T, Ctx>
+{
+    async fn run(mut self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
+        let runtime =
+            store.with(|mut access| (self.get_ctx)(access.data_mut()).runtime_suspension.clone());
+        loop {
+            let neutral = runtime.as_ref().and_then(|runtime| {
+                runtime.neutral_externals(
+                    store.runtime_activity()?,
+                    std::iter::once(self.settlement_activity.as_deref()?),
+                )
+            });
+            let ack = self.requests.recv().await;
+            drop(neutral);
+            let Some(ack) = ack else { break };
+            let result = process_pending_replay_events_access(store, self.get_ctx).await;
+            let _ = ack.send(result);
+        }
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
+    pub(crate) fn capture<T: 'static, D: HasData + ?Sized>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Self {
+        let mut captured = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            Self {
+                replay: ctx.state.replay_state.clone(),
+                oplog: ctx.state.oplog.clone(),
+                settlement_activity: ctx
+                    .runtime_suspension
+                    .as_ref()
+                    .map(|runtime| Arc::new(runtime.external_activity())),
+                counter: ctx.state.live_host_call_counter(),
+                authoritative_failure: ctx.state.authoritative_replay_failure.clone(),
+                linear_memory: ctx.linear_memory.clone(),
+                public_state: ctx.public_state.clone(),
+                role: if ctx.runtime == OwnerRuntime::Agent {
+                    ReplayToLiveRole::PrimaryAgent
+                } else {
+                    ReplayToLiveRole::NonPrimary
+                },
+                local_live_tail: ctx.state.local_live_tail(),
+                replaying_incomplete_entity: ctx.state.entity_execution_mode
+                    == Some(InvocationExecutionMode::ReplayingIncomplete),
+                tool_entity: matches!(
+                    ctx.runtime,
+                    OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+                ),
+                operation: ctx.entity_tool_operation(),
+                suppressed: ctx.state.durability_is_suppressed(),
+                replay_application: None,
+            }
+        });
+        if captured.role == ReplayToLiveRole::PrimaryAgent && !captured.suppressed {
+            let (sender, requests) = tokio::sync::mpsc::unbounded_channel();
+            store.spawn(ApplyEntityReplay {
+                get_ctx,
+                settlement_activity: captured.settlement_activity.clone(),
+                requests,
+            });
+            captured.replay_application = Some(sender);
+        }
+        captured
+    }
+
+    pub(super) async fn publish_live(
+        &self,
+        start: OplogIndex,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        let pending = match crate::durable_host::begin_replay_to_live(
+            self.replaying_incomplete_entity,
+            self.tool_entity,
+            self.operation.clone(),
+            &self.public_state,
+            &self.linear_memory,
+            &self.replay,
+            self.role,
+            self.local_live_tail.clone(),
+        )
+        .await?
+        {
+            BeginReplayToLive::Pending(pending) => pending,
+            BeginReplayToLive::ReplayResumed => {
+                return Err(WorkerExecutorError::runtime(
+                    "replay target grew while an incomplete entity call was settling",
+                ));
+            }
+        };
+        let outcome = pending
+            .finish_at(Some(
+                SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: start.into(),
+                },
+            ))
+            .await?;
+        if outcome == FinishReplayToLive::Live
+            && let Some(sender) = &self.replay_application
+        {
+            let (ack, received) = oneshot::channel();
+            sender.send(ack).map_err(|_| {
+                WorkerExecutorError::runtime(
+                    "caller Store closed before applying entity replay events",
+                )
+            })?;
+            received.await.map_err(|_| {
+                WorkerExecutorError::runtime(
+                    "caller Store closed without acknowledging entity replay events",
+                )
+            })??;
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn coordinate<F: Future>(
+        &self,
+        invocation: &golem_common::model::entity::EntityInvocationId,
+        future: F,
+    ) -> F::Output {
+        match &self.settlement_activity {
+            Some(activity) => activity.coordinate_entity(invocation, future).await,
+            None => future.await,
+        }
+    }
+
+    pub(crate) async fn coordinate_after<F: Future>(
+        &self,
+        invocation: &golem_common::model::entity::EntityInvocationId,
+        enabled: &std::sync::atomic::AtomicBool,
+        future: F,
+    ) -> F::Output {
+        match &self.settlement_activity {
+            Some(activity) => {
+                activity
+                    .coordinate_entity(invocation, future)
+                    .after(enabled)
+                    .await
+            }
+            None => future.await,
+        }
+    }
+}
 
 /// Synchronous access to real context data. The closure cannot return a borrow of the data,
 /// so neither a Store window nor a mutex guard can escape into an asynchronous operation.

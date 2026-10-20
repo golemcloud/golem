@@ -16,9 +16,10 @@
 //!
 //! The tool call surface and middleware-chain dispatcher supply only dispatch behavior. They begin
 //! an entity record here, launch the returned invocation scope through `ActiveAgent`, then hand the
-//! body handle back to [`EntityInvocationDurability::drive_access`].
+//! body handle back to [`EntityInvocationDurability::drive_owned`].
 
 use crate::durable_host::DurableWorkerCtx;
+pub(crate) use crate::durable_host::concurrent::EntitySettlementContext;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
     ReconstructionReplayOutcome, ReplayAccessStartOutcome,
@@ -27,7 +28,9 @@ use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
 use crate::services::oplog::OplogOps;
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
-use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
+use crate::worker::entity_invocation::{
+    EntityBodyOutcome, EntityInvocationHandle, EntityInvocationResources,
+};
 use crate::worker::owner_lane::OwnerInvocationId;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
@@ -54,7 +57,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData};
 
 pub(crate) enum EntityInvocationDurabilityOutcome {
@@ -115,8 +117,8 @@ enum EntityReconstructionOutcome<R, H> {
 }
 
 /// Task-owned durable state for one entity body. Its `Start` index is the entity invocation ID.
-/// Dropping before terminal selection leaves the Start incomplete for recovery; only an explicit
-/// cancellation appends a cancellation terminal.
+/// Executor shutdown leaves an unfinished Start incomplete for recovery. Before execution
+/// ownership transfers, semantic caller Store disposal instead settles a skipped body.
 pub struct EntityInvocationDurability {
     handle: DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
     scope: EntityInvocationScope,
@@ -295,6 +297,12 @@ impl ResolvedEntityInvocationPosition {
 }
 
 impl EntityInvocationDurability {
+    /// Transfers no-body settlement to the independent tool execution owner. Call this only
+    /// after that owner has accepted the operation, without an intervening await.
+    pub(crate) fn accept_execution_ownership(&mut self) {
+        self.handle.accept_entity_execution_ownership();
+    }
+
     pub(crate) async fn start_live_access<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -457,6 +465,9 @@ impl EntityInvocationDurability {
                 )))
             }
             HostRequest::GolemToolInvocationRejected(request) => {
+                // This shared claim path can repair a rejection, not only an accepted body.
+                // A rejection must complete with its recorded error, never an entity cancellation.
+                handle.accept_entity_execution_ownership();
                 let span_started = handle
                     .recorded_span_started_access(store, get_ctx)
                     .await?
@@ -653,20 +664,14 @@ impl EntityInvocationDurability {
     /// Converts a replayed incomplete Start into its live-repair handle before a body exists.
     /// An empty replay-visible entity scope must release its historical reconstruction fence before
     /// dispatch, so the primary owner can transition to the live tail.
-    pub(crate) async fn enter_incomplete_live_repair_before_body_access<T, D, Ctx>(
+    pub(crate) async fn enter_incomplete_live_repair_before_body_owned<Ctx: WorkerCtx>(
         self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<IncompleteLiveRepairBeforeBody, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
+        context: &EntitySettlementContext<Ctx>,
+    ) -> Result<IncompleteLiveRepairBeforeBody, WorkerExecutorError> {
         if self.scope.mode() != InvocationExecutionMode::ReplayingIncomplete {
             return Ok(IncompleteLiveRepairBeforeBody::Ready(self));
         }
-        let replay = store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
+        let replay = &context.replay;
         if replay
             .has_visible_scope_descendant(self.handle.start_index())
             .await?
@@ -686,7 +691,7 @@ impl EntityInvocationDurability {
             mut historical_reconstruction,
             scope_interest,
         } = self;
-        let (handle, cancelled) = match handle.replay_reconstruction_access(store, get_ctx).await? {
+        let (handle, cancelled) = match handle.replay_entity_owned(context, false).await? {
             ReconstructionReplayOutcome::Incomplete(handle) => (handle, false),
             ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => (handle, true),
             ReconstructionReplayOutcome::Replayed(_) => {
@@ -753,23 +758,14 @@ impl EntityInvocationDurability {
     /// Callers use this only to decide whether a recorded skipped-body operation may bypass Store
     /// construction; terminal consumption and equality validation still happen through the call
     /// handle's normal reconstruction path.
-    pub async fn recorded_terminal_access<T, D, Ctx>(
+    pub(crate) async fn recorded_terminal_owned<Ctx: WorkerCtx>(
         &self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<Option<RecordedEntityTerminal>, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
+        context: &EntitySettlementContext<Ctx>,
+    ) -> Result<Option<RecordedEntityTerminal>, WorkerExecutorError> {
         if self.scope.mode() != InvocationExecutionMode::ReplayingCompleted {
             return Ok(None);
         }
-        let (replay, oplog) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            (ctx.state.replay_state.clone(), ctx.state.oplog.clone())
-        });
+        let (replay, oplog) = (&context.replay, &context.oplog);
         let entry = replay
             .visible_terminal_entry(self.handle.start_index())
             .await?
@@ -819,17 +815,12 @@ impl EntityInvocationDurability {
     /// Completes an eager entity `Start` without constructing a sidecar body. This is used only
     /// after deterministic admission has selected an ordinary terminal (for example attachment
     /// resource exhaustion). Replay consumes the recorded terminal directly.
-    pub(crate) async fn complete_without_body_access<T, D, Ctx>(
+    pub(crate) async fn complete_without_body_owned<Ctx: WorkerCtx>(
         self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        context: &EntitySettlementContext<Ctx>,
         response: HostResponseEntityInvocation,
-    ) -> Result<EntityInvocationDurabilityOutcome, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
+    ) -> Result<EntityInvocationDurabilityOutcome, WorkerExecutorError> {
+        let completed = self.scope.mode() == InvocationExecutionMode::ReplayingCompleted;
         let span_id = self
             .scope
             .span_started()
@@ -839,6 +830,7 @@ impl EntityInvocationDurability {
         let Self {
             handle,
             mut historical_reconstruction,
+            scope_interest: _scope_interest,
             ..
         } = self;
         if let Some(reconstruction) = historical_reconstruction.as_mut() {
@@ -847,11 +839,10 @@ impl EntityInvocationDurability {
         let response = if handle.is_live() {
             let span_finished = entity_span_finished(&span_id, &response)?;
             handle
-                .complete_access_with_span(store, get_ctx, response, span_finished)
-                .await
-                .map_err(|error| error.source)?
+                .complete_entity_owned(context, response, span_finished)
+                .await?
         } else {
-            match handle.replay_reconstruction_access(store, get_ctx).await? {
+            match handle.replay_entity_owned(context, completed).await? {
                 ReconstructionReplayOutcome::Replayed(recorded) if recorded == response => recorded,
                 ReconstructionReplayOutcome::Replayed(recorded) => {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -867,9 +858,8 @@ impl EntityInvocationDurability {
                 }
                 ReconstructionReplayOutcome::Incomplete(live) => {
                     let span_finished = entity_span_finished(&span_id, &response)?;
-                    live.complete_access_with_span(store, get_ctx, response, span_finished)
-                        .await
-                        .map_err(|error| error.source)?
+                    live.complete_entity_owned(context, response, span_finished)
+                        .await?
                 }
                 ReconstructionReplayOutcome::LiveAdmissionCancelled(mut live) => {
                     live.abandon_for_trap();
@@ -887,19 +877,15 @@ impl EntityInvocationDurability {
 
     /// Selects the generic durable cancellation terminal before a sidecar body exists. A replayed
     /// call must resolve to the same recorded `Cancelled` entry.
-    pub(crate) async fn cancel_without_body_access<T, D, Ctx>(
+    pub(crate) async fn cancel_without_body_owned<Ctx: WorkerCtx>(
         self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<EntityInvocationDurabilityOutcome, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
+        context: &EntitySettlementContext<Ctx>,
+    ) -> Result<EntityInvocationDurabilityOutcome, WorkerExecutorError> {
+        let completed = self.scope.mode() == InvocationExecutionMode::ReplayingCompleted;
         let Self {
             handle,
             mut historical_reconstruction,
+            scope_interest: _scope_interest,
             ..
         } = self;
         if let Some(reconstruction) = historical_reconstruction.as_mut() {
@@ -908,12 +894,11 @@ impl EntityInvocationDurability {
         let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Skipped).await?;
         let response = if handle.is_live() {
             handle
-                .cancel_access(store, get_ctx, Some(response.clone()))
-                .await
-                .map_err(|error| error.source)?;
+                .cancel_entity_owned(context, response.clone())
+                .await?;
             response
         } else {
-            match handle.replay_reconstruction_access(store, get_ctx).await? {
+            match handle.replay_entity_owned(context, completed).await? {
                 ReconstructionReplayOutcome::Cancelled(recorded) => {
                     validate_recorded_cancellation_terminal(recorded, &response)?
                 }
@@ -925,9 +910,7 @@ impl EntityInvocationDurability {
                 }
                 ReconstructionReplayOutcome::Incomplete(live)
                 | ReconstructionReplayOutcome::LiveAdmissionCancelled(live) => {
-                    live.cancel_access(store, get_ctx, Some(response.clone()))
-                        .await
-                        .map_err(|error| error.source)?;
+                    live.cancel_entity_owned(context, response.clone()).await?;
                     response
                 }
             }
@@ -938,38 +921,25 @@ impl EntityInvocationDurability {
         ))
     }
 
-    /// Drives body reconstruction and the outer durable terminal together. A completed replay does
-    /// not release its recorded response until the fresh body has reconstructed local effects; a
-    /// live cancellation cooperatively unwinds the body while retaining its Store for child
-    /// settlement; and an incomplete Start switches to live and is completed under the original
-    /// Start index.
-    pub(crate) async fn drive_access<
-        T,
-        D,
-        Ctx,
-        OnCompletedStarted,
-        OnCompletedCancelled,
-        OnCompletedFailure,
-        CompletedFailureFuture,
-    >(
-        self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    /// Drives an accepted entity session without borrowing the caller Store. The owner must
+    /// retain and join this future through operation settlement, including after a guest trap.
+    pub(crate) async fn drive_owned<Ctx, Started, Cancelled, Failed, FailureFuture>(
+        mut self,
+        context: &EntitySettlementContext<Ctx>,
         body: EntityInvocationHandle<HostResponseEntityInvocation>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
-        on_completed_started: OnCompletedStarted,
-        on_completed_cancelled: OnCompletedCancelled,
-        on_completed_failure: OnCompletedFailure,
+        on_completed_started: Started,
+        on_completed_cancelled: Cancelled,
+        on_completed_failure: Failed,
     ) -> Result<EntityInvocationDurabilityOutcome, EntityInvocationDurabilityFailure>
     where
-        T: 'static,
-        D: HasData + ?Sized,
         Ctx: WorkerCtx,
-        OnCompletedStarted: FnOnce() + Send,
-        OnCompletedCancelled: FnOnce() + Send + 'static,
-        OnCompletedFailure: FnOnce(WorkerExecutorError) -> CompletedFailureFuture + Send + 'static,
-        CompletedFailureFuture: Future<Output = ()> + Send + 'static,
+        Started: FnOnce() + Send,
+        Cancelled: FnOnce() + Send,
+        Failed: FnOnce(WorkerExecutorError) -> FailureFuture + Send,
+        FailureFuture: Future<Output = ()> + Send,
     {
+        self.accept_execution_ownership();
         let span_id = self
             .scope
             .span_started()
@@ -981,15 +951,15 @@ impl EntityInvocationDurability {
             scope,
             parent,
             call_mode,
-            mut historical_reconstruction,
+            historical_reconstruction,
             scope_interest: _scope_interest,
             ..
         } = self;
         let invocation = scope.invocation_id().clone();
+        let completed = scope.mode() == InvocationExecutionMode::ReplayingCompleted;
         let abort = body.abort_handle();
-        let executor_tasks = body.executor_tasks();
-        let body_resources = Arc::new(Mutex::new(None));
-        let completed_body_resources = body_resources.clone();
+        let resources = Arc::new(Mutex::new(None));
+        let body_resources = resources.clone();
         let body = async move {
             let completion = match call_mode {
                 EntityCallMode::FireAndForget => body.join_completion().await,
@@ -997,400 +967,205 @@ impl EntityInvocationDurability {
                     body.await_completion(&parent).await
                 }
             }?;
-            let (result, resources) = completion.into_parts();
-            *completed_body_resources.lock().unwrap() = Some(resources);
-            result
+            let (response, resources) = completion.into_parts();
+            *body_resources.lock().unwrap() = Some(resources);
+            response
         };
-
-        if scope.mode() == InvocationExecutionMode::ReplayingCompleted {
-            let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
-                (
-                    ctx.state.replay_state.clone(),
-                    ctx.state.oplog.clone(),
-                    ctx.state
-                        .completion_marker_recorder()
-                        .for_store(ctx.runtime_suspension.clone()),
-                )
-            });
-            let active_reconstruction_bodies = replay_state.historical_reconstruction_bodies();
-            let terminal = Arc::new(Mutex::new(None));
-            let replay_terminal = terminal.clone();
-            let structural_replay_state = replay_state.clone();
-            let residual_replay_state = replay_state.clone();
-            let structural_start = invocation.start_index();
-            let unconsumed_scope = async move {
-                structural_replay_state
-                    .await_unconsumed_scope_entry(structural_start, active_reconstruction_bodies)
-                    .await
-            };
-            let replay = async move {
-                let (response, terminal) = handle
-                    .resolve_completed_reconstruction(
-                        replay_state.clone(),
-                        oplog,
-                        completion_marker_recorder,
-                    )
-                    .await?;
-                let cancelled = terminal.cancelled();
-                *replay_terminal.lock().unwrap() = Some(terminal);
-                Ok(if cancelled {
-                    replay_state
-                        .await_tool_attachment_reconstruction(structural_start)
-                        .await?;
-                    // Select attachment cancellation before the coordinator
-                    // aborts the body and drops its producer resources.
-                    on_completed_cancelled();
-                    EntityReconstructionResolution::<
-                        _,
-                        DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
-                    >::Cancelled(response)
-                } else {
-                    EntityReconstructionResolution::Replayed(response)
-                })
-            };
-            let supervisor_body_resources = body_resources.clone();
-            let monitor_reconstruction = historical_reconstruction.clone();
-            let runtime =
-                store.with(|mut access| get_ctx(access.data_mut()).runtime_suspension.clone());
-            let supervisor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
-            let completed_supervisor = executor_tasks.spawn_entity(async move {
-                let _activity = supervisor_activity;
-                let _scope_interest = _scope_interest;
-                let mut historical_reconstruction = historical_reconstruction;
-                let reconstruction = std::panic::AssertUnwindSafe(async {
-                    let reconstruction = coordinate_entity_reconstruction_inner(
-                        &invocation,
-                        InvocationExecutionMode::ReplayingCompleted,
-                        body,
-                        replay,
-                        unconsumed_scope,
-                        || abort.abort(),
-                        &mut historical_reconstruction,
-                        cancellation.as_ref(),
-                    )
-                    .await?;
-                    ensure_body_claimed_retained_descendants(
-                        &residual_replay_state,
-                        &invocation,
-                        &reconstruction,
-                    )
-                    .await?;
-                    let terminal = terminal.lock().unwrap().take().ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "resolved reconstruction did not retain its accessor terminal",
-                        )
-                    })?;
-                    Ok::<_, WorkerExecutorError>((reconstruction, terminal))
-                })
-                .catch_unwind()
-                .await;
-                match reconstruction {
-                    Ok(reconstruction) => {
-                        reconstruction.map_err(|error| EntityInvocationDurabilityFailure {
-                            error,
-                            resources: take_entity_resources(&supervisor_body_resources),
-                        })
-                    }
-                    Err(_) => Err(EntityInvocationDurabilityFailure {
-                        error: WorkerExecutorError::runtime(
-                            "completed entity reconstruction coordinator panicked",
-                        ),
-                        resources: take_entity_resources(&supervisor_body_resources),
-                    }),
-                }
-            });
-            let (completed_tx, completed_rx) = oneshot::channel();
-            let monitor_body_resources = body_resources.clone();
-            let monitor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
-            let _monitor = executor_tasks.spawn_entity(async move {
-                let _activity = monitor_activity;
-                let completed = match completed_supervisor.await {
-                    Ok(Some(completed)) => completed,
-                    Ok(None) => return,
-                    Err(error) => Err(EntityInvocationDurabilityFailure {
-                        error: WorkerExecutorError::runtime(format!(
-                            "completed entity reconstruction task failed: {error}"
-                        )),
-                        resources: take_entity_resources(&monitor_body_resources),
-                    }),
-                };
-                let retained_reconstruction = match &completed {
-                    Err(failure) => {
-                        let error = failure.error.clone();
-                        on_completed_failure(error).await;
-                        drop(monitor_reconstruction);
-                        None
-                    }
-                    Ok((_, terminal)) if terminal.is_replay_at_marker() => {
-                        Some(monitor_reconstruction)
-                    }
-                    Ok(_) => {
-                        drop(monitor_reconstruction);
-                        None
-                    }
-                };
-                let _ = completed_tx.send((completed, retained_reconstruction));
-            });
-            on_completed_started();
-            let (completed, retained_reconstruction) =
-                completed_rx
-                    .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error: WorkerExecutorError::runtime(format!(
-                            "completed entity reconstruction monitor failed: {error}"
-                        )),
-                        resources: take_entity_resources(&body_resources),
-                    })?;
-            let (reconstruction, terminal) = completed?;
-            terminal
-                .finish_access(store, get_ctx)
-                .await
-                .map_err(|error| EntityInvocationDurabilityFailure {
-                    error,
-                    resources: take_entity_resources(&body_resources),
-                })?;
-            drop(retained_reconstruction);
-            return Ok(match reconstruction {
-                EntityReconstructionOutcome::Replayed(recorded) => {
-                    EntityInvocationDurabilityOutcome::Completed(
-                        Box::new(recorded),
-                        take_entity_resources(&body_resources),
-                    )
-                }
-                EntityReconstructionOutcome::Cancelled(recorded) => {
-                    EntityInvocationDurabilityOutcome::Cancelled(
-                        Box::new(recorded),
-                        take_entity_resources(&body_resources),
-                    )
-                }
-                EntityReconstructionOutcome::Incomplete { .. }
-                | EntityReconstructionOutcome::IncompleteCancelled { .. }
-                | EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { .. } => {
-                    unreachable!("completed reconstruction cannot resolve incomplete")
-                }
-            });
-        }
-
+        let mut on_cancelled = Some(on_completed_cancelled);
+        let fail = |error| EntityInvocationDurabilityFailure {
+            error,
+            resources: take_entity_resources(&resources),
+        };
         tokio::pin!(body);
         if handle.is_live() {
-            let neutral = store.with(|mut access| {
-                get_ctx(access.data_mut())
-                    .runtime_suspension
-                    .as_ref()
-                    .and_then(|runtime| {
-                        runtime.neutral_entity(store.runtime_activity()?, &invocation)
-                    })
-            });
-            let body_result = match cancellation {
-                Some(cancellation) => {
-                    tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => None,
-                        response = &mut body => Some(response),
+            let response = context
+                .coordinate(&invocation, async {
+                    match &cancellation {
+                        Some(cancellation) => tokio::select! {
+                            biased;
+                            _ = cancellation.cancelled() => None,
+                            response = &mut body => Some(response),
+                        },
+                        None => Some(body.as_mut().await),
                     }
-                }
-                None => Some(body.as_mut().await),
-            };
-            drop(neutral);
-            let Some(body_result) = body_result else {
-                on_completed_cancelled();
-                let _ = body.as_mut().await;
+                })
+                .await;
+            let Some(response) = response else {
+                on_cancelled.take().unwrap()();
+                context.coordinate(&invocation, body).await.map_err(fail)?;
                 let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Executed)
                     .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error,
-                        resources: take_entity_resources(&body_resources),
-                    })?;
+                    .map_err(fail)?;
                 handle
-                    .cancel_access(store, get_ctx, Some(response.clone()))
+                    .cancel_entity_owned(context, response.clone())
                     .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error: error.source,
-                        resources: take_entity_resources(&body_resources),
-                    })?;
+                    .map_err(fail)?;
                 return Ok(EntityInvocationDurabilityOutcome::Cancelled(
                     Box::new(response),
-                    take_entity_resources(&body_resources),
+                    take_entity_resources(&resources),
                 ));
             };
-            let response = match body_result {
-                Ok(response) => response,
-                Err(error) => {
-                    let _ = handle.trap(error.clone());
-                    return Err(EntityInvocationDurabilityFailure {
-                        error,
-                        resources: take_entity_resources(&body_resources),
-                    });
+            let response = response.map_err(|error| {
+                let _ = handle.trap(error.clone());
+                fail(error)
+            })?;
+            let response = match response {
+                EntityBodyOutcome::Completed(response) => response,
+                EntityBodyOutcome::Cancelled => {
+                    on_cancelled.take().unwrap()();
+                    let response =
+                        cancelled_tool_terminal(SerializableEntityBodyExecution::Executed)
+                            .await
+                            .map_err(fail)?;
+                    handle
+                        .cancel_entity_owned(context, response.clone())
+                        .await
+                        .map_err(fail)?;
+                    return Ok(EntityInvocationDurabilityOutcome::Cancelled(
+                        Box::new(response),
+                        take_entity_resources(&resources),
+                    ));
                 }
             };
-            let span_finished = entity_span_finished(&span_id, &response).map_err(|error| {
-                EntityInvocationDurabilityFailure {
-                    error,
-                    resources: take_entity_resources(&body_resources),
-                }
-            })?;
+            let span = entity_span_finished(&span_id, &response).map_err(fail)?;
             let response = handle
-                .complete_access_with_span(store, get_ctx, response, span_finished)
+                .complete_entity_owned(context, response, span)
                 .await
-                .map_err(|error| EntityInvocationDurabilityFailure {
-                    error: error.source,
-                    resources: take_entity_resources(&body_resources),
-                })?;
+                .map_err(fail)?;
             return Ok(EntityInvocationDurabilityOutcome::Completed(
                 Box::new(response),
-                take_entity_resources(&body_resources),
+                take_entity_resources(&resources),
             ));
         }
 
-        let mut neutral = None;
+        // Keep the completed reconstruction fence until failure supervision has acknowledged
+        // the error. Cursor exhaustion must not publish live across failed reconstruction.
+        let retained_reconstruction = historical_reconstruction.clone();
+        if completed {
+            on_completed_started();
+        }
+        let replay_resolved = std::sync::atomic::AtomicBool::new(false);
         let replay = async {
-            Ok(
-                match Box::pin(handle.replay_reconstruction_access(store, get_ctx)).await? {
-                    ReconstructionReplayOutcome::Replayed(response) => {
-                        EntityReconstructionResolution::Replayed(response)
+            let resolution = match handle.replay_entity_owned(context, completed).await? {
+                ReconstructionReplayOutcome::Replayed(response) => {
+                    EntityReconstructionResolution::Replayed(response)
+                }
+                ReconstructionReplayOutcome::Cancelled(response) => {
+                    context
+                        .replay
+                        .await_tool_attachment_reconstruction(invocation.start_index())
+                        .await?;
+                    on_cancelled.take().unwrap()();
+                    EntityReconstructionResolution::Cancelled(response)
+                }
+                ReconstructionReplayOutcome::Incomplete(handle) => {
+                    if cancellation
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                    {
+                        on_cancelled.take().unwrap()();
                     }
-                    ReconstructionReplayOutcome::Cancelled(recorded) => {
-                        EntityReconstructionResolution::Cancelled(recorded)
-                    }
-                    ReconstructionReplayOutcome::Incomplete(handle) => {
-                        if cancellation
-                            .as_ref()
-                            .is_some_and(|token| token.is_cancelled())
-                        {
-                            on_completed_cancelled();
-                        }
-                        neutral = store.with(|mut access| {
-                            get_ctx(access.data_mut())
-                                .runtime_suspension
-                                .as_ref()
-                                .and_then(|runtime| {
-                                    runtime.neutral_entity(store.runtime_activity()?, &invocation)
-                                })
-                        });
-                        EntityReconstructionResolution::Incomplete(handle)
-                    }
-                    ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => {
-                        EntityReconstructionResolution::LiveAdmissionCancelled(handle)
-                    }
-                },
-            )
+                    EntityReconstructionResolution::Incomplete(handle)
+                }
+                ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => {
+                    EntityReconstructionResolution::LiveAdmissionCancelled(handle)
+                }
+            };
+            replay_resolved.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(resolution)
         };
-        let (replay_state, active_reconstruction_bodies) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            (
-                ctx.state.replay_state.clone(),
-                ctx.state.replay_state.historical_reconstruction_bodies(),
-            )
-        });
-        let unconsumed_scope = replay_state
-            .await_unconsumed_scope_entry(invocation.start_index(), active_reconstruction_bodies);
-        let reconstruction = coordinate_entity_reconstruction(
-            &invocation,
-            scope.mode(),
-            body,
-            replay,
-            unconsumed_scope,
-            || abort.abort(),
-            historical_reconstruction.take(),
-            cancellation.as_ref(),
-        )
+        let active_bodies = context.replay.historical_reconstruction_bodies();
+        let reconstruction = std::panic::AssertUnwindSafe(async {
+            let reconstruction = context
+                .coordinate_after(
+                    &invocation,
+                    &replay_resolved,
+                    coordinate_entity_reconstruction(
+                        &invocation,
+                        scope.mode(),
+                        body,
+                        replay,
+                        context
+                            .replay
+                            .await_unconsumed_scope_entry(invocation.start_index(), active_bodies),
+                        || abort.abort(),
+                        historical_reconstruction,
+                        cancellation.as_ref(),
+                    ),
+                )
+                .await?;
+            ensure_body_claimed_retained_descendants(&context.replay, &invocation, &reconstruction)
+                .await?;
+            Ok::<_, WorkerExecutorError>(reconstruction)
+        })
+        .catch_unwind()
         .await;
-        drop(neutral);
         let reconstruction = match reconstruction {
-            Ok(reconstruction) => ensure_body_claimed_retained_descendants(
-                &replay_state,
-                &invocation,
-                &reconstruction,
-            )
-            .await
-            .map(|()| reconstruction),
-            Err(error) => Err(error),
-        };
-        let reconstruction = match reconstruction {
-            Ok(reconstruction) => reconstruction,
-            Err(error) => {
-                return Err(EntityInvocationDurabilityFailure {
-                    error,
-                    resources: take_entity_resources(&body_resources),
-                });
+            Ok(Ok(reconstruction)) => reconstruction,
+            failure => {
+                let error = match failure {
+                    Ok(Err(error)) => error,
+                    Err(_) => WorkerExecutorError::runtime(
+                        "owned entity reconstruction coordinator panicked",
+                    ),
+                    Ok(Ok(_)) => unreachable!(),
+                };
+                if completed {
+                    on_completed_failure(error.clone()).await;
+                }
+                drop(retained_reconstruction);
+                return Err(fail(error));
             }
         };
+        drop(retained_reconstruction);
         match reconstruction {
-            EntityReconstructionOutcome::Cancelled(recorded) => {
-                Ok(EntityInvocationDurabilityOutcome::Cancelled(
-                    Box::new(recorded),
-                    take_entity_resources(&body_resources),
-                ))
-            }
-            EntityReconstructionOutcome::Replayed(recorded) => {
-                Ok(EntityInvocationDurabilityOutcome::Completed(
-                    Box::new(recorded),
-                    take_entity_resources(&body_resources),
-                ))
-            }
-            EntityReconstructionOutcome::Incomplete {
-                response,
-                handle: live_handle,
-            } => {
-                let span_finished = entity_span_finished(&span_id, &response).map_err(|error| {
-                    EntityInvocationDurabilityFailure {
-                        error,
-                        resources: take_entity_resources(&body_resources),
-                    }
-                })?;
-                let response = live_handle
-                    .complete_access_with_span(store, get_ctx, response, span_finished)
-                    .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error: error.source,
-                        resources: take_entity_resources(&body_resources),
-                    })?;
+            EntityReconstructionOutcome::Replayed(response) => {
                 Ok(EntityInvocationDurabilityOutcome::Completed(
                     Box::new(response),
-                    take_entity_resources(&body_resources),
+                    take_entity_resources(&resources),
                 ))
             }
-            EntityReconstructionOutcome::IncompleteCancelled {
-                handle: live_handle,
-            } => {
+            EntityReconstructionOutcome::Cancelled(response) => {
+                Ok(EntityInvocationDurabilityOutcome::Cancelled(
+                    Box::new(response),
+                    take_entity_resources(&resources),
+                ))
+            }
+            EntityReconstructionOutcome::Incomplete { response, handle } => {
+                let span = entity_span_finished(&span_id, &response).map_err(fail)?;
+                let response = handle
+                    .complete_entity_owned(context, response, span)
+                    .await
+                    .map_err(fail)?;
+                Ok(EntityInvocationDurabilityOutcome::Completed(
+                    Box::new(response),
+                    take_entity_resources(&resources),
+                ))
+            }
+            EntityReconstructionOutcome::IncompleteCancelled { handle } => {
                 let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Executed)
                     .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error,
-                        resources: take_entity_resources(&body_resources),
-                    })?;
-                live_handle
-                    .cancel_access(store, get_ctx, Some(response.clone()))
+                    .map_err(fail)?;
+                handle
+                    .cancel_entity_owned(context, response.clone())
                     .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error: error.source,
-                        resources: take_entity_resources(&body_resources),
-                    })?;
+                    .map_err(fail)?;
                 Ok(EntityInvocationDurabilityOutcome::Cancelled(
                     Box::new(response),
-                    take_entity_resources(&body_resources),
+                    take_entity_resources(&resources),
                 ))
             }
-            EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled {
-                handle: live_handle,
-            } => {
+            EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { handle } => {
                 let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Skipped)
                     .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error,
-                        resources: take_entity_resources(&body_resources),
-                    })?;
-                live_handle
-                    .cancel_access(store, get_ctx, Some(response.clone()))
+                    .map_err(fail)?;
+                handle
+                    .cancel_entity_owned(context, response.clone())
                     .await
-                    .map_err(|error| EntityInvocationDurabilityFailure {
-                        error: error.source,
-                        resources: take_entity_resources(&body_resources),
-                    })?;
+                    .map_err(fail)?;
                 Ok(EntityInvocationDurabilityOutcome::Cancelled(
                     Box::new(response),
-                    take_entity_resources(&body_resources),
+                    take_entity_resources(&resources),
                 ))
             }
         }
@@ -1498,7 +1273,7 @@ async fn skipped_tool_terminal(
     .await
 }
 
-async fn cancelled_tool_terminal(
+pub(crate) async fn cancelled_tool_terminal(
     body_execution: SerializableEntityBodyExecution,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
     encode_tool_terminal(
@@ -1714,7 +1489,7 @@ async fn coordinate_entity_reconstruction<R, H, B, F, S, A, G>(
 ) -> Result<EntityReconstructionOutcome<R, H>, WorkerExecutorError>
 where
     R: PartialEq,
-    B: Future<Output = Result<R, WorkerExecutorError>>,
+    B: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>>,
     F: Future<Output = Result<EntityReconstructionResolution<R, H>, WorkerExecutorError>>,
     S: Future<Output = Result<OplogIndex, WorkerExecutorError>>,
     A: FnOnce(),
@@ -1735,17 +1510,17 @@ where
 
 async fn coordinate_entity_reconstruction_inner<R, H, B, F, S, A, G>(
     invocation: &EntityInvocationId,
-    execution_mode: InvocationExecutionMode,
+    _execution_mode: InvocationExecutionMode,
     body: B,
     replay: F,
     structural_stall: S,
     abort: A,
     historical_reconstruction: &mut Option<G>,
-    cancellation: Option<&tokio_util::sync::CancellationToken>,
+    _cancellation: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<EntityReconstructionOutcome<R, H>, WorkerExecutorError>
 where
     R: PartialEq,
-    B: Future<Output = Result<R, WorkerExecutorError>>,
+    B: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>>,
     F: Future<Output = Result<EntityReconstructionResolution<R, H>, WorkerExecutorError>>,
     S: Future<Output = Result<OplogIndex, WorkerExecutorError>>,
     A: FnOnce(),
@@ -1770,37 +1545,7 @@ where
                 reconstruction.body_settled();
             }
             match body_result {
-                Err(error) => {
-                    let cancellation_interruption = execution_mode
-                        == InvocationExecutionMode::ReplayingIncomplete
-                        && cancellation.is_some_and(|token| token.is_cancelled());
-                    match replay.as_mut().now_or_never() {
-                        Some(replay_result) => (Some(Err(error)), replay_result),
-                        None if cancellation_interruption => {
-                            let replay_result = tokio::select! {
-                                biased;
-                                replay_result = &mut replay => replay_result,
-                                stalled_at = &mut structural_stall => {
-                                    let stalled_at = stalled_at?;
-                                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                        format!("cancelled replay body for {invocation}"),
-                                        format!("entity body was cancelled before consuming its recorded descendant at {stalled_at}"),
-                                    ));
-                                }
-                            };
-                            (Some(Err(error)), replay_result)
-                        }
-                        None => {
-                            return Err(match execution_mode {
-                                InvocationExecutionMode::ReplayingCompleted => {
-                                    replay_body_failure(invocation, error)
-                                }
-                                InvocationExecutionMode::ReplayingIncomplete
-                                | InvocationExecutionMode::Live => error,
-                            });
-                        }
-                    }
-                }
+                Err(error) => return Err(error),
                 Ok(response) => {
                     let replay_result = tokio::select! {
                         biased;
@@ -1836,58 +1581,57 @@ where
     match replay_result {
         EntityReconstructionResolution::Cancelled(recorded) => {
             abort.take().unwrap()();
-            if body_result.is_none() {
-                let _ = body.await;
+            let joined = if let Some(result) = body_result {
+                result
+            } else {
+                let result = body.await;
                 if let Some(reconstruction) = historical_reconstruction.as_mut() {
                     reconstruction.body_settled();
                 }
-            }
+                result
+            };
+            joined?;
             Ok(EntityReconstructionOutcome::Cancelled(recorded))
         }
         EntityReconstructionResolution::Replayed(recorded) => {
             let reconstructed = match body_result {
-                Some(response) => {
-                    response.map_err(|error| replay_body_failure(invocation, error))?
-                }
+                Some(response) => response?,
                 None => {
                     let response = body.await;
                     if let Some(reconstruction) = historical_reconstruction.as_mut() {
                         reconstruction.body_settled();
                     }
-                    response.map_err(|error| replay_body_failure(invocation, error))?
+                    response?
                 }
             };
-            if reconstructed != recorded {
+            if reconstructed != EntityBodyOutcome::Completed(recorded) {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!("recorded entity invocation result for {invocation}"),
                     format!("reconstructed a different result for {invocation}"),
                 ));
             }
-            Ok(EntityReconstructionOutcome::Replayed(recorded))
+            Ok(EntityReconstructionOutcome::Replayed(
+                reconstructed.completed()?,
+            ))
         }
         EntityReconstructionResolution::LiveAdmissionCancelled(handle) => {
             abort.take().unwrap()();
-            if body_result.is_none() {
-                let _ = body.await;
+            let joined = if let Some(result) = body_result {
+                result
+            } else {
+                let result = body.await;
                 if let Some(reconstruction) = historical_reconstruction.as_mut() {
                     reconstruction.body_settled();
                 }
-            }
+                result
+            };
+            joined?;
             Ok(EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { handle })
         }
         EntityReconstructionResolution::Incomplete(handle) => {
             // The resolver already released the historical fence when replay reached the live
             // tail. Keep body membership until the body actually settles so structural-stall
             // detection can still identify its owned descendants during live repair.
-            if cancellation.is_some_and(|token| token.is_cancelled()) {
-                if body_result.is_none() {
-                    let _ = body.await;
-                    if let Some(reconstruction) = historical_reconstruction.as_mut() {
-                        reconstruction.body_settled();
-                    }
-                }
-                return Ok(EntityReconstructionOutcome::IncompleteCancelled { handle });
-            }
             let response = match body_result {
                 Some(response) => response?,
                 None => match body.await {
@@ -1897,12 +1641,6 @@ where
                         }
                         response
                     }
-                    Err(_) if cancellation.is_some_and(|token| token.is_cancelled()) => {
-                        if let Some(reconstruction) = historical_reconstruction.as_mut() {
-                            reconstruction.body_settled();
-                        }
-                        return Ok(EntityReconstructionOutcome::IncompleteCancelled { handle });
-                    }
                     Err(error) => {
                         if let Some(reconstruction) = historical_reconstruction.as_mut() {
                             reconstruction.body_settled();
@@ -1911,19 +1649,16 @@ where
                     }
                 },
             };
-            Ok(EntityReconstructionOutcome::Incomplete { response, handle })
+            match response {
+                EntityBodyOutcome::Completed(response) => {
+                    Ok(EntityReconstructionOutcome::Incomplete { response, handle })
+                }
+                EntityBodyOutcome::Cancelled => {
+                    Ok(EntityReconstructionOutcome::IncompleteCancelled { handle })
+                }
+            }
         }
     }
-}
-
-fn replay_body_failure(
-    invocation: &EntityInvocationId,
-    error: WorkerExecutorError,
-) -> WorkerExecutorError {
-    WorkerExecutorError::unexpected_oplog_entry(
-        format!("reconstructable entity invocation body for {invocation}"),
-        format!("entity replay body failed before its recorded terminal: {error}"),
-    )
 }
 
 #[cfg(test)]
@@ -2337,7 +2072,7 @@ mod tests {
             InvocationExecutionMode::ReplayingCompleted,
             async move {
                 let _ = body_completed.send(());
-                Ok::<_, WorkerExecutorError>(7)
+                Ok::<_, WorkerExecutorError>(EntityBodyOutcome::Completed(7))
             },
             async move {
                 let _ = wait_for_body.await;
@@ -2365,7 +2100,7 @@ mod tests {
             InvocationExecutionMode::ReplayingCompleted,
             async move {
                 let _ = wait_for_cancellation.await;
-                Err::<u64, _>(WorkerExecutorError::runtime("body was cancelled"))
+                Ok::<_, WorkerExecutorError>(EntityBodyOutcome::<u64>::Cancelled)
             },
             async { Ok(EntityReconstructionResolution::<u64, ()>::Cancelled(9)) },
             no_structural_stall(),
@@ -2414,7 +2149,7 @@ mod tests {
             InvocationExecutionMode::ReplayingCompleted,
             async move {
                 let _ = wait_for_cancellation.await;
-                Err::<u64, _>(WorkerExecutorError::runtime("body was cancelled"))
+                Ok::<_, WorkerExecutorError>(EntityBodyOutcome::<u64>::Cancelled)
             },
             async {
                 Err::<EntityReconstructionResolution<u64, ()>, _>(WorkerExecutorError::runtime(
@@ -2448,7 +2183,7 @@ mod tests {
                 InvocationExecutionMode::ReplayingIncomplete,
                 async move {
                     let _ = wait_for_fence.await;
-                    Ok::<_, WorkerExecutorError>(9)
+                    Ok::<_, WorkerExecutorError>(EntityBodyOutcome::Completed(9))
                 },
                 async move {
                     let _ = fence_released.send(());
@@ -2485,7 +2220,7 @@ mod tests {
             InvocationExecutionMode::ReplayingIncomplete,
             async move {
                 let _ = wait_for_cancellation.await;
-                Err::<u64, _>(WorkerExecutorError::runtime("body was cancelled"))
+                Ok::<_, WorkerExecutorError>(EntityBodyOutcome::<u64>::Cancelled)
             },
             async { Ok(EntityReconstructionResolution::<u64, ()>::LiveAdmissionCancelled(())) },
             no_structural_stall(),
@@ -2512,7 +2247,7 @@ mod tests {
         let error = coordinate_entity_reconstruction(
             &invocation(),
             InvocationExecutionMode::ReplayingCompleted,
-            async { Ok::<_, WorkerExecutorError>(7) },
+            async { Ok::<_, WorkerExecutorError>(EntityBodyOutcome::Completed(7)) },
             async { Ok(EntityReconstructionResolution::<u64, ()>::Replayed(8)) },
             no_structural_stall(),
             || {},
@@ -2537,7 +2272,7 @@ mod tests {
             InvocationExecutionMode::ReplayingCompleted,
             async move {
                 let _ = body_completed.send(());
-                Ok::<_, WorkerExecutorError>(7)
+                Ok::<_, WorkerExecutorError>(EntityBodyOutcome::Completed(7))
             },
             async move {
                 let _ = wait_for_body.await;
@@ -2556,29 +2291,42 @@ mod tests {
 
     #[test]
     async fn body_failure_before_replayed_terminal_is_not_hidden() {
-        let (body_completed, wait_for_body) = oneshot::channel();
-        let fence_dropped = Arc::new(AtomicBool::new(false));
-        let error = coordinate_entity_reconstruction(
-            &invocation(),
-            InvocationExecutionMode::ReplayingCompleted,
-            async move {
-                let _ = body_completed.send(());
-                Err::<u64, _>(WorkerExecutorError::runtime("body replay failed"))
+        for failure in [
+            WorkerExecutorError::runtime("body replay failed"),
+            WorkerExecutorError::recovery_required_from(
+                "storage unavailable",
+                OplogIndex::from_u64(5),
+            ),
+            WorkerExecutorError::InvocationFailed {
+                error: golem_common::model::oplog::AgentError::OutOfMemory,
+                stderr: String::new(),
             },
-            async move {
-                let _ = wait_for_body.await;
-                Ok(EntityReconstructionResolution::<u64, ()>::Replayed(7))
-            },
-            no_structural_stall(),
-            || {},
-            Some(DropProbe(fence_dropped.clone())),
-            None,
-        )
-        .await
-        .expect_err("a replayed terminal must not hide body failure");
+        ] {
+            let expected = failure.clone();
+            let (body_completed, wait_for_body) = oneshot::channel();
+            let fence_dropped = Arc::new(AtomicBool::new(false));
+            let error = coordinate_entity_reconstruction(
+                &invocation(),
+                InvocationExecutionMode::ReplayingCompleted,
+                async move {
+                    let _ = body_completed.send(());
+                    Err::<EntityBodyOutcome<u64>, _>(failure)
+                },
+                async move {
+                    let _ = wait_for_body.await;
+                    Ok(EntityReconstructionResolution::<u64, ()>::Replayed(7))
+                },
+                no_structural_stall(),
+                || {},
+                Some(DropProbe(fence_dropped.clone())),
+                None,
+            )
+            .await
+            .expect_err("a replayed terminal must not hide or reclassify body failure");
 
-        assert!(error.to_string().contains("body replay failed"));
-        assert!(fence_dropped.load(Ordering::Acquire));
+            assert_eq!(error, expected);
+            assert!(fence_dropped.load(Ordering::Acquire));
+        }
     }
 
     #[test]
@@ -2588,7 +2336,11 @@ mod tests {
             coordinate_entity_reconstruction(
                 &invocation(),
                 InvocationExecutionMode::ReplayingCompleted,
-                async { Err::<u64, _>(WorkerExecutorError::runtime("body replay failed")) },
+                async {
+                    Err::<EntityBodyOutcome<u64>, _>(WorkerExecutorError::runtime(
+                        "body replay failed",
+                    ))
+                },
                 std::future::pending::<
                     Result<EntityReconstructionResolution<u64, ()>, WorkerExecutorError>,
                 >(),
@@ -2600,7 +2352,7 @@ mod tests {
         )
         .await
         .expect("body failure must not wait for an outer terminal blocked by that body")
-        .expect_err("completed reconstruction body failure is permanent");
+        .expect_err("completed reconstruction must propagate body failure");
 
         assert!(error.to_string().contains("body replay failed"));
     }
@@ -2612,7 +2364,7 @@ mod tests {
             coordinate_entity_reconstruction(
                 &invocation(),
                 InvocationExecutionMode::ReplayingCompleted,
-                async { Ok::<_, WorkerExecutorError>(7) },
+                async { Ok::<_, WorkerExecutorError>(EntityBodyOutcome::Completed(7)) },
                 std::future::pending::<
                     Result<EntityReconstructionResolution<u64, ()>, WorkerExecutorError>,
                 >(),
@@ -2634,7 +2386,11 @@ mod tests {
         let error = coordinate_entity_reconstruction(
             &invocation(),
             InvocationExecutionMode::ReplayingIncomplete,
-            async { Err::<u64, _>(WorkerExecutorError::runtime("live continuation failed")) },
+            async {
+                Err::<EntityBodyOutcome<u64>, _>(WorkerExecutorError::runtime(
+                    "live continuation failed",
+                ))
+            },
             async { Ok(EntityReconstructionResolution::<u64, ()>::Incomplete(())) },
             no_structural_stall(),
             || {},
@@ -2659,7 +2415,7 @@ mod tests {
             InvocationExecutionMode::ReplayingIncomplete,
             async move {
                 let _ = body_failed.send(());
-                Err::<u64, _>(WorkerExecutorError::runtime("cancellation interruption"))
+                Ok::<_, WorkerExecutorError>(EntityBodyOutcome::<u64>::Cancelled)
             },
             async move {
                 let _ = wait_for_body_failure.await;
@@ -2678,5 +2434,112 @@ mod tests {
             result,
             EntityReconstructionOutcome::IncompleteCancelled { handle: () }
         ));
+    }
+
+    #[test]
+    async fn cancelled_incomplete_replay_preserves_typed_owner_oom() {
+        let expected = WorkerExecutorError::InvocationFailed {
+            error: golem_common::model::oplog::AgentError::OutOfMemory,
+            stderr: String::new(),
+        };
+        for cancelled in [false, true] {
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            if cancelled {
+                cancellation.cancel();
+            }
+            let failure = expected.clone();
+            let result = coordinate_entity_reconstruction(
+                &invocation(),
+                InvocationExecutionMode::ReplayingIncomplete,
+                async move { Err::<EntityBodyOutcome<u64>, _>(failure) },
+                async { Ok(EntityReconstructionResolution::<u64, ()>::Incomplete(())) },
+                no_structural_stall(),
+                || {},
+                None::<()>,
+                Some(&cancellation),
+            )
+            .await;
+
+            assert_eq!(
+                result.expect_err("typed owner OOM must not become a tool-local cancellation"),
+                expected,
+                "cancelled={cancelled}"
+            );
+        }
+    }
+
+    #[test]
+    async fn abort_join_preserves_late_owner_oom() {
+        let expected = WorkerExecutorError::InvocationFailed {
+            error: golem_common::model::oplog::AgentError::OutOfMemory,
+            stderr: String::new(),
+        };
+        let failure = expected.clone();
+        let (aborted, wait_for_abort) = oneshot::channel();
+        let result = coordinate_entity_reconstruction(
+            &invocation(),
+            InvocationExecutionMode::ReplayingIncomplete,
+            async move {
+                wait_for_abort.await.unwrap();
+                Err::<EntityBodyOutcome<u64>, _>(failure)
+            },
+            async { Ok(EntityReconstructionResolution::<u64, ()>::LiveAdmissionCancelled(())) },
+            no_structural_stall(),
+            move || {
+                let _ = aborted.send(());
+            },
+            None::<()>,
+            None,
+        )
+        .await;
+        assert_eq!(
+            result.expect_err("joined owner OOM must survive cancellation"),
+            expected
+        );
+    }
+
+    #[test]
+    async fn cancellation_resolution_preserves_a_joined_body_failure() {
+        for expected in [
+            WorkerExecutorError::InvocationFailed {
+                error: golem_common::model::oplog::AgentError::OutOfMemory,
+                stderr: String::new(),
+            },
+            WorkerExecutorError::recovery_required_from(
+                "storage unavailable",
+                OplogIndex::from_u64(13),
+            ),
+            WorkerExecutorError::runtime("storage failed"),
+        ] {
+            for resolution in [
+                EntityReconstructionResolution::Cancelled(7_u64),
+                EntityReconstructionResolution::Incomplete(()),
+                EntityReconstructionResolution::LiveAdmissionCancelled(()),
+            ] {
+                let cancellation = tokio_util::sync::CancellationToken::new();
+                cancellation.cancel();
+                let failure = expected.clone();
+                let result = coordinate_entity_reconstruction(
+                    &invocation(),
+                    InvocationExecutionMode::ReplayingIncomplete,
+                    async move {
+                        // The resolver wins the first poll; joining the body must still retain
+                        // its failure rather than publish the selected cancellation.
+                        tokio::task::yield_now().await;
+                        Err::<EntityBodyOutcome<u64>, _>(failure)
+                    },
+                    async move { Ok(resolution) },
+                    no_structural_stall(),
+                    || {},
+                    None::<()>,
+                    Some(&cancellation),
+                )
+                .await;
+                assert_eq!(
+                    result.expect_err("cancellation cannot hide a joined owner failure"),
+                    expected
+                );
+            }
+        }
     }
 }

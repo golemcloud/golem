@@ -161,7 +161,7 @@ fn resolver_duplicate_resolution_is_ignored() {
 
 // ---- DurableCallSession drop policy ----
 
-fn live_unfinished_handle<P: DropPolicy>(
+pub(super) fn live_unfinished_handle<P: DropPolicy>(
     start_idx: OplogIndex,
     sink: mpsc::UnboundedSender<DropEvent>,
 ) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
@@ -199,6 +199,8 @@ fn live_unfinished_handle<P: DropPolicy>(
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
         runtime_teardown: Arc::new(|| false),
+        tool_trap_disposal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        entity_admission: false,
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -246,6 +248,8 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
         runtime_teardown: Arc::new(|| false),
+        tool_trap_disposal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        entity_admission: false,
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -297,6 +301,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
             DroppedCall {
                 start_idx: idx(5),
                 begin_index: idx(4),
+                entity_admission: false,
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
@@ -830,6 +835,7 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
             DroppedCall {
                 start_idx: idx(1),
                 begin_index: idx(1),
+                entity_admission: false,
                 function_type: DurableFunctionType::ReadLocal,
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
@@ -1657,6 +1663,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         DroppedCall {
             start_idx,
             begin_index: start_idx,
+            entity_admission: false,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
             span_finished: None,
@@ -2252,6 +2259,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     let dropped_a = DroppedCall {
         start_idx: idx(5),
         begin_index: idx(4),
+        entity_admission: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
@@ -2262,6 +2270,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     let dropped_b = DroppedCall {
         start_idx: idx(8),
         begin_index: idx(8),
+        entity_admission: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,

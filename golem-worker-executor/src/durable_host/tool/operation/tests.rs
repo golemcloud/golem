@@ -201,11 +201,11 @@ fn tool_execution(
         state: Mutex::new(ToolExecutionState {
             result: None,
             failure: None,
-            producer: None,
         }),
         changed: Notify::new(),
         get_active: AtomicBool::new(false),
         cancel: tokio_util::sync::CancellationToken::new(),
+        producer: None,
     })
 }
 
@@ -1441,13 +1441,8 @@ async fn host_interruption_preserves_exact_owner_trap() {
     ] {
         let owner = OwnerToolOperations::new();
         let operation = accept_provisional(owner.create(context()), 2);
-        let failure = super::super::guest_trap_output_failure(
-            &operation,
-            TrapType::Interrupt(kind),
-            false,
-            false,
-        )
-        .await;
+        let failure =
+            super::super::guest_trap_output_failure(&operation, TrapType::Interrupt(kind)).await;
         assert!(matches!(
             failure,
             ByteStreamFailure::Failed(details) if details == "tool sidecar trapped"
@@ -1486,8 +1481,7 @@ async fn lifecycle_winner_forces_a_losing_guest_trap_output_to_cancelled() {
             .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
             .await
     );
-    let failure =
-        super::super::guest_trap_output_failure(&operation, TrapType::Exit, false, false).await;
+    let failure = super::super::guest_trap_output_failure(&operation, TrapType::Exit).await;
     assert!(matches!(failure, ByteStreamFailure::Cancelled));
     let _ = stdout.host_fail(failure);
     assert!(matches!(
@@ -2039,6 +2033,46 @@ async fn cancellation_selection_is_idempotent_until_its_terminal_commits() {
 }
 
 #[test]
+async fn ancestor_cancellation_preserves_selected_descendants_but_cancels_their_children() {
+    let owner = OwnerToolOperations::new();
+    let root = accept_provisional(owner.create(context()), 2);
+    let mut child_context = context();
+    child_context.parent = OwnerInvocationId::Entity(root.invocation_id().unwrap());
+    let child = accept_provisional(owner.create(child_context), 3);
+    let mut selected_context = context();
+    selected_context.parent = OwnerInvocationId::Entity(child.invocation_id().unwrap());
+    let selected = accept_provisional(owner.create(selected_context), 4);
+    let mut pending_context = context();
+    pending_context.parent = OwnerInvocationId::Entity(selected.invocation_id().unwrap());
+    let pending = accept_provisional(owner.create(pending_context), 5);
+    let sibling = accept_provisional(owner.create(context()), 6);
+    let executions = [&child, &selected, &pending, &sibling]
+        .map(|operation| ToolExecution::new(operation.clone(), true, None));
+    for execution in &executions {
+        execution
+            .operation
+            .register_execution(Arc::downgrade(execution));
+    }
+    assert!(selected.begin_ordinary());
+    owner.cancel_children(&OwnerInvocationId::Entity(root.invocation_id().unwrap()));
+    assert!(executions[0].is_cancelled());
+    assert!(!executions[1].is_cancelled());
+    assert!(executions[2].is_cancelled());
+    assert!(!executions[3].is_cancelled());
+    assert!(matches!(
+        selected.winner_if_active(),
+        Some(ToolOperationWinner::SelectingOrdinary)
+    ));
+    // An explicit cancellation must use the same arbitration, not token inheritance.
+    executions[1].cancel();
+    assert!(!executions[1].is_cancelled());
+    assert!(matches!(
+        sibling.winner_if_active(),
+        Some(ToolOperationWinner::Open)
+    ));
+}
+
+#[test]
 async fn cancellation_selection_closes_attached_streams() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
@@ -2067,7 +2101,7 @@ async fn cancellation_selection_closes_attached_streams() {
 
 #[test]
 #[timeout("30s")]
-async fn cancellation_wakes_trap_election_waiting_on_a_sibling() {
+async fn cancellation_does_not_mask_trap_election_waiting_on_a_sibling() {
     let owner = OwnerToolOperations::new();
     let sibling = accept_provisional(owner.create(context()), 2);
     let operation = accept_provisional(owner.create(context()), 3);
@@ -2093,13 +2127,145 @@ async fn cancellation_wakes_trap_election_waiting_on_a_sibling() {
     });
     ready.await.unwrap();
     assert!(operation.begin_cancel());
-    assert!(!election.await.unwrap());
-    assert!(owner.owner_winner().is_none());
+    assert!(!election.is_finished());
     assert!(matches!(
         sibling.winner_if_active(),
         Some(ToolOperationWinner::SelectingOrdinary)
     ));
-    operation.resolve_cancel(true).await;
+    sibling.resolve_ordinary(Arc::new(SerializableToolOperationTerminal {
+        admission_refusal: None,
+        body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
+        result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+    }), true).await;
+    assert!(election.await.unwrap());
+    assert!(matches!(
+        operation.winner_if_active(),
+        Some(ToolOperationWinner::Trap)
+    ));
+    assert!(matches!(
+        sibling.winner_if_active(),
+        Some(ToolOperationWinner::Ordinary { .. })
+    ));
+}
+
+#[test]
+#[timeout("5s")]
+async fn concurrent_cancelled_traps_elect_one_owner_failure() {
+    let owner = OwnerToolOperations::new();
+    let first = accept_provisional(owner.create(context()), 2);
+    let second = accept_provisional(owner.create(context()), 3);
+    assert!(first.begin_cancel());
+    assert!(second.begin_cancel());
+
+    let (first_won, second_won) = tokio::join!(
+        first.select_trap(TrapType::Exit),
+        second.select_trap(TrapType::Exit),
+    );
+
+    assert_ne!(first_won, second_won);
+    assert!(matches!(
+        owner.selected_owner_failure(),
+        Some(OwnerFailureWinner::Trap(TrapType::Exit))
+    ));
+    for (operation, won) in [(&first, first_won), (&second, second_won)] {
+        assert!(
+            matches!(
+                operation.winner_if_active(),
+                Some(ToolOperationWinner::Trap)
+            ) == won
+        );
+        assert!(
+            matches!(
+                operation.winner_if_active(),
+                Some(ToolOperationWinner::FencedByOwner)
+            ) != won
+        );
+        assert_eq!(operation.claim_owner_failure_cleanup().is_some(), won);
+    }
+}
+
+#[test]
+#[timeout("5s")]
+async fn concurrent_cancelled_infrastructure_failures_elect_one_owner_failure() {
+    let owner = OwnerToolOperations::new();
+    let first = accept_provisional(owner.create(context()), 2);
+    let second = accept_provisional(owner.create(context()), 3);
+    assert!(first.begin_cancel());
+    assert!(second.begin_cancel());
+    let first_error =
+        WorkerExecutorError::recovery_required_from("first failure", OplogIndex::from_u64(19));
+    let second_error =
+        WorkerExecutorError::recovery_required_from("second failure", OplogIndex::from_u64(23));
+
+    let (first_won, second_won) = tokio::join!(
+        first.select_infrastructure(first_error.clone()),
+        second.select_infrastructure(second_error.clone()),
+    );
+
+    assert_ne!(first_won, second_won);
+    assert!(
+        matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Infrastructure(error)) if error == if first_won { first_error } else { second_error })
+    );
+    for (operation, won) in [(&first, first_won), (&second, second_won)] {
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::FencedByOwner)
+        ));
+        assert_eq!(operation.claim_owner_failure_cleanup().is_some(), won);
+    }
+}
+
+#[test]
+#[timeout("5s")]
+async fn owner_failure_supersedes_its_own_uncommitted_cancellation() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    let cancelled = accept_provisional(owner.create(context()), 3);
+    assert!(cancelled.begin_cancel());
+    cancelled.resolve_cancel(true).await;
+    assert!(operation.begin_cancel());
+    let trap = TrapType::Error {
+        error: golem_common::model::oplog::AgentError::OutOfMemory,
+        retry_from: OplogIndex::from_u64(19),
+        semantic_trap_retry_override: Some(
+            crate::durable_host::durability::SemanticTrapRetryOverride {
+                retry_from: OplogIndex::from_u64(17),
+                policy_name: "selected-host-policy".into(),
+                verdict: crate::durable_host::durability::SemanticTrapRetryVerdict::GiveUp,
+                retry_policy_state: golem_common::model::RetryPolicyState::Counter(3),
+            },
+        ),
+    };
+    assert!(operation.select_trap(trap).await);
+    assert!(
+        matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Trap(
+        TrapType::Error { error: golem_common::model::oplog::AgentError::OutOfMemory, retry_from, semantic_trap_retry_override: Some(semantic) }
+    )) if retry_from == OplogIndex::from_u64(19)
+        && semantic.retry_from == OplogIndex::from_u64(17)
+        && semantic.policy_name == "selected-host-policy"
+        && semantic.verdict == crate::durable_host::durability::SemanticTrapRetryVerdict::GiveUp
+        && semantic.retry_policy_state == golem_common::model::RetryPolicyState::Counter(3))
+    );
+    assert!(matches!(
+        operation.winner_if_active(),
+        Some(ToolOperationWinner::Trap)
+    ));
+    assert!(matches!(
+        cancelled.winner_if_active(),
+        Some(ToolOperationWinner::Cancelled)
+    ));
+
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    assert!(operation.begin_cancel());
+    let error = WorkerExecutorError::recovery_required_from(
+        "storage unavailable",
+        OplogIndex::from_u64(23),
+    );
+    assert!(operation.select_infrastructure(error.clone()).await);
+    assert!(
+        matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Infrastructure(selected)) if selected == error)
+    );
 }
 
 #[test]
@@ -2743,7 +2909,7 @@ fn probed_entity_invocation(
         move |_, _, _| {
             Box::pin(async move {
                 (
-                    Ok(()),
+                    Ok(crate::worker::entity_invocation::EntityBodyOutcome::Completed(())),
                     Some(Box::new(store) as Box<dyn RetainedEntityStore>),
                 )
             })

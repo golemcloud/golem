@@ -487,6 +487,49 @@ pub(crate) enum GuestCallSettlementError {
     Infrastructure(WorkerExecutorError),
 }
 
+/// Permanent guest instruction failures that a tool boundary can record as its own terminal.
+/// Host-call markers take precedence over an underlying Wasmtime trap. A Wasm backtrace alone
+/// does not establish guest origin. Keep the allowlist aligned with `TrapType::from_error`.
+pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<String> {
+    if error.chain().any(|cause| {
+        cause.is::<GolemSpecificWasmTrap>()
+            || cause.is::<ClassifiedHostError>()
+            || cause.is::<SemanticTrapRetryOverrideMarker>()
+            || cause.is::<DurableCallTrapContextMarker>()
+            || cause.is::<DurableRecoveryFailure>()
+            || cause.is::<UnreadableOplog>()
+            || cause.is::<WorkerExecutorError>()
+            || cause.is::<InterruptKind>()
+            || cause.is::<wasmtime_wasi::I32Exit>()
+    }) {
+        return None;
+    }
+
+    match error.root_cause().downcast_ref::<wasmtime::Trap>() {
+        Some(
+            wasmtime::Trap::StackOverflow
+            | wasmtime::Trap::UnreachableCodeReached
+            | wasmtime::Trap::MemoryOutOfBounds
+            | wasmtime::Trap::TableOutOfBounds
+            | wasmtime::Trap::IndirectCallToNull
+            | wasmtime::Trap::BadSignature
+            | wasmtime::Trap::IntegerOverflow
+            | wasmtime::Trap::IntegerDivisionByZero
+            | wasmtime::Trap::BadConversionToInteger
+            | wasmtime::Trap::HeapMisaligned
+            | wasmtime::Trap::NullReference
+            | wasmtime::Trap::AtomicWaitNonSharedMemory,
+        ) => Some(
+            error
+                .chain()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(": "),
+        ),
+        _ => None,
+    }
+}
+
 fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
     let chain_contains = |predicate: &dyn Fn(&(dyn std::error::Error + 'static)) -> bool| {
         error.chain().any(predicate)
@@ -673,11 +716,13 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     let fun = {
         let drain_started = drain_started.clone();
         let runtime = runtime.clone();
+        let finalization = store.data().durable_ctx().entity_body_finalization.clone();
         async move |accessor: &Accessor<Ctx>| {
             if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
                 runtime.certify_root(activity);
             }
             let result = fun(accessor).await;
+            finalization.begin();
             // The root future has completed: everything from here on is the (bounded) drain
             // phase. Arm the timeout here rather than in the settlement predicate — the
             // predicate is only consulted at idle observation points, which are never reached
@@ -2744,6 +2789,145 @@ mod tests {
             ),
             Err(GuestCallSettlementError::Interrupted(_))
         ));
+    }
+
+    #[test]
+    fn permanent_tool_guest_trap_accepts_only_fixed_instruction_traps() {
+        use wasmtime::Trap;
+
+        for trap in [
+            Trap::StackOverflow,
+            Trap::UnreachableCodeReached,
+            Trap::MemoryOutOfBounds,
+            Trap::TableOutOfBounds,
+            Trap::IndirectCallToNull,
+            Trap::BadSignature,
+            Trap::IntegerOverflow,
+            Trap::IntegerDivisionByZero,
+            Trap::BadConversionToInteger,
+            Trap::HeapMisaligned,
+            Trap::NullReference,
+            Trap::AtomicWaitNonSharedMemory,
+        ] {
+            let error = wasmtime::Error::from_anyhow(trap.into());
+            assert_eq!(
+                permanent_tool_guest_trap(&error),
+                Some(format!("{error:#}"))
+            );
+        }
+        for trap in [Trap::AsyncDeadlock, Trap::Interrupt, Trap::OutOfFuel] {
+            assert_eq!(permanent_tool_guest_trap(&trap.into()), None);
+        }
+
+        let error = wasmtime::Error::from_anyhow(
+            anyhow::Error::new(Trap::UnreachableCodeReached)
+                .context("guest-requested trap: invalid tool input"),
+        );
+        assert_eq!(
+            permanent_tool_guest_trap(&error),
+            Some(format!(
+                "guest-requested trap: invalid tool input: {}",
+                Trap::UnreachableCodeReached
+            ))
+        );
+    }
+
+    #[test]
+    fn permanent_tool_guest_trap_details_repeat_across_stores() {
+        let engine = wasmtime::Engine::default();
+        for instruction in ["unreachable", "i32.const 1 i32.const 0 i32.div_s drop"] {
+            let module = wasmtime::Module::new(
+                &engine,
+                format!("(module (func (export \"run\") {instruction}))"),
+            )
+            .unwrap();
+            let run = || {
+                let mut store = wasmtime::Store::new(&engine, ());
+                let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+                let error = instance
+                    .get_typed_func::<(), ()>(&mut store, "run")
+                    .unwrap()
+                    .call(&mut store, ())
+                    .unwrap_err();
+                assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
+                permanent_tool_guest_trap(&error).expect("guest instruction trap")
+            };
+            assert_eq!(run(), run());
+        }
+    }
+
+    #[test]
+    fn permanent_tool_guest_trap_rejects_host_failures_with_backtraces() {
+        use crate::durable_host::durability::{
+            DurableCallTrapContext, HostFailureKind, SemanticTrapRetryOverride,
+            SemanticTrapRetryVerdict, mark_durable_call_trap_context,
+        };
+        use golem_common::model::RetryPolicyState;
+
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"(module
+                (import "host" "fail" (func $fail))
+                (func (export "run") call $fail))"#,
+        )
+        .unwrap();
+        let instruction_trap = || anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached);
+        for failure in [
+            anyhow::anyhow!("unclassified host failure"),
+            anyhow::Error::new(ClassifiedHostError {
+                kind: HostFailureKind::Permanent,
+                message: "permanent host failure".into(),
+            }),
+            mark_durable_call_trap_context(
+                instruction_trap(),
+                DurableCallTrapContext {
+                    retry_from: OplogIndex::from_u64(17),
+                },
+            ),
+            anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+                payload: SemanticTrapRetryOverride {
+                    retry_from: OplogIndex::from_u64(17),
+                    policy_name: "never".into(),
+                    verdict: SemanticTrapRetryVerdict::GiveUp,
+                    retry_policy_state: RetryPolicyState::Counter(1),
+                },
+                inner: instruction_trap(),
+            }),
+            anyhow::Error::new(DurableRecoveryFailure::new(
+                DurableRecoveryFailureKind::Permanent,
+                instruction_trap(),
+            )),
+            WorkerExecutorError::recovery_required("payload unavailable").into(),
+            WorkerExecutorError::unexpected_oplog_entry("expected", "actual").into(),
+            WorkerExecutorError::runtime("persistence failed").into(),
+            GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
+            GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into(),
+            GolemSpecificWasmTrap::WorkerExceededTableLimit.into(),
+            GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted.into(),
+            GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted.into(),
+            InterruptKind::Restart.into(),
+            wasmtime_wasi::I32Exit(0).into(),
+        ] {
+            let failure = std::sync::Mutex::new(Some(failure.context("host call context")));
+            let mut linker = wasmtime::Linker::new(&engine);
+            linker
+                .func_wrap("host", "fail", move || -> wasmtime::Result<()> {
+                    Err(wasmtime::Error::from_anyhow(
+                        failure.lock().unwrap().take().unwrap(),
+                    ))
+                })
+                .unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            let instance = linker.instantiate(&mut store, &module).unwrap();
+            let error = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap()
+                .call(&mut store, ())
+                .unwrap_err();
+            assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
+            assert_eq!(permanent_tool_guest_trap(&error), None, "{error:#}");
+        }
     }
 
     #[test]

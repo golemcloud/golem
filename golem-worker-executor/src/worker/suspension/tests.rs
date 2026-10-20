@@ -443,6 +443,53 @@ fn entity_admission_is_unknown_before_first_task_poll() {
 }
 
 #[test]
+fn owned_entity_coordinate_requires_body_and_invalidates_on_wake_ready_and_drop() {
+    let owner = OwnerSuspension::new();
+    let now = Instant::now();
+    let (_parent, _, _timer) = blocked_timer(&owner, now + Duration::from_secs(30));
+    let invocation = entity(1);
+    let activity = owner.register_external();
+    let saved = Arc::new(Mutex::new(None));
+    let captured = saved.clone();
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = ready.clone();
+    let mut wait = Box::pin(activity.coordinate_entity(
+        &invocation,
+        std::future::poll_fn(move |cx| {
+            *captured.lock().unwrap() = Some(cx.waker().clone());
+            if observed.load(std::sync::atomic::Ordering::Relaxed) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }),
+    ));
+    assert!(poll_once(wait.as_mut()).is_pending());
+    assert!(owner.prepare(now, Duration::ZERO).is_none());
+    let _participant = owner.register_entity(invocation.clone());
+    assert!(poll_once(wait.as_mut()).is_pending());
+    assert!(owner.prepare(now, Duration::ZERO).is_none());
+    let (child, _, _child_timer) = blocked_timer(&owner, now + Duration::from_secs(60));
+    let _delegated = child.delegate(&invocation).unwrap();
+    let attempt = owner.prepare(now, Duration::ZERO).unwrap();
+    saved.lock().unwrap().take().unwrap().wake();
+    assert!(!owner.commit(&attempt, now, Duration::ZERO));
+    assert!(owner.prepare(now, Duration::ZERO).is_none());
+    assert!(poll_once(wait.as_mut()).is_pending());
+    assert!(owner.prepare(now, Duration::ZERO).is_some());
+    ready.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(poll_once(wait.as_mut()).is_ready());
+    assert!(owner.prepare(now, Duration::ZERO).is_none());
+    drop(wait);
+    let mut wait = Box::pin(activity.coordinate_entity(&invocation, pending::<()>()));
+    assert!(poll_once(wait.as_mut()).is_pending());
+    let attempt = owner.prepare(now, Duration::ZERO).unwrap();
+    drop(wait);
+    assert!(!owner.commit(&attempt, now, Duration::ZERO));
+    assert!(owner.prepare(now, Duration::ZERO).is_none());
+}
+
+#[test]
 fn neutral_waiter_requires_blocked_entity_and_reverts_on_drop() {
     let owner = OwnerSuspension::new();
     let now = Instant::now();
