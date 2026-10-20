@@ -18,7 +18,7 @@ use crate::custom_api::api_definition_lookup::{
     ApiDefinitionLookupError, HttpApiDefinitionsLookup,
 };
 use crate::ingress::tests::request_from_peer;
-use crate::mcp::{McpCapabilitiesLookupError, McpRequest, mcp_endpoint};
+use crate::mcp::{McpCapabilitiesLookupError, McpDeployment, McpRequest, mcp_endpoint};
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationName;
@@ -33,7 +33,7 @@ use poem::{Body, EndpointExt};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use test_r::test;
 
 const SHOP: &str = "shop.example.com";
@@ -81,10 +81,12 @@ struct McpDomains {
 
 #[async_trait::async_trait]
 impl McpCapabilityLookup for McpDomains {
-    async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError> {
+    async fn get(&self, domain: &Domain) -> Result<Arc<McpDeployment>, McpCapabilitiesLookupError> {
         self.lookups.lock().unwrap().push(domain.clone());
         match domain.0.as_str() {
-            TOOLS | FLAKY_TOOLS | IPV6_ALIAS => Ok(compiled_mcp(domain)),
+            TOOLS | FLAKY_TOOLS | IPV6_ALIAS => {
+                Ok(Arc::new(McpDeployment::new(compiled_mcp(domain))))
+            }
             BROKEN => Err(McpCapabilitiesLookupError::InternalError(anyhow::anyhow!(
                 "registry unavailable"
             ))),
@@ -120,7 +122,7 @@ fn recording_endpoint(name: &'static str) -> BoxEndpoint<'static> {
                 "scheme": mcp.origin.scheme,
                 "authority": mcp.origin.authority,
                 "forwarded": mcp.origin.forwarded,
-                "deployment": mcp.deployment.domain.0,
+                "deployment": mcp.deployment.compiled.domain.0,
             })
         });
         poem::web::Json(json!({ "endpoint": name, "path": req.uri().path(), "mcp": mcp }))

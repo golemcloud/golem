@@ -17,7 +17,7 @@ use super::session::store::McpSessionStore;
 use super::session::{McpReplica, McpSessionLayer, SSE_RETRY_MILLIS};
 use super::{
     GolemAgentMcpServer, McpBearerAuth, McpCapabilitiesLookupError, McpCapabilityLookup,
-    oauth_proxy_routes,
+    McpDeployment, oauth_proxy_routes,
 };
 use crate::bootstrap::Services;
 use crate::custom_api::oidc::IdentityProvider;
@@ -26,12 +26,12 @@ use crate::ingress::{PublicOrigin, TrustedIngress};
 use crate::service::worker::WorkerService;
 use golem_common::model::domain_registration::Domain;
 use golem_service_base::body_limit::RequestBodyLimit;
-use golem_service_base::mcp::CompiledMcp;
 use poem::endpoint::{BoxEndpoint, TowerCompatExt};
 use poem::middleware::Cors;
 use poem::{Endpoint, EndpointExt, IntoResponse, Request, Response, Result, http};
 use rmcp::ServerHandler;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+use rmcp::transport::streamable_http_server::session::store::EventStore;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,7 +43,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct McpRequest {
     pub origin: PublicOrigin,
-    pub deployment: Arc<CompiledMcp>,
+    pub deployment: Arc<McpDeployment>,
 }
 
 /// The outcome of looking up the MCP deployment for a request's public origin.
@@ -61,10 +61,7 @@ pub async fn lookup_mcp_domain(
         .get(&Domain(origin.authority.clone()))
         .await
     {
-        Ok(deployment) => McpDomainLookup::Found(McpRequest {
-            origin,
-            deployment: Arc::new(deployment),
-        }),
+        Ok(deployment) => McpDomainLookup::Found(McpRequest { origin, deployment }),
         Err(McpCapabilitiesLookupError::UnknownSite(_)) => McpDomainLookup::NotFound,
         Err(McpCapabilitiesLookupError::InternalError(error)) => {
             tracing::warn!(error = %error, "Failed to look up the MCP deployment of a domain");
@@ -97,9 +94,11 @@ pub(crate) fn mcp_endpoint(
     max_body_size: usize,
 ) -> BoxEndpoint<'static> {
     let replica = McpReplica::new(mcp_session_store, config);
+    let events = replica.event_store();
     let service = mcp_transport(
         move || GolemAgentMcpServer::new(mcp_capability_lookup.clone(), worker_service.clone()),
         replica,
+        events,
         config,
     );
 
@@ -129,18 +128,20 @@ pub(crate) fn mcp_endpoint(
         .boxed()
 }
 
-/// The stateless rmcp service for `handler`s behind the session layer of `replica`. Requests
-/// must carry the request's `Arc<CompiledMcp>` and an `McpServing` extension.
+/// The stateless rmcp service for `handler`s behind the session layer of `replica`. rmcp keeps
+/// the response events in `events`, which is the replica's event store or a view of it.
+/// Requests must carry the request's `Arc<McpDeployment>` and an `McpServing` extension.
 pub(crate) fn mcp_transport<S, H>(
     handler: H,
     replica: Arc<McpReplica>,
+    events: Arc<dyn EventStore>,
     config: &crate::config::McpConfig,
 ) -> impl Endpoint<Output = Response> + use<S, H>
 where
     S: ServerHandler + Send + 'static,
     H: Fn() -> S + Send + Sync + 'static,
 {
-    let sessions = NeverSessionManager::default().with_event_store(replica.event_store());
+    let sessions = NeverSessionManager::default().with_event_store(events);
     StreamableHttpService::new(
         move || Ok(handler()),
         Arc::new(sessions),
@@ -220,6 +221,7 @@ mod tests {
     use golem_common::model::application::ApplicationName;
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_service_base::mcp::CompiledMcp;
     use poem::Body;
     use poem::endpoint::make_sync;
     use test_r::test;
@@ -228,9 +230,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl McpCapabilityLookup for Lookup {
-        async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError> {
+        async fn get(
+            &self,
+            domain: &Domain,
+        ) -> Result<Arc<McpDeployment>, McpCapabilitiesLookupError> {
             match domain.0.as_str() {
-                "tools.example.com" => Ok(CompiledMcp {
+                "tools.example.com" => Ok(Arc::new(McpDeployment::new(CompiledMcp {
                     account_id: AccountId::new(),
                     account_email: AccountEmail::new("owner@example.com"),
                     application_name: ApplicationName("app".into()),
@@ -242,7 +247,7 @@ mod tests {
                     security_scheme: None,
                     registered_agent_types: vec![],
                     tools: vec![],
-                }),
+                }))),
                 "broken.example.com" => Err(McpCapabilitiesLookupError::InternalError(
                     anyhow::anyhow!("registry unavailable"),
                 )),
@@ -261,7 +266,7 @@ mod tests {
                 let mcp_request = req.extensions().get::<McpRequest>().unwrap();
                 format!(
                     "{} {}",
-                    mcp_request.origin.authority, mcp_request.deployment.domain.0
+                    mcp_request.origin.authority, mcp_request.deployment.compiled.domain.0
                 )
             })
             .map_to_response()

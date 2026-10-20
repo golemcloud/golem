@@ -15,8 +15,8 @@
 use super::replica::McpReplica;
 use super::rules::{Admission, Refusal, RequestClass, SessionRequest, classify, request_checks};
 use super::store::McpSessionId;
+use crate::mcp::McpDeployment;
 use crate::mcp::auth::no_mcp_deployment_response;
-use golem_service_base::mcp::CompiledMcp;
 use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result};
 use rmcp::model::ClientJsonRpcMessage;
@@ -88,7 +88,7 @@ impl<E: Endpoint> McpSessionEndpoint<E> {
     }
 
     async fn initialize(&self, request: Request) -> Result<Response> {
-        let Some(deployment) = request.extensions().get::<Arc<CompiledMcp>>().cloned() else {
+        let Some(deployment) = request.extensions().get::<Arc<McpDeployment>>().cloned() else {
             return Ok(no_mcp_deployment_response());
         };
         let response = self.forward(request).await?;
@@ -108,17 +108,19 @@ impl<E: Endpoint> McpSessionEndpoint<E> {
         session: McpSessionId,
         kind: SessionRequest,
     ) -> Result<Response> {
-        let Some(deployment) = request.extensions().get::<Arc<CompiledMcp>>().cloned() else {
+        let Some(deployment) = request.extensions().get::<Arc<McpDeployment>>().cloned() else {
             return Ok(no_mcp_deployment_response());
         };
-        match self.replica.admit(session, &deployment).await {
-            Admission::Admitted => {}
+        let pin = match self.replica.admit(session, &deployment.compiled).await {
+            Admission::Admitted(pin) => pin,
             Admission::Gone => return Ok(session_not_found()),
             Admission::Unavailable => return Ok(unavailable()),
-        }
+        };
         match kind {
             SessionRequest::Call(request_id) => {
-                let (serving, call) = self.replica.start_call(session, request_id, deployment);
+                let (serving, call) = self
+                    .replica
+                    .start_call(session, request_id, pin, deployment);
                 request.extensions_mut().insert(serving);
                 let response = self.forward(request).await?;
                 Ok(call.respond(response))

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::{mcp_http_transport_config, mcp_transport};
+use crate::mcp::McpDeployment;
 use crate::mcp::serving::{McpServing, StatelessServing};
 use crate::mcp::session::McpReplica;
 use crate::mcp::session::store::SqliteMcpSessionStore;
@@ -94,7 +95,7 @@ async fn idle_mcp_stream(keep_alive: bool) -> (bool, Vec<u8>) {
         std::time::Duration::from_secs(3600),
     ));
     let replica = McpReplica::new(store, &config);
-    let deployment = Arc::new(CompiledMcp {
+    let deployment = Arc::new(McpDeployment::new(CompiledMcp {
         account_id: golem_common::model::account::AccountId::new(),
         account_email: golem_common::model::account::AccountEmail::new("owner@example.com"),
         application_name: golem_common::model::application::ApplicationName("app".into()),
@@ -106,8 +107,9 @@ async fn idle_mcp_stream(keep_alive: bool) -> (bool, Vec<u8>) {
         security_scheme: None,
         registered_agent_types: vec![],
         tools: vec![],
-    });
-    let endpoint = mcp_transport(|| Server, replica, &config)
+    }));
+    let events = replica.event_store();
+    let endpoint = mcp_transport(|| Server, replica, events, &config)
         .before(move |mut request: Request| {
             let serving: Arc<dyn McpServing> = Arc::new(StatelessServing(deployment.clone()));
             request.extensions_mut().insert(deployment.clone());

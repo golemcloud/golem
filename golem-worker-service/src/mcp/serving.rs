@@ -16,10 +16,10 @@
 //! [`McpServing`] in the request extensions; the handler serves every request through it and
 //! never needs to know which kind it is.
 
+use crate::mcp::McpDeployment;
 use async_trait::async_trait;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_service_base::mcp::CompiledMcp;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -42,7 +42,7 @@ pub enum ServeKind {
 }
 
 pub struct Serving {
-    pub deployment: Arc<CompiledMcp>,
+    pub deployment: Arc<McpDeployment>,
     /// Work that runs next to the request. It never completes; it may cancel the request's
     /// cancellation token.
     pub while_running: BoxFuture<'static, Infallible>,
@@ -60,7 +60,7 @@ pub enum ServeRefusal {
 }
 
 /// Serves every request with the deployment its authentication was checked against.
-pub struct StatelessServing(pub Arc<CompiledMcp>);
+pub struct StatelessServing(pub Arc<McpDeployment>);
 
 #[async_trait]
 impl McpServing for StatelessServing {
@@ -73,5 +73,51 @@ impl McpServing for StatelessServing {
             deployment: self.0.clone(),
             while_running: std::future::pending().boxed(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_service_base::mcp::CompiledMcp;
+    use test_r::test;
+
+    #[test]
+    async fn stateless_serving_serves_the_authenticated_deployment_for_every_kind() {
+        let deployment = Arc::new(McpDeployment::new(CompiledMcp {
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            application_name: ApplicationName("app".into()),
+            environment_id: EnvironmentId::new(),
+            environment_name: EnvironmentName("env".into()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            domain: Domain("tools.example.com".into()),
+            security_scheme_name: None,
+            security_scheme: None,
+            registered_agent_types: vec![],
+            tools: vec![],
+        }));
+        let serving = StatelessServing(deployment.clone());
+        let ct = CancellationToken::new();
+        let servings: Vec<Serving> =
+            futures::stream::iter([ServeKind::Initialize, ServeKind::List, ServeKind::Invoke])
+                .then(|kind| serving.serve(kind, &ct))
+                .map(|served| served.expect("served"))
+                .collect()
+                .await;
+        servings.into_iter().for_each(|served| {
+            assert!(Arc::ptr_eq(&served.deployment, &deployment));
+            assert!(
+                served.while_running.now_or_never().is_none(),
+                "nothing runs next to the request"
+            );
+        });
+        assert!(!ct.is_cancelled());
     }
 }

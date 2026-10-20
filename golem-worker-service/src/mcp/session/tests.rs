@@ -25,8 +25,13 @@ use super::store::{
 };
 use crate::config::McpConfig;
 use crate::custom_api::oidc::session_store::migrated_sqlite_pool;
-use crate::mcp::mcp_transport;
-use crate::mcp::serving::{McpServing, ServeKind, StatelessServing};
+use crate::mcp::InvocationHarness;
+use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, StatelessServing};
+use crate::mcp::{
+    GolemAgentMcpServer, McpCapabilitiesLookupError, McpCapabilityLookup, McpDeployment,
+    mcp_transport,
+};
+use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -44,7 +49,11 @@ use poem::{Endpoint, EndpointExt, Request, Response};
 use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::transport::StreamableHttpService;
+use rmcp::transport::streamable_http_server::session::ServerSseMessage;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+use rmcp::transport::streamable_http_server::session::store::{
+    EventId, EventStore, EventStoreError, EventStream,
+};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -115,6 +124,8 @@ struct Probe {
     seen: Mutex<Vec<(&'static str, bool)>>,
     gates: Mutex<HashMap<String, Arc<Gate>>>,
     list_gated: AtomicBool,
+    /// For each `tools/call`: whether its serving served it, or why not.
+    invoked: Mutex<Vec<Result<(), ServeRefusal>>>,
 }
 
 impl Probe {
@@ -199,7 +210,7 @@ impl ServerHandler for Stub {
     }
 
     /// `echo` answers at once. `gated` waits for its gate, as an agent method does, whatever
-    /// happens to the request's token. `native` waits for its gate or the request's token, as a
+    /// happens to the request's token; `panic` panics when its gate opens. `native` waits for its gate or the request's token, as a
     /// native tool does, and answers "tool invocation cancelled" on the token. A gated call
     /// releases its request before it tells the test that it returned, so its running-call entry
     /// is gone by then.
@@ -209,10 +220,14 @@ impl ServerHandler for Stub {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let request_serving = self.0.saw("tools/call", &context);
-        let serving = request_serving
-            .serve(ServeKind::Invoke, &context.ct)
-            .await
-            .unwrap();
+        let served = request_serving.serve(ServeKind::Invoke, &context.ct).await;
+        self.0
+            .invoked
+            .lock()
+            .unwrap()
+            .push(served.as_ref().map(|_| ()).map_err(|refusal| *refusal));
+        let serving = served
+            .map_err(|_| ErrorData::invalid_params("tool set changed; list tools again", None))?;
         let gate_name = request
             .arguments
             .as_ref()
@@ -229,6 +244,11 @@ impl ServerHandler for Stub {
                     gate.started.add_permits(1);
                     gate.open.acquire().await.unwrap().forget();
                     (Ok(text("opened")), Some("opened"))
+                }
+                "panic" => {
+                    gate.started.add_permits(1);
+                    gate.open.acquire().await.unwrap().forget();
+                    panic!("the stub call panics")
                 }
                 "native" => {
                     gate.started.add_permits(1);
@@ -278,6 +298,8 @@ struct RecordingStore {
     failing: AtomicBool,
     failing_deletes: AtomicBool,
     taken_ids: AtomicUsize,
+    /// When set, `replace` waits for this gate.
+    replace_gate: Mutex<Option<Arc<Gate>>>,
 }
 
 impl RecordingStore {
@@ -334,6 +356,12 @@ impl McpSessionStore for RecordingStore {
         record: &McpSessionRecord,
     ) -> Result<bool, McpSessionStoreError> {
         self.record(Op::Replace)?;
+        let gate = self.replace_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.started.add_permits(1);
+            gate.open.acquire().await.unwrap().forget();
+            gate.finish("opened");
+        }
         self.inner.replace(id, record).await
     }
 
@@ -445,8 +473,8 @@ fn on_paused_time(test: impl Future<Output = ()> + Send + 'static) {
 // ---------------------------------------------------------------------------------------------
 // The fixture
 
-fn deployment(domain: &str) -> Arc<CompiledMcp> {
-    Arc::new(CompiledMcp {
+fn compiled(domain: &str) -> CompiledMcp {
+    CompiledMcp {
         account_id: AccountId::new(),
         account_email: AccountEmail::new("owner@example.com"),
         application_name: ApplicationName("app".into()),
@@ -458,7 +486,19 @@ fn deployment(domain: &str) -> Arc<CompiledMcp> {
         security_scheme: None,
         registered_agent_types: vec![],
         tools: vec![],
-    })
+    }
+}
+
+fn deployment(domain: &str) -> Arc<McpDeployment> {
+    Arc::new(McpDeployment::new(compiled(domain)))
+}
+
+/// The same deployment at another revision, as a deploy or a rollback makes it.
+fn at_revision(deployment: &McpDeployment, revision: DeploymentRevision) -> Arc<McpDeployment> {
+    Arc::new(McpDeployment::new(CompiledMcp {
+        deployment_revision: revision,
+        ..deployment.compiled.clone()
+    }))
 }
 
 fn config(idle: Duration, keep_alive: Duration) -> McpConfig {
@@ -470,31 +510,124 @@ fn config(idle: Duration, keep_alive: Duration) -> McpConfig {
     config
 }
 
+/// The MCP handler behind the session layer: the stub, or Golem's handler.
+#[derive(Clone)]
+enum Handler {
+    Stub(Arc<Probe>),
+    Golem {
+        lookup: Arc<dyn McpCapabilityLookup>,
+        worker_service: Arc<WorkerService>,
+    },
+}
+
+/// The replica's event store as rmcp sees it, counting each attempt to store a response or
+/// error. rmcp stores the response of a call after the handler returns, so a test that checks
+/// what a resume replays waits for the attempt first.
+struct ObservedEvents {
+    inner: Arc<dyn EventStore>,
+    terminals: tokio::sync::watch::Sender<usize>,
+}
+
+impl ObservedEvents {
+    async fn terminals_attempted(&self, count: usize) {
+        let mut attempted = self.terminals.subscribe();
+        timeout(WAIT, attempted.wait_for(|attempted| *attempted >= count))
+            .await
+            .expect("the terminals are stored or refused")
+            .unwrap();
+    }
+}
+
+#[async_trait]
+impl EventStore for ObservedEvents {
+    async fn store_event(
+        &self,
+        stream_id: &str,
+        event: &ServerSseMessage,
+    ) -> Result<EventId, EventStoreError> {
+        let stored = self.inner.store_event(stream_id, event).await;
+        if matches!(
+            event.message.as_deref(),
+            Some(ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_))
+        ) {
+            self.terminals.send_modify(|attempted| *attempted += 1);
+        }
+        stored
+    }
+
+    async fn replay_events_after(
+        &self,
+        last_event_id: &str,
+    ) -> Result<EventStream, EventStoreError> {
+        self.inner.replay_events_after(last_event_id).await
+    }
+}
+
+/// The endpoint of `replica` over `handler`, as `mcp_transport` builds it. With `observe`, rmcp
+/// stores events through an [`ObservedEvents`].
+fn transport<S, H>(
+    handler: H,
+    replica: &Arc<McpReplica>,
+    config: &McpConfig,
+    observe: bool,
+) -> (BoxEndpoint<'static>, Option<Arc<ObservedEvents>>)
+where
+    S: ServerHandler + Send + 'static,
+    H: Fn() -> S + Send + Sync + 'static,
+{
+    let (events, observed): (Arc<dyn EventStore>, _) = if observe {
+        let observed = Arc::new(ObservedEvents {
+            inner: replica.event_store(),
+            terminals: tokio::sync::watch::Sender::new(0),
+        });
+        (observed.clone(), Some(observed))
+    } else {
+        (replica.event_store(), None)
+    };
+    let endpoint = mcp_transport(handler, replica.clone(), events, config)
+        .map_to_response()
+        .boxed();
+    (endpoint, observed)
+}
+
 struct Fixture {
     endpoint: BoxEndpoint<'static>,
     replica: Arc<McpReplica>,
     store: Arc<RecordingStore>,
     probe: Arc<Probe>,
-    deployment: Arc<CompiledMcp>,
+    handler: Handler,
+    deployment: Arc<McpDeployment>,
     config: McpConfig,
+    observed: Option<Arc<ObservedEvents>>,
     _db: Option<NamedTempFile>,
+}
+
+async fn sqlite_store() -> (Arc<dyn McpSessionStore>, NamedTempFile) {
+    let db = NamedTempFile::new().unwrap();
+    let pool = migrated_sqlite_pool(&DbSqliteConfig {
+        database: db.path().to_string_lossy().into_owned(),
+        max_connections: 2,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+    (
+        Arc::new(SqliteMcpSessionStore::new(pool, Duration::from_secs(3600))),
+        db,
+    )
+}
+
+fn default_config() -> McpConfig {
+    config(Duration::from_secs(300), Duration::from_secs(15))
 }
 
 impl Fixture {
     async fn new() -> Self {
-        Self::with_config(config(Duration::from_secs(300), Duration::from_secs(15))).await
+        Self::with_config(default_config()).await
     }
 
     async fn with_config(config: McpConfig) -> Self {
-        let db = NamedTempFile::new().unwrap();
-        let pool = migrated_sqlite_pool(&DbSqliteConfig {
-            database: db.path().to_string_lossy().into_owned(),
-            max_connections: 2,
-            foreign_keys: false,
-        })
-        .await
-        .unwrap();
-        let store = Arc::new(SqliteMcpSessionStore::new(pool, Duration::from_secs(3600)));
+        let (store, db) = sqlite_store().await;
         Self::with_store(config, store, Some(db))
     }
 
@@ -504,55 +637,133 @@ impl Fixture {
         inner: Arc<dyn McpSessionStore>,
         db: Option<NamedTempFile>,
     ) -> Self {
+        Self::build(
+            config,
+            inner,
+            db,
+            None,
+            deployment("tools.example.com"),
+            false,
+        )
+    }
+
+    /// The stub behind a layer whose event store is observed.
+    async fn observed() -> Self {
+        let (store, db) = sqlite_store().await;
+        Self::build(
+            default_config(),
+            store,
+            Some(db),
+            None,
+            deployment("tools.example.com"),
+            true,
+        )
+    }
+
+    /// Golem's handler over the harness's worker service, serving `deployment` by default.
+    async fn golem(
+        harness: &InvocationHarness,
+        lookup: Arc<dyn McpCapabilityLookup>,
+        deployment: Arc<McpDeployment>,
+        observe: bool,
+    ) -> Self {
+        let (store, db) = sqlite_store().await;
+        let handler = Handler::Golem {
+            lookup,
+            worker_service: harness.worker_service.clone(),
+        };
+        Self::build(
+            default_config(),
+            store,
+            Some(db),
+            Some(handler),
+            deployment,
+            observe,
+        )
+    }
+
+    fn build(
+        config: McpConfig,
+        inner: Arc<dyn McpSessionStore>,
+        db: Option<NamedTempFile>,
+        handler: Option<Handler>,
+        deployment: Arc<McpDeployment>,
+        observe: bool,
+    ) -> Self {
         let store = Arc::new(RecordingStore {
             inner,
             ops: Mutex::new(Vec::new()),
             failing: AtomicBool::new(false),
             failing_deletes: AtomicBool::new(false),
             taken_ids: AtomicUsize::new(0),
+            replace_gate: Mutex::new(None),
         });
-        let deployment = deployment("tools.example.com");
         let probe = Arc::new(Probe {
             stateless: Arc::new(StatelessServing(deployment.clone())),
             seen: Mutex::new(Vec::new()),
             gates: Mutex::new(HashMap::new()),
             list_gated: AtomicBool::new(false),
+            invoked: Mutex::new(Vec::new()),
         });
-        let (endpoint, replica) = Self::endpoint(&store, &probe, &config);
+        let handler = handler.unwrap_or_else(|| Handler::Stub(probe.clone()));
+        let (endpoint, replica, observed) = Self::endpoint(&store, &handler, &config, observe);
         Self {
             endpoint,
             replica,
             store,
             probe,
+            handler,
             deployment,
             config,
+            observed,
             _db: db,
         }
     }
 
     fn endpoint(
         store: &Arc<RecordingStore>,
-        probe: &Arc<Probe>,
+        handler: &Handler,
         config: &McpConfig,
-    ) -> (BoxEndpoint<'static>, Arc<McpReplica>) {
+        observe: bool,
+    ) -> (
+        BoxEndpoint<'static>,
+        Arc<McpReplica>,
+        Option<Arc<ObservedEvents>>,
+    ) {
         let replica = McpReplica::new(store.clone(), config);
-        let probe = probe.clone();
-        let endpoint = mcp_transport(move || Stub(probe.clone()), replica.clone(), config)
-            .map_to_response()
-            .boxed();
-        (endpoint, replica)
+        let (endpoint, observed) = match handler.clone() {
+            Handler::Stub(probe) => {
+                transport(move || Stub(probe.clone()), &replica, config, observe)
+            }
+            Handler::Golem {
+                lookup,
+                worker_service,
+            } => transport(
+                move || GolemAgentMcpServer::new(lookup.clone(), worker_service.clone()),
+                &replica,
+                config,
+                observe,
+            ),
+        };
+        (endpoint, replica, observed)
     }
 
     /// Another replica over the same store and handler.
     fn second_replica(&self) -> (BoxEndpoint<'static>, Arc<McpReplica>) {
-        Self::endpoint(&self.store, &self.probe, &self.config)
+        let (endpoint, replica, _) =
+            Self::endpoint(&self.store, &self.handler, &self.config, false);
+        (endpoint, replica)
+    }
+
+    fn observed_events(&self) -> &ObservedEvents {
+        self.observed.as_deref().expect("an observed fixture")
     }
 
     /// Adds what the authentication layer adds: the request's deployment and its serving.
-    fn authenticated(&self, mut request: Request, deployment: &Arc<CompiledMcp>) -> Request {
+    fn authenticated(&self, mut request: Request, deployment: &Arc<McpDeployment>) -> Request {
         request
             .headers_mut()
-            .insert("host", deployment.domain.0.parse().unwrap());
+            .insert("host", deployment.compiled.domain.0.parse().unwrap());
         let serving: Arc<dyn McpServing> = if Arc::ptr_eq(deployment, &self.deployment) {
             self.probe.stateless.clone()
         } else {
@@ -565,6 +776,11 @@ impl Fixture {
 
     fn post(&self, session: Option<&str>, body: Value) -> Request {
         self.post_bytes(session, serde_json::to_vec(&body).unwrap())
+    }
+
+    /// A POST served with `deployment` instead of the fixture's.
+    fn post_with(&self, session: &str, body: Value, deployment: &Arc<McpDeployment>) -> Request {
+        self.authenticated(self.post(Some(session), body), deployment)
     }
 
     fn post_bytes(&self, session: Option<&str>, body: Vec<u8>) -> Request {
@@ -612,14 +828,7 @@ impl Fixture {
     }
 
     async fn initialize(&self) -> String {
-        let response = self.send(self.post(None, initialize())).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let session = response.headers()["mcp-session-id"]
-            .to_str()
-            .unwrap()
-            .to_string();
-        read_to_end(response).await;
-        session
+        initialize_on(&self.endpoint, self.post(None, initialize())).await
     }
 
     async fn record(&self, session: &str) -> Option<McpSessionRecord> {
@@ -634,6 +843,18 @@ impl Fixture {
     fn finish(self) {
         lock_check::assert_no_violation();
     }
+}
+
+/// Sends an `initialize` to `endpoint` and returns the new session's ID.
+async fn initialize_on(endpoint: &BoxEndpoint<'static>, request: Request) -> String {
+    let response = endpoint.call(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let session = response.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    read_to_end(response).await;
+    session
 }
 
 /// A `server/discover` as rmcp's per-request negotiation expects it.
@@ -789,9 +1010,9 @@ async fn initialize_issues_a_session_with_the_served_deployment() {
     assert_eq!(
         fx.record(&session).await,
         Some(McpSessionRecord {
-            domain: fx.deployment.domain.clone(),
-            environment_id: fx.deployment.environment_id,
-            deployment_revision: fx.deployment.deployment_revision,
+            domain: fx.deployment.compiled.domain.clone(),
+            environment_id: fx.deployment.compiled.environment_id,
+            deployment_revision: fx.deployment.compiled.deployment_revision,
         })
     );
     let response = fx.send(fx.post(Some(&session), tools_list(2))).await;
@@ -884,10 +1105,10 @@ async fn a_session_of_another_domain_or_environment_gets_404() {
     let fx = Fixture::new().await;
     let session = fx.initialize().await;
     let other_domain = deployment("other.example.com");
-    let other_environment = Arc::new(CompiledMcp {
+    let other_environment = Arc::new(McpDeployment::new(CompiledMcp {
         environment_id: EnvironmentId::new(),
-        ..(*fx.deployment).clone()
-    });
+        ..fx.deployment.compiled.clone()
+    }));
     let statuses: Vec<StatusCode> = stream::iter([other_domain, other_environment])
         .then(|served| {
             let request = fx.post(Some(&session), tools_list(2));
@@ -1186,6 +1407,19 @@ async fn session_requests_are_served_with_the_session() {
         StatusCode::ACCEPTED
     );
     assert_eq!(fx.probe.gate("n").returned().await, "cancelled");
+
+    // A call served with another revision than the session's pin is refused by the session's
+    // serving; the stateless serving would serve it.
+    let next = at_revision(&fx.deployment, DeploymentRevision::INITIAL.next().unwrap());
+    read_to_end(
+        fx.send(fx.post_with(&session, call(4, "echo", ""), &next))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        *fx.probe.invoked.lock().unwrap(),
+        [Ok(()), Err(ServeRefusal::ToolSetChanged)]
+    );
     fx.finish();
 }
 
@@ -1775,4 +2009,567 @@ async fn a_call_that_ends_between_the_bind_steps_leaves_its_stream_not_running()
     );
     assert_eq!(messages(&rest(body).await.unwrap()).len(), 1);
     fx.finish();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Golem's handler behind the layer
+
+/// A deployment cache with one domain. `get` answers from its entry, which an invalidation
+/// empties; the next `get` fills it with the current deployment.
+struct OneDomainLookup {
+    current: Mutex<Arc<McpDeployment>>,
+    cached: Mutex<Option<Arc<McpDeployment>>>,
+    invalidations: AtomicUsize,
+}
+
+impl OneDomainLookup {
+    fn new(current: &Arc<McpDeployment>) -> Arc<Self> {
+        Arc::new(Self {
+            current: Mutex::new(current.clone()),
+            cached: Mutex::new(None),
+            invalidations: AtomicUsize::new(0),
+        })
+    }
+
+    /// A new deployment becomes current. The cached entry stays until an invalidation, as it
+    /// does until the registry's event reaches the replica.
+    fn deploy(&self, deployment: &Arc<McpDeployment>) {
+        *self.current.lock().unwrap() = deployment.clone();
+    }
+
+    fn invalidations(&self) -> usize {
+        self.invalidations.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl McpCapabilityLookup for OneDomainLookup {
+    async fn get(&self, _: &Domain) -> Result<Arc<McpDeployment>, McpCapabilitiesLookupError> {
+        let current = self.current.lock().unwrap().clone();
+        Ok(self.cached.lock().unwrap().get_or_insert(current).clone())
+    }
+
+    async fn invalidate(&self, _: &Domain) {
+        self.invalidations.fetch_add(1, Ordering::SeqCst);
+        *self.cached.lock().unwrap() = None;
+    }
+
+    async fn invalidate_all(&self) {
+        self.invalidate(&Domain(String::new())).await;
+    }
+}
+
+/// The harness's agent method as an MCP tool.
+const AGENT_TOOL: &str = "mcp-agent-run";
+/// The harness's native tool.
+const NATIVE_TOOL: &str = "native";
+
+/// The harness's deployment of `tools.example.com` at the first revision, and the same
+/// deployment at the next revision.
+fn harness_deployments(harness: &InvocationHarness) -> (Arc<McpDeployment>, Arc<McpDeployment>) {
+    let first = Arc::new(McpDeployment::new(harness.compiled_mcp(
+        "tools.example.com",
+        DeploymentRevision::INITIAL,
+        true,
+    )));
+    let next = at_revision(&first, DeploymentRevision::INITIAL.next().unwrap());
+    (first, next)
+}
+
+fn call_tool(id: i64, name: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+           "params": {"name": name, "arguments": {}}})
+}
+
+/// The JSON-RPC messages of a whole response.
+async fn answer(response: Response) -> Vec<Value> {
+    assert_eq!(response.status(), StatusCode::OK);
+    messages(&read_to_end(response).await)
+}
+
+const TOOL_SET_CHANGED: &str = "tool set changed; list tools again";
+
+/// Whether `messages` are the answer to a call refused because the tool set changed: the
+/// `tools/list_changed` notification, then the error.
+fn is_tool_set_changed(messages: &[Value]) -> bool {
+    matches!(
+        messages,
+        [notification, error]
+            if notification["method"] == "notifications/tools/list_changed"
+                && error["error"]["message"] == TOOL_SET_CHANGED
+    )
+}
+
+/// Whether `messages` are a successful result.
+fn is_result(messages: &[Value]) -> bool {
+    matches!(messages, [result] if result.get("result").is_some())
+}
+
+#[test]
+async fn any_replica_serves_any_request() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, _) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
+    let session = fx.initialize().await;
+    let (other_replica, _replica) = fx.second_replica();
+
+    let listed = answer(
+        other_replica
+            .call(fx.post(Some(&session), tools_list(2)))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let names: Vec<&str> = listed[0]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(names.contains(&AGENT_TOOL), "{names:?}");
+    let called = answer(
+        other_replica
+            .call(fx.post(Some(&session), call_tool(3, AGENT_TOOL)))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(is_result(&called), "{called:?}");
+    fx.finish();
+}
+
+#[test]
+async fn a_deploy_between_list_and_call_gives_tool_set_changed_then_works_after_a_list() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, next) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
+    let session = fx.initialize().await;
+    answer(fx.send(fx.post(Some(&session), tools_list(2))).await).await;
+
+    let after_deploy = answer(
+        fx.send(fx.post_with(&session, call_tool(3, AGENT_TOOL), &next))
+            .await,
+    )
+    .await;
+    assert!(is_tool_set_changed(&after_deploy), "{after_deploy:?}");
+
+    answer(fx.send(fx.post_with(&session, tools_list(4), &next)).await).await;
+    assert_eq!(
+        fx.record(&session).await.unwrap().deployment_revision,
+        next.compiled.deployment_revision
+    );
+    let after_list = answer(
+        fx.send(fx.post_with(&session, call_tool(5, AGENT_TOOL), &next))
+            .await,
+    )
+    .await;
+    assert!(is_result(&after_list), "{after_list:?}");
+    fx.finish();
+}
+
+#[test]
+async fn a_stale_replica_costs_one_tool_set_changed() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (stale, current) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&stale), stale.clone(), false).await;
+    // Replica B already serves the new revision; replica A (the fixture's) still serves the old.
+    let (b, _replica) = fx.second_replica();
+    let session = initialize_on(&b, fx.authenticated(fx.post(None, initialize()), &current)).await;
+
+    answer(fx.send(fx.post(Some(&session), tools_list(2))).await).await;
+    assert_eq!(
+        fx.record(&session).await.unwrap().deployment_revision,
+        stale.compiled.deployment_revision,
+        "a list on the stale replica pins the revision it served"
+    );
+
+    let calls_on_b = |id| b.call(fx.post_with(&session, call_tool(id, AGENT_TOOL), &current));
+    let first_call = answer(calls_on_b(3).await.unwrap()).await;
+    answer(
+        b.call(fx.post_with(&session, tools_list(4), &current))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let second_call = answer(calls_on_b(5).await.unwrap()).await;
+
+    assert!(is_tool_set_changed(&first_call), "{first_call:?}");
+    assert!(is_result(&second_call), "{second_call:?}");
+    assert_eq!(
+        fx.record(&session).await.unwrap().deployment_revision,
+        current.compiled.deployment_revision
+    );
+    fx.finish();
+}
+
+#[test]
+async fn a_list_writes_the_pin_only_when_it_differs() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, next) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
+    let session = fx.initialize().await;
+    let replaces = |fx: &Fixture| {
+        fx.store
+            .ops()
+            .iter()
+            .filter(|op| **op == Op::Replace)
+            .count()
+    };
+
+    answer(fx.send(fx.post(Some(&session), tools_list(2))).await).await;
+    assert_eq!(
+        replaces(&fx),
+        0,
+        "a list of the pinned revision writes nothing"
+    );
+    answer(fx.send(fx.post_with(&session, tools_list(3), &next)).await).await;
+    assert_eq!(
+        replaces(&fx),
+        1,
+        "a list of another revision writes the pin"
+    );
+    assert_eq!(
+        fx.record(&session).await.unwrap().deployment_revision,
+        next.compiled.deployment_revision
+    );
+    fx.finish();
+}
+
+#[test]
+async fn a_rollback_gives_tool_set_changed_then_works_after_a_list() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (older, newer) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&older), older.clone(), false).await;
+    let session = initialize_on(
+        &fx.endpoint,
+        fx.authenticated(fx.post(None, initialize()), &newer),
+    )
+    .await;
+
+    let after_rollback = answer(
+        fx.send(fx.post(Some(&session), call_tool(2, AGENT_TOOL)))
+            .await,
+    )
+    .await;
+    assert!(is_tool_set_changed(&after_rollback), "{after_rollback:?}");
+
+    answer(fx.send(fx.post(Some(&session), tools_list(3))).await).await;
+    assert_eq!(
+        fx.record(&session).await.unwrap().deployment_revision,
+        older.compiled.deployment_revision
+    );
+    let after_list = answer(
+        fx.send(fx.post(Some(&session), call_tool(4, AGENT_TOOL)))
+            .await,
+    )
+    .await;
+    assert!(is_result(&after_list), "{after_list:?}");
+    fx.finish();
+}
+
+#[test]
+async fn tool_set_changed_reaches_the_sessions_get_streams_on_this_replica() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, next) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
+    let session = fx.initialize().await;
+    let other = fx.initialize().await;
+    let mut get_stream = body_of(fx.send(fx.get(Some(&session), None)).await);
+    let mut other_stream = body_of(fx.send(fx.get(Some(&other), None)).await);
+    next_frames(&mut get_stream).await;
+    next_frames(&mut other_stream).await;
+
+    let refused = answer(
+        fx.send(fx.post_with(&session, call_tool(2, AGENT_TOOL), &next))
+            .await,
+    )
+    .await;
+    assert!(is_tool_set_changed(&refused), "{refused:?}");
+
+    let notified = messages(&next_frames(&mut get_stream).await);
+    assert_eq!(notified.len(), 1);
+    assert_eq!(notified[0]["method"], "notifications/tools/list_changed");
+    assert!(
+        timeout(Duration::from_millis(200), other_stream.next())
+            .await
+            .is_err(),
+        "another session's stream gets nothing"
+    );
+    fx.finish();
+}
+
+/// Starts a native call on a fresh session and waits until its tool session is open.
+async fn running_native_call(
+    fx: &Fixture,
+    harness: &InvocationHarness,
+    id: i64,
+) -> (String, BodyStream) {
+    let session = fx.initialize().await;
+    let mut body = body_of(
+        fx.send(fx.post(Some(&session), call_tool(id, NATIVE_TOOL)))
+            .await,
+    );
+    next_frames(&mut body).await;
+    harness.native_sessions_opened(1).await;
+    (session, body)
+}
+
+#[test]
+async fn a_cancel_stops_a_native_tool_through_the_entry_token() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    harness.answer_native_sessions(crate::mcp::invoke::test_support::NativeSessions::Hold);
+    let (first, _) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
+    let (session, body) = running_native_call(&fx, &harness, 4).await;
+    let tail = harness.take_native_session_tail();
+
+    assert_eq!(
+        fx.send(fx.post(Some(&session), cancel(4))).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    timeout(WAIT, tail.collect::<Vec<_>>())
+        .await
+        .expect("the native tool stops and closes its session");
+    let end = rest(body).await.expect("the call's body ends");
+    assert!(messages(&end).is_empty());
+    timeout(WAIT, fx.replica.calls().wait_until_empty())
+        .await
+        .expect("the call leaves the table");
+    fx.finish();
+}
+
+#[test]
+async fn a_cancelled_native_call_skips_the_deployment_changed_path() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    harness.answer_native_sessions(crate::mcp::invoke::test_support::NativeSessions::Hold);
+    let (first, next) = harness_deployments(&harness);
+    let lookup = OneDomainLookup::new(&first);
+    let fx = Fixture::golem(&harness, lookup.clone(), first, false).await;
+    let (session, _body) = running_native_call(&fx, &harness, 4).await;
+    lookup.deploy(&next);
+
+    assert_eq!(
+        fx.send(fx.post(Some(&session), cancel(4))).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    timeout(WAIT, fx.replica.calls().wait_until_empty())
+        .await
+        .expect("the cancelled call returns");
+    assert_eq!(lookup.invalidations(), 0, "the deployment was not checked");
+    fx.finish();
+}
+
+#[test]
+async fn a_failed_native_call_checks_the_deployment_at_the_time_of_failure() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, next) = harness_deployments(&harness);
+    let lookup = OneDomainLookup::new(&first);
+    let fx = Fixture::golem(&harness, lookup.clone(), first.clone(), false).await;
+    let session = fx.initialize().await;
+    // The replica's cache still holds the first revision when the new one is deployed.
+    let _ = lookup.get(&first.compiled.domain).await;
+    lookup.deploy(&next);
+
+    let failed = answer(
+        fx.send(fx.post(Some(&session), call_tool(2, NATIVE_TOOL)))
+            .await,
+    )
+    .await;
+
+    assert!(is_tool_set_changed(&failed), "{failed:?}");
+    assert_eq!(lookup.invalidations(), 1);
+    fx.finish();
+}
+
+#[test]
+async fn a_cancelled_list_sends_no_response() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, next) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, true).await;
+    let session = fx.initialize().await;
+    let pin_write = Arc::new(Gate::new());
+    *fx.store.replace_gate.lock().unwrap() = Some(pin_write.clone());
+
+    let mut body = body_of(fx.send(fx.post_with(&session, tools_list(6), &next)).await);
+    let priming = next_frames(&mut body).await[0].id.clone().unwrap();
+    pin_write.started().await;
+    assert_eq!(
+        fx.send(fx.post(Some(&session), cancel(6))).await.status(),
+        StatusCode::ACCEPTED
+    );
+    let end = rest(body)
+        .await
+        .expect("the body ends while the pin write waits");
+    assert!(messages(&end).is_empty());
+
+    pin_write.open();
+    pin_write.returned().await;
+    // The `initialize` answer and the list's.
+    fx.observed_events().terminals_attempted(2).await;
+    let resumed = read_to_end(fx.send(fx.get(Some(&session), Some(&priming))).await).await;
+    assert!(messages(&resumed).is_empty(), "{resumed:?}");
+    fx.finish();
+}
+
+// ---------------------------------------------------------------------------------------------
+// The stub's calls: heartbeat and cancel
+
+#[test]
+async fn a_cancelled_agent_method_call_sends_no_response() {
+    let fx = Fixture::observed().await;
+    let session = fx.initialize().await;
+    let mut body = body_of(
+        fx.send(fx.post(Some(&session), call(5, "gated", "d")))
+            .await,
+    );
+    let priming = next_frames(&mut body).await[0].id.clone().unwrap();
+    let gate = fx.probe.gate("d");
+    gate.started().await;
+
+    assert_eq!(
+        fx.send(fx.post(Some(&session), cancel(5))).await.status(),
+        StatusCode::ACCEPTED
+    );
+    let end = rest(body)
+        .await
+        .expect("the body ends while the gate is closed");
+    assert!(messages(&end).is_empty());
+
+    gate.open();
+    assert_eq!(gate.returned().await, "opened");
+    // The `initialize` answer and the call's.
+    fx.observed_events().terminals_attempted(2).await;
+    let resumed = read_to_end(fx.send(fx.get(Some(&session), Some(&priming))).await).await;
+    assert!(messages(&resumed).is_empty(), "{resumed:?}");
+    fx.finish();
+}
+
+/// The number of reads that extend `session`, in `ops`.
+fn extending_reads(ops: &[Op], session: &str) -> usize {
+    let session: McpSessionId = session.parse().unwrap();
+    ops.iter()
+        .filter(|op| {
+            **op == Op::Get {
+                session,
+                extend: true,
+            }
+        })
+        .count()
+}
+
+#[test]
+fn a_long_call_keeps_the_session_alive_and_returns_its_result() {
+    on_paused_time(async {
+        let fx = Fixture::with_store(
+            config(Duration::from_secs(1), Duration::from_secs(15)),
+            Arc::new(ClockStore::default()),
+            None,
+        );
+        let session = fx.initialize().await;
+        let mut body = body_of(
+            fx.send(fx.post(Some(&session), call(2, "gated", "long")))
+                .await,
+        );
+        next_frames(&mut body).await;
+        let gate = fx.probe.gate("long");
+        gate.started().await;
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(
+            fx.record(&session).await.is_some(),
+            "the session outlives three idle timeouts while its call runs"
+        );
+        gate.open();
+        let answered = messages(&rest(body).await.expect("the call answers"));
+        assert_eq!(answered.len(), 1);
+        assert_eq!(answered[0]["result"]["content"][0]["text"], "opened");
+        assert_eq!(
+            fx.send(fx.post(Some(&session), tools_list(3)))
+                .await
+                .status(),
+            StatusCode::OK,
+            "the session stays usable"
+        );
+        fx.finish();
+    })
+}
+
+#[test]
+fn a_panicking_call_stops_its_heartbeat() {
+    on_paused_time(async {
+        let fx = Fixture::with_store(
+            config(Duration::from_secs(3), Duration::from_secs(15)),
+            Arc::new(ClockStore::default()),
+            None,
+        );
+        let session = fx.initialize().await;
+        let _body = body_of(
+            fx.send(fx.post(Some(&session), call(2, "panic", "p")))
+                .await,
+        );
+        let gate = fx.probe.gate("p");
+        gate.started().await;
+        assert!(
+            extending_reads(&fx.store.ops(), &session) >= 2,
+            "the heartbeat runs"
+        );
+
+        gate.open();
+        fx.replica.calls().wait_until_empty().await;
+        let after_panic = extending_reads(&fx.store.ops(), &session);
+        // Two heartbeat periods of one second each.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(
+            extending_reads(&fx.store.ops(), &session),
+            after_panic,
+            "no heartbeat after the call ended"
+        );
+        fx.finish();
+    })
+}
+
+#[test]
+fn the_heartbeat_ticks_when_the_call_starts() {
+    on_paused_time(async {
+        let fx = Fixture::with_store(
+            config(Duration::from_secs(300), Duration::from_secs(15)),
+            Arc::new(ClockStore::default()),
+            None,
+        );
+        let session = fx.initialize().await;
+        let before = fx.store.ops().len();
+        let mut body = body_of(
+            fx.send(fx.post(Some(&session), call(2, "gated", "g")))
+                .await,
+        );
+        next_frames(&mut body).await;
+        let gate = fx.probe.gate("g");
+        gate.started().await;
+
+        let extending = Op::Get {
+            session: session.parse().unwrap(),
+            extend: true,
+        };
+        assert_eq!(
+            fx.store.ops()[before..],
+            [extending.clone(), extending],
+            "the admission read and the first heartbeat, before any period has passed, and no \
+             other store call"
+        );
+        gate.open();
+        rest(body).await.expect("the call answers");
+        fx.finish();
+    })
 }

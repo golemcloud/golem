@@ -14,25 +14,32 @@
 
 use super::calls::{BindOutcome, CancelledCall, EntryId, RunningCallGuard, RunningCalls};
 use super::event_store::{ReplicaEventStore, parse_event_id, sweep_step};
-use super::rules::{Admission, admit, priming_event_id};
+use super::rules::{
+    Admission, PinStep, admit, heartbeat_period, pin_step, pin_written, priming_event_id,
+};
 use super::store::{McpSessionId, McpSessionRecord, McpSessionStore, McpSessionStoreError};
 use super::streams::GetStreams;
 use crate::config::McpConfig;
+use crate::mcp::McpDeployment;
 use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, Serving};
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, stream};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_service_base::mcp::CompiledMcp;
 use poem::http::HeaderValue;
 use poem::web::sse::{Event, SSE};
 use poem::{Body, IntoResponse, Response};
-use rmcp::model::RequestId;
+use rmcp::model::{
+    RequestId, ServerJsonRpcMessage, ServerNotification, ToolListChangedNotification,
+};
 use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, HEADER_SESSION_ID};
 use rmcp::transport::streamable_http_server::session::ServerSseMessage;
 use rmcp::transport::streamable_http_server::session::store::EventStore;
+use std::convert::Infallible;
 use std::future::ready;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 use tokio_stream::wrappers::{IntervalStream, ReceiverStream};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::warn;
@@ -124,9 +131,9 @@ impl McpReplica {
     pub(super) async fn open_session(
         self: &Arc<Self>,
         mut response: Response,
-        deployment: &CompiledMcp,
+        deployment: &McpDeployment,
     ) -> Option<Response> {
-        let session = self.create_session(deployment).await?;
+        let session = self.create_session(&deployment.compiled).await?;
         let header = HeaderValue::try_from(session.to_string()).ok()?;
         response.headers_mut().insert(HEADER_SESSION_ID, header);
         Some(
@@ -171,13 +178,14 @@ impl McpReplica {
         admit(&read, served)
     }
 
-    /// Starts a call of an admitted session: the serving to put into the request, and the call
-    /// whose response the request gets.
+    /// Starts a call of an admitted session whose pin is `pin`: the serving to put into the
+    /// request, and the call whose response the request gets.
     pub(super) fn start_call(
         self: &Arc<Self>,
         session: McpSessionId,
         request_id: RequestId,
-        deployment: Arc<CompiledMcp>,
+        pin: DeploymentRevision,
+        deployment: Arc<McpDeployment>,
     ) -> (Arc<dyn McpServing>, StartedCall) {
         let (token, call) = self.calls.add(&self.events, session, request_id);
         let started = StartedCall {
@@ -187,11 +195,52 @@ impl McpReplica {
             token: token.clone(),
         };
         let serving = Arc::new(SessionServing {
+            replica: self.clone(),
+            session,
+            pin,
             deployment,
             token,
             _call: call,
         });
         (serving, started)
+    }
+
+    /// Moves the session's pin to `pin`, keeping the record's expiry.
+    async fn write_pin(
+        &self,
+        session: McpSessionId,
+        served: &CompiledMcp,
+        pin: DeploymentRevision,
+    ) -> Result<(), ServeRefusal> {
+        let record = McpSessionRecord {
+            domain: served.domain.clone(),
+            environment_id: served.environment_id,
+            deployment_revision: pin,
+        };
+        let replaced = self.store.replace(session, &record).await;
+        if let Err(error) = &replaced {
+            warn!(error = %error, "Failed to write the pin of an MCP session");
+        }
+        pin_written(&replaced)
+    }
+
+    /// Keeps the session live while one of its calls runs. The returned future never completes;
+    /// it stops when it is dropped with the call.
+    fn heartbeat(&self, session: McpSessionId) -> impl Future<Output = ()> + Send + 'static {
+        heartbeat(self.store.clone(), session, self.idle)
+    }
+
+    /// Tells this replica's GET streams of the session that its tool list changed.
+    fn notify_tool_list_changed(&self, session: McpSessionId) {
+        self.streams.notify(
+            session,
+            ServerJsonRpcMessage::notification(ServerNotification::ToolListChangedNotification(
+                ToolListChangedNotification {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                },
+            )),
+        );
     }
 
     /// Cancels the session's running calls with this request ID.
@@ -351,10 +400,39 @@ async fn record_gone(store: Arc<dyn McpSessionStore>, session: McpSessionId, idl
         .await;
 }
 
-/// Serves the calls of an admitted session with the request's deployment. When the call is
-/// cancelled through the session, the handler's cancellation token is cancelled too.
+/// Keeps the session live while a call runs: moves its expiry forward at once, then once per
+/// heartbeat period. It never completes; it stops when it is dropped with the call.
+async fn heartbeat(store: Arc<dyn McpSessionStore>, session: McpSessionId, idle: Duration) {
+    let mut ticks = tokio::time::interval(heartbeat_period(idle));
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    IntervalStream::new(ticks)
+        .for_each(|_| {
+            let store = store.clone();
+            async move {
+                if let Err(error) = store.get(session, Some(idle)).await {
+                    warn!(error = %error, "Failed to extend an MCP session with a running call");
+                }
+            }
+        })
+        .await
+}
+
+/// Cancels `ct` when the call is cancelled through the session.
+async fn cancel_with(token: CancellationToken, ct: CancellationToken) {
+    token.cancelled().await;
+    ct.cancel();
+}
+
+/// Serves the requests of an admitted session with the request's deployment, after the pin
+/// rule: lists move the pin to the served revision, and a call is served only with the
+/// revision its client listed. When the call is cancelled through the session, the handler's
+/// cancellation token is cancelled too.
 struct SessionServing {
-    deployment: Arc<CompiledMcp>,
+    replica: Arc<McpReplica>,
+    session: McpSessionId,
+    /// The revision the session's client last listed, as admitted.
+    pin: DeploymentRevision,
+    deployment: Arc<McpDeployment>,
     token: CancellationToken,
     /// Kept for its `Drop`: the call leaves the running-call table when the request ends.
     _call: RunningCallGuard,
@@ -364,19 +442,37 @@ struct SessionServing {
 impl McpServing for SessionServing {
     async fn serve(
         &self,
-        _kind: ServeKind,
+        kind: ServeKind,
         ct: &CancellationToken,
     ) -> Result<Serving, ServeRefusal> {
-        let token = self.token.clone();
-        let ct = ct.clone();
-        Ok(Serving {
-            deployment: self.deployment.clone(),
-            while_running: async move {
-                token.cancelled().await;
-                ct.cancel();
-                std::future::pending().await
+        let served = &self.deployment.compiled;
+        match pin_step(kind, self.pin, served.deployment_revision) {
+            PinStep::Serve => {}
+            PinStep::Write(pin) => self.replica.write_pin(self.session, served, pin).await?,
+            PinStep::Changed => {
+                self.replica.notify_tool_list_changed(self.session);
+                return Err(ServeRefusal::ToolSetChanged);
+            }
+        }
+        let cancel = cancel_with(self.token.clone(), ct.clone());
+        let while_running = match kind {
+            ServeKind::Invoke => {
+                let heartbeat = self.replica.heartbeat(self.session);
+                async move {
+                    futures::future::join(heartbeat, cancel).await;
+                    std::future::pending::<Infallible>().await
+                }
+                .boxed()
+            }
+            ServeKind::Initialize | ServeKind::List => async move {
+                cancel.await;
+                std::future::pending::<Infallible>().await
             }
             .boxed(),
+        };
+        Ok(Serving {
+            deployment: self.deployment.clone(),
+            while_running,
         })
     }
 }

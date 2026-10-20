@@ -74,6 +74,20 @@ impl GetStreams {
         receiver
     }
 
+    /// Sends `message` to every GET stream of the session that has room for it. A stream whose
+    /// client does not keep up misses the message, as a notification is not resent.
+    pub(super) fn notify(&self, session: McpSessionId, message: ServerJsonRpcMessage) {
+        let senders: Vec<StreamSender> = self.sessions.with(&session, |sessions| {
+            sessions
+                .get(&session)
+                .map(|open| open.iter().cloned().collect())
+                .unwrap_or_default()
+        });
+        senders.iter().for_each(|sender| {
+            let _ = sender.try_send(message.clone());
+        });
+    }
+
     /// Closes every GET stream of the session.
     pub(super) fn close_session(&self, session: McpSessionId) {
         let closed = self
@@ -131,6 +145,27 @@ mod tests {
             [other_session()]
         );
         assert_eq!(sessions[&session()], VecDeque::from([1, 2]));
+    }
+
+    #[test]
+    async fn notify_reaches_every_stream_of_the_session_only() {
+        let streams = GetStreams::new();
+        let mut first = streams.admit(session());
+        let mut second = streams.admit(session());
+        let mut other = streams.admit(other_session());
+        let message = ServerJsonRpcMessage::notification(
+            rmcp::model::ServerNotification::ToolListChangedNotification(
+                rmcp::model::ToolListChangedNotification {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                },
+            ),
+        );
+        streams.notify(session(), message);
+        assert!(first.try_recv().is_ok());
+        assert!(second.try_recv().is_ok());
+        assert!(other.try_recv().is_err());
+        super::super::sharded::lock_check::assert_no_violation();
     }
 
     #[test]

@@ -15,6 +15,8 @@
 //! The decisions of the session layer, as functions over plain values.
 
 use super::store::{McpSessionId, McpSessionRecord, McpSessionStoreError};
+use crate::mcp::serving::{ServeKind, ServeRefusal};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_service_base::mcp::CompiledMcp;
 use poem::http::{HeaderMap, Method, StatusCode};
 use rmcp::model::{ClientJsonRpcMessage, ClientNotification, ClientRequest, RequestId};
@@ -23,6 +25,7 @@ use rmcp::transport::common::http_header::{
     JSON_MIME_TYPE,
 };
 use std::borrow::Cow;
+use std::time::Duration;
 
 /// What the layer does with a request whose method and headers passed [`request_checks`].
 #[derive(Debug, PartialEq)]
@@ -197,7 +200,9 @@ pub(super) fn classify(
 /// The outcome of reading a session's record for a request served with `served`.
 #[derive(Debug, PartialEq)]
 pub(super) enum Admission {
-    Admitted,
+    /// The session is live for the request's domain and environment. Its client last listed
+    /// the tools of this deployment revision (the pin).
+    Admitted(DeploymentRevision),
     /// The record is missing or expired, or belongs to another domain or environment.
     Gone,
     /// The store could not be read.
@@ -212,11 +217,59 @@ pub(super) fn admit(
         Ok(Some(record))
             if record.domain == served.domain && record.environment_id == served.environment_id =>
         {
-            Admission::Admitted
+            Admission::Admitted(record.deployment_revision)
         }
         Ok(_) => Admission::Gone,
         Err(_) => Admission::Unavailable,
     }
+}
+
+/// What serving a request of `kind` with the `served` revision does with the session's pin
+/// (`stored`).
+#[derive(Debug, PartialEq)]
+pub(super) enum PinStep {
+    Serve,
+    /// Serve, after the pin is moved to this revision.
+    Write(DeploymentRevision),
+    /// The client listed another revision's tools: it must list again.
+    Changed,
+}
+
+/// `initialize` and the lists serve any revision and move the pin to it; a call, resource read
+/// or prompt get is served only with the revision its client listed. Only equality counts, so
+/// a rollback to an older revision is a change too.
+pub(super) fn pin_step(
+    kind: ServeKind,
+    stored: DeploymentRevision,
+    served: DeploymentRevision,
+) -> PinStep {
+    match (stored == served, kind) {
+        (true, _) => PinStep::Serve,
+        (false, ServeKind::Initialize | ServeKind::List) => PinStep::Write(served),
+        (false, ServeKind::Invoke) => PinStep::Changed,
+    }
+}
+
+/// The outcome of a pin write: `replace` finds no live record when the session has ended.
+pub(super) fn pin_written(
+    replaced: &Result<bool, McpSessionStoreError>,
+) -> Result<(), ServeRefusal> {
+    match replaced {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ServeRefusal::Gone),
+        Err(_) => Err(ServeRefusal::Unavailable),
+    }
+}
+
+/// The longest time between two expiry updates of a session with a running call.
+const MAX_HEARTBEAT_PERIOD: Duration = Duration::from_secs(60);
+
+/// How often a running call moves its session's expiry forward: three times per idle timeout,
+/// at most once a minute, and never more often than once a millisecond.
+pub(super) fn heartbeat_period(idle: Duration) -> Duration {
+    (idle / 3)
+        .min(MAX_HEARTBEAT_PERIOD)
+        .max(Duration::from_millis(1))
 }
 
 /// The event ID of the first SSE event in `frame`, the start of a response body. rmcp starts
@@ -525,15 +578,15 @@ mod tests {
             (
                 "same domain and environment",
                 Ok(Some(record("a.example.com", environment))),
-                Admission::Admitted,
+                Admission::Admitted(DeploymentRevision::INITIAL),
             ),
             (
-                "other revision is admitted",
+                "other revision is admitted with its pin",
                 Ok(Some(McpSessionRecord {
                     deployment_revision: DeploymentRevision::INITIAL.next().unwrap(),
                     ..record("a.example.com", environment)
                 })),
-                Admission::Admitted,
+                Admission::Admitted(DeploymentRevision::INITIAL.next().unwrap()),
             ),
             (
                 "other domain",
@@ -554,6 +607,106 @@ mod tests {
         ]
         .into_iter()
         .for_each(|(row, read, expected)| assert_eq!(admit(&read, &served), expected, "{row}"));
+    }
+
+    #[test]
+    fn pin_step_table() {
+        let n = DeploymentRevision::INITIAL.next().unwrap();
+        let older = DeploymentRevision::INITIAL;
+        let newer = n.next().unwrap();
+        [
+            (
+                "initialize, same",
+                ServeKind::Initialize,
+                n,
+                n,
+                PinStep::Serve,
+            ),
+            (
+                "initialize, newer",
+                ServeKind::Initialize,
+                n,
+                newer,
+                PinStep::Write(newer),
+            ),
+            ("list, same", ServeKind::List, n, n, PinStep::Serve),
+            (
+                "list, newer",
+                ServeKind::List,
+                n,
+                newer,
+                PinStep::Write(newer),
+            ),
+            (
+                "list, older (stale replica)",
+                ServeKind::List,
+                n,
+                older,
+                PinStep::Write(older),
+            ),
+            ("invoke, same", ServeKind::Invoke, n, n, PinStep::Serve),
+            (
+                "invoke, newer (deploy)",
+                ServeKind::Invoke,
+                n,
+                newer,
+                PinStep::Changed,
+            ),
+            (
+                "invoke, older (rollback)",
+                ServeKind::Invoke,
+                n,
+                older,
+                PinStep::Changed,
+            ),
+        ]
+        .into_iter()
+        .for_each(|(row, kind, stored, served, expected)| {
+            assert_eq!(pin_step(kind, stored, served), expected, "{row}")
+        });
+    }
+
+    #[test]
+    fn pin_written_table() {
+        [
+            ("replaced", Ok(true), Ok(())),
+            ("no live record", Ok(false), Err(ServeRefusal::Gone)),
+            (
+                "store error",
+                Err(McpSessionStoreError::InternalError(anyhow::anyhow!("down"))),
+                Err(ServeRefusal::Unavailable),
+            ),
+        ]
+        .into_iter()
+        .for_each(|(row, replaced, expected)| {
+            assert_eq!(pin_written(&replaced), expected, "{row}")
+        });
+    }
+
+    #[test]
+    fn heartbeat_period_table() {
+        let ms = Duration::from_millis;
+        [
+            (
+                "default idle timeout",
+                Duration::from_secs(300),
+                Duration::from_secs(60),
+            ),
+            (
+                "at the cap",
+                Duration::from_secs(180),
+                Duration::from_secs(60),
+            ),
+            (
+                "below the cap",
+                Duration::from_secs(90),
+                Duration::from_secs(30),
+            ),
+            ("one second", ms(1000), Duration::from_nanos(333_333_333)),
+            ("shortest idle timeout", ms(1), ms(1)),
+        ]
+        .into_iter()
+        .for_each(|(row, idle, expected)| assert_eq!(heartbeat_period(idle), expected, "{row}"));
     }
 
     #[test]
