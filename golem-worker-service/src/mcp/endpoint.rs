@@ -95,16 +95,60 @@ pub(crate) fn mcp_endpoint(
 ) -> BoxEndpoint<'static> {
     let replica = McpReplica::new(mcp_session_store, config);
     let events = replica.event_store();
-    let service = mcp_transport(
-        move || GolemAgentMcpServer::new(mcp_capability_lookup.clone(), worker_service.clone()),
-        replica,
-        events,
-        config,
-    );
+    mcp_routes(
+        mcp_transport(
+            golem_handler(mcp_capability_lookup, worker_service),
+            replica,
+            events,
+            config,
+        ),
+        identity_provider,
+        session_store,
+        max_body_size,
+    )
+}
 
+/// The MCP endpoint of [`mcp_endpoint`] without the session layer and without an event store:
+/// rmcp serves every request statelessly.
+#[cfg(test)]
+pub(crate) fn mcp_endpoint_without_sessions(
+    mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
+    worker_service: Arc<WorkerService>,
+    identity_provider: Arc<dyn IdentityProvider>,
+    session_store: Arc<dyn SessionStore>,
+    config: &crate::config::McpConfig,
+    max_body_size: usize,
+) -> BoxEndpoint<'static> {
+    mcp_routes(
+        stateless_transport(
+            golem_handler(mcp_capability_lookup, worker_service),
+            NeverSessionManager::default(),
+            config,
+        ),
+        identity_provider,
+        session_store,
+        max_body_size,
+    )
+}
+
+fn golem_handler(
+    mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
+    worker_service: Arc<WorkerService>,
+) -> impl Fn() -> GolemAgentMcpServer + Send + Sync + 'static {
+    move || GolemAgentMcpServer::new(mcp_capability_lookup.clone(), worker_service.clone())
+}
+
+/// The OAuth proxy routes and the `/mcp` `transport` behind the bearer authentication, with their
+/// body limit and CORS policy.
+fn mcp_routes(
+    transport: impl Endpoint<Output = Response> + 'static,
+    identity_provider: Arc<dyn IdentityProvider>,
+    session_store: Arc<dyn SessionStore>,
+    max_body_size: usize,
+) -> BoxEndpoint<'static> {
     let oauth_routes = oauth_proxy_routes(identity_provider.clone(), session_store);
 
-    let mcp_with_auth = service.with(McpBearerAuth::new(identity_provider));
+    let mcp_with_auth = transport.with(McpBearerAuth::new(identity_provider));
 
     // OAuth routes use .at() so they take priority over .nest("/mcp", ...)
     oauth_routes
@@ -141,14 +185,30 @@ where
     S: ServerHandler + Send + 'static,
     H: Fn() -> S + Send + Sync + 'static,
 {
-    let sessions = NeverSessionManager::default().with_event_store(events);
+    stateless_transport(
+        handler,
+        NeverSessionManager::default().with_event_store(events),
+        config,
+    )
+    .with(McpSessionLayer::new(replica))
+}
+
+/// The rmcp service for `handler`s, which serves every request statelessly with `sessions`.
+fn stateless_transport<S, H>(
+    handler: H,
+    sessions: NeverSessionManager,
+    config: &crate::config::McpConfig,
+) -> impl Endpoint<Output = Response> + use<S, H>
+where
+    S: ServerHandler + Send + 'static,
+    H: Fn() -> S + Send + Sync + 'static,
+{
     StreamableHttpService::new(
         move || Ok(handler()),
         Arc::new(sessions),
         mcp_http_transport_config(config),
     )
     .compat()
-    .with(McpSessionLayer::new(replica))
 }
 
 pub(crate) fn mcp_http_transport_config(
@@ -283,6 +343,96 @@ mod tests {
             .call(request_from_peer(peer, builder, Body::empty()))
             .await
             .unwrap()
+    }
+
+    /// The JSON-RPC messages of a streamed MCP response.
+    async fn messages(response: Response) -> Vec<serde_json::Value> {
+        let status = response.status();
+        let text = response.into_body().into_string().await.unwrap();
+        assert_eq!(status, http::StatusCode::OK, "{text}");
+        text.lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .filter(|data| !data.is_empty())
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect()
+    }
+
+    #[test]
+    async fn the_endpoint_serves_without_the_session_layer() {
+        let harness = crate::mcp::InvocationHarness::with_run_method(
+            golem_common::model::agent::AgentMode::Durable,
+        );
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let pool = crate::custom_api::oidc::session_store::migrated_sqlite_pool(
+            &golem_common::config::DbSqliteConfig {
+                database: db.path().to_string_lossy().into_owned(),
+                max_connections: 2,
+                foreign_keys: false,
+            },
+        )
+        .await
+        .unwrap();
+        let session_store = crate::custom_api::oidc::session_store::SqliteSessionStore::new(
+            pool,
+            Duration::from_secs(60),
+            Duration::from_secs(3600),
+        )
+        .unwrap();
+        // The lookup serves another deployment of the domain, with no tools; the requests must
+        // be served with the deployment that the request was authenticated against.
+        let endpoint = mcp_endpoint_without_sessions(
+            Arc::new(Lookup),
+            harness.worker_service.clone(),
+            Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
+            Arc::new(session_store),
+            &crate::config::McpConfig::default(),
+            usize::MAX,
+        );
+        let authenticated = McpRequest {
+            origin: crate::ingress::PublicOrigin {
+                scheme: "https".to_string(),
+                authority: "tools.example.com".to_string(),
+                forwarded: false,
+            },
+            deployment: Arc::new(McpDeployment::new(harness.compiled_mcp(
+                "tools.example.com",
+                DeploymentRevision::INITIAL,
+                false,
+            ))),
+        };
+        let post = |body: serde_json::Value| {
+            let mut request = Request::builder()
+                .method(http::Method::POST)
+                .uri_str("/mcp")
+                .header("host", "tools.example.com")
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .body(serde_json::to_vec(&body).unwrap());
+            request.extensions_mut().insert(authenticated.clone());
+            request
+        };
+
+        let listed = endpoint
+            .call(post(serde_json::json!(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+            )))
+            .await
+            .unwrap();
+        assert!(!listed.headers().contains_key("mcp-session-id"));
+        let listed = messages(listed).await;
+        assert_eq!(listed[0]["result"]["tools"][0]["name"], "mcp-agent-run");
+
+        let called = endpoint
+            .call(post(serde_json::json!(
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                 "params": {"name": "mcp-agent-run", "arguments": {}}}
+            )))
+            .await
+            .unwrap();
+        assert!(!called.headers().contains_key("mcp-session-id"));
+        let called = messages(called).await;
+        assert_eq!(called[0]["result"]["isError"], false, "{called:?}");
     }
 
     #[test]

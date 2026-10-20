@@ -2113,10 +2113,15 @@ async fn any_replica_serves_any_request() {
     let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
     let session = fx.initialize().await;
     let (other_replica, _replica) = fx.second_replica();
+    list_and_call(&fx, &other_replica, &session).await;
+    fx.finish();
+}
 
+/// Lists the tools of `session` through `endpoint`, then calls the harness's agent tool there.
+async fn list_and_call(fx: &Fixture, endpoint: &BoxEndpoint<'static>, session: &str) {
     let listed = answer(
-        other_replica
-            .call(fx.post(Some(&session), tools_list(2)))
+        endpoint
+            .call(fx.post(Some(session), tools_list(2)))
             .await
             .unwrap(),
     )
@@ -2129,13 +2134,33 @@ async fn any_replica_serves_any_request() {
         .collect();
     assert!(names.contains(&AGENT_TOOL), "{names:?}");
     let called = answer(
-        other_replica
-            .call(fx.post(Some(&session), call_tool(3, AGENT_TOOL)))
+        endpoint
+            .call(fx.post(Some(session), call_tool(3, AGENT_TOOL)))
             .await
             .unwrap(),
     )
     .await;
     assert!(is_result(&called), "{called:?}");
+}
+
+#[test]
+async fn session_survives_a_stopped_replica() {
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, _) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
+    let (stopped, stopped_replica) = fx.second_replica();
+    let session = initialize_on(&stopped, fx.post(None, initialize())).await;
+    let weak = Arc::downgrade(&stopped_replica);
+    drop(stopped_replica);
+    drop(stopped);
+    assert!(
+        weak.upgrade().is_none(),
+        "nothing keeps the stopped replica's memory"
+    );
+
+    let (started, _replica) = fx.second_replica();
+    list_and_call(&fx, &started, &session).await;
     fx.finish();
 }
 
