@@ -149,7 +149,7 @@ export type ChapterFigure = Record<CodeLanguage, ChapterCode>;
 export const agentsChapter = {
   eyebrow: "Agents",
   heading: "Agents are your own arbitrary code, not prompts",
-  lead: "Each agent's VM keeps its whole execution durable.",
+  lead: "Each agent's VM keeps its whole execution durable, files included.",
   figure: {
     ts: {
       filename: "support-agent.ts",
@@ -887,7 +887,7 @@ export const faq = {
     {
       q: "Do I still need my database?",
       aHtml:
-        "Probably not. Each agent's whole execution is durable, and each agent has its own file system and can have its own database. Golem Social, a whole social network, runs on Golem with no external database. The same holds for your agents and tools, and for the artifacts your agents deploy. Keep existing databases where other systems share the data.",
+        "Probably not. Each agent's whole execution is durable, and each agent has its own durable file system and can have its own database. Golem Social, a whole social network, runs on Golem with no external database. The same holds for your agents and tools, and for the artifacts your agents deploy. Keep existing databases where other systems share the data.",
     },
     {
       q: "Can I keep my agent framework?",
@@ -902,7 +902,7 @@ export const faq = {
     {
       q: "How does it compare with a workflow engine?",
       aHtml:
-        "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM and runtime-checked permissions.",
+        "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM, with a durable file system, and runtime-checked permissions.",
     },
     {
       q: "Is Golem open source?",
