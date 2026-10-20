@@ -32,6 +32,7 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
 };
+use golem_test_framework::components::cloud_http::SpreadClients;
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -40,6 +41,7 @@ use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{Instrument, Level, info};
 
@@ -480,12 +482,12 @@ pub struct ThroughputBenchmark {
     rust_http_request: HttpRequestFn,
     deps: BenchmarkTestDependencies,
     call_count: usize,
-    /// Pre-built HTTP client for cloud-mode apps-domain calls
-    /// (`https://{env_id}.{apps_base_domain}`).  Cached here so the
-    /// connection pool is warm across benchmark iterations.
-    /// `None` in local/provided mode (client is built per-iteration from the
+    /// Pre-built HTTP clients for cloud-mode apps-domain calls
+    /// (`https://{env_id}.{apps_base_domain}`), one connection each, spread over the
+    /// zones of the gateway. Cached here so the connections stay warm across benchmark
+    /// iterations. `None` in local/provided mode (client is built per-iteration from the
     /// custom-request port with a Host header override).
-    cloud_http_client: Option<reqwest::Client>,
+    cloud_http_clients: Option<Arc<SpreadClients>>,
 }
 
 fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> Vec<AgentId> {
@@ -542,21 +544,12 @@ impl ThroughputBenchmark {
         )
         .await;
 
-        // Build the cloud HTTP client once so the connection pool stays alive
-        // across all benchmark iterations.  In cloud mode requests go to
-        // https://{env_id}.{apps_base_domain}, so we use standard TLS with
-        // ALPN negotiation — NOT http2_prior_knowledge() which is for h2c
-        // (cleartext HTTP/2) and would bypass the ALPN step that the NLB
-        // terminating TLS expects.
-        let cloud_http_client = deps.apps_base_domain().map(|_| {
-            reqwest::ClientBuilder::new()
-                .pool_max_idle_per_host(1024)
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .tcp_nodelay(true)
-                .timeout(std::time::Duration::from_secs(180))
-                .build()
-                .expect("Failed to build cloud HTTP client for throughput benchmark")
-        });
+        // Build the cloud HTTP clients once so the connections stay alive across all
+        // benchmark iterations. In cloud mode requests go to
+        // https://{env_id}.{apps_base_domain}; see `cloud_client_builder` for the settings.
+        let cloud_http_clients = deps
+            .apps_base_domain()
+            .map(|_| Arc::new(SpreadClients::new()));
 
         Self {
             rust_method_name: rust_method_name.to_string(),
@@ -566,7 +559,7 @@ impl ThroughputBenchmark {
             rust_http_request,
             deps,
             call_count,
-            cloud_http_client,
+            cloud_http_clients,
         }
     }
 
@@ -947,8 +940,11 @@ impl ThroughputBenchmark {
         //                → reqwest connects to localhost; an explicit Host
         //                  header ("{env_id}.golem.cloud") tells the local
         //                  worker-service which deployment to route to.
-        let (http_base_url, client): (String, reqwest::Client) =
-            if let Some(ref cached) = self.cloud_http_client {
+        //
+        //   In cloud mode, agent `idx` keeps to client `idx` mod CLOUD_CONNECTIONS, so the
+        //   agents spread evenly over the connections and the zones.
+        let (http_base_url, clients): (String, Arc<SpreadClients>) =
+            if let Some(ref cached) = self.cloud_http_clients {
                 let base = format!("https://{}", iteration.domain.0);
                 (base, cached.clone())
             } else {
@@ -960,18 +956,18 @@ impl ThroughputBenchmark {
                     .default_headers(headers)
                     .build()
                     .expect("Failed to create HTTP client");
-                (base, c)
+                (base, Arc::new(SpreadClients::from_clients(vec![c])))
             };
 
         async {
-            let client = client.clone();
+            let clients = clients.clone();
             let base = http_base_url.clone();
             let result_futures = iteration
                 .rust_agent_ids_for_http
                 .iter()
                 .enumerate()
                 .map(move |(idx, _agent_id)| {
-                    let client = client.clone();
+                    let client = clients.for_index(idx).clone();
                     let base = base.clone();
                     async move {
                         let mut results = vec![];
@@ -1025,7 +1021,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .enumerate()
                 .map(move |(idx, _agent_id)| {
-                    let client = client.clone();
+                    let client = clients.for_index(idx).clone();
                     let base = http_base_url.clone();
                     async move {
                         let mut results = vec![];
