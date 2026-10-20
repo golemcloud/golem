@@ -158,6 +158,7 @@ pub(super) enum HttpBodyDemand {
         reply: oneshot::Sender<HttpBodyChunkReply>,
         cancel: oneshot::Receiver<()>,
         cancel_ack: oneshot::Sender<()>,
+        guest: bool,
     },
     /// The guest dropped/cancelled the stream with no read in flight. Finalize
     /// the durable consume-body parent without reading more upstream bytes, then
@@ -667,6 +668,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 reply: reply_tx,
                 cancel: cancel_rx,
                 cancel_ack: cancel_ack_tx,
+                guest: dst.remaining(&mut store).is_some(),
             }) {
                 Ok(()) => self.demand_signal.observe(),
                 Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -866,6 +868,7 @@ async fn deliver_http_body_reply(
     activity: &TailActivity,
     mut demand: oneshot::Sender<HttpBodyChunkReply>,
     mut delivery: CompletionDelivery,
+    guest: bool,
     reply: impl FnOnce(HttpBodyChunkDelivery) -> HttpBodyChunkReply,
 ) -> Result<DemandDelivery, WorkerExecutorError> {
     if delivery.is_replay_discarded() {
@@ -877,7 +880,20 @@ async fn deliver_http_body_reply(
         return Ok(DemandDelivery::Abandoned);
     }
 
-    delivery.prepare_delivery(Some(activity)).await?;
+    tokio::select! {
+        biased;
+        _ = demand.closed() => {
+            delivery.discarded().await?;
+            return Ok(DemandDelivery::Abandoned);
+        }
+        result = async {
+            if guest {
+                delivery.prepare_delivery(Some(activity)).await
+            } else {
+                delivery.prepare_host_delivery(Some(activity)).await
+            }
+        } => result?,
+    }
     let (delivery, observed) = HttpBodyChunkDelivery::new(delivery);
     if let Err(reply) = demand.send(reply(delivery)) {
         // Dropping an armed delivery reserves the discard marker before waking this task.
@@ -1308,24 +1324,25 @@ where
 
         loop {
             // Safe park: waiting for the guest to demand the next body chunk.
-            let (demand, cancel_rx, mut read_cancel_ack) = match stream.next_demand(&activity).await
-            {
-                Some(HttpBodyDemand::Read {
-                    reply,
-                    cancel,
-                    cancel_ack,
-                }) => {
-                    if reply.is_closed() {
+            let (demand, cancel_rx, mut read_cancel_ack, guest) =
+                match stream.next_demand(&activity).await {
+                    Some(HttpBodyDemand::Read {
+                        reply,
+                        cancel,
+                        cancel_ack,
+                        guest,
+                    }) => {
+                        if reply.is_closed() {
+                            break;
+                        }
+                        (reply, Some(cancel), Some(cancel_ack), guest)
+                    }
+                    Some(HttpBodyDemand::Cancel(ack)) => {
+                        cancel_ack = Some(ack);
                         break;
                     }
-                    (reply, Some(cancel), Some(cancel_ack))
-                }
-                Some(HttpBodyDemand::Cancel(ack)) => {
-                    cancel_ack = Some(ack);
-                    break;
-                }
-                None => break,
-            };
+                    None => break,
+                };
 
             let item = match stream
                 .next(
@@ -1892,7 +1909,7 @@ where
                 ProducedChunk::Data(bytes) => {
                     let chunk_len = bytes.len() as u64;
                     delivered_digest.update(&bytes);
-                    match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+                    match deliver_http_body_reply(&activity, demand, delivery, guest, |delivery| {
                         HttpBodyChunkReply::Data { bytes, delivery }
                     })
                     .await
@@ -1918,7 +1935,7 @@ where
                     }
                 }
                 ProducedChunk::End => {
-                    match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+                    match deliver_http_body_reply(&activity, demand, delivery, guest, |delivery| {
                         HttpBodyChunkReply::End { delivery }
                     })
                     .await
@@ -1938,7 +1955,7 @@ where
                 }
                 ProducedChunk::Cancelled => {
                     body_cancelled = true;
-                    match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+                    match deliver_http_body_reply(&activity, demand, delivery, guest, |delivery| {
                         HttpBodyChunkReply::Cancelled { delivery }
                     })
                     .await
@@ -2066,15 +2083,19 @@ where
             activity.park(trailers_tx.closed()).await;
             drop(trailers_tx);
         } else {
-            delivery
-                .prepare_delivery(Some(&activity))
-                .await
-                .map_err(|error| {
-                    wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                        anyhow::Error::from(error),
-                        parent_trap_context,
-                    ))
-                })?;
+            let mut trailers_tx = trailers_tx;
+            tokio::select! {
+                biased;
+                _ = trailers_tx.closed() => {},
+                result = delivery.prepare_delivery(Some(&activity)) => {
+                    result.map_err(|error| {
+                        wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                            anyhow::Error::from(error),
+                            parent_trap_context,
+                        ))
+                    })?;
+                }
+            }
             trailers_delivery.arm(delivery);
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => {}
@@ -2446,6 +2467,7 @@ mod tests {
             &activity,
             demand,
             delivery,
+            true,
             |delivery| HttpBodyChunkReply::Data {
                 bytes: Bytes::from_static(b"abc"),
                 delivery,
@@ -2508,7 +2530,7 @@ mod tests {
         let activity = tracker.activity();
         let (demand, reply) = oneshot::channel::<HttpBodyChunkReply>();
         drop(reply);
-        let outcome = deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+        let outcome = deliver_http_body_reply(&activity, demand, delivery, true, |delivery| {
             HttpBodyChunkReply::Data {
                 bytes: Bytes::from_static(b"abc"),
                 delivery,
@@ -2550,6 +2572,7 @@ mod tests {
             &activity,
             demand,
             delivery,
+            true,
             |delivery| HttpBodyChunkReply::Data {
                 bytes: Bytes::from_static(b"abc"),
                 delivery,

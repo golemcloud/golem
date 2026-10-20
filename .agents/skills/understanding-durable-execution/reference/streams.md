@@ -304,7 +304,13 @@ Native guest reads record one `ConsumerItemValue` or `ConsumerTerminal` at Wasmt
 consumption observer. The observer synchronously reserves the oplog position with `enqueue_add`,
 then owned work commits and indexes the record under producer admission. Its position is the
 guest boundary: replay retains the reconstructed item there until the observer acknowledges
-synchronous return, waitable delivery or callback. These records remain hints and satisfy no claim.
+waitable delivery or callback. After source/cursor readiness, `InputObservationDelivery::prepare`
+waits for the consuming Store's `RuntimeStore::await_guest_blocked`: recorded async events reach
+the guest only at a blocked wait, at most one event per block, live and replay alike. Native
+reads share this gate with timers and accessor completions. A non-blocking poll or a yield
+cannot consume an async input; a busy guest must ask through recorded synchronous host calls.
+Host-side `consume_host` takes do not gate. Native guest write completions are not instrumented
+by this gate. These records remain hints and satisfy no claim.
 There is no extra durable call or delivery marker. Packed byte records contain only the bytes
 the guest read consumed; later reads record the remainder. A crash between host take and guest
 consumption leaves no consumer record, so restart re-reads the source by offset. Nested reader
@@ -317,18 +323,14 @@ by the consumer discriminant rather than the source binding.
 Reaching a guest observation's physical position does not prove that the guest has reached
 every earlier call: the cursor can retain unclaimed `Start`s. Before releasing a native guest
 observation, replay checks retained Starts before it in the consuming invocation's root namespace.
-A Start blocks delivery until it is claimed or its ordinal is covered by the invocation's
-deferred-import watermark. Concurrent imports and synchronous imports that spawn host tasks
-advance that watermark when the guest issues them, before host admission can yield. Direct
-Store-holding calls do not advance it. A later deferred ordinal proves that earlier direct calls
-returned; waiting for already-issued deferred calls to reach admission could deadlock their Store.
+Every such Start must be claimed, including host-internal descendants that share the import's
+invocation id, or adopted as replay-inert by a cancelled parent's claim. Reserving an import's
+ordinal is not enough: live host-internal calls run eagerly before the guest can observe the read.
 The waiter releases the cursor transaction and advance gate while blocked. Existing retained
 claims and ready host results remain accessible under a delivery barrier.
 
-The watermark is one shared atomic per Store invocation, not a collection of historical calls.
-Starting another invocation replaces the allocation alongside its ordinal counters; pending
-preparations keep their original allocation. Nested custom invocation namespaces do not advance
-the root watermark. This prerequisite applies to guest input items and terminals, including tool
+The consuming invocation's anchor selects the retained Starts that constrain its read; Starts
+with another anchor do not block it. This prerequisite applies to guest input items and terminals, including tool
 attachments and client-tool stdin. Host projections and `CompletionDelivered` keep their existing
 ordering rules.
 

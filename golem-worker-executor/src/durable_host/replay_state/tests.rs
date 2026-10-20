@@ -4847,9 +4847,7 @@ async fn guest_stream_observation_waits_for_unreached_direct_calls() {
         .await;
         let order = GuestReadOrder {
             anchor: OplogIndex::from_u64(1),
-            issued: Arc::new(AtomicU64::new(0)),
         };
-        rs.record_deferred_import(&order, 6);
         let mut delivery =
             Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(4), Some(order)));
         assert!(
@@ -4885,7 +4883,7 @@ async fn guest_stream_observation_waits_for_unreached_direct_calls() {
 
 #[test]
 #[test_r::timeout("10s")]
-async fn guest_stream_observation_does_not_wait_for_issued_or_other_invocation_calls() {
+async fn guest_stream_observation_waits_for_same_invocation_claims_only() {
     for same_invocation in [false, true] {
         let mut start = start_now();
         let OplogEntry::Start { invocation_id, .. } = &mut start else {
@@ -4904,32 +4902,30 @@ async fn guest_stream_observation_does_not_wait_for_issued_or_other_invocation_c
         .await;
         let order = GuestReadOrder {
             anchor: OplogIndex::from_u64(if same_invocation { 1 } else { 10 }),
-            issued: Arc::new(AtomicU64::new(0)),
         };
-        let mut delivery = Box::pin(
-            rs.await_guest_stream_observation(OplogIndex::from_u64(4), Some(order.clone())),
-        );
+        let mut delivery =
+            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(4), Some(order)));
         if same_invocation {
             assert!(
                 tokio::time::timeout(Duration::from_millis(50), delivery.as_mut())
                     .await
                     .is_err()
             );
-            // Issuance alone must wake the waiter. Host admission still needs the Store.
-            rs.record_deferred_import(&order, 7);
         }
-        let barrier = delivery.await.unwrap();
-        let ReplayStartClaimOutcome::Claimed { handle: call, .. } = rs
-            .claim_start_or_replay_end(
-                StartClaim::unowned(
-                    &HostFunctionName::MonotonicClockNow,
-                    &DurableFunctionType::ReadLocal,
-                )
-                .with_invocation_id(Some(test_invocation_id(7))),
+        let claim = rs.claim_start_or_replay_end(
+            StartClaim::unowned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
             )
-            .await
-            .unwrap()
-        else {
+            .with_invocation_id(Some(test_invocation_id(7))),
+        );
+        let (barrier, outcome) = if same_invocation {
+            let outcome = claim.await.unwrap();
+            (delivery.await.unwrap(), outcome)
+        } else {
+            (delivery.await.unwrap(), claim.await.unwrap())
+        };
+        let ReplayStartClaimOutcome::Claimed { handle: call, .. } = outcome else {
             panic!("recorded deferred call must be claimed")
         };
         assert!(matches!(
@@ -4937,6 +4933,95 @@ async fn guest_stream_observation_does_not_wait_for_issued_or_other_invocation_c
             Resolution::Completed { .. }
         ));
         barrier.acknowledge();
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn guest_stream_observation_waits_for_host_internal_claims_or_adoption() {
+    for cancelled in [false, true] {
+        let mut outer = start_named(HostFunctionName::P3MonotonicClockWaitFor);
+        let mut child = owned_start_now(2);
+        for start in [&mut outer, &mut child] {
+            let OplogEntry::Start { invocation_id, .. } = start else {
+                unreachable!()
+            };
+            *invocation_id = Some(test_invocation_id(7));
+        }
+        // Recovery, Start A=2, Start B=3 (parent A), End B=4, terminal A=5,
+        // observation=6. Both Starts carry the same import id, including its ordinal.
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            outer,
+            child,
+            end_for(3, 43),
+            if cancelled {
+                cancelled_for(2)
+            } else {
+                end_for(2, 42)
+            },
+            consumer_observation(0, true, true),
+            remove_retry_policy(),
+        ])
+        .await;
+        let order = GuestReadOrder {
+            anchor: OplogIndex::from_u64(1),
+        };
+        let mut delivery =
+            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(6), Some(order)));
+        assert!(futures::poll!(delivery.as_mut()).is_pending());
+        let ReplayStartClaimOutcome::Claimed { handle: outer, .. } = rs
+            .claim_start_or_replay_end(
+                StartClaim::unowned(
+                    &HostFunctionName::P3MonotonicClockWaitFor,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .with_invocation_id(Some(test_invocation_id(7)))
+                .with_host_internal_calls(true),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("recorded import must be claimed")
+        };
+        assert_eq!(outer.start_idx(), OplogIndex::from_u64(2));
+        if !cancelled {
+            assert!(futures::poll!(delivery.as_mut()).is_pending());
+            let ReplayStartClaimOutcome::Claimed { handle: child, .. } = rs
+                .claim_start_or_replay_end(
+                    StartClaim::owned(
+                        &HostFunctionName::MonotonicClockNow,
+                        &DurableFunctionType::ReadLocal,
+                        OplogIndex::from_u64(2),
+                    )
+                    .with_invocation_id(Some(test_invocation_id(7))),
+                )
+                .await
+                .unwrap()
+            else {
+                panic!("recorded internal call must be claimed")
+            };
+            assert_eq!(child.start_idx(), OplogIndex::from_u64(3));
+            assert!(
+                matches!(rs.await_resolution(child).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4))
+            );
+        }
+        let barrier = delivery.await.unwrap();
+        match rs.await_resolution(outer).await.unwrap() {
+            Resolution::Cancelled { partial: None, .. } => assert!(cancelled),
+            Resolution::Completed { end_idx, .. } => {
+                assert!(!cancelled);
+                assert_eq!(end_idx, OplogIndex::from_u64(5));
+            }
+            other => panic!("unexpected import resolution {other:?}"),
+        }
+        barrier.acknowledge();
+        assert_eq!(
+            rs.get_oplog_entry(None).await.unwrap().0,
+            OplogIndex::from_u64(7)
+        );
     }
 }
 

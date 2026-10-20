@@ -185,7 +185,6 @@ pub(crate) fn reserve_invocation_id<Ctx: WorkerCtx>(
     if let Some((activity, runtime)) = &runtime {
         match runtime.guest_import_invocation_id(*activity) {
             GuestImportInvocationId::Reserved(invocation_id) => {
-                ctx.record_deferred_import(invocation_id);
                 return Ok(invocation_id);
             }
             GuestImportInvocationId::Reservable => {}
@@ -199,7 +198,6 @@ pub(crate) fn reserve_invocation_id<Ctx: WorkerCtx>(
     let invocation_id = next_invocation_id(&mut ctx.state.invocation_ordinals, anchor)?;
     if let Some((activity, runtime)) = runtime {
         runtime.record_guest_import_invocation_id(activity, invocation_id);
-        ctx.record_deferred_import(invocation_id);
     }
     Ok(invocation_id)
 }
@@ -1777,7 +1775,10 @@ fn custom_completion_delivery<Ctx: WorkerCtx>(
     start_index: OplogIndex,
     replay: Option<concurrent::ReplayDeliveryDisposition>,
 ) -> concurrent::CompletionDelivery {
-    let recorder = ctx.state.completion_marker_recorder();
+    let recorder = ctx
+        .state
+        .completion_marker_recorder()
+        .for_store(ctx.runtime_suspension.clone());
     let trap_context = DurableCallTrapContext {
         retry_from: start_index,
     };

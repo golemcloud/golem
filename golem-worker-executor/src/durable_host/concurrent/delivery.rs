@@ -53,10 +53,20 @@ impl OrderedAppend {
 /// Records successful-completion delivery markers in the exact order their guest boundaries occur.
 /// Delivered markers reserve their oplog position synchronously from Wasmtime's terminal observer.
 /// Discards of pending terminals wait for persistence success before reserving a position.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CompletionMarkerRecorder {
     oplog: Arc<dyn Oplog>,
     replay_state: ReplayState,
+    runtime: Option<Arc<crate::worker::suspension::RuntimeStore>>,
+}
+
+impl std::fmt::Debug for CompletionMarkerRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletionMarkerRecorder")
+            .field("oplog", &self.oplog)
+            .field("replay_state", &self.replay_state)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CompletionMarkerRecorder {
@@ -64,7 +74,16 @@ impl CompletionMarkerRecorder {
         Self {
             oplog,
             replay_state,
+            runtime: None,
         }
+    }
+
+    pub(crate) fn for_store(
+        mut self,
+        runtime: Option<Arc<crate::worker::suspension::RuntimeStore>>,
+    ) -> Self {
+        self.runtime = runtime;
+        self
     }
 
     pub(super) fn record(
@@ -305,6 +324,7 @@ pub(super) enum ReplayDelivery {
         replay_state: ReplayState,
         start_index: OplogIndex,
         marker_index: OplogIndex,
+        runtime: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     },
     /// The marker was consumed: the token owns the global cursor gate until the actual guest
     /// boundary acknowledges it.
@@ -327,6 +347,7 @@ impl ReplayDelivery {
                 replay_state,
                 start_index,
                 marker_index,
+                ..
             } => replay_state.fail_completion_delivery(start_index, marker_index, reason.clone()),
             Self::Armed(barrier) => barrier.fail(reason.clone()),
             // A still-tail-gated token settles silently: no marker exists and none may be
@@ -450,6 +471,7 @@ impl CompletionDelivery {
                     replay_state: recorder.replay_state.clone(),
                     start_index,
                     marker_index,
+                    runtime: recorder.runtime.clone(),
                 },
                 ReplayDeliveryDisposition::AtReplayTail => {
                     ReplayDelivery::AtReplayTail(Box::new(LiveDelivery {
@@ -511,10 +533,36 @@ impl CompletionDelivery {
     /// token tail-gated and settles it silently, keeping the `End` markerless for the next
     /// recovery.
     ///
-    /// Tracked background tasks supply their activity so only the passive markerless tail wait
-    /// can park across invocation settlement. Cursor transactions and marker-bearing waits stay
-    /// active. Live and immediate replay are no-ops.
+    /// After the cursor boundary, live and replay both wait for one fresh guest block. This
+    /// guest-driven wait may park across settlement; cursor transactions and marker waits stay
+    /// active. Guest-initiated cancellation with a partial result remains immediate.
     pub async fn prepare_delivery(
+        &mut self,
+        activity: Option<&TailActivity>,
+    ) -> Result<(), WorkerExecutorError> {
+        let runtime = match &self.state {
+            CompletionDeliveryState::Live(live)
+            | CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(live)) => {
+                live.marker.recorder.runtime.clone()
+            }
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
+                runtime, ..
+            }) => runtime.clone(),
+            _ => None,
+        };
+        self.prepare_host_delivery(activity).await?;
+        if let Some(runtime) = runtime {
+            if let Some(activity) = activity {
+                activity.park(runtime.await_guest_blocked()).await;
+            } else {
+                runtime.await_guest_blocked().await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Host-only transfers do not release a waitable event to the guest.
+    pub(crate) async fn prepare_host_delivery(
         &mut self,
         activity: Option<&TailActivity>,
     ) -> Result<(), WorkerExecutorError> {
@@ -523,6 +571,7 @@ impl CompletionDelivery {
                 replay_state,
                 start_index,
                 marker_index,
+                ..
             }) => {
                 let (replay_state, start_index, marker_index) =
                     (replay_state.clone(), *start_index, *marker_index);
@@ -659,7 +708,11 @@ impl CompletionDelivery {
             self.state = CompletionDeliveryState::Done;
             return Ok(());
         }
-        self.prepare_delivery(None).await?;
+        if store.has_guest_visible_subtask() {
+            self.prepare_delivery(None).await?;
+        } else {
+            self.prepare_host_delivery(None).await?;
+        }
         let replay_barrier = matches!(
             self.state,
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
