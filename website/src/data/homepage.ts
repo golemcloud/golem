@@ -66,8 +66,8 @@ export const customerLogos = {
 export const coreVm = {
   eyebrow: "The core of Golem",
   heading: "A lightweight, durable VM with permissions agents can't bypass",
-  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can resume anywhere.",
-  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2 from the oplog. It resumes where it left off, with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
+  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which enforces your permissions and records external interactions so the VM can resume anywhere.",
+  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks every call against your permissions: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of external interactions stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2. It resumes where it left off, with its memory, call stack, files and environment restored, and the Orders API is not called again: the recorded result is used.",
   vm: { name: "Agent", where: "node 1", sub: "in its own WebAssembly VM" },
   golem: { name: "Golem", sub: "the VM's only way out" },
   calls: [
@@ -77,7 +77,7 @@ export const coreVm = {
   recorded: "recorded",
   oplog: {
     title: "Oplog",
-    sub: "a log of every call, stored off the node",
+    sub: "external interactions, stored off the node",
     entries: [{ name: "Orders API", value: "result" }],
   },
   rebuilt: "restored after a restart, a crash or an idle wait",
@@ -92,15 +92,15 @@ export const coreVm = {
   explanations: [
     {
       title: "Lightweight",
-      body: "WebAssembly, not Linux: each VM has private memory, files and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
+      body: "WebAssembly, not Linux: each VM has its own memory, file system and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
     },
     {
       title: "Durable",
-      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, without repeating completed calls.",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, with its files, without repeating completed calls.",
     },
     {
       title: "Secure",
-      body: "A VM can't reach files, the network, secrets or other VMs directly. Every call out goes through Golem's permission checks, which no code, including AI-generated code, can bypass.",
+      body: "A VM reaches its own files, the network, secrets and other VMs only through Golem's permission checks, which no code, including AI-generated code, can bypass.",
     },
   ],
 };
@@ -517,7 +517,7 @@ var _ = Body.Handle(func(_ *tool.Context, a Args) (Result, error) {
   items: [
     {
       title: "Bundled and custom tools",
-      body: "Shell, Git, Node.js, npm and TypeScript come bundled. Build your own tools with any Golem SDK; no separate sandbox service needed.",
+      body: "Shell, Git, Node.js, npm and TypeScript come bundled, and can work on the agent's own files. Build your own tools with any Golem SDK; no separate sandbox service needed.",
     },
     {
       title: "External requests",
@@ -692,7 +692,7 @@ var _ = impl.Handle(Publish, func(
   items: [
     {
       title: "Routes and files",
-      body: "Agents deploy front-ends and back ends under the permissions you grant. HTTP routes are declared in agent code; static files are served directly from storage.",
+      body: "Agents deploy front-ends and back ends under the permissions you grant. Routes are declared in agent code; files are served from storage or live from an agent's files.",
     },
     {
       title: "Durable streaming",
@@ -704,7 +704,7 @@ var _ = impl.Handle(Publish, func(
     },
     {
       title: "Read-only methods",
-      body: "Methods marked read-only can't change state; the runtime enforces it. Responses are cached until the agent next writes, served without waking it.",
+      body: "Golem blocks writes to anything outside the agent in methods marked read-only. Responses are cached until the agent next writes, served without waking it.",
     },
   ] as ChapterItem[],
 };
