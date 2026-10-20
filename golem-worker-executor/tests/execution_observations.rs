@@ -1,6 +1,5 @@
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_worker_executor::durable_host::tool::ToolOwnerFailureMetadata;
-use golem_worker_executor::services::HasActiveAgents;
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::workerctx::WorkerCtx;
 use std::future::Future;
@@ -24,10 +23,7 @@ pub trait WorkerObservations {
 
 impl<Ctx: WorkerCtx> WorkerObservations for Worker<Ctx> {
     async fn selected_owner_failure_for_test(&self) -> Option<ToolOwnerFailureMetadata> {
-        self.active_agents()
-            .try_get_active_agent(&self.get_initial_worker_metadata().owned_agent_id())
-            .await?
-            .execution()
+        self.owner_execution()
             .tool_operation_metadata()
             .owner_failure
     }
