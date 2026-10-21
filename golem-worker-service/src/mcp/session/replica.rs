@@ -224,10 +224,14 @@ impl McpReplica {
         pin_written(&replaced)
     }
 
-    /// Keeps the session live while one of its calls runs. The returned future never completes;
-    /// it stops when it is dropped with the call.
-    fn heartbeat(&self, session: McpSessionId) -> impl Future<Output = ()> + Send + 'static {
-        heartbeat(self.store.clone(), session, self.idle)
+    /// Keeps the session live while one of its calls runs, and cancels the call through `token`
+    /// when the session's record is gone.
+    fn heartbeat(
+        &self,
+        session: McpSessionId,
+        token: CancellationToken,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        heartbeat(self.store.clone(), session, self.idle, token)
     }
 
     /// Tells this replica's GET streams of the session that its tool list changed.
@@ -411,20 +415,35 @@ async fn record_gone(store: Arc<dyn McpSessionStore>, session: McpSessionId, idl
 }
 
 /// Keeps the session live while a call runs: moves its expiry forward at once, then once per
-/// heartbeat period. It never completes; it stops when it is dropped with the call.
-async fn heartbeat(store: Arc<dyn McpSessionStore>, session: McpSessionId, idle: Duration) {
+/// heartbeat period. A read that finds no record cancels the call through `token`, so a call
+/// that the cancel sweep of a DELETE misses still ends. A failed read cancels nothing. Otherwise
+/// it stops when it is dropped with the call.
+async fn heartbeat(
+    store: Arc<dyn McpSessionStore>,
+    session: McpSessionId,
+    idle: Duration,
+    token: CancellationToken,
+) {
     let mut ticks = tokio::time::interval(heartbeat_period(idle));
     ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    IntervalStream::new(ticks)
-        .for_each(|_| {
+    let gone = IntervalStream::new(ticks)
+        .then(move |_| {
             let store = store.clone();
-            async move {
-                if let Err(error) = store.get(session, Some(idle)).await {
-                    warn!(error = %error, "Failed to extend an MCP session with a running call");
-                }
-            }
+            async move { store.get(session, Some(idle)).await }
         })
-        .await
+        .any(|read| {
+            ready(match read {
+                Ok(record) => record.is_none(),
+                Err(error) => {
+                    warn!(error = %error, "Failed to extend an MCP session with a running call");
+                    false
+                }
+            })
+        })
+        .await;
+    if gone {
+        token.cancel();
+    }
 }
 
 /// Cancels `ct` when the call is cancelled through the session.
@@ -467,7 +486,7 @@ impl McpServing for SessionServing {
         let cancel = cancel_with(self.token.clone(), ct.clone());
         let while_running = match kind {
             ServeKind::Invoke => {
-                let heartbeat = self.replica.heartbeat(self.session);
+                let heartbeat = self.replica.heartbeat(self.session, self.token.clone());
                 async move {
                     futures::future::join(heartbeat, cancel).await;
                     std::future::pending::<Infallible>().await

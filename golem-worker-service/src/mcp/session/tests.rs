@@ -2751,6 +2751,31 @@ fn a_panicking_call_stops_its_heartbeat() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn a_call_ends_when_its_record_is_gone() {
+    let fx = Fixture::with_config(config(Duration::from_secs(1), Duration::from_secs(15))).await;
+    let session = fx.initialize().await;
+    let mut body = body_of(
+        fx.send(fx.post(Some(&session), call(2, "native", "n")))
+            .await,
+    );
+    next_frames(&mut body).await;
+    fx.probe.gate("n").started().await;
+
+    // A DELETE whose cancel sweep missed the call, as on another replica.
+    fx.store
+        .inner
+        .delete(session.parse().unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(fx.probe.gate("n").returned().await, "cancelled");
+    let end = rest(body).await.expect("the body ends");
+    assert!(messages(&end).is_empty(), "{end:?}");
+    fx.finish();
+}
+
+#[test]
 fn the_heartbeat_ticks_when_the_call_starts() {
     on_paused_time(async {
         let fx = Fixture::with_store(
