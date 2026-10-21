@@ -2,6 +2,8 @@
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
 import * as native from "golem-tool-process-bridge";
+import { createToolProcessBackend } from "golem-tool-process-backend";
+import { createToolProcessHost } from "golem-tool-process-host";
 import * as childProcess from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
@@ -27,6 +29,11 @@ export {
   saveSnapshot,
   loadSnapshot,
 } from "golem-tool-process-sdk-control";
+
+const adapter = createToolProcessBackend(
+  createToolProcessHost(native),
+  process,
+);
 
 const probe = toolDefinition("node-tool-probe", { requiresFilesystem: true })
   .version("0.0.1")
@@ -187,7 +194,9 @@ async function cancelNative(native) {
 
 probe.implement({
   async "node-tool-probe"(input, context) {
-    const [mode, effectUrl, execution = "all"] = input.args;
+    const [mode, effectUrl, execution = "all", dispatch = "public-api"] =
+      input.args;
+    assert.ok(["public-api", "adapter"].includes(dispatch));
     const control = execution === "fresh-stream-control";
     const nativeControl = execution.endsWith("native-cancel");
     const sdkControl = execution === "fresh-sdk-overflow";
@@ -221,8 +230,9 @@ probe.implement({
     const bytes = echo
       ? new Uint8Array([0, 255, 1, 128, 0, 13, 10, 254])
       : new Uint8Array();
-    const backend = childProcess;
-    if (execution === "all") await checkPublicProcessContract();
+    const backend = dispatch === "adapter" ? adapter : childProcess;
+    if (execution === "all" && dispatch === "public-api")
+      await checkPublicProcessContract();
     const summarize = (result) => {
       if (result.error?.code === "ENOBUFS")
         return `overflow:${result.stdout.length}`;
@@ -257,7 +267,7 @@ probe.implement({
       value ??= result;
       if (result !== value) throw new Error("Async process differs");
     }
-    if (extra && !pressure) {
+    if (extra && !pressure && dispatch === "public-api") {
       const stdout = backend.execFileSync("streaming", args, {
         input: bytes,
         maxBuffer: 4096,
@@ -393,7 +403,12 @@ probe.implement({
                 return '7:700:14:1455';
             `
               : `
-                const backend = await import('node:child_process');
+                const { default: process } = await import('node:process');
+                const backend = ${JSON.stringify(dispatch)} === 'adapter'
+                    ? (await import('golem-tool-process-backend')).createToolProcessBackend(
+                        (await import('golem-tool-process-host')).createToolProcessHost(
+                            await import('golem-tool-process-bridge')), process)
+                    : await import('node:child_process');
                 if (${JSON.stringify(effectUrl)}) {
                     const response = await fetch(${JSON.stringify(effectUrl)} + '/' + ${JSON.stringify(mode)} + '-job', { method: 'POST' });
                     await response.arrayBuffer();
@@ -419,7 +434,8 @@ probe.implement({
     }
     const writer = context.stdout.getWriter();
     try {
-      const label = execution === "all" ? mode : `${mode}[${execution}]`;
+      const path = execution === "all" ? mode : `${mode}[${execution}]`;
+      const label = dispatch === "adapter" ? `${path}[adapter]` : path;
       await writer.write(new TextEncoder().encode(`${label}:${value}\n`));
     } finally {
       writer.releaseLock();

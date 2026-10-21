@@ -75,6 +75,36 @@ lifecycle cases. `fresh-stream-control` uses ordinary Node streams inside
 `streams-collect`. Focused results include the selected path in their label so a
 successful run cannot silently exercise the default instead.
 
+For a matched wrapper-cost comparison, use one component artifact with
+`GOLEM_NODE_TOOL_STREAM_PROBE_CASES=streams-collect` and
+`GOLEM_NODE_TOOL_STREAM_PROBE_EXECUTION=main-both`. Select
+`GOLEM_NODE_TOOL_STREAM_PROBE_DISPATCH=public-api` or `adapter`. The latter calls
+the same backend directly and marks its output with `[adapter]`, so an older
+fixture cannot silently act as the control. Both main-runtime backends are
+preinitialized, so adapter construction is outside the measured call. Both paths
+retain the same runtime initializer, native bridge, command parser and tool. This
+isolates call dispatch, not registration or component-size cost. Fix the repetition
+count in advance, interleave the paths and stop at the first failure. The reported `elapsed_us`
+is the enclosing fixture invocation, not a single child-call latency.
+
+### Matched call-path observation
+
+On the executor built after merging main, five interleaved pairs used one Wizer
+component and one synchronous plus one asynchronous child call per invocation.
+All ten invocations passed. All samples, including the first pair, are retained.
+
+| Call path | Median fixture latency | Range |
+| --- | ---: | ---: |
+| Public process API | 355.8 ms | 338.7–470.7 ms |
+| Adapter control | 351.4 ms | 332.7–356.4 ms |
+
+The median within-pair public-minus-adapter difference was +6.1 ms. The first
+pair differed by +114.4 ms; the other pairs differed by +0.9 to +9.6 ms. This small,
+startup-inclusive sample does not establish a per-child overhead or npm/tsc
+performance, nor does it prove the absence of a regression in other workloads.
+The whole integration process's median maximum RSS was 514 MiB versus 500 MiB;
+this is neither worker-only memory nor the bridge's incremental memory cost.
+
 `main-native-cancel` and `fresh-native-cancel` bypass the process adapter and Node
 streams. They wait for the provider's output marker, cancel through the native
 bridge, join the result and dispose the attachments. These controls only accept
@@ -154,12 +184,12 @@ The fixture is not a release readiness claim. Live completion and successful
 isolated replay are separate checks; the combined lifecycle and fresh-runtime
 overflow replay cases still need deterministic completion before SDK registration.
 
-The public process API fixture has completed its full live run on the preserved
-feature-base executor: separate output channels, binary stdin, overflow,
+The public process API fixture has completed its full live run on the merged-main
+executor: separate output channels, binary stdin, overflow,
 overlapping calls, cancellation and fresh-runtime registration. It also exercises
 `execFile` callbacks and local Node launchers while tool dispatch is disabled or
-a tool with the same name is bound. This checkpoint is not a latest-main executor
-run and does not establish replay safety.
+a tool with the same name is bound. This checkpoint does not establish replay
+safety.
 
 Keep replay failures strict. Do not increase timeouts or skip unmatched history to
 make a case pass. Report bugs before adding executor changes.

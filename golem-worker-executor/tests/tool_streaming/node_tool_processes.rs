@@ -26,6 +26,9 @@ async fn node_guest_tool_process_bridge(
     let cases = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_CASES")?;
     let execution = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_EXECUTION")
         .unwrap_or_else(|_| "all".to_string());
+    let dispatch = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_DISPATCH")
+        .unwrap_or_else(|_| "public-api".to_string());
+    anyhow::ensure!(matches!(dispatch.as_str(), "public-api" | "adapter"));
     anyhow::ensure!(matches!(
         execution.as_str(),
         "all"
@@ -149,17 +152,23 @@ async fn node_guest_tool_process_bridge(
         .as_ref()
         .map(|(port, _, _)| format!("http://127.0.0.1:{port}"));
     for mode in cases.split(',') {
-        println!("node-tool-stream starting mode={mode} execution={execution}");
+        println!("node-tool-stream starting mode={mode} execution={execution} dispatch={dispatch}");
         let started = Instant::now();
         let args = vec![
             mode,
             effect_url.as_deref().unwrap_or(""),
             execution.as_str(),
+            dispatch.as_str(),
         ];
         let label = if execution == "all" {
             mode.to_string()
         } else {
             format!("{mode}[{execution}]")
+        };
+        let label = if dispatch == "adapter" {
+            format!("{label}[adapter]")
+        } else {
+            label
         };
         let result = tokio::time::timeout(
             Duration::from_secs(30),
