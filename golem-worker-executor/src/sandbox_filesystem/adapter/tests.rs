@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(target_os = "linux")]
+use super::namespace::native_directory_coordination_key;
+#[cfg(target_os = "macos")]
+use super::native::admit_root;
+#[cfg(target_os = "linux")]
+use super::native::namespace_operation_error;
 use super::*;
+#[cfg(target_os = "macos")]
 use std::io::Write;
 use test_r::test;
 

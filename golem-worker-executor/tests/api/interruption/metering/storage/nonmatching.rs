@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use test_r::test;
 
 #[cfg(target_os = "linux")]
 #[test]

@@ -35,8 +35,6 @@ use namespace::linux_name_comparison_mode;
 pub(super) use namespace::native_file_identity;
 use namespace::resolve_host_namespace_target;
 #[cfg(test)]
-use native::admit_root;
-#[cfg(test)]
 use native::check_opened_kind;
 #[cfg(test)]
 use native::directory_for;
