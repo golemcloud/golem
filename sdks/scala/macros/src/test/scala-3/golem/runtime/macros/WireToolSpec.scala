@@ -18,7 +18,7 @@ package golem.runtime.macros
 
 import golem.Principal
 import golem.schema.*
-import golem.schema.SchemaTypeBody.{ListType, S8Type, U8Type}
+import golem.schema.SchemaTypeBody.{ListType, S8Type, U8Type, UuidType}
 import golem.schema.validation.RefResolution
 import golem.schema.wire.*
 import golem.tool.*
@@ -31,11 +31,11 @@ object WireToolSpec extends ZIOSpecDefault {
 
   @golem.runtime.annotations.toolDefinition(version = "1.0.0")
   trait UuidTool {
-    def echo(value: golem.Uuid): golem.Uuid
+    def echo(value: java.util.UUID): java.util.UUID
   }
 
   final class UuidToolImpl extends UuidTool {
-    def echo(value: golem.Uuid): golem.Uuid = value
+    def echo(value: java.util.UUID): java.util.UUID = value
   }
 
   @golem.runtime.annotations.toolDefinition(version = "1.0.0")
@@ -137,19 +137,15 @@ object WireToolSpec extends ZIOSpecDefault {
         signed.left.toOption.exists(_.isInstanceOf[WitToolError.InvalidInput])
       )
     },
-    test("Uuid invocation uses the u64 record representation declared by its descriptor") {
+    test("UUID invocation uses the native uuid representation declared by its descriptor") {
+      val max    = java.util.UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
       val result = invoke(
         uuidTool,
         "echo",
         WireToolInput(
           WitSchemaValueTree(
-            Vector(
-              WitSchemaValueNode.U64Value(Long.MinValue),
-              WitSchemaValueNode.U64Value(-1L),
-              WitSchemaValueNode.RecordValue(Vector(0, 1)),
-              WitSchemaValueNode.RecordValue(Vector(2))
-            ),
-            3
+            Vector(WitSchemaValueNode.UuidValue(max), WitSchemaValueNode.RecordValue(Vector(0))),
+            1
           ),
           None,
           None,
@@ -157,16 +153,17 @@ object WireToolSpec extends ZIOSpecDefault {
           Principal.Anonymous
         )
       )
+      val reflected = ToolReflection.fromWire(uuidTool.descriptor)
+      val body      = reflected.commands(reflected.commandIndexByPath(List("echo")).get).body.get
       assertTrue(
         result.exists(
           _.exists(value =>
-            value.value.valueNodes == Vector(
-              WitSchemaValueNode.U64Value(Long.MinValue),
-              WitSchemaValueNode.U64Value(-1L),
-              WitSchemaValueNode.RecordValue(Vector(0, 1))
-            ) && value.value.root == 2 && value.graph == ConcreteCodec.uuid.graph
+            value.value.valueNodes == Vector(WitSchemaValueNode.UuidValue(max)) &&
+              value.value.root == 0 && value.graph == ConcreteCodec.uuid.graph
           )
-        )
+        ),
+        rootBody(body.positionals.fixed.head.tpe) == UuidType,
+        rootBody(body.result.get.tpe) == UuidType
       )
     },
     test("compiled byte arrays use list<u8> while scalar bytes remain s8") {

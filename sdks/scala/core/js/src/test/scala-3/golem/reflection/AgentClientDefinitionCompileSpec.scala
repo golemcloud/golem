@@ -55,7 +55,7 @@ object AgentClientDefinitionCompileSpec extends ZIOSpecDefault {
         )
         durable.agentId("main")
         durable.client.get("main")
-        durable.client.getPhantom("main", golem.Uuid.random())
+        durable.client.getPhantom("main", java.util.UUID.randomUUID())
         durable.client.newPhantom("main")
 
         val ephemeral = AgentClientDefinition.full(
@@ -64,7 +64,7 @@ object AgentClientDefinitionCompileSpec extends ZIOSpecDefault {
           constructor = InputRecordCodec.single[String]("route")
         )
         ephemeral.agentId("live")
-        ephemeral.client.getPhantom("live", golem.Uuid.random())
+        ephemeral.client.getPhantom("live", java.util.UUID.randomUUID())
         ephemeral.client.newPhantom("live")
       """)
       assertTrue(errors.isEmpty)

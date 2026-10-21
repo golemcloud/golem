@@ -13,8 +13,9 @@ package golem.reflection
 import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.runtime.{InputRecordCodec, OutputCodec, OutputMetadata}
 import golem.schema.SchemaValue
-import golem.{Datetime, Uuid}
+import golem.Datetime
 
+import java.util.UUID
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.annotation.targetName
@@ -64,7 +65,7 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
 
   def agentId(
     input: Constructor,
-    phantomId: Option[Uuid] = None
+    phantomId: Option[UUID] = None
   )(implicit full: Capability <:< Full): Either[GolemReflectError, ParsedAgentId] =
     try ParsedAgentId.create(contractName.get, constructorCodec.get.toValue(input), phantomId)
     catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
@@ -169,7 +170,7 @@ final case class CallerCodecMethod[Input, Output](
 
 final case class CallerCodecPhantomClient(
   agentId: ParsedAgentId,
-  phantomId: Uuid,
+  phantomId: UUID,
   client: CallerCodecAgentClient
 )
 
@@ -182,12 +183,12 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
   def get(input: Constructor, config: Config): Either[GolemReflectError, CallerCodecAgentClient] =
     encodeConfig(config).flatMap(getWithOverrides(input, _))
 
-  def getPhantom(input: Constructor, phantomId: Uuid): Either[GolemReflectError, CallerCodecAgentClient] =
+  def getPhantom(input: Constructor, phantomId: UUID): Either[GolemReflectError, CallerCodecAgentClient] =
     create(input, Some(phantomId), Nil)
 
   def getPhantom(
     input: Constructor,
-    phantomId: Uuid,
+    phantomId: UUID,
     config: Config
   ): Either[GolemReflectError, CallerCodecAgentClient] =
     encodeConfig(config).flatMap(create(input, Some(phantomId), _))
@@ -209,7 +210,7 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
   ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
     if (definition.contractMode.contains(AgentMode.Ephemeral)) create(input, None, overrides).map(Left(_))
     else {
-      val phantom = Uuid.random()
+      val phantom = UUID.randomUUID()
       for {
         constructor <- encodeConstructor(input)
         id          <- ParsedAgentId.create(definition.contractName.get, constructor, Some(phantom))
@@ -223,14 +224,14 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
 
   private def create(
     input: Constructor,
-    phantomId: Option[Uuid],
+    phantomId: Option[UUID],
     overrides: List[ConfigOverride]
   ): Either[GolemReflectError, CallerCodecAgentClient] =
     encodeConstructor(input).flatMap(createValue(_, phantomId, overrides))
 
   private def createValue(
     constructor: SchemaValue,
-    phantomId: Option[Uuid],
+    phantomId: Option[UUID],
     overrides: List[ConfigOverride]
   ): Either[GolemReflectError, CallerCodecAgentClient] =
     Transport

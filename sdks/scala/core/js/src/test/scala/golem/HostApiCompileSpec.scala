@@ -29,7 +29,7 @@ object HostApiCompileSpec extends ZIOSpecDefault {
     // ---------------------------------------------------------------------------
 
     test("ForkResult.Original and Forked variants compile") {
-      val phantomId                    = Uuid(BigInt(1), BigInt(2))
+      val phantomId                    = new java.util.UUID(1L, 2L)
       val original: HostApi.ForkResult = HostApi.ForkResult.Original(phantomId)
       val forked: HostApi.ForkResult   = HostApi.ForkResult.Forked(phantomId)
       assertTrue(
@@ -40,7 +40,7 @@ object HostApiCompileSpec extends ZIOSpecDefault {
 
     test("ForkResult pattern match compiles") {
       val result: HostApi.ForkResult =
-        HostApi.ForkResult.Original(Uuid(BigInt(0), BigInt(0)))
+        HostApi.ForkResult.Original(new java.util.UUID(0L, 0L))
       val label = result match {
         case HostApi.ForkResult.Original(_) => "original"
         case HostApi.ForkResult.Forked(_)   => "forked"
@@ -141,14 +141,6 @@ object HostApiCompileSpec extends ZIOSpecDefault {
       assertTrue(byIndex != null, byCount != null)
     },
 
-    test("Uuid construction") {
-      val u = Uuid(BigInt(123456789L), BigInt(987654321L))
-      assertTrue(
-        u.highBits == BigInt(123456789L),
-        u.lowBits == BigInt(987654321L)
-      )
-    },
-
     // ---------------------------------------------------------------------------
     // RegisteredAgentType (Scala case class, no js.Object)
     // ---------------------------------------------------------------------------
@@ -168,7 +160,7 @@ object HostApiCompileSpec extends ZIOSpecDefault {
     test("AgentIdParts construction") {
       val parts = HostApi.AgentIdParts(
         agentTypeName = "counter",
-        phantom = Some(Uuid(BigInt(1), BigInt(2)))
+        phantom = Some(new java.util.UUID(1L, 2L))
       )
       assertTrue(
         parts.agentTypeName == "counter",

@@ -10,7 +10,6 @@
 
 package golem.reflection
 
-import golem.Uuid
 import golem.FutureInterop
 import golem.host.ToolWireInterop
 import golem.host.js.tool.JsInvocationResult
@@ -82,7 +81,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
         ),
         schema
       ),
-      ComponentId(Uuid(0, 0))
+      ComponentId(new java.util.UUID(0L, 0L))
     )
   }
 
@@ -166,7 +165,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
         WitCommandTree(Vector(WitCommandNode("bash", Nil, doc, WitGlobals(Nil, Nil), Nil, Some(body)))),
         schema
       ),
-      ComponentId(Uuid(0, 0))
+      ComponentId(new java.util.UUID(0L, 0L))
     )
   }
 

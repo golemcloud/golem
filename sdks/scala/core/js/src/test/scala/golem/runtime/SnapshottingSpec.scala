@@ -278,12 +278,12 @@ object SnapshottingSpec extends ZIOSpecDefault {
       },
       test("restore receives identity, agent ID, phantom ID, and restored principal") {
         ZIO.fromFuture { implicit ec =>
-          val phantom = golem.Uuid(BigInt(1), BigInt(2))
+          val phantom = new java.util.UUID(1L, 2L)
           val context = SnapshotRestoreContext(
             Vector("identity"),
             "custom-snapshot-agent(\"identity\")",
             Some(phantom),
-            Principal.GolemUser(golem.Uuid(BigInt(3), BigInt(4))),
+            Principal.GolemUser(new java.util.UUID(3L, 4L)),
             None
           )
           customDefn.snapshotHandlers.get
@@ -364,7 +364,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
     suite("Guest restoration lifecycle")(
       test("binary restoration skips normal initialization and installs principal and state") {
         val identity  = SchemaPayload.encode[String]("fresh")(InputRecordCodec.single[String]("name"))
-        val principal = Principal.GolemUser(golem.Uuid(BigInt(5), BigInt(6)))
+        val principal = Principal.GolemUser(new java.util.UUID(5L, 6L))
         ZIO.fromFuture { implicit ec =>
           val _ = customDefn
           Guest.resetForTesting()
@@ -395,7 +395,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
       },
       test("JSON restoration dispatches the generated state factory through Guest") {
         val identity  = SchemaPayload.encode[Unit](())(InputRecordCodec.unit)
-        val principal = Principal.Agent(golem.Uuid(BigInt(7), BigInt(8)), "caller")
+        val principal = Principal.Agent(new java.util.UUID(7L, 8L), "caller")
         ZIO.fromFuture { implicit ec =>
           val _ = autoDefn
           Guest.resetForTesting()
@@ -426,7 +426,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
       },
       test("failed restoration installs no runtime state and a later restoration can succeed") {
         val identity  = SchemaPayload.encode[Unit](())(InputRecordCodec.unit)
-        val principal = Principal.GolemUser(golem.Uuid(BigInt(9), BigInt(10)))
+        val principal = Principal.GolemUser(new java.util.UUID(9L, 10L))
         ZIO.fromFuture { implicit ec =>
           val _ = configDefn
           Guest.resetForTesting()

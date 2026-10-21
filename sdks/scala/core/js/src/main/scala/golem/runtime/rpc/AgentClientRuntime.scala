@@ -24,7 +24,7 @@ import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
 import golem.runtime.{WireAgentClientType, WireClientMethod}
 import golem.schema.wire.{ConcreteCodec, WitSchemaValueTree}
 import golem.FutureInterop
-import golem.Uuid
+import java.util.UUID
 import golem.Datetime
 
 import scala.concurrent.Future
@@ -44,7 +44,7 @@ object AgentClientRuntime {
   def resolveWire[Trait, Constructor](
     agentType: WireAgentClientType[Trait, Constructor],
     constructorArgs: Constructor,
-    phantom: Option[Uuid] = None,
+    phantom: Option[UUID] = None,
     configOverrides: List[ConfigOverride] = Nil
   ): Either[String, WireResolvedAgent[Trait]] =
     encodeWireSync(agentType.ctorCodec, agentType.ctorContainsStream, constructorArgs).flatMap { payload =>
@@ -148,7 +148,7 @@ object AgentClientRuntime {
   def resolveWithPhantom[Trait, Constructor](
     agentType: AgentType[Trait, Constructor],
     constructorArgs: Constructor,
-    phantom: Option[Uuid]
+    phantom: Option[UUID]
   ): Either[String, ResolvedAgent[Trait]] =
     resolveWithPhantomAndConfig(agentType, constructorArgs, phantom, configOverrides = Nil)
 
@@ -162,7 +162,7 @@ object AgentClientRuntime {
   def resolveWithPhantomAndConfig[Trait, Constructor](
     agentType: AgentType[Trait, Constructor],
     constructorArgs: Constructor,
-    phantom: Option[Uuid],
+    phantom: Option[UUID],
     configOverrides: List[ConfigOverride]
   ): Either[String, ResolvedAgent[Trait]] =
     for {
@@ -217,7 +217,7 @@ object AgentClientRuntime {
   private def resolveRemote(
     agentTypeName: String,
     payload: JsSchemaValueTree,
-    phantom: Option[Uuid],
+    phantom: Option[UUID],
     configOverrides: List[ConfigOverride]
   ): Either[String, RemoteAgentClient] =
     remoteResolverOverride match {

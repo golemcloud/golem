@@ -16,13 +16,14 @@
 
 package golem.host
 
-import golem.{HostApi, Uuid}
+import golem.HostApi
 import golem.host.js._
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.rpc.host.AgentHostApi
 import golem.schema.TypedSchemaValue
 import golem.schema.wire.SchemaWire
 
+import java.util.UUID
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 
@@ -157,7 +158,7 @@ object OplogApi {
 
   final case class PublicInvocationWalletPin(
     walletToken: PermissionsApi.WalletVersionToken,
-    scopeCardId: Option[Uuid]
+    scopeCardId: Option[UUID]
   )
 
   final case class AgentInvocationStartedParameters(
@@ -754,9 +755,7 @@ object OplogApi {
         walletIdHash = raw.walletToken.walletIdHash.toArray.iterator.map(_.toByte).toVector,
         generation = BigInt(raw.walletToken.generation.toString)
       ),
-      scopeCardId = raw.scopeCardId.toOption.map(cardId =>
-        Uuid(BigInt(cardId.uuid.highBits.toString), BigInt(cardId.uuid.lowBits.toString))
-      )
+      scopeCardId = raw.scopeCardId.toOption.map(cardId => JsUuid.toUuid(cardId.uuid))
     )
 
   private def parseAgentInvocationStartedParameters(

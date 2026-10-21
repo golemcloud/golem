@@ -22,9 +22,8 @@ use golem_cli::bridge_gen::scala::scala::{
     unique_idents_with_reserved,
 };
 use golem_cli::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
-use golem_cli::bridge_gen::scala::type_name::RemappedType;
 use golem_cli::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode, ScalaTypeName};
-use golem_cli::bridge_gen::type_naming::{TypeName, TypeNaming};
+use golem_cli::bridge_gen::type_naming::TypeName;
 use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
@@ -322,29 +321,85 @@ fn single_agent_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPacka
     compile(pkg.package_dir().as_path());
 }
 
-#[test]
-fn first_class_uuid_uses_self_contained_runtime_type() {
-    let pkg = GeneratedPackage::new(agent(
+fn native_uuid_agent() -> AgentTypeSchema {
+    agent(
         "UuidAgent",
         "scala",
         vec![field("id", SchemaType::uuid())],
-        vec![method(
-            "round-trip",
-            vec![field("value", SchemaType::uuid())],
-            Some(SchemaType::uuid()),
-        )],
+        vec![
+            method(
+                "round-trip",
+                vec![field("value", SchemaType::uuid())],
+                Some(SchemaType::uuid()),
+            ),
+            method(
+                "maybe",
+                vec![field("value", SchemaType::option(SchemaType::uuid()))],
+                Some(SchemaType::option(SchemaType::uuid())),
+            ),
+            method(
+                "many",
+                vec![field("values", SchemaType::list(SchemaType::uuid()))],
+                Some(SchemaType::list(SchemaType::uuid())),
+            ),
+            method(
+                "holder",
+                vec![field(
+                    "value",
+                    SchemaType::record(vec![named_field("id", SchemaType::uuid())]),
+                )],
+                None,
+            ),
+        ],
         vec![],
         AgentMode::Durable,
-    ));
+    )
+}
+
+#[test]
+fn native_uuid_maps_to_java_util_uuid_in_external_mode() {
+    let pkg = GeneratedPackage::new(native_uuid_agent());
     let package_dir = pkg.package_dir();
     let client = std::fs::read_to_string(
         package_dir.join("src/main/scala/golem/bridge/client/uuid_agent/UuidAgentClient.scala"),
     )
     .unwrap();
 
-    assert!(client.contains("_root_.golem.bridge.runtime.Uuid"));
+    assert!(client.contains("def get(id: _root_.java.util.UUID)"));
+    assert!(client.contains(
+        "value: _root_.java.util.UUID): _root_.scala.concurrent.Future[_root_.java.util.UUID]"
+    ));
+    assert!(client.contains("_root_.scala.Option[_root_.java.util.UUID]"));
+    assert!(client.contains("_root_.scala.collection.immutable.List[_root_.java.util.UUID]"));
+    assert!(client.contains("_root_.golem.bridge.runtime.SchemaValue.UuidValue(id)"));
+    assert!(client.contains("_root_.java.util.UUID.randomUUID()"));
+    assert!(!client.contains("golem.bridge.runtime.Uuid"));
     assert!(!client.contains("_root_.golem.Uuid"));
+    assert!(
+        !package_dir
+            .join("src/main/scala/golem/bridge/runtime/Uuid.scala")
+            .exists()
+    );
     compile(package_dir.as_path());
+}
+
+#[test]
+fn native_uuid_maps_to_java_util_uuid_in_guest_mode() {
+    let pkg = GeneratedPackage::new_with_mode(native_uuid_agent(), ScalaBridgeMode::GuestWasmRpc);
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir.join("src/main/scala/golem/bridge/client/uuid_agent/UuidAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(client.contains("def get(id: _root_.java.util.UUID)"));
+    assert!(client.contains("phantom: _root_.java.util.UUID"));
+    assert!(client.contains("_root_.scala.Option[_root_.java.util.UUID]"));
+    assert!(client.contains("_root_.scala.collection.immutable.List[_root_.java.util.UUID]"));
+    assert!(client.contains("_root_.golem.schema.SchemaValue.UuidValue(id)"));
+    assert!(!client.contains("golem.bridge.runtime"));
+    assert!(!client.contains("_root_.golem.Uuid"));
+    compile_guest_if_enabled(package_dir.as_path());
 }
 
 #[test]
@@ -368,10 +423,24 @@ fn first_class_uuid_rejects_non_canonical_strings() {
 package golem.bridge.runtime
 
 class StreamRuntimeTest extends munit.FunSuite {
+  test("first-class UUID codec round-trips nil and max UUIDs as lowercase hyphenated strings") {
+    val values = List(
+      new java.util.UUID(0L, 0L) -> "00000000-0000-0000-0000-000000000000",
+      new java.util.UUID(-1L, -1L) -> "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    )
+    values.foreach { case (uuid, text) =>
+      val encoded = SchemaValueCodec.toJson(SchemaValue.UuidValue(uuid))
+      assertEquals(encoded.render, s"""{"kind":"uuid","value":"$text"}""")
+      assertEquals(SchemaValueCodec.render(SchemaValue.UuidValue(uuid)), encoded.render)
+      assertEquals(SchemaValueCodec.fromJson(encoded), Right(SchemaValue.UuidValue(uuid)))
+    }
+  }
   test("first-class UUID decoder rejects non-canonical UUID strings") {
     val malformed = List(
       "000000000-0000-0000-0000-000000000000",
-      "550E8400-E29B-41D4-A716-446655440000"
+      "550E8400-E29B-41D4-A716-446655440000",
+      "1-2-3-4-5",
+      "550e8400e29b41d4a716446655440000"
     )
     malformed.foreach { value =>
       val jsonValue = json.Json.obj(
@@ -406,7 +475,7 @@ package golem.bridge.runtime
 class StreamRuntimeTest extends munit.FunSuite {
   import SchemaValue.*
   test("direct tagged writer matches every node shape and exact scalar tokens") {
-    val scalar = List[SchemaValue](BoolValue(true), S8Value(-128), S16Value(-32768), S32Value(Int.MinValue), S64Value(Long.MinValue), U8Value(255), U16Value(65535), U32Value(4294967295L), U64Value(-1L), CharValue(0x1f600), StringValue("\"\\\b\f\n\r\tárvíz😀"), UuidValue(Uuid.fromStandardString("00112233-4455-6677-8899-aabbccddeeff").toOption.get))
+    val scalar = List[SchemaValue](BoolValue(true), S8Value(-128), S16Value(-32768), S32Value(Int.MinValue), S64Value(Long.MinValue), U8Value(255), U16Value(65535), U32Value(4294967295L), U64Value(-1L), CharValue(0x1f600), StringValue("\"\\\b\f\n\r\tárvíz😀"), UuidValue(java.util.UUID.fromString("00112233-4455-6677-8899-aabbccddeeff")))
     val floats = List(-0.0, 0.0, 0.1, Double.MinPositiveValue, Double.MaxValue, Double.NaN, Double.PositiveInfinity, Double.NegativeInfinity).map(F64Value.apply) ++ List(-0.0f, 0.0f, 0.1f, Float.MinPositiveValue, Float.MaxValue, Float.NaN, Float.PositiveInfinity, Float.NegativeInfinity).map(F32Value.apply)
     val containers = List[SchemaValue](RecordValue(scalar), RecordValue(Nil), TupleValue(floats), TupleValue(Nil), ListValue(scalar), ListValue(Nil), FixedListValue(List(U8Value(1))), FixedListValue(Nil), VariantValue(3, Some(ListValue(scalar))), VariantValue(0, None), EnumValue(2), FlagsValue(List(true, false, true)), FlagsValue(Nil), MapValue(List(SchemaMapEntry(StringValue("key"), OptionValue(Some(S64Value(Long.MaxValue)))))), MapValue(Nil), OptionValue(None), ResultValue(SchemaResult.Ok(None)), ResultValue(SchemaResult.Err(Some(U64Value(-1L)))), TextValue("árvíz", Some("hu")), TextValue("", None), BinaryValue(Vector(0, -1, 127).map(_.toByte), Some("application/octet-stream")), BinaryValue(Vector.empty, None), PathValue("/a\""), UrlValue("https://example.com/a?q=😀"), DatetimeValue("2026-01-01T00:00:00.123Z"), DurationValue(Long.MinValue), QuantityValue(Long.MaxValue, -9, "m/s"), StreamReferenceValue(Some("00112233-4455-4677-8899-aabbccddeeff"), None), StreamReferenceValue(None, Some("token\"😀")), UnionValue("branch\"", RecordValue(scalar)))
     for (value <- scalar ++ floats ++ containers) assertEquals(SchemaValueCodec.render(value), SchemaValueCodec.toJson(value).render)
@@ -1491,7 +1560,7 @@ fn guest_durable_phantom_constructors_use_replay_safe_identity() {
         client_source.contains("_root_.scala.Some(_root_.golem.HostApi.generateIdempotencyKey())")
     );
     assert!(client_source.contains("_root_.scala.Some(phantom)"));
-    assert!(!client_source.contains("_root_.golem.Uuid.random()"));
+    assert!(!client_source.contains("randomUUID()"));
 
     compile_guest_if_enabled(dir.as_path());
 }
@@ -1820,11 +1889,13 @@ fn generates_client_surface() {
     // Durable agent: get / getPhantom / newPhantom, all returning the remote.
     assert!(client.contains("bindRemote(_root_.golem.bridge.runtime.ResolvedAgent("));
     assert!(client.contains("def get(person: _root_.golem.bridge.client.agent1.Person"));
-    assert!(client.contains(
-        "phantom: _root_.golem.bridge.runtime.Uuid): _root_.scala.concurrent.Future[Agent1Remote]"
-    ));
+    assert!(
+        client.contains(
+            "phantom: _root_.java.util.UUID): _root_.scala.concurrent.Future[Agent1Remote]"
+        )
+    );
     assert!(client.contains("def newPhantom("));
-    assert!(client.contains("_root_.golem.bridge.runtime.Uuid.random()"));
+    assert!(client.contains("_root_.java.util.UUID.randomUUID()"));
     assert!(client.contains(
         "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, phantomId,"
     ));
@@ -1855,7 +1926,7 @@ fn ephemeral_agent_omits_get_constructor() {
     );
     assert!(!client.contains("def getPhantom("));
     assert!(client.contains("def newPhantom("));
-    assert!(!client.contains("Uuid.random()"));
+    assert!(!client.contains("randomUUID()"));
     assert!(!client.contains("Bridge.createAgent("));
     assert!(
         client.contains("Future[_root_.golem.bridge.runtime.InvocationResult[_root_.scala.Unit]]")
@@ -1868,7 +1939,7 @@ fn ephemeral_agent_omits_get_constructor() {
 /// Generated codecs reject malformed wire shapes on the negative path: a
 /// payload-less variant case carrying a payload, a unit-`result` arm carrying a
 /// payload, and an invalid (surrogate) `char` on encode. (The runtime-only
-/// strictness — option object shape, UUID half ranges, strict case-index
+/// strictness — option object shape, strict case-index
 /// parsing — lives in the hand-written runtime sources, which the sbt
 /// compile only type-checks rather than executes.)
 #[test]
@@ -2190,7 +2261,7 @@ fn term_ident_casing_respects_same_language() {
     assert_eq!(to_scala_term_ident("read-only", false), "readOnly");
 }
 
-// --- ScalaTypeName casing & remapping (Step 2) -----------------------------
+// --- ScalaTypeName casing ----------------------------------------------------
 
 #[test]
 fn type_names_are_upper_camel_case() {
@@ -2202,76 +2273,6 @@ fn type_names_are_upper_camel_case() {
 
     let segmented = ScalaTypeName::from_segments(["foo", "bar-baz"], false);
     assert_eq!(segmented.to_string(), "FooBarBaz");
-}
-
-#[test]
-fn uuid_ref_is_remapped() {
-    let uuid_ref = SchemaType::ref_to(TypeId::new("uuid.Uuid"));
-    let mapped = ScalaTypeName::from_schema_type(&uuid_ref);
-    assert_eq!(mapped, Some(ScalaTypeName::Remapped(RemappedType::Uuid)));
-    assert_eq!(mapped.unwrap().to_string(), "Uuid");
-
-    let other_ref = SchemaType::ref_to(TypeId::new("my.OtherType"));
-    assert_eq!(ScalaTypeName::from_schema_type(&other_ref), None);
-
-    assert_eq!(ScalaTypeName::from_schema_type(&SchemaType::string()), None);
-}
-
-// --- UUID remap wired into the TypeNaming walker (Step 3) -------------------
-
-/// The `uuid.Uuid` builtin record is remapped onto the runtime `Uuid` type: no
-/// structural record definition is generated for it, while normal nominal types
-/// in the same agent still get derived names.
-#[test]
-fn uuid_ref_is_remapped_through_the_walker() {
-    let uuid_def = def(
-        "uuid.Uuid",
-        SchemaType::record(vec![
-            named_field("high-bits", SchemaType::u64()),
-            named_field("low-bits", SchemaType::u64()),
-        ]),
-    );
-
-    let agent_type = agent(
-        "IdAgent",
-        "scala",
-        vec![
-            field("id", ref_to("uuid.Uuid")),
-            field(
-                "color",
-                SchemaType::r#enum(vec!["red".into(), "green".into(), "blue".into()]),
-            ),
-        ],
-        vec![method("get-id", vec![], Some(ref_to("uuid.Uuid")))],
-        vec![uuid_def],
-        AgentMode::Durable,
-    );
-
-    let naming = TypeNaming::<ScalaTypeName>::new(&agent_type, false).unwrap();
-    let names: Vec<ScalaTypeName> = naming.types().map(|(_, n)| n.clone()).collect();
-
-    // The uuid ref (used by both the constructor field and the method result,
-    // structurally identical) collapses to a single remapped entry.
-    let uuid_count = names
-        .iter()
-        .filter(|n| matches!(n, ScalaTypeName::Remapped(RemappedType::Uuid)))
-        .count();
-    assert_eq!(uuid_count, 1, "expected exactly one remapped uuid entry");
-
-    // No structural definition was generated for the uuid record body, and
-    // nothing derived collides with the runtime `Uuid` name.
-    assert!(
-        !names
-            .iter()
-            .any(|n| n.to_string() == "Uuid" && n.as_remapped().is_none()),
-        "no derived type should be named Uuid: {names:?}"
-    );
-
-    // Normal nominal naming still works: the inline enum got a derived name.
-    assert!(
-        names.iter().any(|n| matches!(n, ScalaTypeName::Derived(_))),
-        "expected a derived name for the inline enum: {names:?}"
-    );
 }
 
 /// A multimodal method input/output (`list<variant<… Role::Multimodal>>`) is
@@ -2420,7 +2421,7 @@ fn local_config_overrides_compile() {
         "def getWithConfig(name: _root_.scala.Predef.String, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
     ));
     assert!(client.contains(
-        "def getPhantomWithConfig(name: _root_.scala.Predef.String, phantom: _root_.golem.bridge.runtime.Uuid, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
+        "def getPhantomWithConfig(name: _root_.scala.Predef.String, phantom: _root_.java.util.UUID, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
     ));
     assert!(client.contains(
         "def newPhantomWithConfig(name: _root_.scala.Predef.String, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"

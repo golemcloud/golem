@@ -17,9 +17,10 @@
 package example.integrationtests
 
 import example.templates.CounterClient
-import golem.{HostApi, Uuid}
+import golem.HostApi
 import golem.runtime.annotations.agentImplementation
 
+import java.util.UUID
 import scala.annotation.unused
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
@@ -123,8 +124,8 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
     // generateIdempotencyKey
     val key1 = HostApi.generateIdempotencyKey()
     val key2 = HostApi.generateIdempotencyKey()
-    sb.append(s"idempotencyKey1=${key1.highBits},${key1.lowBits}\n")
-    sb.append(s"idempotencyKey2=${key2.highBits},${key2.lowBits}\n")
+    sb.append(s"idempotencyKey1=$key1\n")
+    sb.append(s"idempotencyKey2=$key2\n")
     sb.append(s"keys are distinct=${key1 != key2}\n")
 
     sb.result()
@@ -147,12 +148,9 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
     // forkAgent (may not work locally)
     try {
       val key        = HostApi.generateIdempotencyKey()
-      val targetUuid = HostApi.UuidLiteral(
-        js.BigInt(key.highBits.toString),
-        js.BigInt(key.lowBits.toString)
-      )
-      val targetCid = HostApi.ComponentIdLiteral(targetUuid)
-      val targetAid = HostApi.AgentIdLiteral(targetCid, "fork-target")
+      val targetUuid = HostApi.UuidLiteral(key)
+      val targetCid  = HostApi.ComponentIdLiteral(targetUuid)
+      val targetAid  = HostApi.AgentIdLiteral(targetCid, "fork-target")
       HostApi.forkAgent(self.agentId, targetAid, BigInt(2))
       sb.append("forkAgent: succeeded\n")
     } catch {
@@ -174,8 +172,8 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
     val sb = new StringBuilder
     sb.append("=== Phantom RPC Demo ===\n")
 
-    val phantomId = Uuid(BigInt(42), BigInt(99))
-    sb.append(s"creating phantom counter with Uuid(42,99)\n")
+    val phantomId = UUID.fromString("00000000-0000-002a-0000-000000000063")
+    sb.append(s"creating phantom counter with UUID $phantomId\n")
 
     try {
       val counter = CounterClient.getPhantom("phantom-counter-instance", phantomId)

@@ -462,24 +462,29 @@ object RpcCodegen {
     if (mode == "ephemeral") {
       emitConstructor("newPhantom", "", "", phantom = None, config = None)
       if (configFields.nonEmpty) emitWithConfigConstructor("newPhantomWithConfig", "", "", phantom = None)
-      emitConstructor("getPhantom", "", "phantom: _root_.golem.Uuid", phantom = Some("phantom"), config = None)
+      emitConstructor("getPhantom", "", "phantom: _root_.java.util.UUID", phantom = Some("phantom"), config = None)
       if (configFields.nonEmpty)
-        emitWithConfigConstructor("getPhantomWithConfig", "", "phantom: _root_.golem.Uuid", phantom = Some("phantom"))
+        emitWithConfigConstructor(
+          "getPhantomWithConfig",
+          "",
+          "phantom: _root_.java.util.UUID",
+          phantom = Some("phantom")
+        )
       return
     }
 
     // Durable phantom constructors retain their existing behavior.
-    emitConstructor("getPhantom", "", "phantom: _root_.golem.Uuid", phantom = Some("phantom"), config = None)
+    emitConstructor("getPhantom", "", "phantom: _root_.java.util.UUID", phantom = Some("phantom"), config = None)
     val ctorRefs         = if (ctorParams.isEmpty) "" else ctorParams.map(_.name).mkString(", ") + ", "
     val newPhantomParams = if (paramDecls.isEmpty) "" else paramDecls
     sb.append(s"  def newPhantom($newPhantomParams): $remoteName =\n")
     sb.append(s"    getPhantom(${ctorRefs}_root_.golem.HostApi.generateIdempotencyKey())\n\n")
     if (configFields.nonEmpty) {
-      emitWithConfigConstructor("getPhantomWithConfig", "", "phantom: _root_.golem.Uuid", phantom = Some("phantom"))
+      emitWithConfigConstructor("getPhantomWithConfig", "", "phantom: _root_.java.util.UUID", phantom = Some("phantom"))
       val newPhantomWithConfigParams = {
         val configParams = configParamDecls
         val extra        =
-          Seq("phantom: _root_.golem.Uuid" +: Nil, configParams +: Nil).flatten.filter(_.nonEmpty).mkString(", ")
+          Seq("phantom: _root_.java.util.UUID" +: Nil, configParams +: Nil).flatten.filter(_.nonEmpty).mkString(", ")
         Seq(paramDecls, extra).filter(_.nonEmpty).mkString(", ")
       }
       // newPhantomWithConfig delegates, need to forward config params

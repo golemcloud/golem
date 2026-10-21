@@ -18,83 +18,31 @@ use heck::ToUpperCamelCase;
 use itertools::Itertools;
 use std::fmt::{Display, Formatter};
 
-/// Canonical id of the cross-SDK UUID builtin record (two `u64` halves), shared
-/// by all language SDKs. The Scala bridge remaps it onto the runtime `Uuid`
-/// type instead of generating a structural record, matching the Scala SDK's
-/// type mapping.
-const UUID_TYPE_ID: &str = "uuid.Uuid";
-
-/// A runtime type a generated name maps onto directly, instead of a generated
-/// definition. Mirrors the Scala SDK, which surfaces these builtins as their
-/// ergonomic runtime types rather than their structural schema bodies.
+/// A generated Scala type name, derived from the schema (owner + name, or
+/// location segments). The generator emits a definition (case class / sealed
+/// trait / type alias) for it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RemappedType {
-    /// The `uuid.Uuid` builtin record → `golem.bridge.runtime.Uuid`.
-    Uuid,
-}
-
-impl RemappedType {
-    /// The Scala type as it is referenced in generated code (the runtime
-    /// package is wildcard-imported, so the simple name is enough).
-    pub fn rendered(&self) -> &'static str {
-        match self {
-            RemappedType::Uuid => "Uuid",
-        }
-    }
-}
-
-/// A generated Scala type name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ScalaTypeName {
-    /// A name derived from the schema (owner + name, or location segments). The
-    /// generator emits a definition (case class / sealed trait / type alias)
-    /// for it.
-    Derived(String),
-    /// A name that maps onto an existing runtime type. No definition is emitted
-    /// and the schema body is not walked.
-    Remapped(RemappedType),
-}
-
-impl ScalaTypeName {
-    pub fn as_remapped(&self) -> Option<&RemappedType> {
-        match self {
-            ScalaTypeName::Remapped(remapped) => Some(remapped),
-            ScalaTypeName::Derived(_) => None,
-        }
-    }
-}
+pub struct ScalaTypeName(pub String);
 
 impl From<String> for ScalaTypeName {
     fn from(value: String) -> Self {
-        Self::Derived(value)
+        Self(value)
     }
 }
 
 impl From<&str> for ScalaTypeName {
     fn from(value: &str) -> Self {
-        Self::Derived(value.to_string())
+        Self(value.to_string())
     }
 }
 
 impl Display for ScalaTypeName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ScalaTypeName::Derived(string) => write!(f, "{string}"),
-            ScalaTypeName::Remapped(remapped) => write!(f, "{}", remapped.rendered()),
-        }
+        write!(f, "{}", self.0)
     }
 }
 
 impl TypeName for ScalaTypeName {
-    fn from_schema_type(typ: &SchemaType) -> Option<Self> {
-        match typ {
-            SchemaType::Ref { id, .. } if id.0 == UUID_TYPE_ID => {
-                Some(ScalaTypeName::Remapped(RemappedType::Uuid))
-            }
-            _ => None,
-        }
-    }
-
     fn from_owner_and_name(
         owner: Option<impl AsRef<str>>,
         name: impl AsRef<str>,
@@ -103,7 +51,7 @@ impl TypeName for ScalaTypeName {
         // WIT type names are kebab-case regardless of source language, so the
         // generated Scala type name is always UpperCamelCase. This matches the
         // Rust and TypeScript generators.
-        Self::Derived(match owner {
+        Self(match owner {
             Some(owner) => format!(
                 "{}{}",
                 owner.as_ref().to_upper_camel_case(),

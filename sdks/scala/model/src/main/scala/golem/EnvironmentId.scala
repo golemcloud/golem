@@ -18,8 +18,10 @@ package golem
 
 import zio.blocks.schema.Schema
 
+import java.util.UUID
+
 final case class EnvironmentId(
-  uuid: Uuid
+  uuid: UUID
 )
 
 object EnvironmentId {

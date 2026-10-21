@@ -17,7 +17,7 @@
 package golem.runtime.rpc
 
 import golem.Datetime
-import golem.Uuid
+import java.util.UUID
 import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.FutureInterop
 import golem.host.PermissionsApi.ScopeCard
@@ -122,14 +122,14 @@ object RemoteAgentClient {
   def resolve(
     agentTypeName: String,
     constructorPayload: JsSchemaValueTree,
-    phantom: Option[Uuid]
+    phantom: Option[UUID]
   ): Either[String, RemoteAgentClient] =
     resolve(agentTypeName, constructorPayload, phantom, configOverrides = Nil)
 
   def resolve(
     agentTypeName: String,
     constructorPayload: JsSchemaValueTree,
-    phantom: Option[Uuid],
+    phantom: Option[UUID],
     configOverrides: List[ConfigOverride]
   ): Either[String, RemoteAgentClient] =
     AgentHostApi
@@ -138,13 +138,8 @@ object RemoteAgentClient {
       .flatMap { agentType =>
         val displayTypeName = agentType.agentType.typeName
         AgentHostApi.makeAgentId(displayTypeName, constructorPayload, phantom).map { id =>
-          val phantomArg: js.UndefOr[JsUuid] = phantom.fold[js.UndefOr[JsUuid]](js.undefined) { uuid =>
-            JsUuid(
-              js.BigInt(uuid.highBits.toString),
-              js.BigInt(uuid.lowBits.toString)
-            )
-          }
-          val jsConfig =
+          val phantomArg: js.UndefOr[JsUuid] = phantom.fold[js.UndefOr[JsUuid]](js.undefined)(JsUuid.fromUuid)
+          val jsConfig                       =
             if (configOverrides.isEmpty) js.Array[JsTypedAgentConfigValue]()
             else ConfigOverrideEncoder.encode(configOverrides)
           val rpcClient = WasmRpcApi.newClient(displayTypeName, constructorPayload, phantomArg, jsConfig)

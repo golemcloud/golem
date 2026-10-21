@@ -18,6 +18,7 @@ package golem.host
 
 import golem.host.js._
 
+import java.util.UUID
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 import scala.scalajs.js.typedarray.Uint8Array
@@ -43,8 +44,6 @@ object Rdbms {
   final case class DbTimestampTz(timestamp: DbTimestamp, offset: Int)
 
   final case class DbTimeTz(time: DbTime, offset: Int)
-
-  final case class DbUuid(highBits: BigInt, lowBits: BigInt)
 
   sealed trait IpAddress extends Product with Serializable
   object IpAddress {
@@ -76,8 +75,8 @@ object Rdbms {
   private def parseDbTimeTz(raw: JsDbTimeTz): DbTimeTz =
     DbTimeTz(parseDbTime(raw.time), raw.offset)
 
-  private def parseDbUuid(raw: JsDbUuid): DbUuid =
-    DbUuid(BigInt(raw.highBits.toString), BigInt(raw.lowBits.toString))
+  private def parseDbUuid(raw: JsDbUuid): UUID =
+    JsUuid.fromBits(raw.highBits, raw.lowBits)
 
   private def parseIpAddress(raw: JsIpAddress): IpAddress =
     raw.tag match {
@@ -113,8 +112,8 @@ object Rdbms {
   private def dbTimeTzToJs(ttz: DbTimeTz): JsDbTimeTz =
     JsDbTimeTz(dbTimeToJs(ttz.time), ttz.offset)
 
-  private def dbUuidToJs(u: DbUuid): JsDbUuid =
-    JsDbUuid(js.BigInt(u.highBits.toString), js.BigInt(u.lowBits.toString))
+  private def dbUuidToJs(u: UUID): JsDbUuid =
+    JsDbUuid(JsUuid.unsignedBits(u.getMostSignificantBits), JsUuid.unsignedBits(u.getLeastSignificantBits))
 
   private def ipAddressToJs(ip: IpAddress): JsIpAddress = ip match {
     case IpAddress.Ipv4(a, b, c, d)             => JsIpAddress.ipv4(a.toInt, b.toInt, c.toInt, d.toInt)
@@ -263,22 +262,22 @@ object Rdbms {
 
   sealed trait IgniteDbValue extends Product with Serializable
   object IgniteDbValue {
-    case object DbNull                                           extends IgniteDbValue
-    final case class DbBoolean(value: Boolean)                   extends IgniteDbValue
-    final case class DbByte(value: Byte)                         extends IgniteDbValue
-    final case class DbShort(value: Short)                       extends IgniteDbValue
-    final case class DbInt(value: Int)                           extends IgniteDbValue
-    final case class DbLong(value: Long)                         extends IgniteDbValue
-    final case class DbFloat(value: Float)                       extends IgniteDbValue
-    final case class DbDouble(value: Double)                     extends IgniteDbValue
-    final case class DbChar(value: Char)                         extends IgniteDbValue
-    final case class DbString(value: String)                     extends IgniteDbValue
-    final case class DbUuid(value: (scala.BigInt, scala.BigInt)) extends IgniteDbValue
-    final case class DbDate(value: Long)                         extends IgniteDbValue
-    final case class DbTimestamp(value: (Long, Int))             extends IgniteDbValue
-    final case class DbTime(value: Long)                         extends IgniteDbValue
-    final case class DbDecimal(value: String)                    extends IgniteDbValue
-    final case class DbByteArray(value: Array[Byte])             extends IgniteDbValue
+    case object DbNull                               extends IgniteDbValue
+    final case class DbBoolean(value: Boolean)       extends IgniteDbValue
+    final case class DbByte(value: Byte)             extends IgniteDbValue
+    final case class DbShort(value: Short)           extends IgniteDbValue
+    final case class DbInt(value: Int)               extends IgniteDbValue
+    final case class DbLong(value: Long)             extends IgniteDbValue
+    final case class DbFloat(value: Float)           extends IgniteDbValue
+    final case class DbDouble(value: Double)         extends IgniteDbValue
+    final case class DbChar(value: Char)             extends IgniteDbValue
+    final case class DbString(value: String)         extends IgniteDbValue
+    final case class DbUuid(value: UUID)             extends IgniteDbValue
+    final case class DbDate(value: Long)             extends IgniteDbValue
+    final case class DbTimestamp(value: (Long, Int)) extends IgniteDbValue
+    final case class DbTime(value: Long)             extends IgniteDbValue
+    final case class DbDecimal(value: String)        extends IgniteDbValue
+    final case class DbByteArray(value: Array[Byte]) extends IgniteDbValue
 
     def fromJs(raw: JsIgniteDbValue): IgniteDbValue =
       raw.tag match {
@@ -297,7 +296,7 @@ object Rdbms {
             case "db-string"  => DbString(v.asInstanceOf[String])
             case "db-uuid"    =>
               val t = v.asInstanceOf[js.Tuple2[js.BigInt, js.BigInt]]
-              DbUuid((scala.BigInt(t._1.toString), scala.BigInt(t._2.toString)))
+              DbUuid(JsUuid.fromBits(t._1, t._2))
             case "db-date"      => DbDate(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
             case "db-timestamp" =>
               val t = v.asInstanceOf[js.Tuple2[js.BigInt, Double]]
@@ -312,17 +311,20 @@ object Rdbms {
     def fromDynamic(raw: js.Dynamic): IgniteDbValue = fromJs(raw.asInstanceOf[JsIgniteDbValue])
 
     def toJs(v: IgniteDbValue): JsIgniteDbValue = v match {
-      case DbNull         => JsIgniteDbValue.dbNull
-      case DbBoolean(b)   => JsIgniteDbValue.dbBoolean(b)
-      case DbByte(n)      => JsIgniteDbValue.dbByte(n.toInt)
-      case DbShort(n)     => JsIgniteDbValue.dbShort(n.toInt)
-      case DbInt(n)       => JsIgniteDbValue.dbInt(n)
-      case DbLong(n)      => JsIgniteDbValue.dbLong(js.BigInt(n.toString))
-      case DbFloat(n)     => JsIgniteDbValue.dbFloat(n.toDouble)
-      case DbDouble(n)    => JsIgniteDbValue.dbDouble(n)
-      case DbChar(c)      => JsIgniteDbValue.dbChar(c.toInt)
-      case DbString(s)    => JsIgniteDbValue.dbString(s)
-      case DbUuid(t)      => JsIgniteDbValue.dbUuid(js.Tuple2(js.BigInt(t._1.toString), js.BigInt(t._2.toString)))
+      case DbNull       => JsIgniteDbValue.dbNull
+      case DbBoolean(b) => JsIgniteDbValue.dbBoolean(b)
+      case DbByte(n)    => JsIgniteDbValue.dbByte(n.toInt)
+      case DbShort(n)   => JsIgniteDbValue.dbShort(n.toInt)
+      case DbInt(n)     => JsIgniteDbValue.dbInt(n)
+      case DbLong(n)    => JsIgniteDbValue.dbLong(js.BigInt(n.toString))
+      case DbFloat(n)   => JsIgniteDbValue.dbFloat(n.toDouble)
+      case DbDouble(n)  => JsIgniteDbValue.dbDouble(n)
+      case DbChar(c)    => JsIgniteDbValue.dbChar(c.toInt)
+      case DbString(s)  => JsIgniteDbValue.dbString(s)
+      case DbUuid(u)    =>
+        JsIgniteDbValue.dbUuid(
+          js.Tuple2(JsUuid.unsignedBits(u.getMostSignificantBits), JsUuid.unsignedBits(u.getLeastSignificantBits))
+        )
       case DbDate(ms)     => JsIgniteDbValue.dbDate(js.BigInt(ms.toString))
       case DbTimestamp(t) => JsIgniteDbValue.dbTimestamp(js.Tuple2(js.BigInt(t._1.toString), t._2))
       case DbTime(ns)     => JsIgniteDbValue.dbTime(js.BigInt(ns.toString))
@@ -574,7 +576,7 @@ object Rdbms {
     final case class Jsonb(value: String)                  extends PostgresDbValue
     final case class JsonPath(value: String)               extends PostgresDbValue
     final case class Xml(value: String)                    extends PostgresDbValue
-    final case class Uuid(value: DbUuid)                   extends PostgresDbValue
+    final case class Uuid(value: UUID)                     extends PostgresDbValue
     final case class Inet(value: IpAddress)                extends PostgresDbValue
     final case class Cidr(value: IpAddress)                extends PostgresDbValue
     final case class MacAddr(value: MacAddress)            extends PostgresDbValue
