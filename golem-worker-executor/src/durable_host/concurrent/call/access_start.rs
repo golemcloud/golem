@@ -170,9 +170,25 @@ where
 {
     let interrupt =
         accessor.with(|mut access| get_ctx(access.data_mut()).create_interrupt_signal());
+    tokio::pin!(start);
     let result = tokio::select! {
-        result = start => result,
+        result = &mut start => result,
         interruption = interrupt => {
+            // Classify the selected disposal before dropping the metadata receiver. Its
+            // independently owned Start may be accepted after this task unwinds.
+            accessor.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                match interruption {
+                    InterruptKind::EntityCancellation => {
+                        ctx.tool_trap_disposal.store(true, Ordering::Release);
+                    }
+                    InterruptKind::Interrupt(_)
+                    | InterruptKind::Restart
+                    | InterruptKind::Suspend(_)
+                    | InterruptKind::Jump
+                    | InterruptKind::ShardLost => ctx.begin_stream_runtime_teardown(),
+                }
+            });
             let error = WorkerExecutorError::from(interruption);
             let _ = handed.send(Err(error.clone().into()));
             return Err(error.into());

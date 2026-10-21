@@ -15,14 +15,14 @@
 use super::{
     AcceptedToolCall, AgentEntity, Arc, AttachmentController, ByteStreamFailure,
     DeferredAdmissionCleanup, EntityBodyOutcome, EntityCallMode, EntityInvocationDescriptor,
-    EntityInvocationDurability, FailedRetainedEntityResources, HasActiveAgents, HasWorker,
+    EntityInvocationDurability, FailedRetainedEntityResources, HasActiveAgents,
     HostResponseEntityInvocation, IncompleteLiveRepairBeforeBody, InterruptKind,
     InvocationExecutionMode, Mutex, OwnedToolEndpoints, RecordedEntityTerminal,
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
     SessionError, ToolAttachmentCounterparty, ToolBodyStdin, ToolCaller, ToolExecution,
     ToolInvokeResponse, ToolOutputWriterEntry, ToolSidecarBody, ToolSidecarInvocation, WorkerCtx,
-    WorkerExecutorError, anyhow, attachment, decode_tool_terminal, durability,
-    encode_tool_terminal, invoke_native_tool, oneshot, operation, publish_output_completions,
+    WorkerExecutorError, anyhow, attachment, decode_tool_terminal, encode_tool_terminal,
+    invoke_native_tool, oneshot, operation, publish_output_completions,
     resource_exhausted_after_body, resource_exhausted_terminal, resource_exhausted_without_body,
     streams, terminal_from_response,
 };
