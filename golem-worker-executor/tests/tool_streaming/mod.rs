@@ -8282,6 +8282,156 @@ async fn large_tool_output_reconstructs_with_one_chunk_capacity(
     Ok(())
 }
 
+/// Guest read observations of a durable owner become durable with the next owner-oplog commit,
+/// not with a commit of their own. Crashing while a large stream is being consumed must still
+/// deliver every chunk exactly once, and each consumed byte must belong to exactly one original
+/// read payload.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn large_tool_output_survives_crashes_while_it_is_consumed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentReadObservation, ToolAttachmentSlot,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = 4096;
+                config.retry.max_attempts = 0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "crash-while-consumed");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "collect",
+        data_value!("large", Vec::<u8>::new(), 1_u32),
+    );
+    tokio::pin!(invocation);
+    let crashes = async {
+        for reads_before_crash in [16_usize, 128, 320] {
+            tokio::time::timeout(Duration::from_secs(60), async {
+                loop {
+                    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    let reads = entries
+                        .iter()
+                        .filter(|entry| {
+                            matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_))
+                        })
+                        .count();
+                    if reads >= reads_before_crash {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await??;
+            executor.simulated_crash(&worker).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::select! {
+        result = invocation.as_mut() => panic!("the stream finished before the last crash: {result:?}"),
+        crashed = crashes => crashed?,
+    }
+    let result: StreamEvidence = tokio::time::timeout(Duration::from_secs(120), invocation)
+        .await??
+        .into_typed()?;
+    let expected: Vec<u8> = (0..512_u32)
+        .flat_map(|index| std::iter::repeat_n((index % 251) as u8, 4096))
+        .collect();
+    assert_eq!(result.output.len(), expected.len());
+    assert!(
+        result.output == expected,
+        "every chunk is delivered once and in order"
+    );
+    assert_eq!(result.completion, "ok");
+
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::tool::streams::tool-output-writer::write"
+            ))
+            .count(),
+        512,
+        "recovery must not append replacement output writes"
+    );
+    let mut consumed = Vec::new();
+    for entry in &oplog {
+        if let PublicOplogEntry::ToolAttachmentRead(read) = &entry.entry
+            && let Some(bytes) = &read.payload
+        {
+            let observation =
+                ToolAttachmentReadObservation::from_value(read.observation.value()).unwrap();
+            assert!(observation.reobserves.is_none());
+            if matches!(
+                observation.attachment.slot,
+                ToolAttachmentSlot::Stdout | ToolAttachmentSlot::Output
+            ) {
+                consumed.extend_from_slice(bytes);
+            }
+        }
+    }
+    assert_eq!(consumed.len(), expected.len());
+    assert!(
+        consumed == expected,
+        "original read observations own exactly the consumed bytes"
+    );
+    executor.delete_worker(&worker).await?;
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]

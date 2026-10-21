@@ -482,6 +482,11 @@ Their producer calls use ordinary durable-call envelopes with lengths, digests a
 not byte bodies. `AttachmentInputProducer` records consumed payloads through
 `PrepareAttachmentObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
 actual consumption; host pipe reads commit their observation before handing bytes to transport.
+A durable owner's guest read observation is append-only, like a `CompletionDelivered` marker: the
+next commit of the owner oplog (usually the producer's next accepted `End`) persists it as part of
+the prefix, and invocation settlement commits any remainder. No later entry can become durable
+without it, and a crash before that commit leaves no record, so recovery reads the chunk again.
+Ephemeral owners still commit each guest read observation immediately.
 The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
 stdin uses the same producer adapter. `NativeAttachmentInput` records at the host return boundary.
 The stdin of an external call has no attachment when the body is a component: the body reads the
