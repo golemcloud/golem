@@ -22,7 +22,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_service::custom_api::oidc::session_store::{
     migrated_postgres_pool, migrated_sqlite_pool,
@@ -296,4 +296,81 @@ async fn postgres_cleanup_deletes_expired_mcp_sessions(
         Arc::new(PostgresMcpSessionStore::new(pool, cleanup_interval))
     })
     .await
+}
+
+/// How long the sessions of the lock-wait tests live. The database clock must pass their expiry
+/// while a write waits for a row lock, so each of these tests waits this long once.
+const LOCK_WAIT_EXPIRY: Duration = Duration::from_secs(2);
+
+/// A Postgres store and a pool for another transaction on the same schema, with one session
+/// that expires after [`LOCK_WAIT_EXPIRY`]. Then the other transaction holds an uncommitted
+/// update of the session's row, which `write` waits behind.
+async fn postgres_write_behind_a_held_row_lock<T: Send + 'static>(
+    postgres: &DockerPostgresRdb,
+    write: impl FnOnce(Arc<PostgresMcpSessionStore>, McpSessionId) -> tokio::task::JoinHandle<T>,
+) -> anyhow::Result<(Arc<PostgresMcpSessionStore>, McpSessionId, T)> {
+    let config = unique_postgres_config(postgres);
+    let store = Arc::new(PostgresMcpSessionStore::new(
+        migrated_postgres_pool(&config).await?,
+        Duration::from_secs(3600),
+    ));
+    let holder_pool = PostgresPool::configured(&config).await?;
+    let id = new_id();
+    let created = Instant::now();
+    assert!(
+        store
+            .create(id, &record(EnvironmentId::new(), 1), LOCK_WAIT_EXPIRY)
+            .await?
+    );
+
+    let mut holder = holder_pool
+        .with_rw("mcp_session_store_test", "hold")
+        .begin()
+        .await?;
+    holder
+        .execute(sqlx::query("UPDATE mcp_session SET value = value"))
+        .await?;
+    let waiting = write(store.clone(), id);
+    sleep_until(created + LOCK_WAIT_EXPIRY + Duration::from_millis(200)).await;
+    assert_eq!(
+        store.get(id, None).await?,
+        None,
+        "another reader sees the expiry"
+    );
+    holder.rollback().await?;
+    Ok((store.clone(), id, waiting.await?))
+}
+
+// Postgres evaluates a statement's row filter before the statement waits for a row lock, and
+// keeps that result when the lock holder rolls back. A read that refreshes the session waits
+// behind the holder while the session expires; it must then find the row expired.
+#[test]
+#[timeout("60s")]
+async fn postgres_mcp_session_refresh_behind_a_lock_does_not_revive_it(
+    _tracing: &Tracing,
+    postgres: &DockerPostgresRdb,
+) -> anyhow::Result<()> {
+    let (store, id, read) = postgres_write_behind_a_held_row_lock(postgres, |store, id| {
+        tokio::spawn(async move { store.get(id, Some(Duration::from_secs(300))).await })
+    })
+    .await?;
+    assert_eq!(read?, None, "the refresh returns no record");
+    assert_eq!(store.get(id, None).await?, None, "the session stays gone");
+    Ok(())
+}
+
+// A replace that waits behind the holder while the session expires must not report success.
+#[test]
+#[timeout("60s")]
+async fn postgres_mcp_session_replace_behind_a_lock_does_not_succeed(
+    _tracing: &Tracing,
+    postgres: &DockerPostgresRdb,
+) -> anyhow::Result<()> {
+    let (store, id, replaced) = postgres_write_behind_a_held_row_lock(postgres, |store, id| {
+        tokio::spawn(async move { store.replace(id, &record(EnvironmentId::new(), 2)).await })
+    })
+    .await?;
+    assert!(!replaced?, "the replace reports a session that is not live");
+    assert_eq!(store.get(id, None).await?, None, "the session stays gone");
+    Ok(())
 }
