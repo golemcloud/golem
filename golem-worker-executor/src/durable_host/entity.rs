@@ -667,6 +667,7 @@ impl EntityInvocationDurability {
     pub(crate) async fn enter_incomplete_live_repair_before_body_owned<Ctx: WorkerCtx>(
         self,
         context: &EntitySettlementContext<Ctx>,
+        ready_for_caller_replay: impl FnOnce(),
     ) -> Result<IncompleteLiveRepairBeforeBody, WorkerExecutorError> {
         if self.scope.mode() != InvocationExecutionMode::ReplayingIncomplete {
             return Ok(IncompleteLiveRepairBeforeBody::Ready(self));
@@ -691,6 +692,9 @@ impl EntityInvocationDurability {
             mut historical_reconstruction,
             scope_interest,
         } = self;
+        // An empty body has nothing to reconstruct before the caller can replay its later
+        // host calls. Those calls must advance the cursor before incomplete repair can finish.
+        ready_for_caller_replay();
         let (handle, cancelled) = match handle.replay_entity_owned(context, false).await? {
             ReconstructionReplayOutcome::Incomplete(handle) => (handle, false),
             ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => (handle, true),

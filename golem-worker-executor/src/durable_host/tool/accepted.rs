@@ -842,7 +842,11 @@ where
     let replaying_incomplete = durability.scope().mode()
         == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
     let pre_body_live_admission_cancelled = match durability
-        .enter_incomplete_live_repair_before_body_owned(&accessor.settlement)
+        .enter_incomplete_live_repair_before_body_owned(&accessor.settlement, || {
+            if let Some(started) = completed_supervisor_started.take() {
+                let _ = started.send(());
+            }
+        })
         .await?
     {
         IncompleteLiveRepairBeforeBody::Ready(ready) => {

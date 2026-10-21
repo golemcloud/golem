@@ -13313,6 +13313,8 @@ async fn deterministic_stream_crash_checkpoint_matrix(
             )
             .await?;
         let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let mut original_body = (checkpoint.name() == "before-input")
+            .then(|| executor.gate_next_entity_body_start(&worker_id));
         match checkpoint {
             Checkpoint::Incapable { checkpoint, .. } => {
                 executor
@@ -13370,6 +13372,11 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_checkpoint.name, checkpoint.name());
 
+        if let Some(body) = original_body.as_mut() {
+            tokio::time::timeout(std::time::Duration::from_secs(30), body.entered())
+                .await
+                .map_err(|_| anyhow::anyhow!("tool did not reach its pre-body crash gate"))?;
+        }
         let original_start = if let Some((expected_admission, expected_lane)) =
             checkpoint.expected_operation()
         {
@@ -13487,6 +13494,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         };
 
         executor.simulated_crash(&worker_id).await?;
+        drop(original_body);
         drop(original_checkpoint.release);
 
         let replayed_checkpoint = tokio::time::timeout(

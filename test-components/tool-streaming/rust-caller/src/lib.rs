@@ -2729,11 +2729,17 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await;
         if value == "parent-trap" {
             let failure = result.expect_err("middleware must trap");
-            assert!(matches!(
-                failure,
-                tool_host::ToolRpcError::RemoteInternalError(_)
-            ));
+            let tool_host::ToolRpcError::RemoteInternalError(_) = failure else {
+                panic!("expected remote internal error, got {failure:?}");
+            };
             "parent-trap-handled".to_string()
+        } else if value.starts_with("cascade(") {
+            let failure = result.expect_err("middleware forwards the child failure");
+            let ToolRpcError::RemoteToolError(WireToolError::InvalidResult(details)) = failure
+            else {
+                panic!("expected forwarded middleware error, got {failure:?}");
+            };
+            details
         } else {
             decode_middleware_probe_result(result.expect("middleware handles child trap"))
         }
