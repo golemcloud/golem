@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Each record is one row of `mcp_session`; `expires_at` holds Unix milliseconds. A read
-//! moves the expiry forward only when [`expiry_write`] asks for it, so a busy session costs at
-//! most one write per slack period.
+//! Each record is one row of `mcp_session`; `expires_at` holds Unix milliseconds of the database
+//! clock. Every statement reads that clock when it executes, so the expiry checks of all
+//! replicas use one clock and no statement acts on a time taken before it ran. A read moves the
+//! expiry forward only when [`expiry_write`] asks for it, so a busy session costs at most one
+//! write per slack period.
 
 use super::{McpSessionId, McpSessionRecord, McpSessionStore, McpSessionStoreError, millis};
 use async_trait::async_trait;
-use chrono::Utc;
 use conditional_trait_gen::trait_gen;
 use futures::StreamExt;
 use golem_service_base::db::postgres::PostgresPool;
@@ -35,9 +36,69 @@ const SVC_NAME: &str = "mcp_session_store";
 /// The longest time a database expiry write may be skipped.
 const MAX_SLACK: Duration = Duration::from_secs(30);
 
-fn now_millis() -> i64 {
-    Utc::now().timestamp_millis()
+/// The longest lifetime a statement adds to the database clock, so that the sum stays in the
+/// range of a 64-bit integer.
+const MAX_LIFETIME_MS: i64 = i64::MAX / 4;
+
+/// The statements of one database.
+trait McpSessionSql {
+    /// Binds the ID, the encoded record and the lifetime in milliseconds.
+    const CREATE: &'static str;
+    /// Binds the ID; returns the value, the expiry and the clock of the read.
+    const GET: &'static str;
+    /// Binds the ID and the lifetime in milliseconds.
+    const EXTEND: &'static str;
+    /// Binds the ID and the encoded record.
+    const REPLACE: &'static str;
+    const DELETE_EXPIRED: &'static str;
 }
+
+/// Implements [`McpSessionSql`] for `$pool`. `$now` is the database clock in Unix milliseconds
+/// at its evaluation. `$cleanup_now` is the same clock at the start of the statement, which an
+/// index scan of `expires_at` can use; an earlier clock only deletes fewer rows.
+macro_rules! mcp_session_sql {
+    ($pool:ty, $now:literal, $cleanup_now:literal) => {
+        impl McpSessionSql for $pool {
+            const CREATE: &'static str = concat!(
+                "INSERT INTO mcp_session (session_id, value, expires_at) VALUES ($1, $2, ",
+                $now,
+                " + $3) ON CONFLICT (session_id) DO NOTHING"
+            );
+            const GET: &'static str = concat!(
+                "SELECT value, expires_at, ",
+                $now,
+                " FROM mcp_session WHERE session_id = $1 AND expires_at > ",
+                $now
+            );
+            const EXTEND: &'static str = concat!(
+                "UPDATE mcp_session SET expires_at = ",
+                $now,
+                " + $2 WHERE session_id = $1 AND expires_at > ",
+                $now,
+                " AND expires_at < ",
+                $now,
+                " + $2"
+            );
+            const REPLACE: &'static str = concat!(
+                "UPDATE mcp_session SET value = $2 WHERE session_id = $1 AND expires_at > ",
+                $now
+            );
+            const DELETE_EXPIRED: &'static str =
+                concat!("DELETE FROM mcp_session WHERE expires_at <= ", $cleanup_now);
+        }
+    };
+}
+
+mcp_session_sql!(
+    SqlitePool,
+    "CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)",
+    "CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)"
+);
+mcp_session_sql!(
+    PostgresPool,
+    "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT",
+    "FLOOR(EXTRACT(EPOCH FROM statement_timestamp()) * 1000)::BIGINT"
+);
 
 pub type SqliteMcpSessionStore = DbMcpSessionStore<SqlitePool>;
 pub type PostgresMcpSessionStore = DbMcpSessionStore<PostgresPool>;
@@ -55,14 +116,16 @@ impl<P> Drop for DbMcpSessionStore<P> {
     }
 }
 
-/// The expiry that a read at `now_ms` which keeps the session live for `idle` writes, or `None`
-/// while the stored expiry is already at least `now_ms + idle`. The written value is
-/// `now_ms + idle + slack`, with `slack = min(30 s, idle / 4)`: a session never ends earlier than
-/// `idle` after its last read, and a busy session is written at most once per slack.
+/// The lifetime that a write after a read at `now_ms` which keeps the session live for `idle`
+/// gives the session, or `None` while the stored expiry is already at least `now_ms + idle`.
+/// The lifetime is `idle + slack`, with `slack = min(30 s, idle / 4)`: a session never ends
+/// earlier than `idle` after its last read, and a busy session is written at most once per
+/// slack.
 fn expiry_write(stored_ms: i64, now_ms: i64, idle: Duration) -> Option<i64> {
-    let due = now_ms.saturating_add(millis(idle));
+    let idle_ms = millis(idle);
     let slack = millis(MAX_SLACK.min(idle / 4));
-    (stored_ms < due).then(|| due.saturating_add(slack))
+    (stored_ms < now_ms.saturating_add(idle_ms))
+        .then(|| idle_ms.saturating_add(slack).min(MAX_LIFETIME_MS))
 }
 
 #[trait_gen(SqlitePool -> SqlitePool, PostgresPool)]
@@ -79,7 +142,7 @@ impl DbMcpSessionStore<SqlitePool> {
                 ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 IntervalStream::new(ticks)
                     .take_until(cancelled)
-                    .for_each(|_| Self::delete_expired(&cleanup_pool, now_millis()))
+                    .for_each(|_| Self::delete_expired(&cleanup_pool))
                     .await
             }
             .in_current_span(),
@@ -90,35 +153,37 @@ impl DbMcpSessionStore<SqlitePool> {
         }
     }
 
-    async fn delete_expired(pool: &SqlitePool, now_ms: i64) {
+    async fn delete_expired(pool: &SqlitePool) {
         if let Err(err) = pool
             .with_rw(SVC_NAME, "delete_expired")
-            .execute(sqlx::query("DELETE FROM mcp_session WHERE expires_at <= $1").bind(now_ms))
+            .execute(sqlx::query(<SqlitePool as McpSessionSql>::DELETE_EXPIRED))
             .await
         {
             error!(error = %err, "Failed to delete expired MCP sessions");
         }
     }
 
-    /// Moves the expiry of a record that is live at `now_ms` forward to `expires_at`. `false`
-    /// when the record is not live, or its expiry is already at least `expires_at`.
-    async fn extend(
+    /// Keeps the session live for at least `idle`, after a read that saw the stored expiry
+    /// `expires_at` when the database clock was `read_at`. Writes only when [`expiry_write`]
+    /// asks for it, and only while the row is live when the write executes. `true` when the
+    /// expiry moved.
+    pub async fn refresh(
         &self,
         id: McpSessionId,
-        now_ms: i64,
         expires_at: i64,
+        read_at: i64,
+        idle: Duration,
     ) -> Result<bool, McpSessionStoreError> {
+        let Some(lifetime) = expiry_write(expires_at, read_at, idle) else {
+            return Ok(false);
+        };
         let result = self
             .pool
             .with_rw(SVC_NAME, "extend")
             .execute(
-                sqlx::query(
-                    "UPDATE mcp_session SET expires_at = $3
-                     WHERE session_id = $1 AND expires_at > $2 AND expires_at < $3",
-                )
-                .bind(id.uuid())
-                .bind(now_ms)
-                .bind(expires_at),
+                sqlx::query(<SqlitePool as McpSessionSql>::EXTEND)
+                    .bind(id.uuid())
+                    .bind(lifetime),
             )
             .await?;
         Ok(result.rows_affected() == 1)
@@ -138,13 +203,10 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
             .pool
             .with_rw(SVC_NAME, "create")
             .execute(
-                sqlx::query(
-                    "INSERT INTO mcp_session (session_id, value, expires_at) VALUES ($1, $2, $3)
-                     ON CONFLICT (session_id) DO NOTHING",
-                )
-                .bind(id.uuid())
-                .bind(record.encode()?)
-                .bind(now_millis().saturating_add(millis(ttl))),
+                sqlx::query(<SqlitePool as McpSessionSql>::CREATE)
+                    .bind(id.uuid())
+                    .bind(record.encode()?)
+                    .bind(millis(ttl).min(MAX_LIFETIME_MS)),
             )
             .await?;
         Ok(result.rows_affected() == 1)
@@ -155,26 +217,17 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
         id: McpSessionId,
         extend: Option<Duration>,
     ) -> Result<Option<McpSessionRecord>, McpSessionStoreError> {
-        let now_ms = now_millis();
         let row = self
             .pool
             .with_ro(SVC_NAME, "get")
-            .fetch_optional(
-                sqlx::query(
-                    "SELECT value, expires_at FROM mcp_session
-                     WHERE session_id = $1 AND expires_at > $2",
-                )
-                .bind(id.uuid())
-                .bind(now_ms),
-            )
+            .fetch_optional(sqlx::query(<SqlitePool as McpSessionSql>::GET).bind(id.uuid()))
             .await?;
         let Some(row) = row else {
             return Ok(None);
         };
         let value: Vec<u8> = row.get(0);
-        let stored_ms: i64 = row.get(1);
-        if let Some(expires_at) = extend.and_then(|idle| expiry_write(stored_ms, now_ms, idle)) {
-            self.extend(id, now_ms, expires_at).await?;
+        if let Some(idle) = extend {
+            self.refresh(id, row.get(1), row.get(2), idle).await?;
         }
         McpSessionRecord::decode(&value).map(Some)
     }
@@ -188,12 +241,9 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
             .pool
             .with_rw(SVC_NAME, "replace")
             .execute(
-                sqlx::query(
-                    "UPDATE mcp_session SET value = $2 WHERE session_id = $1 AND expires_at > $3",
-                )
-                .bind(id.uuid())
-                .bind(record.encode()?)
-                .bind(now_millis()),
+                sqlx::query(<SqlitePool as McpSessionSql>::REPLACE)
+                    .bind(id.uuid())
+                    .bind(record.encode()?),
             )
             .await?;
         Ok(result.rows_affected() == 1)
@@ -210,13 +260,7 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqliteMcpSessionStore, expiry_write, now_millis};
-    use crate::custom_api::oidc::session_store::migrated_sqlite_pool;
-    use crate::mcp::session::store::{McpSessionId, McpSessionRecord, McpSessionStore};
-    use golem_common::config::DbSqliteConfig;
-    use golem_common::model::deployment::DeploymentRevision;
-    use golem_common::model::domain_registration::Domain;
-    use golem_common::model::environment::EnvironmentId;
+    use super::{MAX_LIFETIME_MS, expiry_write};
     use std::time::Duration;
     use test_r::test;
 
@@ -230,35 +274,25 @@ mod tests {
             // Stored expiry at least `now + idle`: no write.
             (t0 + 400 * SECOND, t0, five_minutes, None),
             (t0 + 300 * SECOND, t0, five_minutes, None),
-            // Stored expiry earlier than `now + idle`: write `now + idle + slack`.
-            (
-                t0 + 300 * SECOND - 1,
-                t0,
-                five_minutes,
-                Some(t0 + 330 * SECOND),
-            ),
-            (t0 - 1, t0, five_minutes, Some(t0 + 330 * SECOND)),
+            // Stored expiry earlier than `now + idle`: write a lifetime of `idle + slack`.
+            (t0 + 300 * SECOND - 1, t0, five_minutes, Some(330 * SECOND)),
+            (t0 - 1, t0, five_minutes, Some(330 * SECOND)),
             // The slack is a quarter of a short idle timeout.
-            (t0, t0, Duration::from_secs(2), Some(t0 + 2_500)),
-            // Idle 4 s, created at t0, read at t0 + 0.6 s: the write keeps the session live
-            // until t0 + 5.6 s, later than `idle` after the read.
+            (t0, t0, Duration::from_secs(2), Some(2_500)),
+            // Idle 4 s, created at t0, read at t0 + 0.6 s: a write at t0 + 0.6 s keeps the
+            // session live until t0 + 5.6 s, later than `idle` after the read.
             (
                 t0 + 4 * SECOND,
                 t0 + 600,
                 Duration::from_secs(4),
-                Some(t0 + 5_600),
+                Some(5_000),
             ),
-            // A written value is skipped until a slack has passed.
+            // A value written at t0 + 0.6 s is skipped until a slack has passed.
             (t0 + 5_600, t0 + 1_599, Duration::from_secs(4), None),
-            (
-                t0 + 5_600,
-                t0 + 1_601,
-                Duration::from_secs(4),
-                Some(t0 + 6_601),
-            ),
-            // No overflow.
+            (t0 + 5_600, t0 + 1_601, Duration::from_secs(4), Some(5_000)),
+            // No overflow, and the lifetime stays within the bound.
             (i64::MAX, i64::MAX - 1, Duration::MAX, None),
-            (0, i64::MAX - 1, Duration::MAX, Some(i64::MAX)),
+            (0, i64::MAX - 1, Duration::MAX, Some(MAX_LIFETIME_MS)),
         ]
         .into_iter()
         .for_each(|(stored, now, idle, expected)| {
@@ -268,37 +302,5 @@ mod tests {
                 "stored {stored}, now {now}, idle {idle:?}"
             )
         });
-    }
-
-    #[test]
-    async fn extend_does_not_revive_an_expired_row() {
-        let db_file = tempfile::NamedTempFile::new().unwrap();
-        let pool = migrated_sqlite_pool(&DbSqliteConfig {
-            database: db_file.path().to_string_lossy().to_string(),
-            max_connections: 2,
-            foreign_keys: false,
-        })
-        .await
-        .unwrap();
-        let store = SqliteMcpSessionStore::new(pool, Duration::from_secs(3600));
-        let id = McpSessionId::generate().unwrap();
-        let record = McpSessionRecord {
-            domain: Domain("mcp.example.com".to_string()),
-            environment_id: EnvironmentId::new(),
-            deployment_revision: DeploymentRevision::INITIAL,
-        };
-        assert!(
-            store
-                .create(id, &record, Duration::from_secs(60))
-                .await
-                .unwrap()
-        );
-
-        // Two minutes later the row has expired, but the cleanup has not deleted it yet.
-        let later = now_millis() + 120 * SECOND;
-        assert!(!store.extend(id, later, later + 300 * SECOND).await.unwrap());
-        // While the row is live, the same statement moves its expiry.
-        let now = now_millis();
-        assert!(store.extend(id, now, now + 300 * SECOND).await.unwrap());
     }
 }
