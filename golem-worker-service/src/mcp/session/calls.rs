@@ -36,7 +36,7 @@ pub(super) struct RunningCall {
     /// handler stops on it.
     token: CancellationToken,
     /// The call's response stream, once the layer has seen its first event.
-    stream: Option<Box<str>>,
+    stream: Option<Arc<str>>,
     cancelled: bool,
 }
 
@@ -58,7 +58,7 @@ pub(super) enum BindOutcome {
 #[derive(Debug)]
 pub(super) struct CancelledCall {
     pub(super) token: CancellationToken,
-    pub(super) stream: Option<Box<str>>,
+    pub(super) stream: Option<Arc<str>>,
 }
 
 /// The entries removed for one ended call: the call, and its session's map when it was the
@@ -73,7 +73,7 @@ fn note_stream(
     table: &mut Table,
     session: McpSessionId,
     entry: EntryId,
-    stream: Box<str>,
+    stream: Arc<str>,
 ) -> BindOutcome {
     match table
         .get_mut(&session)
@@ -176,7 +176,7 @@ impl RunningCalls {
 
     /// Notes the call's response stream.
     pub(super) fn bind(&self, session: McpSessionId, entry: EntryId, stream: &str) -> BindOutcome {
-        let stream = Box::from(stream);
+        let stream = Arc::from(stream);
         self.table
             .with(&session, |table| note_stream(table, session, entry, stream))
     }

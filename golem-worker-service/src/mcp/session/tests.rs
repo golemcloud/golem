@@ -122,7 +122,7 @@ struct Probe {
     stateless: Arc<dyn McpServing>,
     /// For each handled request: its method, and whether it saw `stateless`.
     seen: Mutex<Vec<(&'static str, bool)>>,
-    gates: Mutex<HashMap<String, Arc<Gate>>>,
+    gates: Mutex<HashMap<Box<str>, Arc<Gate>>>,
     list_gated: AtomicBool,
     /// For each `tools/call`: whether its serving served it, or why not.
     invoked: Mutex<Vec<Result<(), ServeRefusal>>>,
@@ -133,7 +133,7 @@ impl Probe {
         self.gates
             .lock()
             .unwrap()
-            .entry(name.to_string())
+            .entry(Box::from(name))
             .or_insert_with(|| Arc::new(Gate::new()))
             .clone()
     }

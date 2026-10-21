@@ -88,7 +88,7 @@ pub(super) mod lock_check {
     }
 
     /// Where the first nested shard lock of this process was taken. Never reset.
-    static FIRST_VIOLATION: OnceLock<String> = OnceLock::new();
+    static FIRST_VIOLATION: OnceLock<Box<str>> = OnceLock::new();
 
     /// Marks this thread as holding a shard lock until it is dropped, also on a panic.
     pub(in crate::mcp::session) struct Held(());
@@ -103,7 +103,7 @@ pub(super) mod lock_check {
     pub(in crate::mcp::session) fn enter() -> Held {
         if HELD.with(Cell::get) {
             let location = Location::caller();
-            FIRST_VIOLATION.get_or_init(|| location.to_string());
+            FIRST_VIOLATION.get_or_init(|| location.to_string().into_boxed_str());
             panic!("a shard lock was taken at {location} while another shard lock is held");
         }
         HELD.with(|held| held.set(true));

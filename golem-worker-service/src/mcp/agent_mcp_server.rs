@@ -424,6 +424,7 @@ mod tests {
     mod serving {
         use super::super::GolemAgentMcpServer;
         use crate::config::McpConfig;
+        use crate::mcp::invoke::test_support::streamed_messages;
         use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, Serving, StatelessServing};
         use crate::mcp::{
             InvocationHarness, McpCapabilitiesLookupError, McpCapabilityLookup, McpDeployment,
@@ -433,7 +434,7 @@ mod tests {
         use golem_common::model::deployment::DeploymentRevision;
         use golem_common::model::domain_registration::Domain;
         use poem::endpoint::{BoxEndpoint, TowerCompatExt};
-        use poem::http::{Method, StatusCode};
+        use poem::http::Method;
         use poem::{Endpoint, EndpointExt, Request};
         use rmcp::ServerHandler;
         use rmcp::model::ProtocolVersion;
@@ -506,18 +507,9 @@ mod tests {
             request
         }
 
-        /// The JSON-RPC messages of a streamed response.
+        /// The JSON-RPC messages of the streamed response to `request`.
         async fn messages(endpoint: &BoxEndpoint<'static>, request: Request) -> Vec<Value> {
-            let response = endpoint.call(request).await.unwrap();
-            let status = response.status();
-            let text = response.into_body().into_string().await.unwrap();
-            assert_eq!(status, StatusCode::OK, "{text}");
-            text.lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim)
-                .filter(|data| !data.is_empty())
-                .map(|data| serde_json::from_str(data).unwrap())
-                .collect()
+            streamed_messages(endpoint.call(request).await.unwrap()).await
         }
 
         fn list(id: i64) -> Value {

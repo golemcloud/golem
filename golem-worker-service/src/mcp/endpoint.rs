@@ -277,6 +277,7 @@ impl Endpoint for McpOnlyEndpoint {
 mod tests {
     use super::*;
     use crate::ingress::tests::request_from_peer;
+    use crate::mcp::invoke::test_support::streamed_messages;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::deployment::DeploymentRevision;
@@ -345,19 +346,6 @@ mod tests {
             .unwrap()
     }
 
-    /// The JSON-RPC messages of a streamed MCP response.
-    async fn messages(response: Response) -> Vec<serde_json::Value> {
-        let status = response.status();
-        let text = response.into_body().into_string().await.unwrap();
-        assert_eq!(status, http::StatusCode::OK, "{text}");
-        text.lines()
-            .filter_map(|line| line.strip_prefix("data:"))
-            .map(str::trim)
-            .filter(|data| !data.is_empty())
-            .map(|data| serde_json::from_str(data).unwrap())
-            .collect()
-    }
-
     #[test]
     async fn the_endpoint_serves_without_the_session_layer() {
         let harness = crate::mcp::InvocationHarness::with_run_method(
@@ -420,7 +408,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!listed.headers().contains_key("mcp-session-id"));
-        let listed = messages(listed).await;
+        let listed = streamed_messages(listed).await;
         assert_eq!(listed[0]["result"]["tools"][0]["name"], "mcp-agent-run");
 
         let called = endpoint
@@ -431,7 +419,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!called.headers().contains_key("mcp-session-id"));
-        let called = messages(called).await;
+        let called = streamed_messages(called).await;
         assert_eq!(called[0]["result"]["isError"], false, "{called:?}");
     }
 

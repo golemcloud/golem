@@ -1213,6 +1213,6 @@ mod tests {
         .await;
 
         assert!(refused.is_err(), "the harness refuses the session");
-        assert_eq!(harness.native_session_keys(), [key.value]);
+        assert_eq!(harness.native_session_keys(), [Arc::from(key.value)]);
     }
 }

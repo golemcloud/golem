@@ -26,8 +26,8 @@ pub const PROTOCOL_VERSION: &str = "2025-03-26";
 pub struct McpClient {
     http: reqwest::Client,
     url: Box<str>,
-    host: Box<str>,
-    session_id: Option<Box<str>>,
+    host: Arc<str>,
+    session_id: Option<Arc<str>>,
     /// The next JSON-RPC request ID of the session.
     next_id: Arc<AtomicU64>,
 }
@@ -35,7 +35,7 @@ pub struct McpClient {
 /// The answer to one POSTed JSON-RPC message.
 pub struct McpResponse {
     /// The `Mcp-Session-Id` that the response names.
-    pub session_id: Option<Box<str>>,
+    pub session_id: Option<Arc<str>>,
     /// The first JSON-RPC message of the response; `None` for an accepted notification.
     pub message: Option<Value>,
 }
@@ -124,7 +124,7 @@ impl McpClient {
             .headers()
             .get("mcp-session-id")
             .and_then(|value| value.to_str().ok())
-            .map(Box::from);
+            .map(Arc::from);
         let body = response.text().await?;
         if !status.is_success() {
             anyhow::bail!("MCP HTTP request failed with status {status}: {body}");

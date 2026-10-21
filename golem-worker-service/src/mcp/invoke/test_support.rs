@@ -360,7 +360,7 @@ pub(crate) enum NativeSessions {
 pub(crate) struct NativeSessionLog {
     pub(crate) mode: NativeSessions,
     /// The idempotency key of each session's start.
-    pub(crate) keys: Vec<String>,
+    pub(crate) keys: Vec<Arc<str>>,
     /// The rest of each held session's request stream, after its start.
     pub(crate) tails: VecDeque<crate::service::worker::InvocationRequestStream>,
     /// The number of sessions received so far.
@@ -711,7 +711,7 @@ impl WorkerClient for RecordingWorkerClient {
             _ => None,
         };
         let mut log = self.native_sessions.lock().unwrap();
-        log.keys.push(key.unwrap_or_default());
+        log.keys.push(Arc::from(key.unwrap_or_default()));
         let answer: crate::service::worker::InvocationResponseStream = match log.mode {
             NativeSessions::Refuse => {
                 log.opened.send_modify(|opened| *opened += 1);
@@ -1090,7 +1090,7 @@ impl InvocationHarness {
     }
 
     /// The idempotency keys of the invocation sessions received so far.
-    pub(crate) fn native_session_keys(&self) -> Vec<String> {
+    pub(crate) fn native_session_keys(&self) -> Vec<Arc<str>> {
         self.native_sessions.lock().unwrap().keys.clone()
     }
 
@@ -1153,4 +1153,17 @@ pub(crate) fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
         .rsplit_once('[')
         .and_then(|(_, phantom_id)| phantom_id.strip_suffix(']'))
         .and_then(|phantom_id| Uuid::parse_str(phantom_id).ok())
+}
+
+/// The JSON-RPC messages of a streamed MCP response, which must have status 200.
+pub(crate) async fn streamed_messages(response: poem::Response) -> Vec<serde_json::Value> {
+    let status = response.status();
+    let text = response.into_body().into_string().await.unwrap();
+    assert_eq!(status, poem::http::StatusCode::OK, "{text}");
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .filter(|data| !data.is_empty())
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect()
 }
