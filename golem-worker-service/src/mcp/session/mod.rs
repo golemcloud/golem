@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! The MCP session layer: session records in a shared store, and the per-replica state (response
-//! events, running calls, GET streams) of the requests this replica serves.
+//! events, running calls, open streams) of the requests this replica serves.
 
 mod calls;
 mod event_store;

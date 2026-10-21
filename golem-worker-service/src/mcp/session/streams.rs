@@ -12,19 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The open GET streams of each session on this replica: at most 32 per session, the oldest
-//! closed when a new one opens. A stream ends when its sender is dropped.
+//! The open streams of each session on this replica, GET streams and resumed response streams
+//! together: at most 32 per session, the oldest closed when a new one opens. Only the GET streams
+//! get the session's notifications. A stream ends when its entry is dropped.
 
 use super::sharded::Sharded;
 use super::store::McpSessionId;
 use rmcp::model::ServerJsonRpcMessage;
 use std::collections::{HashMap, VecDeque};
-use tokio::sync::mpsc;
+use std::convert::Infallible;
+use tokio::sync::{mpsc, oneshot};
 
-/// The GET streams kept open per session on one replica.
+/// The streams kept open per session on one replica.
 pub(super) const MAX_STREAMS_PER_SESSION: usize = 32;
 
 pub(super) type StreamSender = mpsc::Sender<ServerJsonRpcMessage>;
+
+/// An open stream of a session. Dropping it closes the stream.
+enum OpenStream {
+    /// A GET stream, which gets the session's notifications.
+    Get(StreamSender),
+    /// A resumed response stream, which gets no notifications.
+    Resumed(oneshot::Sender<Infallible>),
+}
+
+impl OpenStream {
+    /// True when the stream's response has ended.
+    fn is_closed(&self) -> bool {
+        match self {
+            OpenStream::Get(sender) => sender.is_closed(),
+            OpenStream::Resumed(sender) => sender.is_closed(),
+        }
+    }
+}
 
 /// Adds `new` to the open streams and takes out the oldest ones above the limit, to be closed.
 fn open_stream<S>(open: &mut VecDeque<S>, new: S) -> Vec<S> {
@@ -52,11 +72,11 @@ fn take_closed<S>(
     (closed, empty)
 }
 
-pub(super) struct GetStreams {
-    sessions: Sharded<McpSessionId, VecDeque<StreamSender>>,
+pub(super) struct OpenStreams {
+    sessions: Sharded<McpSessionId, VecDeque<OpenStream>>,
 }
 
-impl GetStreams {
+impl OpenStreams {
     pub(super) fn new() -> Self {
         Self {
             sessions: Sharded::new(),
@@ -67,11 +87,23 @@ impl GetStreams {
     /// closed.
     pub(super) fn admit(&self, session: McpSessionId) -> mpsc::Receiver<ServerJsonRpcMessage> {
         let (sender, receiver) = mpsc::channel(1);
+        self.open(session, OpenStream::Get(sender));
+        receiver
+    }
+
+    /// Opens a resumed response stream of the session. The returned receiver completes when the
+    /// stream is closed.
+    pub(super) fn admit_resumed(&self, session: McpSessionId) -> oneshot::Receiver<Infallible> {
+        let (sender, receiver) = oneshot::channel();
+        self.open(session, OpenStream::Resumed(sender));
+        receiver
+    }
+
+    fn open(&self, session: McpSessionId, stream: OpenStream) {
         let closed = self.sessions.with(&session, |sessions| {
-            open_stream(sessions.entry(session).or_default(), sender)
+            open_stream(sessions.entry(session).or_default(), stream)
         });
         drop(closed);
-        receiver
     }
 
     /// Sends `message` to every GET stream of the session that has room for it. A stream whose
@@ -80,7 +112,14 @@ impl GetStreams {
         let senders: Vec<StreamSender> = self.sessions.with(&session, |sessions| {
             sessions
                 .get(&session)
-                .map(|open| open.iter().cloned().collect())
+                .map(|open| {
+                    open.iter()
+                        .filter_map(|stream| match stream {
+                            OpenStream::Get(sender) => Some(sender.clone()),
+                            OpenStream::Resumed(_) => None,
+                        })
+                        .collect()
+                })
                 .unwrap_or_default()
         });
         senders.iter().for_each(|sender| {
@@ -88,7 +127,7 @@ impl GetStreams {
         });
     }
 
-    /// Closes every GET stream of the session.
+    /// Closes every open stream of the session.
     pub(super) fn close_session(&self, session: McpSessionId) {
         let closed = self
             .sessions
@@ -99,7 +138,7 @@ impl GetStreams {
     /// Forgets the streams of one shard whose client has gone.
     pub(super) fn sweep(&self, shard: usize) {
         let swept = self.sessions.with_shard(shard, |sessions| {
-            take_closed(sessions, StreamSender::is_closed)
+            take_closed(sessions, OpenStream::is_closed)
         });
         drop(swept);
     }
@@ -149,7 +188,7 @@ mod tests {
 
     #[test]
     async fn notify_reaches_every_stream_of_the_session_only() {
-        let streams = GetStreams::new();
+        let streams = OpenStreams::new();
         let mut first = streams.admit(session());
         let mut second = streams.admit(session());
         let mut other = streams.admit(other_session());
@@ -170,7 +209,7 @@ mod tests {
 
     #[test]
     async fn the_33rd_stream_closes_the_oldest() {
-        let streams = GetStreams::new();
+        let streams = OpenStreams::new();
         let mut first = streams.admit(session());
         let mut rest: Vec<_> = (0..31).map(|_| streams.admit(session())).collect();
         assert_eq!(streams.count(session()), 32);

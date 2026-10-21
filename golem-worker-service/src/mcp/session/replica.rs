@@ -18,7 +18,7 @@ use super::rules::{
     Admission, PinStep, admit, heartbeat_period, pin_step, pin_written, priming_event_id,
 };
 use super::store::{McpSessionId, McpSessionRecord, McpSessionStore, McpSessionStoreError};
-use super::streams::GetStreams;
+use super::streams::OpenStreams;
 use crate::config::McpConfig;
 use crate::mcp::McpDeployment;
 use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, Serving};
@@ -46,18 +46,18 @@ use tracing::warn;
 
 /// The reconnect delay that every response stream announces, in milliseconds.
 pub(crate) const SSE_RETRY_MILLIS: u64 = 3000;
-/// How often one shard of the event store and of the GET-stream registry is swept.
+/// How often one shard of the event store and of the open-stream registry is swept.
 const SWEEP_TICK: Duration = Duration::from_secs(1);
 
 /// The session state that one MCP endpoint keeps in its own memory: response events for resume,
-/// the running calls for cancel, and the open GET streams. Session records live in the shared
+/// the running calls for cancel, and the open streams. Session records live in the shared
 /// store. Each endpoint has its own replica, as each worker-service process has its own.
 pub struct McpReplica {
     store: Arc<dyn McpSessionStore>,
     idle: Duration,
     keep_alive: Duration,
     events: Arc<ReplicaEventStore>,
-    streams: Arc<GetStreams>,
+    streams: Arc<OpenStreams>,
     calls: Arc<RunningCalls>,
     /// Stops the sweep task when the replica is dropped.
     _sweep: DropGuard,
@@ -100,7 +100,7 @@ impl McpReplica {
     /// is dropped.
     pub fn new(store: Arc<dyn McpSessionStore>, config: &McpConfig) -> Arc<Self> {
         let events = Arc::new(ReplicaEventStore::new());
-        let streams = Arc::new(GetStreams::new());
+        let streams = Arc::new(OpenStreams::new());
         let sweep = CancellationToken::new();
         tokio::spawn(sweep_until_cancelled(
             events.clone(),
@@ -231,7 +231,7 @@ impl McpReplica {
     }
 
     /// Tells this replica's GET streams of the session that its tool list changed.
-    fn notify_tool_list_changed(&self, session: McpSessionId) {
+    pub(super) fn notify_tool_list_changed(&self, session: McpSessionId) {
         self.streams.notify(
             session,
             ServerJsonRpcMessage::notification(ServerNotification::ToolListChangedNotification(
@@ -249,7 +249,7 @@ impl McpReplica {
     }
 
     /// Ends the session: deletes its record, cancels its running calls on this replica and
-    /// closes its GET streams here.
+    /// closes its open streams here.
     pub(super) async fn close_session(
         &self,
         session: McpSessionId,
@@ -348,22 +348,30 @@ impl McpReplica {
     }
 
     /// The rest of the response stream that `last_event_id` belongs to, when that stream is bound
-    /// to `session`; otherwise an empty stream.
+    /// to `session`; otherwise an empty stream. A resumed stream counts against the session's
+    /// limit of open streams, and ends when the limit closes it.
     pub(super) fn resume(&self, last_event_id: &str, session: McpSessionId) -> Response {
         match self.events.replay(last_event_id, session) {
-            Some(events) => SSE::new(events.map(|(id, event)| sse_event(id, event)))
+            Some(events) => {
+                let closed = self.streams.admit_resumed(session);
+                SSE::new(
+                    events
+                        .map(|(id, event)| sse_event(id, event))
+                        .take_until(closed),
+                )
                 .keep_alive(self.keep_alive)
-                .into_response(),
+                .into_response()
+            }
             None => SSE::new(stream::empty()).into_response(),
         }
     }
 }
 
-/// Sweeps one shard of the event store and of the GET-stream registry per tick, until `stop` is
+/// Sweeps one shard of the event store and of the open-stream registry per tick, until `stop` is
 /// cancelled.
 async fn sweep_until_cancelled(
     events: Arc<ReplicaEventStore>,
-    streams: Arc<GetStreams>,
+    streams: Arc<OpenStreams>,
     stop: CancellationToken,
 ) {
     IntervalStream::new(tokio::time::interval(SWEEP_TICK))
@@ -499,7 +507,7 @@ impl McpReplica {
         &self.events
     }
 
-    pub(super) fn streams(&self) -> &GetStreams {
+    pub(super) fn streams(&self) -> &OpenStreams {
         &self.streams
     }
 }

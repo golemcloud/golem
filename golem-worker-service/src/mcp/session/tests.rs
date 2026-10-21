@@ -1588,6 +1588,104 @@ async fn a_stream_of_another_session_is_not_resumed() {
     fx.finish();
 }
 
+/// Resumes the stream of `priming` `count` times and returns the response bodies, oldest first.
+async fn resume_times(fx: &Fixture, session: &str, priming: &str, count: usize) -> Vec<BodyStream> {
+    stream::iter(0..count)
+        .then(|_| fx.send(fx.get(Some(session), Some(priming))))
+        .map(body_of)
+        .collect()
+        .await
+}
+
+/// Opens a GET stream of the session and reads its first frame.
+async fn open_get_stream(fx: &Fixture, session: &str) -> BodyStream {
+    let mut body = body_of(fx.send(fx.get(Some(session), None)).await);
+    next_frames(&mut body).await;
+    body
+}
+
+#[test]
+async fn the_33rd_resume_closes_the_oldest_resumed_stream() {
+    let fx = Fixture::new().await;
+    let session = fx.initialize().await;
+    let session_id: McpSessionId = session.parse().unwrap();
+    let priming = cut_call(&fx, &session, 4, "g").await;
+
+    let mut resumed = resume_times(&fx, &session, &priming, 33).await;
+    assert_eq!(fx.replica.streams().count(session_id), 32);
+    let oldest = resumed.remove(0);
+    assert!(
+        rest(oldest)
+            .await
+            .is_some_and(|frames| messages(&frames).is_empty()),
+        "the oldest resumed stream ends without the result"
+    );
+
+    fx.probe.gate("g").open();
+    let results: Vec<Vec<Value>> = stream::iter(resumed)
+        .then(|body| async move { messages(&rest(body).await.expect("the stream ends")) })
+        .collect()
+        .await;
+    assert!(
+        results
+            .iter()
+            .all(|messages| messages.len() == 1 && messages[0]["id"] == 4),
+        "every other resumed stream carries the result: {results:?}"
+    );
+    fx.finish();
+}
+
+#[test]
+async fn resumed_and_get_streams_share_the_limit() {
+    let fx = Fixture::new().await;
+    let session = fx.initialize().await;
+    let session_id: McpSessionId = session.parse().unwrap();
+    let priming = cut_call(&fx, &session, 4, "g").await;
+
+    let get_stream = open_get_stream(&fx, &session).await;
+    let mut resumed = resume_times(&fx, &session, &priming, 31).await;
+    assert_eq!(fx.replica.streams().count(session_id), 32);
+    resumed.extend(resume_times(&fx, &session, &priming, 1).await);
+    assert!(
+        rest(get_stream).await.is_some(),
+        "a resume closes the oldest stream, a GET stream"
+    );
+
+    let _newest_get = open_get_stream(&fx, &session).await;
+    assert_eq!(fx.replica.streams().count(session_id), 32);
+    assert!(
+        rest(resumed.remove(0)).await.is_some(),
+        "a GET stream closes the oldest stream, a resumed stream"
+    );
+    fx.probe.gate("g").open();
+    fx.finish();
+}
+
+#[test]
+async fn a_notification_does_not_reach_a_resumed_stream() {
+    let fx = Fixture::new().await;
+    let session = fx.initialize().await;
+    let session_id: McpSessionId = session.parse().unwrap();
+    let priming = cut_call(&fx, &session, 4, "g").await;
+    let resumed = resume_times(&fx, &session, &priming, 1).await;
+    let mut get_stream = open_get_stream(&fx, &session).await;
+
+    fx.replica.notify_tool_list_changed(session_id);
+    let notified = messages(&next_frames(&mut get_stream).await);
+    assert_eq!(notified.len(), 1);
+    assert_eq!(notified[0]["method"], "notifications/tools/list_changed");
+
+    fx.probe.gate("g").open();
+    let replayed = messages(
+        &rest(resumed.into_iter().next().unwrap())
+            .await
+            .expect("the resumed stream ends after the result"),
+    );
+    assert_eq!(replayed.len(), 1, "{replayed:?}");
+    assert_eq!(replayed[0]["id"], 4);
+    fx.finish();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Cancel
 
