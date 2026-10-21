@@ -29,7 +29,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.13"
+  WASM_RQUICKJS_VERSION: "5fe5859f37809e09a41df2579fa5f5d7cdc26a5e"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk

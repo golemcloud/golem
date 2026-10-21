@@ -8,6 +8,199 @@ use super::*;
 use std::time::Instant;
 use test_r::test;
 
+#[test]
+#[timeout("3m")]
+async fn builtin_node_and_npm_dispatch_bound_tools(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_provider")] streaming: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    exercise_builtin_tool_dispatch(
+        last_unique_id,
+        deps,
+        caller,
+        streaming,
+        javascript_tools,
+        false,
+    )
+    .await
+}
+
+/// Reproduce asynchronous tool work outliving an inline Node lifecycle child.
+#[test]
+#[ignore]
+#[timeout("3m")]
+async fn builtin_npm_async_node_child_dispatch_bound_tools(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_provider")] streaming: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    exercise_builtin_tool_dispatch(
+        last_unique_id,
+        deps,
+        caller,
+        streaming,
+        javascript_tools,
+        true,
+    )
+    .await
+}
+
+async fn exercise_builtin_tool_dispatch(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    streaming: &PrecompiledComponent,
+    javascript_tools: &PrecompiledComponent,
+    async_lifecycle: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let mut deployment: Option<ToolDeploymentState> = None;
+    for (component, package) in [
+        (javascript_tools, "golem:javascript-tools"),
+        (streaming, "golem-it:tool-streaming-rust-provider"),
+    ] {
+        let provider = executor
+            .component_dep(&context.default_environment_id, component)
+            .store()
+            .await?;
+        let metadata = extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", component.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        let next = deployment_state(
+            context.account_id,
+            provider.id,
+            provider.revision,
+            package,
+            "ToolStreamingCaller",
+            metadata.tools,
+        );
+        if let Some(current) = deployment.as_mut() {
+            current.registered_tools.extend(next.registered_tools);
+            for (owner, bindings) in next.tool_bindings {
+                current
+                    .tool_bindings
+                    .entry(owner)
+                    .or_default()
+                    .extend(bindings);
+            }
+        } else {
+            deployment = Some(next);
+        }
+    }
+    let mut deployment = deployment.unwrap();
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let synchronous = r#"
+const assert = require('node:assert/strict');
+const { spawnSync, execFile } = require('node:child_process');
+const args = ['dual-reconstruct', 'redaction-terminals'];
+const sync = spawnSync('streaming', args, { encoding: 'utf8' });
+assert.equal(sync.error, undefined);
+assert.equal(sync.status, 0);
+assert.equal(sync.stdout, 'marker:');
+assert.equal(sync.stderr, 'stderr-visible');
+"#;
+    let script = format!(
+        "{synchronous}{}",
+        r#"
+await new Promise((resolve, reject) => execFile('streaming', args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+    if (error) return reject(error);
+    try {
+        assert.equal(stdout, 'marker:');
+        assert.equal(stderr, 'stderr-visible');
+        resolve();
+    } catch (error) { reject(error); }
+}));
+console.log('bound tools passed');
+"#
+    );
+    let agent = "builtin-node-tool-dispatch";
+    let node = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent,
+        "node",
+        "/workspace",
+        vec!["-e", &script],
+    )
+    .await?;
+    assert_eq!(node.exit_code, 0, "{node:?}");
+    assert_eq!(node.stdout, b"bound tools passed\n");
+    assert!(node.stderr.is_empty(), "{node:?}");
+
+    let lifecycle = if async_lifecycle {
+        script
+    } else {
+        format!("{synchronous} console.log('bound tools passed');")
+    };
+    let setup = format!(
+        "require('node:fs').writeFileSync('/workspace/dispatch.cjs', {}); require('node:fs').writeFileSync('/workspace/package.json', JSON.stringify({{name: 'bound-tool-dispatch', scripts: {{verify: 'node dispatch.cjs'}}}}));",
+        serde_json::to_string(&format!(
+            "(async () => {{ {lifecycle} }})().catch(error => {{ console.error(error); process.exitCode = 1; }});"
+        ))?,
+    );
+    let setup = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent,
+        "node",
+        "/workspace",
+        vec!["-e", &setup],
+    )
+    .await?;
+    assert_eq!(setup.exit_code, 0, "{setup:?}");
+    assert!(setup.stdout.is_empty());
+    assert!(setup.stderr.is_empty(), "{setup:?}");
+    let npm = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent,
+        "npm",
+        "/workspace",
+        vec!["run", "verify", "--silent"],
+    )
+    .await?;
+    assert_eq!(npm.exit_code, 0, "{npm:?}");
+    assert_eq!(npm.stdout, b"bound tools passed\n");
+    assert!(npm.stderr.is_empty(), "{npm:?}");
+    Ok(())
+}
+
 /// Exercise a guest-owned stdin pump, output drains and result wait through
 /// ordinary tool imports. Build the fixture before running this test.
 #[test]

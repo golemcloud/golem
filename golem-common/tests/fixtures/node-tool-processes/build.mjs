@@ -14,7 +14,11 @@ import { fileURLToPath } from "node:url";
 import { rollup } from "../../../../sdks/ts/packages/golem-ts-sdk/node_modules/rollup/dist/es/rollup.js";
 import { nodeResolve } from "../../../../sdks/ts/packages/golem-ts-sdk/node_modules/@rollup/plugin-node-resolve/dist/es/index.js";
 import commonjs from "../../../../sdks/ts/packages/golem-ts-sdk/node_modules/@rollup/plugin-commonjs/dist/es/index.js";
-import { installToolProcessBridge } from "../../../../sdks/javascript/tool-process-template.mjs";
+import {
+  installToolProcessBridge,
+  toolProcessModules,
+} from "../../../../sdks/javascript/tool-process-template.mjs";
+import { componentEntry } from "../../../../sdks/ts/packages/golem-ts-sdk/scripts/component.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../../..");
@@ -22,7 +26,9 @@ const destination = process.argv[2];
 if (!destination) throw new Error("Pass an empty output directory");
 const sdkMinimal = process.argv[3] === "--sdk-minimal";
 const sdkOnly = sdkMinimal || process.argv[3] === "--sdk-only";
-if (process.argv[3] && !sdkOnly) throw new Error("Unknown probe build option");
+const sdkTemplate = process.argv[3] === "--sdk-template";
+if (process.argv[3] && !sdkOnly && !sdkTemplate)
+  throw new Error("Unknown probe build option");
 const out = resolve(destination);
 const wrapper = join(out, "wrapper");
 const source = join(out, "probe.mjs");
@@ -42,19 +48,59 @@ function run(command, args) {
 
 async function bundleModule(input, file) {
   const bundle = await rollup({
-    input: join(here, input),
+    input: sdkTemplate ? "virtual:probe" : join(here, input),
     external: (id) =>
-      /^(node:|wasi:|golem:|wasm-rquickjs:|golem-tool-process-)/.test(id),
+      /^(node:|wasi:|golem:|wasm-rquickjs:|golem-tool-process-)/.test(id) &&
+      !(sdkTemplate && id === "golem-tool-process-sdk-control"),
     treeshake: { moduleSideEffects: (id) => !/^(wasi:|golem:)/.test(id) },
-    plugins: [nodeResolve(), commonjs()],
+    plugins: [
+      {
+        name: "sdk-template-probe",
+        resolveId(id) {
+          if (id === "virtual:probe") return id;
+          if (sdkTemplate && id === "golem-tool-process-sdk-control")
+            return join(here, "sdk-control.js");
+        },
+        load(id) {
+          if (id === "virtual:probe")
+            return componentEntry(
+              join(here, input),
+              { agents: false, tools: true, middleware: false },
+              undefined,
+            );
+        },
+      },
+      nodeResolve(),
+      commonjs(),
+    ],
     onwarn(warning, warn) {
       if (warning.code !== "CIRCULAR_DEPENDENCY") warn(warning);
     },
   });
-  await bundle.write({ file, format: "es" });
+  await bundle.write({ file, format: "es", inlineDynamicImports: true });
   await bundle.close();
 }
 await bundleModule(sdkOnly ? "sdk-only-probe.js" : "tool-probe.js", source);
+if (sdkTemplate) {
+  const injected = join(out, "injected.wasm");
+  run("wasm-rquickjs", [
+    "inject-js",
+    "--input",
+    join(root, "sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
+    "--output",
+    injected,
+    "--js",
+    source,
+  ]);
+  run("wasm-rquickjs", [
+    "optimize",
+    "--input",
+    injected,
+    "--output",
+    join(out, "probe.wasm"),
+  ]);
+  process.exit(0);
+}
 const sdkControl = join(out, "sdk-control.mjs");
 await bundleModule(
   sdkMinimal ? "sdk-replay-minimal.js" : "sdk-control.js",
@@ -67,9 +113,7 @@ const modules = [
 ];
 if (!sdkOnly)
   modules.push(
-    `golem-tool-process-backend=${join(root, "sdks/javascript/tool-process-backend.js")}`,
-    `golem-tool-process-host=${join(root, "sdks/javascript/tool-process-host.js")}`,
-    `wasm-rquickjs-runtime-init=${join(root, "sdks/javascript/tool-process-runtime-init.js")}`,
+    ...toolProcessModules.map(([name, source]) => `${name}=${source}`),
   );
 run("wasm-rquickjs", [
   "generate-wrapper-crate",

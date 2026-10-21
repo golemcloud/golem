@@ -15,13 +15,13 @@
     "component": "git-tool",
     "path": "builtin-tools/git-tool.wasm",
     "task": "build-git-tool",
-    "inputs": ["builtin-tools/git", "sdks/ts", "sdks/javascript"]
+    "inputs": ["builtin-tools/git", "sdks/ts", "sdks/javascript", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
   },
   "javascript_tools": {
     "component": "javascript-tools",
     "path": "builtin-tools/javascript-tools.wasm",
     "task": "build-javascript-tools",
-    "inputs": ["builtin-tools/js-ts-tools", "sdks/ts", "sdks/javascript"]
+    "inputs": ["builtin-tools/js-ts-tools", "sdks/ts", "sdks/javascript", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
   },
   "otlp_exporter": {
     "component": "otlp-exporter",
@@ -39,7 +39,7 @@
     "component": "typescript-tools",
     "path": "builtin-tools/typescript-tools.wasm",
     "task": "build-typescript-tools",
-    "inputs": ["builtin-tools/js-ts-tools", "sdks/ts", "sdks/javascript"]
+    "inputs": ["builtin-tools/js-ts-tools", "sdks/ts", "sdks/javascript", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
   },
   "web_fetch": {
     "component": "web-fetch",

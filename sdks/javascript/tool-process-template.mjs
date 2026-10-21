@@ -5,10 +5,17 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const bridge = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "tool-process-bridge",
-);
+const directory = dirname(fileURLToPath(import.meta.url));
+const bridge = resolve(directory, "tool-process-bridge");
+
+export const toolProcessModules = [
+  ["golem-tool-process-backend", resolve(directory, "tool-process-backend.js")],
+  ["golem-tool-process-host", resolve(directory, "tool-process-host.js")],
+  [
+    "wasm-rquickjs-runtime-init",
+    resolve(directory, "tool-process-runtime-init.js"),
+  ],
+];
 
 function replaceOnce(text, from, to, file) {
   if (text.split(from).length !== 2) {
@@ -18,6 +25,12 @@ function replaceOnce(text, from, to, file) {
 }
 
 export function installToolProcessBridge(wrapper) {
+  const builtins = readFileSync(resolve(wrapper, "src/builtin/mod.rs"), "utf8");
+  if (!builtins.includes('.with_module("wasm-rquickjs:child-process")')) {
+    throw new Error(
+      "The wasm-rquickjs toolchain must provide runtime-local child process backends",
+    );
+  }
   const cargo = resolve(wrapper, "Cargo.toml");
   writeFileSync(
     cargo,

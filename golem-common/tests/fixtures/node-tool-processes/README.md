@@ -38,6 +38,21 @@ does not include them):
 CARGO_BUILD_JOBS=1 node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory
 ```
 
+To verify the normal SDK packaging instead of generating a fixture-specific
+wrapper, first rebuild the SDK bundle and agent template with the same WRQJS
+toolchain, then run:
+
+```sh
+node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-template
+```
+
+This bundles the fixture with the SDK component entry, injects it into
+`agent_guest.wasm`, and runs Wizer. It does not install a native module or register
+a backend itself. Use the resulting `probe.wasm` with the same executor test.
+The separately named `fresh-sdk-overflow` reduction uses the custom wrapper path,
+which embeds its SDK control as a separate module; the SDK template path bundles
+that control into the application instead.
+
 The script uses the existing `agent-guest` world and the SDK's pinned wit-bindgen
 revision. Native module registrations are private JavaScript modules, not WIT
 exports. It does not patch WRQJS's scheduler or host imports.
@@ -93,10 +108,10 @@ On the executor built after merging main, five interleaved pairs used one Wizer
 component and one synchronous plus one asynchronous child call per invocation.
 All ten invocations passed. All samples, including the first pair, are retained.
 
-| Call path | Median fixture latency | Range |
-| --- | ---: | ---: |
-| Public process API | 355.8 ms | 338.7–470.7 ms |
-| Adapter control | 351.4 ms | 332.7–356.4 ms |
+| Call path          | Median fixture latency |          Range |
+| ------------------ | ---------------------: | -------------: |
+| Public process API |               355.8 ms | 338.7–470.7 ms |
+| Adapter control    |               351.4 ms | 332.7–356.4 ms |
 
 The median within-pair public-minus-adapter difference was +6.1 ms. The first
 pair differed by +114.4 ms; the other pairs differed by +0.9 to +9.6 ms. This small,
@@ -164,13 +179,13 @@ start SDK producer → read one chunk → write Node stream → cancel SDK call
 All observations below use released WRQJS 0.4.13 and identical guest Cargo lockfiles.
 They use the current feature branch, not a new validation of latest `main`.
 
-| Reduction | Offline reconstruction |
-| --- | --- |
-| SDK cancellation without Node streams, main and fresh runtimes | Five fixed trials passed |
-| Original full SDK-only control | Trial one passed; trial two timed out |
-| SDK cancellation and one Node stream, main and fresh runtimes | Trial one timed out |
-| SDK cancellation and one Node stream, main runtime only | Trial one passed; trial two timed out |
-| One Node stream without the nested tool call, main runtime only | Five fixed trials passed |
+| Reduction                                                       | Offline reconstruction                    |
+| --------------------------------------------------------------- | ----------------------------------------- |
+| SDK cancellation without Node streams, main and fresh runtimes  | Five fixed trials passed                  |
+| Original full SDK-only control                                  | Trial one passed; trial two timed out     |
+| SDK cancellation and one Node stream, main and fresh runtimes   | Trial one timed out                       |
+| SDK cancellation and one Node stream, main runtime only         | Trial one passed; trial two timed out     |
+| One Node stream without the nested tool call, main runtime only | Five fixed trials passed                  |
 | Three-chunk SDK producer and one Node stream, main runtime only | Three trials passed; trial four timed out |
 
 Each timeout above followed successful live execution. The smaller failing case
@@ -181,11 +196,13 @@ They are not fixes or proof that a passing variant is free of the intermittent f
 For a repeated trial, fix its count before starting and stop at the first failure.
 
 The fixture is not a release readiness claim. Live completion and successful
-isolated replay are separate checks; the combined lifecycle and fresh-runtime
-overflow replay cases still need deterministic completion before SDK registration.
+isolated replay are separate checks. The combined lifecycle and fresh-runtime
+overflow replay cases still need strict validation. The independent SDK/Node-stream
+finding does not gate SDK registration.
 
 The public process API fixture has completed its full live run on the merged-main
-executor: separate output channels, binary stdin, overflow,
+executor, both with the custom wrapper and through the normal SDK template:
+separate output channels, binary stdin, overflow,
 overlapping calls, cancellation and fresh-runtime registration. It also exercises
 `execFile` callbacks and local Node launchers while tool dispatch is disabled or
 a tool with the same name is bound. This checkpoint does not establish replay
@@ -199,17 +216,23 @@ remain recoverable in Git history, not in this fixture tree.
 
 ## Resume implementation
 
-Keep this proof separate from a complete process adapter. The remaining work is:
+The SDK template and optimized built-in components now include the backend.
+The regular `builtin_node_and_npm_dispatch_bound_tools` executor test checks
+synchronous and awaited asynchronous calls from built-in `node`, then synchronous
+calls from an npm lifecycle script. The ignored
+`builtin_npm_async_node_child_dispatch_bound_tools` test retains the failing
+asynchronous lifecycle case: WRQJS's local inline Node child returns before its
+Promise work finishes and produces no captured success output.
 
-- Validate the native facade and shared command parser on a current executor.
-  Do not infer dispatch admission or body execution from error tags or readiness.
-- Validate concurrent async children alongside synchronous calls before choosing
-  the production wait boundary. Keep synchronous output and stdin progress
-  independent of JavaScript.
-- Resolve the independent SDK/Node-stream replay finding, then validate timeout,
-  cancellation and crash recovery without relaxing the history checks.
-- Connect the completed adapter to the SDK templates, retain its disable option,
-  and measure startup, invocation cost and component size.
+The remaining work is:
+
+- Fix the local Node-child asynchronous lifetime separately from tool dispatch.
+- Validate native shell routing, timeout and cross-component failure cases.
+- Validate timeout, cancellation and crash recovery without relaxing the history
+  checks. Track the independent SDK/Node-stream replay finding separately.
+- Measure registration/startup cost and representative component-size deltas.
+- Replace the draft CI Git pin with a WRQJS release containing the generic hooks,
+  and align the publication toolchain pins before merging.
 
 Discuss confirmed platform bugs before adding executor or WIT changes. The prior
 prototype's crash findings are not evidence that this replacement needs those changes.
