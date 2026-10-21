@@ -1636,6 +1636,26 @@ async fn the_33rd_resume_closes_the_oldest_resumed_stream() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn a_resumed_stream_ends_when_the_record_is_gone() {
+    let fx = Fixture::with_config(config(Duration::from_secs(1), Duration::from_secs(15))).await;
+    let session = fx.initialize().await;
+    let priming = cut_call(&fx, &session, 4, "g").await;
+    let resumed = resume_times(&fx, &session, &priming, 1).await;
+    fx.store
+        .inner
+        .delete(session.parse().unwrap())
+        .await
+        .unwrap();
+    assert!(
+        rest(resumed.into_iter().next().unwrap()).await.is_some(),
+        "the resumed stream ends while the call runs"
+    );
+    fx.probe.gate("g").open();
+    fx.finish();
+}
+
+#[test]
 async fn resumed_and_get_streams_share_the_limit() {
     let fx = Fixture::new().await;
     let session = fx.initialize().await;
@@ -1720,7 +1740,7 @@ async fn cancelled_native_calls_store_no_terminal() {
     let session = fx.initialize().await;
     let session_id: McpSessionId = session.parse().unwrap();
     // Two running calls with the same request ID, each with a known response stream.
-    let calls: Vec<(BodyStream, String)> = stream::iter(["n1", "n2"])
+    let calls: Vec<(BodyStream, Arc<str>)> = stream::iter(["n1", "n2"])
         .then(|gate| {
             let fx = &fx;
             let session = &session;
@@ -1729,14 +1749,18 @@ async fn cancelled_native_calls_store_no_terminal() {
                     fx.send(fx.post(Some(session), call(9, "native", gate)))
                         .await,
                 );
-                let priming = next_frames(&mut body).await[0].id.clone().unwrap();
+                let priming: Arc<str> = next_frames(&mut body).await[0]
+                    .id
+                    .as_deref()
+                    .map(Arc::from)
+                    .unwrap();
                 fx.probe.gate(gate).started().await;
                 (body, priming)
             }
         })
         .collect()
         .await;
-    let primings: Vec<String> = calls.iter().map(|(_, priming)| priming.clone()).collect();
+    let primings: Arc<[Arc<str>]> = calls.iter().map(|(_, priming)| priming.clone()).collect();
     let events = fx.replica.events().clone();
     let replayed = primings.clone();
     // Whether the hook ran, and whether at every run both replays had already ended: a replay
@@ -1795,11 +1819,11 @@ async fn cancelled_native_calls_store_no_terminal() {
             .is_some_and(|frames| messages(frames).is_empty())),
         "both bodies end with no result: {ends:?}"
     );
-    let resumed: Vec<Vec<Frame>> = stream::iter(primings)
+    let resumed: Vec<Vec<Frame>> = stream::iter(primings.iter())
         .then(|priming| {
             let fx = &fx;
             let session = &session;
-            async move { read_to_end(fx.send(fx.get(Some(session), Some(&priming))).await).await }
+            async move { read_to_end(fx.send(fx.get(Some(session), Some(&**priming))).await).await }
         })
         .collect()
         .await;

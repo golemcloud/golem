@@ -349,15 +349,17 @@ impl McpReplica {
 
     /// The rest of the response stream that `last_event_id` belongs to, when that stream is bound
     /// to `session`; otherwise an empty stream. A resumed stream counts against the session's
-    /// limit of open streams, and ends when the limit closes it.
+    /// limit of open streams, and ends when the limit closes it or the session's record is gone.
     pub(super) fn resume(&self, last_event_id: &str, session: McpSessionId) -> Response {
         match self.events.replay(last_event_id, session) {
             Some(events) => {
                 let closed = self.streams.admit_resumed(session);
+                let gone = record_gone(self.store.clone(), session, self.idle);
                 SSE::new(
                     events
                         .map(|(id, event)| sse_event(id, event))
-                        .take_until(closed),
+                        .take_until(closed)
+                        .take_until(gone),
                 )
                 .keep_alive(self.keep_alive)
                 .into_response()
