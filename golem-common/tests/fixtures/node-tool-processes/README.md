@@ -6,7 +6,9 @@ It adds no tool WIT methods or worker-executor implementation.
 
 ## Focused guest bridge
 
-- `tool-probe.js` defines the probe tool and invokes the process backend.
+- `tool-probe.js` defines the probe tool and calls `node:child_process`.
+- `sdks/javascript/tool-process-runtime-init.js` registers the Golem adapter
+  through WRQJS's optional runtime-init module.
 - `sdks/javascript/tool-process-host.js` adapts the native module to the backend.
 - `sdks/javascript/tool-process-bridge` provides the private
   `golem-tool-process-bridge` JavaScript module and prepares canonical inputs.
@@ -19,9 +21,11 @@ script does not use it.
 The cases cover independent stdout/stderr, binary stdin and overflow cancellation
 through both synchronous and asynchronous calls. A child also waits for stdin
 while another synchronous call runs. The output cases run in a fresh JavaScript
-runtime. The bridge uses the shared command parser, but the fixture invokes the
-backend directly rather than the public `node:child_process` entry points.
-The SDK templates do not register that adapter while its transport is replaced.
+runtime. The bridge uses the shared command parser. The fixture calls public
+`spawn`, `spawnSync`, `execFile` and `execFileSync` entry points. It also checks
+the disable switch, unknown commands and precedence of local Node scripts over
+bound tools. The SDK templates do not register the adapter while replay readiness
+is unresolved.
 
 ## Build prerequisites
 
@@ -29,7 +33,9 @@ Build the Rust tool-streaming caller and provider with the local SDK, following
 `test-components/tool-streaming/AGENTS.md`. Tests consume prebuilt Wasm and never
 invoke a compiler. Inspect existing artifacts rather than assuming they are fresh.
 
-From the repository root, with the matching `wasm-rquickjs` CLI on `PATH`:
+From the repository root, with a `wasm-rquickjs` CLI that includes the generic
+`wasm-rquickjs:child-process` and runtime-init hooks on `PATH` (released 0.4.13
+does not include them):
 
 ```sh
 CARGO_BUILD_JOBS=1 node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory
@@ -93,7 +99,10 @@ between its handler and fresh-runtime helper. It links neither the new native
 bridge nor the Rust SDK. The ordinary SDK client also handles the fresh follow-up
 invocation, so a pass still checks reconstruction and continued execution.
 
-The SDK-only control has completed live execution and offline replay, but an
+The independent SDK/Node-stream case is now recorded in
+[the SDK replay PR](https://github.com/golemcloud/golem/pull/4293). It still
+reproduces with the blocked-wait delivery fix present. The SDK-only control has
+completed live execution and offline replay, but an
 unchanged component has also timed out during reconstruction on a subsequent
 run. Treat this as an intermittent replay finding, not proof that a passing
 adapter variation fixed it. Its cause is not yet assigned to the SDK, WRQJS or
@@ -147,6 +156,13 @@ For a repeated trial, fix its count before starting and stop at the first failur
 The fixture is not a release readiness claim. Live completion and successful
 isolated replay are separate checks; the combined lifecycle and fresh-runtime
 overflow replay cases still need deterministic completion before SDK registration.
+
+The public process API fixture has completed its full live run on the preserved
+feature-base executor: separate output channels, binary stdin, overflow,
+overlapping calls, cancellation and fresh-runtime registration. It also exercises
+`execFile` callbacks and local Node launchers while tool dispatch is disabled or
+a tool with the same name is bound. This checkpoint is not a latest-main executor
+run and does not establish replay safety.
 
 Keep replay failures strict. Do not increase timeouts or skip unmatched history to
 make a case pass. Report bugs before adding executor changes.

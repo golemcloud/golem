@@ -69,6 +69,7 @@ if (!sdkOnly)
   modules.push(
     `golem-tool-process-backend=${join(root, "sdks/javascript/tool-process-backend.js")}`,
     `golem-tool-process-host=${join(root, "sdks/javascript/tool-process-host.js")}`,
+    `wasm-rquickjs-runtime-init=${join(root, "sdks/javascript/tool-process-runtime-init.js")}`,
   );
 run("wasm-rquickjs", [
   "generate-wrapper-crate",

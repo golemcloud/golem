@@ -2,8 +2,10 @@
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
 import * as native from "golem-tool-process-bridge";
-import { createToolProcessBackend } from "golem-tool-process-backend";
-import { createToolProcessHost } from "golem-tool-process-host";
+import * as childProcess from "node:child_process";
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
 import { sdkOverflowControl } from "golem-tool-process-sdk-control";
 import process from "node:process";
 import { runJavaScript } from "wasm-rquickjs:execution";
@@ -70,6 +72,68 @@ function startCapture(backend, args, options = {}) {
     }),
   );
   return { child, done, firstOutput, stdout };
+}
+
+async function checkPublicProcessContract() {
+  const saved = process.env.GOLEM_NODE_TOOL_PROCESSES;
+  try {
+    for (const disabled of ["0", "false"]) {
+      process.env.GOLEM_NODE_TOOL_PROCESSES = disabled;
+      assert.equal(
+        childProcess.spawnSync("streaming", ["--help"]).error?.code,
+        "ENOSYS",
+      );
+      const child = childProcess.spawn("streaming", ["--help"]);
+      const failure = once(child, "error");
+      const closed = new Promise((resolve) => child.once("close", resolve));
+      assert.equal((await failure)[0].code, "ENOSYS");
+      await closed;
+      const local = childProcess.spawnSync(process.execPath, ["-p", "6 * 7"], {
+        encoding: "utf8",
+      });
+      assert.equal(local.status, 0);
+      assert.equal(local.stdout.trim(), "42");
+    }
+  } finally {
+    if (saved === undefined) delete process.env.GOLEM_NODE_TOOL_PROCESSES;
+    else process.env.GOLEM_NODE_TOOL_PROCESSES = saved;
+  }
+  assert.equal(
+    childProcess.spawnSync("unbound-process-probe").error?.code,
+    "ENOSYS",
+  );
+  const directory = "/workspace/node-tool-process-bin";
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    `${directory}/entry.cjs`,
+    '#!/usr/bin/env node\nconsole.log("local:" + process.argv[2]);\n',
+  );
+  if (!existsSync(`${directory}/streaming`))
+    symlinkSync("entry.cjs", `${directory}/streaming`);
+  // A filesystem executable with the bound tool's name must still run locally.
+  const options = {
+    env: { ...process.env, PATH: directory },
+    encoding: "utf8",
+  };
+  assert.equal(
+    childProcess.spawnSync("streaming", ["priority"], options).stdout,
+    "local:priority\n",
+  );
+  assert.equal(
+    childProcess.execFileSync(`${directory}/streaming`, ["absolute"], options),
+    "local:absolute\n",
+  );
+  await new Promise((resolve, reject) => {
+    childProcess.execFile("streaming", ["callback"], options, (error, out) => {
+      try {
+        assert.ifError(error);
+        assert.equal(out, "local:callback\n");
+        resolve();
+      } catch (failure) {
+        reject(failure);
+      }
+    });
+  });
 }
 
 async function cancelNative(native) {
@@ -157,10 +221,8 @@ probe.implement({
     const bytes = echo
       ? new Uint8Array([0, 255, 1, 128, 0, 13, 10, 254])
       : new Uint8Array();
-    const backend = createToolProcessBackend(
-      createToolProcessHost(native),
-      process,
-    );
+    const backend = childProcess;
+    if (execution === "all") await checkPublicProcessContract();
     const summarize = (result) => {
       if (result.error?.code === "ENOBUFS")
         return `overflow:${result.stdout.length}`;
@@ -194,6 +256,26 @@ probe.implement({
       const result = summarize(await child.done);
       value ??= result;
       if (result !== value) throw new Error("Async process differs");
+    }
+    if (extra && !pressure) {
+      const stdout = backend.execFileSync("streaming", args, {
+        input: bytes,
+        maxBuffer: 4096,
+      });
+      const callback = await new Promise((resolve, reject) => {
+        const child = backend.execFile(
+          "streaming",
+          args,
+          { encoding: "buffer", maxBuffer: 4096 },
+          (error, stdout, stderr) => {
+            if (error) reject(error);
+            else resolve({ status: 0, stdout, stderr });
+          },
+        );
+        child.stdin?.end(bytes);
+      });
+      assert.deepEqual(stdout, callback.stdout);
+      assert.equal(summarize(callback), value);
     }
     if (echo && extra) {
       const large = Uint8Array.from(
@@ -311,15 +393,11 @@ probe.implement({
                 return '7:700:14:1455';
             `
               : `
-                const native = await import('golem-tool-process-bridge');
-                const { createToolProcessBackend } = await import('golem-tool-process-backend');
-                const { createToolProcessHost } = await import('golem-tool-process-host');
-                const { default: process } = await import('node:process');
+                const backend = await import('node:child_process');
                 if (${JSON.stringify(effectUrl)}) {
                     const response = await fetch(${JSON.stringify(effectUrl)} + '/' + ${JSON.stringify(mode)} + '-job', { method: 'POST' });
                     await response.arrayBuffer();
                 }
-                const backend = createToolProcessBackend(createToolProcessHost(native), process);
                 const summarize = ${summarize.toString()};
                 const startCapture = ${startCapture.toString()};
                 let value;

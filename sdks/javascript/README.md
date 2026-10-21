@@ -22,14 +22,22 @@ waits for the output and its write callbacks.
 
 The [guest bridge fixture](../../golem-common/tests/fixtures/node-tool-processes/README.md)
 tests this adapter over the existing tool API, without WIT or executor changes.
-The fixture invokes the backend directly, not the public `node:child_process`
-entry points. The native module must remain
-Golem-owned; wasm-rquickjs supplies the generic runtime-local process backend.
+The fixture embeds `tool-process-runtime-init.js` as the optional
+`wasm-rquickjs-runtime-init` module. It registers the adapter separately in the
+main runtime and each fresh execution job, then calls the public
+`node:child_process` entry points. The native module remains Golem-owned;
+wasm-rquickjs supplies the generic runtime-local process backend. Registration
+performs no tool discovery or host I/O, including during Wizer initialization.
+
+`GOLEM_NODE_TOOL_PROCESSES=0` or `false` disables tool dispatch per call; it does
+not disable local Node scripts. This compatibility switch is not an authority
+boundary. Golem's existing tool permissions still apply to dispatched commands.
 
 Run `cargo make test-javascript-tool-process-backend` for the mock adapter and facade tests. These
 tests do not validate the native transport, component execution, or replay.
 
 SDK registration also remains gated on deterministic replay. The fixture includes
 an SDK-only cancellation control with ordinary Node streams; it can reproduce a
-reconstruction timeout without linking this bridge. Do not infer an executor fix
-or a bridge fix from a single successful run.
+reconstruction timeout without linking this bridge. The independent reproducer is
+tracked in [the SDK replay PR](https://github.com/golemcloud/golem/pull/4293).
+Do not infer an executor fix or a bridge fix from a single successful run.
