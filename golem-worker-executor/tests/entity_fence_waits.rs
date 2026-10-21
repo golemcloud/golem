@@ -10,7 +10,7 @@ use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
 test_r::inherit_test_dep!(Tracing);
 
-const TARGET: &str = "golem_worker_executor::services::active_agents";
+const TARGET: &str = "golem_worker_executor::services::active_agents::entity_execution";
 const MESSAGE: &str = "Selecting owner failure for entity fence";
 
 struct Interest {

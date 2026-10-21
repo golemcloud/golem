@@ -820,6 +820,7 @@ id = "local-development"
 key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
 
 [worker_service.mcp]
+session_idle_timeout = "5m"
 sse_keep_alive_interval = "15s"
 
 [worker_service.registry_service]
@@ -1839,6 +1840,7 @@ type = "Disabled"
 # key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
 #
 # [worker_service.mcp]
+# session_idle_timeout = "5m"
 # sse_keep_alive_interval = "15s"
 #
 # [worker_service.registry_service]

@@ -108,11 +108,13 @@ grep -q "golem-router: GOLEM_ROUTER_CONCURRENCY has the value '0'" <<<"$output" 
 # with a trailing dot or a port is still the management host; every other host reaches the custom
 # request port. The services are Envoy listeners that answer with their name, and with the
 # authority, the protocol and the X-Forwarded-Proto of the request. They accept WebSocket upgrades
-# and answer them with their name in a header, because Envoy sends no body after an upgrade.
+# and answer them with their name in a header, because Envoy sends no body after an upgrade. Three
+# replicas of the services run under the same names, and each one also answers with its own name.
 echo "== $router: routing by host"
 network=$("$engine" network create "$tag_prefix-router")
+replicas=(replica-1 replica-2 replica-3)
 cleanup_router() {
-    "$engine" rm -f "$tag_prefix-router" "$tag_prefix-router-trusted" "$tag_prefix-services" >/dev/null 2>&1 || true
+    "$engine" rm -f "$tag_prefix-router" "$tag_prefix-router-trusted" "${replicas[@]/#/$tag_prefix-}" >/dev/null 2>&1 || true
     "$engine" network rm "$network" >/dev/null 2>&1 || true
 }
 trap cleanup_router EXIT
@@ -137,6 +139,7 @@ listener() {
               - header: {key: x-protocol, value: "%PROTOCOL%"}
               - header: {key: x-received-proto, value: "%REQ(X-FORWARDED-PROTO)%"}
               - header: {key: x-service, value: $2}
+              - header: {key: x-replica, value: $3}
               routes:
               - match: {prefix: /}
                 direct_response: {status: 200, body: {inline_string: $2}}
@@ -145,10 +148,12 @@ listener() {
             typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
 EOF
 }
-stand_ins=$(printf 'static_resources:\n  listeners:\n%s\n%s\n%s\n' "$(listener 8081 registry)" \
-    "$(listener 9005 worker)" "$(listener 9006 custom)")
-"$engine" run -d --name "$tag_prefix-services" --network "$network" --network-alias registry \
-    --network-alias worker --entrypoint envoy "$router" --disable-hot-restart --config-yaml "$stand_ins" >/dev/null
+for replica in "${replicas[@]}"; do
+    stand_ins=$(printf 'static_resources:\n  listeners:\n%s\n%s\n%s\n' "$(listener 8081 registry "$replica")" \
+        "$(listener 9005 worker "$replica")" "$(listener 9006 custom "$replica")")
+    "$engine" run -d --name "$tag_prefix-$replica" --network "$network" --network-alias registry \
+        --network-alias worker --entrypoint envoy "$router" --disable-hot-restart --config-yaml "$stand_ins" >/dev/null
+done
 # The first router has the metrics port; the second trusts one proxy in front of it and has none.
 start_router() {
     name=$1
@@ -191,6 +196,39 @@ for case in "${cases[@]}"; do
     [ "$result" = "$host $expected" ] ||
         fail "$router sent $path for host $host to '$result', not to '$host $expected'"
 done
+
+# The requests of one MCP session reach one replica of the custom request port, and different
+# sessions reach different replicas. Requests without the header are covered above.
+# Prints the replica and the service that served a request with the Mcp-Session-Id header.
+session_served_by() {
+    curl -s -D - --http1.1 -H 'Host: app.test' -H "Mcp-Session-Id: $1" "http://$address/mcp" |
+        tr -d '\r' | sed -n -e 's/^x-replica: //p' -e '$p' | paste -sd ' '
+}
+served=$(for _ in $(seq 1 20); do session_served_by 0123456789abcdef0123456789abcdef; done | sort -u)
+[ "$(wc -l <<<"$served")" = 1 ] && [[ "$served" == *" custom" ]] ||
+    fail "$router sent the requests of one MCP session to: $served"
+served=$(for session in $(seq 1 20); do session_served_by "session-$session"; done | sort -u)
+[ "$(wc -l <<<"$served")" -gt 1 ] ||
+    fail "$router sent the requests of 20 MCP sessions to one replica: $served"
+if grep -qv ' custom$' <<<"$served"; then
+    fail "$router sent requests of MCP sessions outside the custom request port: $served"
+fi
+
+# The route of MCP sessions has no timeout, like every other route, and hashes the session ID with
+# Maglev over the replicas, one host for each address. Envoy runs as PID 1 with the configuration
+# that the entrypoint wrote.
+rendered=$("$engine" exec "$tag_prefix-router" cat /proc/1/cmdline | tr '\0' '\n')
+route=$(grep -F 'cluster: custom_request_mcp_session,' <<<"$rendered") ||
+    fail "$router has no route to custom_request_mcp_session"
+[[ "$route" == *"timeout: 0s"* ]] || fail "$router has a timeout on the route of MCP sessions: $route"
+[[ "$route" == *"hash_policy: [{header: {header_name: mcp-session-id}}]"* ]] ||
+    fail "$router does not hash the route of MCP sessions on mcp-session-id: $route"
+cluster=$(awk '/^  - name: / { inside = ($3 == "custom_request_mcp_session") } inside' <<<"$rendered")
+grep -qx '    lb_policy: MAGLEV' <<<"$cluster" ||
+    fail "$router does not balance custom_request_mcp_session with MAGLEV: $cluster"
+if grep -q 'all_addresses_in_single_endpoint' <<<"$cluster"; then
+    fail "$router sets all_addresses_in_single_endpoint on custom_request_mcp_session: $cluster"
+fi
 
 # Prints the status, the protocol that the service received and the name of the service, for a
 # WebSocket upgrade request.

@@ -1335,6 +1335,7 @@ mod tests {
     use golem_registry_service::config::ComponentCompilationConfig;
     use golem_shard_manager::config::PersistenceConfig;
     use golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig;
+    use golem_worker_service::mcp::session::McpSessionStorageConfig;
     use test_r::test;
 
     /// Loads the configuration on a platform without platform defaults, with the validation-only
@@ -1771,6 +1772,15 @@ mod tests {
             sqlite_path(&sessions.sqlite_config),
             data_dir.join("gateway-sessions.db")
         );
+        let McpSessionStorageConfig::Sqlite(mcp_sessions) = config
+            .worker_service
+            .mcp
+            .session
+            .effective_session_storage(&config.worker_service.gateway_session_storage)
+        else {
+            panic!("expected the MCP sessions in the gateway's SQLite database")
+        };
+        assert_eq!(mcp_sessions.sqlite_config, sessions.sqlite_config);
         let KeyValueStorageConfig::MultiSqlite(key_value) =
             &config.worker_executor.key_value_storage
         else {
@@ -2427,6 +2437,24 @@ mod tests {
     #[test]
     fn the_session_store_counts_with_its_default_schema() {
         let mut config = GolemServerConfig::postgres_s3_example(Path::new("/data")).unwrap();
+        let (
+            SessionStoreConfig::Postgres(gateway_sessions),
+            McpSessionStorageConfig::Postgres(mcp_sessions),
+        ) = (
+            &config.worker_service.gateway_session_storage,
+            config
+                .worker_service
+                .mcp
+                .session
+                .effective_session_storage(&config.worker_service.gateway_session_storage),
+        )
+        else {
+            panic!("expected the MCP sessions in the gateway's Postgres schema")
+        };
+        assert_eq!(
+            mcp_sessions.postgres_config,
+            gateway_sessions.postgres_config_with_schema()
+        );
         let SessionStoreConfig::Postgres(sessions) =
             &mut config.worker_service.gateway_session_storage
         else {

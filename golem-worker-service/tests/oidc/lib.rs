@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod handler;
+mod mcp_session_store;
 mod session_store;
 mod sql_session_store;
 
@@ -26,10 +27,14 @@ use golem_test_framework::components::rdb::{DbInfo, Rdb};
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::spawned_tls::{CERT_PEM, SpawnedRedisTls};
-use golem_worker_service::config::{PostgresSessionStoreConfig, SqliteSessionStoreConfig};
+use golem_worker_service::config::with_session_store_schema;
 use golem_worker_service::custom_api::oidc::session_store::SessionStore;
 use golem_worker_service::custom_api::oidc::session_store::{
-    PostgresSessionStore, RedisSessionStore, SqliteSessionStore,
+    PostgresSessionStore, RedisSessionStore, SqliteSessionStore, migrated_postgres_pool,
+    migrated_sqlite_pool,
+};
+use golem_worker_service::mcp::session::store::{
+    McpSessionStore, PostgresMcpSessionStore, RedisMcpSessionStore, SqliteMcpSessionStore,
 };
 use rustls::RootCertStore;
 use std::sync::{Arc, Once};
@@ -118,12 +123,11 @@ pub async fn sqlite_store(
     sqlite_config: &DbSqliteConfig,
     pending_login_expiration: Duration,
 ) -> SqliteSessionStore {
-    SqliteSessionStore::configured(&SqliteSessionStoreConfig {
+    SqliteSessionStore::new(
+        migrated_sqlite_pool(sqlite_config).await.unwrap(),
         pending_login_expiration,
-        cleanup_interval: CLEANUP_INTERVAL,
-        sqlite_config: sqlite_config.clone(),
-    })
-    .await
+        CLEANUP_INTERVAL,
+    )
     .unwrap()
 }
 
@@ -249,12 +253,13 @@ pub async fn postgres_store(
     postgres_config: &DbPostgresConfig,
     pending_login_expiration: Duration,
 ) -> PostgresSessionStore {
-    PostgresSessionStore::configured(&PostgresSessionStoreConfig {
+    PostgresSessionStore::new(
+        migrated_postgres_pool(&with_session_store_schema(postgres_config))
+            .await
+            .unwrap(),
         pending_login_expiration,
-        cleanup_interval: CLEANUP_INTERVAL,
-        postgres_config: postgres_config.clone(),
-    })
-    .await
+        CLEANUP_INTERVAL,
+    )
     .unwrap()
 }
 
@@ -471,6 +476,28 @@ async fn redis_store_fast_expiry(
     redis_pool: &RedisPool,
 ) -> Arc<dyn SessionStore> {
     Arc::new(redis_store(redis_pool, 100).await)
+}
+
+#[test_dep(scope = Shared, tagged_as = "mcp_redis")]
+async fn mcp_redis_store(_tracing: &Tracing, redis_pool: &RedisPool) -> Arc<dyn McpSessionStore> {
+    Arc::new(RedisMcpSessionStore::new(redis_pool.clone()))
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "mcp_sqlite")]
+async fn mcp_sqlite_store(_tracing: &Tracing, config: &DbSqliteConfig) -> Arc<dyn McpSessionStore> {
+    let pool = migrated_sqlite_pool(config).await.unwrap();
+    Arc::new(SqliteMcpSessionStore::new(pool, CLEANUP_INTERVAL))
+}
+
+#[test_dep(scope = Shared, tagged_as = "mcp_postgres")]
+async fn mcp_postgres_store(
+    _tracing: &Tracing,
+    postgres: &DockerPostgresRdb,
+) -> Arc<dyn McpSessionStore> {
+    let pool = migrated_postgres_pool(&unique_postgres_config(postgres))
+        .await
+        .unwrap();
+    Arc::new(PostgresMcpSessionStore::new(pool, CLEANUP_INTERVAL))
 }
 
 #[test_dep(scope = Shared, tagged_as = "tls")]

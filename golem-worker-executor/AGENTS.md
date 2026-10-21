@@ -18,7 +18,7 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
 2. **The resident runtime is disposable.** `Store`, worker task, process, sockets, channels and
    subscriptions may vanish at any instruction boundary. Suspend, evict, reshard, restart and
    crash all reconstruct the instance from the oplog through the same path
-   (`src/worker/invocation_loop.rs::run` → `src/durable_host/mod.rs::prepare_instance` →
+   (`src/worker/invocation_loop/mod.rs::run` → `src/durable_host/recovery.rs::prepare_instance` →
    `resume_replay`). Do not design feature-specific "safe to unload" gates; make every pending
    obligation durable or deterministically recomputable instead.
 3. **Durable agent RPC is exactly-once per logical target invocation.** Caller attempts (replay,
@@ -52,7 +52,7 @@ External operators can revert or fork at validated cuts. `oplog-commit` remains 
 barrier, not an external transaction commit or an undo operation.
 
 Golem itself enforces exactly-once for durable agent RPC and for oplog-processor plugin delivery
-(`services/oplog/plugin.rs`: batch keys from `oplog_processor_idempotency_key`, checkpoints in
+(`services/oplog/plugin/mod.rs`: batch keys from `oplog_processor_idempotency_key`, checkpoints in
 `AgentStatusRecord.oplog_processor_checkpoints`). Ephemeral targets are fail-stop (accepted work is
 not re-executed, but completion is not guaranteed). For external peers the crash window between
 the effect and its `End` entry is ambiguous, so exactly-once depends on the peer honouring an
@@ -68,5 +68,5 @@ A new or changed `OplogEntry` requires updating, in the same change: `is_hint()`
 the WIT `oplog-entry` / `public-oplog-entry` variants in `wit/deps/golem-1.x/golem-oplog.wit`
 (the `oplog_macro` binds `wit_raw_type` / `wit_public_type`; load `modifying-wit-interfaces`),
 replay claims (`src/durable_host/replay_state/claims.rs`), cut-point validation
-(`src/worker/cut_point.rs`), status folding (`src/worker/status.rs`), public oplog rendering, and
+(`src/worker/cut_point.rs`), status folding (`src/worker/status/`), public oplog rendering, and
 a test that restarts a worker across the new entry.

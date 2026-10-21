@@ -17,12 +17,12 @@ use crate::base_model::agent::{AgentMode, OwnerKind};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::{AgentId, OplogIndex};
 use crate::model::Timestamp;
+use crate::model::agent::UntypedAgentConfigEntry;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::oplog::OplogPayload;
 use crate::model::quota::ResourceName;
-use crate::model::worker::UntypedAgentConfigEntry;
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,

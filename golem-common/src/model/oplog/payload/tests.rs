@@ -826,6 +826,9 @@ use super::{
     HostRequestGolemContextSpanAttributes, HostRequestGolemContextSpanResource,
     HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
 };
+use crate::model::agent::{
+    ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+};
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
@@ -883,9 +886,6 @@ use crate::model::oplog::{
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponsePermissionCheck,
     HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
     host_functions,
-};
-use crate::model::worker::{
-    ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
 };
 use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
 use crate::model::{ScanCursor, Timestamp};

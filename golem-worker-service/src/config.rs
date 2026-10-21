@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::mcp::session::McpSessionConfig;
 use golem_common::SafeDisplay;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
@@ -211,7 +212,8 @@ impl SafeDisplay for WorkerServiceConfig {
             "invocation session: {:?}",
             self.invocation_session
         );
-        let _ = writeln!(&mut result, "MCP: {:?}", self.mcp);
+        let _ = writeln!(&mut result, "MCP:");
+        let _ = writeln!(&mut result, "{}", self.mcp.to_safe_string_indented());
 
         let _ = writeln!(&mut result, "HTTP session:");
         let _ = writeln!(
@@ -379,13 +381,29 @@ impl Default for InvocationSessionConfig {
 pub struct McpConfig {
     #[serde(with = "humantime_serde")]
     pub sse_keep_alive_interval: Duration,
+    #[serde(flatten)]
+    pub session: McpSessionConfig,
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
             sse_keep_alive_interval: Duration::from_secs(15),
+            session: McpSessionConfig::default(),
         }
+    }
+}
+
+impl SafeDisplay for McpConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "SSE keep-alive interval: {:?}",
+            self.sse_keep_alive_interval
+        );
+        let _ = write!(&mut result, "{}", self.session.to_safe_string());
+        result
     }
 }
 
@@ -619,12 +637,17 @@ pub struct PostgresSessionStoreConfig {
 
 impl PostgresSessionStoreConfig {
     pub fn postgres_config_with_schema(&self) -> DbPostgresConfig {
-        let mut postgres_config = self.postgres_config.clone();
-        postgres_config
-            .schema
-            .get_or_insert_with(|| DEFAULT_POSTGRES_SESSION_STORE_SCHEMA.to_string());
-        postgres_config
+        with_session_store_schema(&self.postgres_config)
     }
+}
+
+/// `postgres_config`, with [`DEFAULT_POSTGRES_SESSION_STORE_SCHEMA`] when it sets no schema.
+pub fn with_session_store_schema(postgres_config: &DbPostgresConfig) -> DbPostgresConfig {
+    let mut postgres_config = postgres_config.clone();
+    postgres_config
+        .schema
+        .get_or_insert_with(|| DEFAULT_POSTGRES_SESSION_STORE_SCHEMA.to_string());
+    postgres_config
 }
 
 impl SafeDisplay for PostgresSessionStoreConfig {
@@ -1091,8 +1114,10 @@ mod tests {
         DEFAULT_POSTGRES_SESSION_STORE_SCHEMA, HttpSessionLimits, SessionStoreConfig,
         WorkerServiceConfig, make_worker_service_config_loader,
     };
+    use crate::mcp::session::{McpSessionStorageConfig, McpSqliteStorageConfig};
     use figment::providers::{Format, Toml};
     use golem_common::SafeDisplay;
+    use golem_common::config::RedisConfig;
 
     #[test]
     pub fn config_is_loadable() {
@@ -1136,6 +1161,90 @@ mod tests {
             Duration::from_secs(2)
         );
         assert_eq!(config.mcp.sse_keep_alive_interval, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn mcp_session_defaults_and_overrides() {
+        let defaults = WorkerServiceConfig::default();
+        assert!(defaults.mcp.session.validate().is_ok());
+        assert_eq!(
+            defaults.mcp.session.session_idle_timeout,
+            Duration::from_secs(300)
+        );
+        assert_eq!(defaults.mcp.session.session_storage, None);
+        let SessionStoreConfig::Redis(gateway) = &defaults.gateway_session_storage else {
+            panic!("expected a Redis gateway session store config");
+        };
+        assert_eq!(
+            defaults
+                .mcp
+                .session
+                .effective_session_storage(&defaults.gateway_session_storage),
+            McpSessionStorageConfig::Redis(gateway.redis_config.clone())
+        );
+
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [mcp]
+                session_idle_timeout = "2m"
+
+                [mcp.session_storage]
+                type = "Sqlite"
+
+                [mcp.session_storage.config]
+                cleanup_interval = "5m"
+                database = "sessions.db"
+                max_connections = 4
+                foreign_keys = false
+                "#,
+            ))
+            .extract()
+            .expect("Failed to load config");
+        assert_eq!(
+            config.mcp.session.session_idle_timeout,
+            Duration::from_secs(120)
+        );
+        assert_eq!(config.mcp.sse_keep_alive_interval, Duration::from_secs(15));
+        let Some(McpSessionStorageConfig::Sqlite(sqlite)) = &config.mcp.session.session_storage
+        else {
+            panic!("expected a SQLite MCP session store config");
+        };
+        assert_eq!(sqlite.cleanup_interval, Duration::from_secs(300));
+        assert_eq!(sqlite.sqlite_config.database, "sessions.db");
+        assert_eq!(sqlite.sqlite_config.max_connections, 4);
+    }
+
+    #[test]
+    fn mcp_session_config_rejects_a_zero_idle_timeout_or_cleanup_interval() {
+        let mut config = WorkerServiceConfig::default();
+        config.mcp.session.session_idle_timeout = Duration::from_micros(999);
+        assert!(config.mcp.session.validate().is_err());
+        config.mcp.session.session_idle_timeout = Duration::from_millis(1);
+        assert!(config.mcp.session.validate().is_ok());
+
+        config.mcp.session.session_storage =
+            Some(McpSessionStorageConfig::Sqlite(McpSqliteStorageConfig {
+                cleanup_interval: Duration::ZERO,
+                sqlite_config: Default::default(),
+            }));
+        assert!(config.mcp.session.validate().is_err());
+    }
+
+    #[test]
+    fn mcp_session_storage_credentials_are_not_displayed() {
+        let mut config = WorkerServiceConfig::default();
+        config.mcp.session.session_storage = Some(McpSessionStorageConfig::Redis(RedisConfig {
+            username: Some("mcp-user".to_string()),
+            password: Some("mcp-password".to_string()),
+            ..RedisConfig::default()
+        }));
+
+        let displayed = config.to_safe_string();
+        assert!(displayed.contains("session idle timeout: 300s"));
+        assert!(!displayed.contains("mcp-user"));
+        assert!(!displayed.contains("mcp-password"));
     }
 
     #[test]

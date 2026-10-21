@@ -240,7 +240,7 @@ reqwest-retry = "0.9.1"
 reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_32"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
-rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "3.6.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
 rust_decimal = "1.39.0"

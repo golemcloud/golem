@@ -1,0 +1,144 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Canonical encoding for [`BinaryValuePayload`].
+//!
+//! - Text form: RFC 2397-style data URL `data:<mime>;base64,<base64>`. The
+//!   base64 alphabet is **URL-safe-no-pad** (Golem-specific; this differs
+//!   from the standard `data:` URL convention which uses standard base64
+//!   with `+`, `/` and `=` padding). When the payload has no MIME type the
+//!   form is `data:;base64,<base64>`. An explicit `Some("")` mime is
+//!   rejected at encode time — we never emit a form we would not decode
+//!   back to the same payload.
+//! - JSON form: `{ "bytes": "<base64>", "mimeType": "...?" }`. The
+//!   `mimeType` field is absent (not `null`) on output when `None`; the
+//!   decoder rejects an explicit `mimeType: null` and an empty string.
+//! - When the MIME type is `Some(s)`, `s` must match a minimal MIME regex
+//!   (`type/subtype` with a small ASCII-only character set).
+
+use crate::schema::canonical::error::ParseError;
+use crate::schema::schema_value::BinaryValuePayload;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use serde_json::{Map, Value};
+
+const DATA_PREFIX: &str = "data:";
+const BASE64_MARKER: &str = ";base64,";
+
+fn mime_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&c))
+}
+
+fn validate_mime(mime: &str) -> Result<(), ParseError> {
+    if mime.is_empty() {
+        return Err(ParseError::BadFormat("empty mime_type".into()));
+    }
+    if !mime
+        .split_once('/')
+        .is_some_and(|(a, b)| mime_token(a) && mime_token(b))
+    {
+        return Err(ParseError::BadFormat("invalid mime_type".into()));
+    }
+    Ok(())
+}
+
+pub fn to_text(payload: &BinaryValuePayload) -> Result<String, ParseError> {
+    if let Some(mime) = payload.mime_type.as_deref() {
+        validate_mime(mime)?;
+    }
+    let mime = payload.mime_type.as_deref().unwrap_or("");
+    let encoded = URL_SAFE_NO_PAD.encode(&payload.bytes);
+    Ok(format!("{DATA_PREFIX}{mime}{BASE64_MARKER}{encoded}"))
+}
+
+pub fn from_text(s: &str) -> Result<BinaryValuePayload, ParseError> {
+    if s.is_empty() {
+        return Err(ParseError::Empty);
+    }
+    let rest = s
+        .strip_prefix(DATA_PREFIX)
+        .ok_or_else(|| ParseError::BadFormat("missing 'data:' prefix".into()))?;
+    let marker_at = rest
+        .find(BASE64_MARKER)
+        .ok_or_else(|| ParseError::BadFormat("missing ';base64,' marker".into()))?;
+    let mime = &rest[..marker_at];
+    let body = &rest[marker_at + BASE64_MARKER.len()..];
+    let bytes = URL_SAFE_NO_PAD
+        .decode(body.as_bytes())
+        .map_err(|e| ParseError::InvalidBase64(e.to_string()))?;
+    let mime_type = if mime.is_empty() {
+        None
+    } else {
+        validate_mime(mime)?;
+        Some(mime.to_string())
+    };
+    Ok(BinaryValuePayload { bytes, mime_type })
+}
+
+pub fn to_json(payload: &BinaryValuePayload) -> Result<Value, ParseError> {
+    if let Some(mime) = payload.mime_type.as_deref() {
+        validate_mime(mime)?;
+    }
+    let mut obj = Map::new();
+    obj.insert(
+        "bytes".to_string(),
+        Value::String(URL_SAFE_NO_PAD.encode(&payload.bytes)),
+    );
+    if let Some(mime) = &payload.mime_type {
+        obj.insert("mimeType".to_string(), Value::String(mime.clone()));
+    }
+    Ok(Value::Object(obj))
+}
+
+pub fn from_json(value: &Value) -> Result<BinaryValuePayload, ParseError> {
+    let obj = value.as_object().ok_or(ParseError::TypeField {
+        expected: "object",
+        field: None,
+    })?;
+    let b64 = obj
+        .get("bytes")
+        .ok_or(ParseError::MissingField("bytes"))?
+        .as_str()
+        .ok_or(ParseError::TypeField {
+            expected: "string",
+            field: Some("bytes"),
+        })?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(b64.as_bytes())
+        .map_err(|e| ParseError::InvalidBase64(e.to_string()))?;
+    let mime_type = match obj.get("mimeType") {
+        Some(Value::String(s)) => {
+            validate_mime(s)?;
+            Some(s.clone())
+        }
+        None => None,
+        Some(_) => {
+            return Err(ParseError::TypeField {
+                expected: "string",
+                field: Some("mimeType"),
+            });
+        }
+    };
+    for key in obj.keys() {
+        if key != "bytes" && key != "mimeType" {
+            return Err(ParseError::ExtraField(key.clone()));
+        }
+    }
+    Ok(BinaryValuePayload { bytes, mime_type })
+}
+
+#[cfg(test)]
+mod tests;

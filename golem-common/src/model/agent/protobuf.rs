@@ -1,3 +1,8 @@
+use super::AgentMetadataDto;
+use super::{
+    AgentConfigEntryDto, ExportedResourceMetadata, FailedUpdate, PendingUpdate,
+    SnapshotAssistedUpdateMetadata, SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
+};
 use super::{
     AgentConfigSource, AgentHttpAuthDetails, AgentInvocationMode, AgentMode, AgentPrincipal,
     CachePolicy, CachePolicyTtl, CorsOptions, CustomHttpMethod, DurableStreamInputSlotSource,
@@ -9,8 +14,15 @@ use super::{
     Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
     SystemVariable, SystemVariableSegment,
 };
+use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
+use crate::base_model::AgentFingerprint;
 use crate::base_model::agent::{ExactFileMapping, FileMapping, SubtreeFileMapping};
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::Empty;
+use crate::model::oplog::{AgentResourceId, OplogErrorKind};
+use crate::model::regions::OplogRegion;
+use crate::model::{AgentResourceDescription, OplogIndex};
+use std::collections::HashSet;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
     fn from(value: golem_api_grpc::proto::golem::component::AgentMode) -> Self {
@@ -1027,5 +1039,433 @@ impl From<AgentConfigSource> for golem_api_grpc::proto::golem::component::AgentC
             AgentConfigSource::Local => Self::Local,
             AgentConfigSource::Secret => Self::Secret,
         }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetadataDto {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentMetadata,
+    ) -> Result<Self, Self::Error> {
+        let mut exported_resource_instances = Vec::new();
+
+        for desc in value.owned_resources {
+            exported_resource_instances.push(ExportedResourceMetadata {
+                key: AgentResourceId(desc.resource_id),
+                description: AgentResourceDescription {
+                    created_at: desc.created_at.ok_or("Missing created_at")?.into(),
+                    resource_owner: desc.resource_owner,
+                    resource_name: desc.resource_name,
+                },
+            });
+        }
+        Ok(Self {
+            agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
+            owner_kind: crate::model::agent::OwnerKind::try_from(value.owner_kind)?,
+            environment_id: value
+                .environment_id
+                .ok_or("Missing environment_id")?
+                .try_into()?,
+            created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
+            env: value.env,
+            config: value
+                .config
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            status: value.status.try_into()?,
+            component_revision: value.component_revision.try_into()?,
+            retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value
+                .updates
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            created_at: value.created_at.ok_or("Missing created_at")?.into(),
+            last_error: value.last_error,
+            last_error_kind: value
+                .last_error_kind
+                .map(|kind| {
+                    golem_api_grpc::proto::golem::worker::OplogErrorKind::try_from(kind)
+                        .map_err(|_| format!("Invalid oplog error kind: {kind}"))
+                        .map(|kind| match kind {
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation => {
+                                OplogErrorKind::Invocation
+                            }
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery => {
+                                OplogErrorKind::Recovery
+                            }
+                        })
+                })
+                .transpose()?,
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
+            exported_resource_instances,
+            active_plugins: value
+                .active_plugins
+                .into_iter()
+                .map(EnvironmentPluginGrantId::try_from)
+                .collect::<Result<HashSet<_, _>, _>>()?,
+            skipped_regions: value
+                .skipped_regions
+                .into_iter()
+                .map(OplogRegion::from)
+                .collect::<Vec<_>>(),
+            deleted_regions: value
+                .deleted_regions
+                .into_iter()
+                .map(OplogRegion::from)
+                .collect::<Vec<_>>(),
+            last_oplog_index: OplogIndex::from_u64(value.oplog_idx),
+            fingerprint: value
+                .fingerprint
+                .map(|uuid| AgentFingerprint(uuid.into()))
+                .unwrap_or_default(),
+        })
+    }
+}
+
+impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMetadata {
+    type Error = String;
+
+    fn try_from(value: AgentMetadataDto) -> Result<Self, Self::Error> {
+        let mut owned_resources = Vec::new();
+        for instance in value.exported_resource_instances {
+            owned_resources.push(golem_api_grpc::proto::golem::worker::ResourceDescription {
+                resource_id: instance.key.0,
+                resource_name: instance.description.resource_name,
+                resource_owner: instance.description.resource_owner,
+                created_at: Some(instance.description.created_at.into()),
+            });
+        }
+
+        Ok(Self {
+            agent_id: Some(value.agent_id.into()),
+            owner_kind: value.owner_kind.into(),
+            environment_id: Some(value.environment_id.into()),
+            created_by: Some(value.created_by.into()),
+            env: value.env,
+            config: value
+                .config
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            status: value.status.into(),
+            component_revision: value.component_revision.into(),
+            retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value.updates.into_iter().map(Into::into).collect(),
+            created_at: Some(value.created_at.into()),
+            last_error: value.last_error,
+            last_error_kind: value.last_error_kind.map(|kind| match kind {
+                OplogErrorKind::Invocation => {
+                    golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation as i32
+                }
+                OplogErrorKind::Recovery => {
+                    golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery as i32
+                }
+            }),
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
+            owned_resources,
+            active_plugins: value
+                .active_plugins
+                .into_iter()
+                .map(|id| id.into())
+                .collect(),
+            skipped_regions: value
+                .skipped_regions
+                .into_iter()
+                .map(|region| region.into())
+                .collect(),
+            deleted_regions: value
+                .deleted_regions
+                .into_iter()
+                .map(|region| region.into())
+                .collect(),
+            oplog_idx: u64::from(value.last_oplog_index),
+            fingerprint: Some(value.fingerprint.0.into()),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateRecord> for UpdateRecord {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::UpdateRecord,
+    ) -> Result<Self, Self::Error> {
+        let mode = value.mode().into();
+        let timestamp = value.timestamp.ok_or("Missing timestamp")?.into();
+        let target_revision = value.target_revision.try_into()?;
+        let pending_update_index = value.pending_update_index.map(OplogIndex::from_u64);
+        let snapshot_assisted_details = value
+            .snapshot_assisted_details
+            .map(TryInto::try_into)
+            .transpose()?;
+        match value.update.ok_or("Missing update field")? {
+            golem_api_grpc::proto::golem::worker::update_record::Update::Failed(failed) => {
+                Ok(Self::FailedUpdate(FailedUpdate {
+                    timestamp,
+                    target_revision,
+                    details: { failed.details },
+                    pending_update_index,
+                    mode,
+                    snapshot_assisted_details,
+                }))
+            }
+            golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
+                Ok(Self::PendingUpdate(PendingUpdate {
+                    timestamp,
+                    target_revision,
+                    pending_update_index,
+                    mode,
+                    snapshot_assisted_details,
+                }))
+            }
+            golem_api_grpc::proto::golem::worker::update_record::Update::Successful(_) => {
+                Ok(Self::SuccessfulUpdate(SuccessfulUpdate {
+                    timestamp,
+                    target_revision,
+                    pending_update_index,
+                    mode,
+                    snapshot_assisted_details,
+                }))
+            }
+        }
+    }
+}
+
+impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
+    fn from(value: UpdateRecord) -> Self {
+        match value {
+            UpdateRecord::FailedUpdate(FailedUpdate {
+                timestamp,
+                target_revision,
+                details,
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_revision: target_revision.into(),
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
+                        golem_api_grpc::proto::golem::worker::FailedUpdate { details },
+                    ),
+                ),
+                pending_update_index: pending_update_index.map(Into::into),
+                mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(mode) as i32,
+                snapshot_assisted_details: snapshot_assisted_details.map(Into::into),
+            },
+            UpdateRecord::PendingUpdate(PendingUpdate {
+                timestamp,
+                target_revision,
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_revision: target_revision.into(),
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Pending(
+                        golem_api_grpc::proto::golem::worker::PendingUpdate {},
+                    ),
+                ),
+                pending_update_index: pending_update_index.map(Into::into),
+                mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(mode) as i32,
+                snapshot_assisted_details: snapshot_assisted_details.map(Into::into),
+            },
+            UpdateRecord::SuccessfulUpdate(SuccessfulUpdate {
+                timestamp,
+                target_revision,
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_revision: target_revision.into(),
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Successful(
+                        golem_api_grpc::proto::golem::worker::SuccessfulUpdate {},
+                    ),
+                ),
+                pending_update_index: pending_update_index.map(Into::into),
+                mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(mode) as i32,
+                snapshot_assisted_details: snapshot_assisted_details.map(Into::into),
+            },
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateMetadata>
+    for SnapshotAssistedUpdateMetadata
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateMetadata,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            source_component_revision: value.source_component_revision.try_into()?,
+            source_revision_start_index: OplogIndex::from_u64(value.source_revision_start_index),
+            snapshot_index: OplogIndex::from_u64(value.snapshot_index),
+            snapshot_revision: value.snapshot_revision.try_into()?,
+            filesystem_snapshot: value.filesystem_snapshot,
+        })
+    }
+}
+
+impl From<SnapshotAssistedUpdateMetadata>
+    for golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateMetadata
+{
+    fn from(value: SnapshotAssistedUpdateMetadata) -> Self {
+        Self {
+            source_component_revision: value.source_component_revision.into(),
+            source_revision_start_index: value.source_revision_start_index.into(),
+            snapshot_index: value.snapshot_index.into(),
+            snapshot_revision: value.snapshot_revision.into(),
+            filesystem_snapshot: value.filesystem_snapshot,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
+    fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
+        Self {
+            last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
+        }
+    }
+}
+
+impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
+    fn from(value: RevertToOplogIndex) -> Self {
+        Self {
+            last_oplog_index: u64::from(value.last_oplog_index) as i64,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
+    fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
+        Self {
+            number_of_invocations: value.number_of_invocations as u64,
+        }
+    }
+}
+
+impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
+    fn from(value: RevertLastInvocations) -> Self {
+        Self {
+            number_of_invocations: value.number_of_invocations as i64,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
+    ) -> Result<Self, Self::Error> {
+        match value.target {
+            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
+                Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
+            }
+            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
+                Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
+            }
+            None => Err("Missing field: target".to_string()),
+        }
+    }
+}
+
+impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
+    fn from(value: RevertWorkerTarget) -> Self {
+        match value {
+            RevertWorkerTarget::RevertToOplogIndex(target) => Self {
+                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
+            },
+            RevertWorkerTarget::RevertLastInvocations(target) => Self {
+                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
+            },
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for AgentUpdateMode {
+    fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
+                AgentUpdateMode::Automatic
+            }
+            golem_api_grpc::proto::golem::worker::UpdateMode::Manual => AgentUpdateMode::Manual,
+        }
+    }
+}
+
+impl From<AgentUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
+    fn from(value: AgentUpdateMode) -> Self {
+        match value {
+            AgentUpdateMode::Automatic => {
+                golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
+            }
+            AgentUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentConfigEntryDto> for AgentConfigEntryDto {
+    type Error = String;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentConfigEntryDto,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path,
+            value: serde_json::from_str::<serde_json::Value>(&value.value)
+                .map_err(|e| e.to_string())?
+                .into(),
+        })
+    }
+}
+
+impl From<AgentConfigEntryDto> for golem_api_grpc::proto::golem::worker::AgentConfigEntryDto {
+    fn from(value: AgentConfigEntryDto) -> Self {
+        Self {
+            path: value.path,
+            value: value.value.to_string(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry>
+    for TypedAgentConfigEntry
+{
+    type Error = String;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path,
+            value: value
+                .value
+                .ok_or_else(|| "Missing field: value".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl TryFrom<TypedAgentConfigEntry>
+    for golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry
+{
+    type Error = String;
+
+    fn try_from(value: TypedAgentConfigEntry) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path,
+            value: Some(value.value.try_into()?),
+        })
     }
 }

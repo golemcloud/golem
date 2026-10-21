@@ -1,0 +1,157 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::*;
+use test_r::test;
+
+fn idx(value: u64) -> OplogIndex {
+    OplogIndex::from_u64(value)
+}
+
+fn offset(index: u64, sub_index: u32) -> StreamOffset {
+    StreamOffset::new(idx(index), sub_index)
+}
+
+fn resolve(
+    registration_index: OplogIndex,
+    batches: &[(OplogIndex, u32)],
+    terminal: Option<StreamOffset>,
+    anchor: Option<StreamOffset>,
+    sub_offset: u64,
+) -> Result<StreamForkCut, StreamForkCutError> {
+    resolve_stream_fork_cut(
+        registration_index,
+        batches,
+        terminal,
+        anchor,
+        sub_offset,
+        u64::MAX,
+    )
+}
+
+#[test]
+fn cursor_retains_delivered_item_and_sub_offset_crosses_oplog_gaps() {
+    let batches = [(idx(7), 4), (idx(19), 3), (idx(31), 2)];
+    let cut = resolve(idx(3), &batches, None, Some(offset(7, 1)), 0).unwrap();
+    assert_eq!(cut.retained_items, 2);
+    assert_eq!(cut.last_item_offset, Some(offset(7, 1)));
+    assert_eq!(cut.retained_boundary_items, 2);
+
+    let cut = resolve(idx(3), &batches, None, Some(offset(7, 1)), 4).unwrap();
+    assert_eq!(cut.retained_items, 6);
+    assert_eq!(cut.oplog_index, idx(19));
+    assert_eq!(cut.retained_boundary_items, 2);
+    assert_eq!(cut.last_item_offset, Some(offset(19, 1)));
+}
+
+#[test]
+fn empty_prefix_and_exact_batch_boundary_do_not_copy_next_batch() {
+    let batches = [(idx(7), 4), (idx(19), 3)];
+    let empty = resolve(idx(3), &batches, None, Some(offset(0, 0)), 0).unwrap();
+    assert_eq!(empty.oplog_index, idx(3));
+    assert_eq!(empty.retained_items, 0);
+    assert_eq!(empty.last_item_offset, None);
+    let cut = resolve(idx(3), &batches, None, Some(offset(0, 0)), 4).unwrap();
+    assert_eq!(cut.oplog_index, idx(7));
+    assert_eq!(cut.retained_boundary_items, 4);
+    assert_eq!(cut.last_item_offset, Some(offset(7, 3)));
+}
+
+#[test]
+fn terminal_and_default_tail_retain_data_without_terminal() {
+    let batches = [(idx(7), 4), (idx(19), 3)];
+    for anchor in [None, Some(offset(22, 0)), Some(offset(19, 2))] {
+        let cut = resolve(idx(3), &batches, Some(offset(22, 0)), anchor, 0).unwrap();
+        assert_eq!(
+            cut.oplog_index,
+            if anchor == Some(offset(19, 2)) {
+                idx(19)
+            } else {
+                idx(22)
+            }
+        );
+        assert_eq!(cut.retained_items, 7);
+        assert_eq!(cut.last_item_offset, Some(offset(19, 2)));
+        assert_eq!(
+            resolve(idx(3), &batches, Some(offset(22, 0)), anchor, 1),
+            Err(StreamForkCutError::BeyondHead)
+        );
+    }
+}
+
+#[test]
+fn empty_closed_stream_retains_registration() {
+    for anchor in [None, Some(offset(0, 0)), Some(offset(8, 0))] {
+        let cut = resolve(idx(3), &[], Some(offset(8, 0)), anchor, 0).unwrap();
+        assert_eq!(
+            cut.oplog_index,
+            if anchor == Some(offset(0, 0)) {
+                idx(3)
+            } else {
+                idx(8)
+            }
+        );
+        assert_eq!(cut.retained_items, 0);
+        assert_eq!(cut.last_item_offset, None);
+    }
+}
+
+#[test]
+fn rejects_unknown_cursor_overshoot_and_overflow() {
+    let batches = [(idx(7), 4), (idx(19), 3)];
+    for anchor in [offset(7, 4), offset(8, 0), offset(30, 0), offset(0, 1)] {
+        assert_eq!(
+            resolve(idx(3), &batches, None, Some(anchor), 0),
+            Err(StreamForkCutError::UnknownOffset)
+        );
+    }
+    for sub_offset in [6, u64::MAX] {
+        assert_eq!(
+            resolve(idx(3), &batches, None, Some(offset(7, 1)), sub_offset),
+            Err(StreamForkCutError::BeyondHead)
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_batch_or_terminal_order() {
+    for batches in [
+        vec![(idx(3), 1)],
+        vec![(idx(7), 0)],
+        vec![(idx(7), 2), (idx(7), 1)],
+        vec![(idx(9), 2), (idx(7), 1)],
+    ] {
+        assert_eq!(
+            resolve(idx(3), &batches, None, None, 0),
+            Err(StreamForkCutError::InvalidHistory)
+        );
+    }
+    for terminal in [offset(7, 0), offset(9, 1)] {
+        assert_eq!(
+            resolve(idx(3), &[(idx(7), 2)], Some(terminal), None, 0),
+            Err(StreamForkCutError::InvalidHistory)
+        );
+    }
+}
+
+#[test]
+fn semantic_byte_boundary_can_span_records_but_not_be_exceeded() {
+    let batches = [(idx(7), 2), (idx(12), 3), (idx(18), 4)];
+    let cut = resolve_stream_fork_cut(idx(3), &batches, None, Some(offset(0, 0)), 5, 5).unwrap();
+    assert_eq!(cut.last_item_offset, Some(offset(12, 2)));
+    assert_eq!(
+        resolve_stream_fork_cut(idx(3), &batches, None, Some(offset(0, 0)), 6, 5),
+        Err(StreamForkCutError::BeyondDataBoundary)
+    );
+}

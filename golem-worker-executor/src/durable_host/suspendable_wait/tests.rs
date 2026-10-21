@@ -1,0 +1,205 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::*;
+use golem_common::model::Timestamp;
+use std::future::{pending, ready};
+use std::task::Poll;
+use test_r::test;
+
+async fn deadline_wait_order(agent_mode: AgentMode, ready_first: bool, stop_before_poll: bool) {
+    let ready = tokio::sync::Notify::new();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let kind = InterruptKind::Suspend(Timestamp::now_utc());
+    let mut stop = Some(stop);
+    if stop_before_poll {
+        stop.take().unwrap().send(kind).unwrap();
+    }
+    let mut wait = Box::pin(wait_for_ready(
+        agent_mode,
+        Duration::from_secs(300),
+        Some(Duration::from_secs(20)),
+        Box::pin(async { stopped.await.unwrap() }),
+        ready.notified(),
+    ));
+    if !stop_before_poll {
+        std::future::poll_fn(|cx| {
+            assert!(wait.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+    }
+    if ready_first {
+        ready.notify_one();
+    } else if let Some(stop) = stop.take() {
+        stop.send(kind).unwrap();
+    }
+    let outcome = tokio::time::timeout(Duration::from_secs(1), &mut wait)
+        .await
+        .expect("wait must not depend on the deadline or voluntary grace");
+    drop(wait);
+    if ready_first {
+        assert_eq!(outcome, ParkOutcome::Ready);
+        // A later stop has no receiver and cannot rewrite selected readiness.
+        assert_eq!(stop.take().unwrap().send(kind), Err(kind));
+    } else {
+        assert_eq!(outcome, ParkOutcome::Interrupted(kind));
+        ready.notify_one();
+    }
+}
+
+#[test]
+#[test_r::timeout("5s")]
+async fn deadline_wait_readiness_before_stop_stays_ready() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        deadline_wait_order(mode, true, false).await;
+    }
+}
+
+#[test]
+#[test_r::timeout("5s")]
+async fn deadline_wait_stop_before_readiness_retains_typed_cause() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        deadline_wait_order(mode, false, false).await;
+    }
+}
+
+#[test]
+#[test_r::timeout("5s")]
+async fn deadline_wait_stop_before_first_poll_is_not_lost() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        deadline_wait_order(mode, false, true).await;
+    }
+}
+
+#[test]
+async fn suppressed_durable_wait_has_no_ephemeral_timeout_or_local_election() {
+    let result = wait_for_ready(
+        AgentMode::Durable,
+        Duration::ZERO,
+        None,
+        Box::pin(pending()),
+        async { tokio::time::sleep(Duration::from_millis(2)).await },
+    )
+    .await;
+    assert_eq!(result, ParkOutcome::Ready);
+    let result = wait_for_ready(
+        AgentMode::Durable,
+        Duration::ZERO,
+        Some(Duration::MAX),
+        Box::pin(ready(InterruptKind::Restart)),
+        pending(),
+    )
+    .await;
+    assert_eq!(result, ParkOutcome::Interrupted(InterruptKind::Restart));
+}
+
+#[test]
+async fn ephemeral_clocks_enforce_exact_boundary() {
+    let max = Duration::from_millis(10);
+    for remaining in [max, max + Duration::from_nanos(1)] {
+        assert_eq!(
+            wait_for_ready(
+                AgentMode::Ephemeral,
+                max,
+                Some(remaining),
+                Box::pin(pending()),
+                ready(()),
+            )
+            .await,
+            ParkOutcome::EphemeralTooLong {
+                requested_nanos: std_duration_to_nanos(remaining),
+                max_nanos: std_duration_to_nanos(max),
+            }
+        );
+    }
+    assert_eq!(
+        wait_for_ready(
+            AgentMode::Ephemeral,
+            max,
+            Some(max / 2),
+            Box::pin(pending()),
+            tokio::time::sleep(max / 2),
+        )
+        .await,
+        ParkOutcome::Ready
+    );
+}
+
+#[test]
+async fn ephemeral_promises_complete_timeout_and_interrupt() {
+    fn gauge() -> f64 {
+        prometheus::gather()
+            .into_iter()
+            .find(|metric| metric.name() == "ephemeral_promise_waiting")
+            .unwrap()
+            .get_metric()[0]
+            .get_gauge()
+            .value()
+    }
+    drop(PromiseWaiting::new());
+    let baseline = gauge();
+    let max = Duration::from_millis(2);
+    assert_eq!(
+        wait_for_ready(
+            AgentMode::Ephemeral,
+            max,
+            None,
+            Box::pin(pending()),
+            ready(()),
+        )
+        .await,
+        ParkOutcome::Ready
+    );
+    assert_eq!(gauge(), baseline);
+    assert_eq!(
+        wait_for_ready(
+            AgentMode::Ephemeral,
+            max,
+            None,
+            Box::pin(ready(InterruptKind::Restart)),
+            pending(),
+        )
+        .await,
+        ParkOutcome::Interrupted(InterruptKind::Restart)
+    );
+    assert_eq!(gauge(), baseline);
+    assert_eq!(
+        wait_for_ready(
+            AgentMode::Ephemeral,
+            max,
+            None,
+            Box::pin(pending()),
+            pending(),
+        )
+        .await,
+        ParkOutcome::EphemeralTooLong {
+            requested_nanos: std_duration_to_nanos(max),
+            max_nanos: std_duration_to_nanos(max),
+        }
+    );
+    assert_eq!(gauge(), baseline);
+    let mut wait = Box::pin(wait_for_ready(
+        AgentMode::Ephemeral,
+        Duration::from_secs(60),
+        None,
+        Box::pin(pending()),
+        pending(),
+    ));
+    let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+    assert!(wait.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(gauge(), baseline + 1.0);
+    drop(wait);
+    assert_eq!(gauge(), baseline);
+}

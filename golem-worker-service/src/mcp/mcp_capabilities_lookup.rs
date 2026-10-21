@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::mcp::McpDeployment;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use golem_common::base_model::domain_registration::Domain;
@@ -27,7 +28,8 @@ use tokio::time::Instant;
 
 #[async_trait]
 pub trait McpCapabilityLookup: Send + Sync {
-    async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError>;
+    /// The domain's active deployment, with its capabilities built once per cached entry.
+    async fn get(&self, domain: &Domain) -> Result<Arc<McpDeployment>, McpCapabilitiesLookupError>;
     async fn invalidate(&self, domain: &Domain);
     async fn invalidate_all(&self);
 }
@@ -76,7 +78,7 @@ struct McpCacheKey {
 
 struct CachedMcp {
     created_at: Instant,
-    deployment: Option<CompiledMcp>,
+    deployment: Option<Arc<McpDeployment>>,
 }
 
 type CachedMcpCache = Cache<McpCacheKey, (), Arc<CachedMcp>, String>;
@@ -179,7 +181,7 @@ impl RegistryServiceMcpCapabilityLookup {
             .negative_cache
             .get_or_insert_simple_spawned(key, move || async move {
                 let deployment = match fetch(domain).await {
-                    Ok(compiled) => Some(compiled),
+                    Ok(compiled) => Some(Arc::new(McpDeployment::new(compiled))),
                     Err(RegistryServiceError::NotFound(_)) => None,
                     Err(error) => return Err(error.to_string()),
                 };
@@ -226,7 +228,7 @@ impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
         self.remove_cached(|key| key.generation < generation).await;
     }
 
-    async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError> {
+    async fn get(&self, domain: &Domain) -> Result<Arc<McpDeployment>, McpCapabilitiesLookupError> {
         for _ in 0..MAX_LOOKUP_ATTEMPTS {
             let key = self.key(domain);
             let result = self.lookup(&key).await;
@@ -249,7 +251,7 @@ impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
                 continue;
             }
             return match &cached.deployment {
-                Some(compiled) => Ok(compiled.clone()),
+                Some(deployment) => Ok(deployment.clone()),
                 None => Err(McpCapabilitiesLookupError::UnknownSite(domain.clone())),
             };
         }
@@ -339,7 +341,10 @@ mod tests {
         domains.lock().unwrap().push(domain.clone());
         lookup.invalidate_all().await;
 
-        assert_eq!(lookup.get(&domain).await.ok().unwrap().domain, domain);
+        assert_eq!(
+            lookup.get(&domain).await.ok().unwrap().compiled.domain,
+            domain
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -359,7 +364,10 @@ mod tests {
             Err(McpCapabilitiesLookupError::InternalError(_))
         ));
         *failing.lock().unwrap() = false;
-        assert_eq!(lookup.get(&domain).await.ok().unwrap().domain, domain);
+        assert_eq!(
+            lookup.get(&domain).await.ok().unwrap().compiled.domain,
+            domain
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -394,10 +402,16 @@ mod tests {
 
         let fresh_fill = requests.recv().await.unwrap();
         assert!(fresh_fill.send(Ok(compiled(&domain))).is_ok());
-        assert_eq!(stale_lookup.await.unwrap().ok().unwrap().domain, domain);
+        assert_eq!(
+            stale_lookup.await.unwrap().ok().unwrap().compiled.domain,
+            domain
+        );
 
         // The stale "not found" fill must not answer later lookups either.
-        assert_eq!(lookup.get(&domain).await.ok().unwrap().domain, domain);
+        assert_eq!(
+            lookup.get(&domain).await.ok().unwrap().compiled.domain,
+            domain
+        );
     }
 
     #[test]
@@ -436,11 +450,18 @@ mod tests {
                 .unwrap()
                 .ok()
                 .unwrap()
+                .compiled
                 .deployment_revision,
             new.deployment_revision
         );
         assert_eq!(
-            lookup.get(&domain).await.ok().unwrap().deployment_revision,
+            lookup
+                .get(&domain)
+                .await
+                .ok()
+                .unwrap()
+                .compiled
+                .deployment_revision,
             new.deployment_revision
         );
     }
@@ -490,7 +511,27 @@ mod tests {
         assert!(lookup.get(&domain).await.is_err());
         tokio::time::sleep(ttl).await;
 
-        assert_eq!(lookup.get(&domain).await.ok().unwrap().domain, domain);
+        assert_eq!(
+            lookup.get(&domain).await.ok().unwrap().compiled.domain,
+            domain
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    async fn capabilities_are_built_once_per_cache_entry() {
+        let domain = Domain("tools.example.com".into());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let lookup = registry(
+            Arc::new(Mutex::new(vec![domain.clone()])),
+            Arc::new(Mutex::new(false)),
+            calls.clone(),
+        );
+
+        let first = lookup.get(&domain).await.ok().unwrap();
+        let second = lookup.get(&domain).await.ok().unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

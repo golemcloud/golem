@@ -770,14 +770,34 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_agent_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = if expected_output.uses_streams() {
-                let result = store
+                let runtime = store.data().durable_ctx().runtime_suspension.clone();
+                let entity_invocation = store
+                    .data()
+                    .durable_ctx()
+                    .entity_invocation_scope()
+                    .map(|scope| scope.invocation_id().clone());
+                let policy = store.data().durable_ctx().suspension_policy();
+                let runtime_for_call = runtime.clone();
+                let future = store
                     .as_context_mut()
-                    .run_concurrent(async |accessor| {
+                    .run_concurrent(async move |accessor| {
+                        if let (Some(runtime), Some(activity)) =
+                            (&runtime_for_call, accessor.runtime_activity())
+                        {
+                            runtime.certify_root(activity);
+                        }
                         guest
                             .call_invoke(accessor, method_name, input, principal)
                             .await
-                    })
-                    .await;
+                    });
+                let result = match runtime {
+                    Some(runtime) => {
+                        runtime
+                            .drive(future, entity_invocation.as_ref(), policy)
+                            .await
+                    }
+                    None => future.await,
+                };
                 let interrupted = store.data().durable_ctx().is_interrupting()
                     || store.data().durable_ctx().invocation_deadline_exceeded();
                 classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted)
@@ -1081,7 +1101,7 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
 ///
 /// A `none` result (the declared `unit` output) is represented by the
 /// canonical empty tuple, matching the `unit` projection used on the caller
-/// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
+/// side ([`schema_value_to_wire_output`](crate::durable_host::rpc)).
 fn decode_invoke_output<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     output: Option<core_wire::SchemaValueTree>,

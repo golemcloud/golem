@@ -355,7 +355,14 @@ pub(crate) async fn deliver_demand<R>(
         return Ok(DemandDelivery::Abandoned);
     }
 
-    delivery.prepare_delivery(Some(activity)).await?;
+    tokio::select! {
+        biased;
+        _ = demand.closed() => {
+            delivery.discarded().await?;
+            return Ok(DemandDelivery::Abandoned);
+        }
+        result = delivery.prepare_delivery(Some(activity)) => result?,
+    }
     if demand.send(reply).is_ok() {
         delivery.delivered();
         Ok(DemandDelivery::Delivered)

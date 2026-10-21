@@ -35,6 +35,8 @@
 //!   recorder);
 //! * awaiting guest-produced stream data (stdio capture, filesystem write
 //!   chunks, TCP send bytes, replayed request-body frames);
+//! * awaiting a fresh guest block after async input preparation is complete;
+//!   only guest progress can admit this delivery, and no durable effect remains;
 //! * passive replay-progress notification for a markerless completion whose
 //!   durable finalization is finished. No recorded entry depends on that
 //!   unobserved delivery, and invocation settlement may own the remaining tail.
@@ -188,5 +190,180 @@ mod tests {
         assert!(tracker.has_active());
         drop(activity);
         assert!(!tracker.has_active());
+    }
+}
+
+mod context {
+    use crate::durable_host::*;
+
+    impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
+        fn drop(&mut self) {
+            self.begin_stream_runtime_teardown();
+            self.linear_memory.clear_limit_exceeded_callback();
+        }
+    }
+
+    impl InvocationDeadline {
+        /// Whether the deadline fired during this invocation.
+        pub fn exceeded(&self) -> bool {
+            self.latch.load(Ordering::Acquire)
+        }
+
+        /// The configured maximum invocation duration, if any.
+        pub fn duration(&self) -> Option<Duration> {
+            self.duration
+        }
+    }
+
+    impl Drop for InvocationDeadline {
+        fn drop(&mut self) {
+            if let Some(timer) = self.timer.take() {
+                timer.abort();
+            }
+            self.latch.store(false, Ordering::Release);
+        }
+    }
+
+    impl TailWorkDeadline {
+        pub(crate) fn exceeded(&self) -> bool {
+            self.latch.load(Ordering::Acquire)
+        }
+
+        pub(crate) fn duration(&self) -> Duration {
+            self.duration
+        }
+    }
+
+    impl Drop for TailWorkDeadline {
+        fn drop(&mut self) {
+            if let Some(timer) = self.timer.take() {
+                timer.abort();
+            }
+            self.latch.store(false, Ordering::Release);
+        }
+    }
+
+    impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+        /// Activity tracker for Golem-spawned store background tasks; see
+        /// [`tail_work::TailWorkTracker`].
+        pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
+            self.state.tail_work_tracker()
+        }
+
+        pub(crate) fn stream_runtime_teardown_probe(
+            &self,
+        ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
+            let stream_runtime_teardown = self.stream_runtime_teardown.clone();
+            // Owner failure fences entity Stores immediately. The primary signals teardown
+            // separately when its interrupt is delivered, not when it is merely queued.
+            let fenced_entity_operations = matches!(self.runtime, OwnerRuntime::Entity(_))
+                .then(|| self.owner_execution.tool_operations());
+            let invocation_loops = self
+                .public_state
+                .worker()
+                .active_agents()
+                .invocation_loops();
+            Arc::new(move || {
+                stream_runtime_teardown.load(Ordering::Acquire)
+                    || invocation_loops.is_shut_down()
+                    || fenced_entity_operations
+                        .as_ref()
+                        .is_some_and(|operations| operations.selected_owner_failure().is_some())
+            })
+        }
+
+        pub(crate) fn begin_stream_runtime_teardown(&self) {
+            self.stream_runtime_teardown.store(true, Ordering::Release);
+        }
+
+        /// Arms the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`)
+        /// and returns its guard. Called at the start of every guest invocation.
+        ///
+        /// When configured, a timer task is spawned that, once the deadline elapses, latches the
+        /// shared `invocation_deadline_exceeded` flag and broadcasts a *synthetic* interrupt on the
+        /// running execution status's interrupt-signal channel — without changing the execution
+        /// status itself, so the worker is never externally observed as `Interrupted`. The broadcast
+        /// wakes every cooperative host park point already racing the interrupt signal; the latched
+        /// flag makes `check_interrupt` (epoch callback, CPU-bound wasm) and every *subsequently
+        /// created* interrupt signal observe the deadline too. The invocation boundary converts the
+        /// resulting synthetic interrupt unwind into a typed timeout failure (see
+        /// `apply_invocation_deadline` in `worker::invocation`).
+        ///
+        /// Dropping the guard (at the invocation boundary) aborts the timer and clears the latch;
+        /// arming also clears it first, so a stale latch from a lost abort race cannot leak into the
+        /// next invocation.
+        pub fn arm_invocation_deadline(&self) -> InvocationDeadline {
+            let latch = self.state.invocation_deadline_exceeded.clone();
+            latch.store(false, Ordering::Release);
+            let duration = self.state.config.limits.max_invocation_duration;
+            let timer = duration.map(|duration| {
+                let latch = latch.clone();
+                let execution_status = self.execution_status.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(duration).await;
+                    latch.store(true, Ordering::Release);
+                    let interrupt_signal = {
+                        let status = execution_status.read().unwrap();
+                        match &*status {
+                            ExecutionStatus::Running {
+                                interrupt_signal, ..
+                            } => Some(interrupt_signal.clone()),
+                            _ => None,
+                        }
+                    };
+                    if let Some(interrupt_signal) = interrupt_signal {
+                        let _ =
+                            interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+                    }
+                })
+            });
+            InvocationDeadline {
+                latch,
+                duration,
+                timer,
+            }
+        }
+
+        /// Arms a deadline that starts when `drain_started` is notified after the guest export has
+        /// returned. When it fires, the shared latch and interrupt broadcast make both existing and
+        /// subsequently-created cooperative park points unwind their durable call handles safely.
+        pub(crate) fn arm_tail_work_deadline(
+            &self,
+            drain_started: Arc<tokio::sync::Notify>,
+        ) -> TailWorkDeadline {
+            let latch = self.state.tail_work_deadline_exceeded.clone();
+            latch.store(false, Ordering::Release);
+            let timer_latch = latch.clone();
+            let execution_status = self.execution_status.clone();
+            let duration = self.state.config.limits.tail_work_settle_timeout;
+            let timer = tokio::spawn(async move {
+                drain_started.notified().await;
+                tokio::time::sleep(duration).await;
+                timer_latch.store(true, Ordering::Release);
+                let interrupt_signal = {
+                    let status = execution_status.read().unwrap();
+                    match &*status {
+                        ExecutionStatus::Running {
+                            interrupt_signal, ..
+                        } => Some(interrupt_signal.clone()),
+                        _ => None,
+                    }
+                };
+                if let Some(interrupt_signal) = interrupt_signal {
+                    let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+                }
+            });
+            TailWorkDeadline {
+                latch,
+                duration,
+                timer: Some(timer),
+            }
+        }
+
+        pub(crate) fn invocation_deadline_exceeded(&self) -> bool {
+            self.state
+                .invocation_deadline_exceeded
+                .load(Ordering::Acquire)
+        }
     }
 }

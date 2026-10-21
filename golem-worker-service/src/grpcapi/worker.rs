@@ -40,12 +40,12 @@ use golem_api_grpc::proto::golem::worker::{
     InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
     invocation_request, invocation_response,
 };
+use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
@@ -925,7 +925,7 @@ impl WorkerGrpcApi {
         let resolved_revert =
             request
                 .resolved_revert
-                .map(|resolved| golem_common::model::worker::ResolvedRevert {
+                .map(|resolved| golem_common::model::agent::ResolvedRevert {
                     last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
                     observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
                 });

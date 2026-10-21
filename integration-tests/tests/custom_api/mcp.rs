@@ -18,11 +18,11 @@ use golem_common::base_model::domain_registration::{Domain, DomainRegistrationCr
 use golem_common::base_model::mcp_deployment::{McpDeploymentAgentOptions, McpDeploymentCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{EnvironmentOptions, TestDsl, TestDslExtended};
+use integration_tests::mcp_client::McpClient;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
-use test_r::{define_matrix_dimension, test_dep};
+use test_r::{define_matrix_dimension, tag, test_dep};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -34,177 +34,6 @@ inherit_test_dep!(
     #[tagged_as("sqlite")]
     EnvBasedTestDependencies
 );
-
-static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-
-struct McpClient {
-    http: reqwest::Client,
-    url: String,
-    host: String,
-    session_id: Option<String>,
-}
-
-fn parse_sse_json(body: &str) -> anyhow::Result<Value> {
-    for line in body.lines() {
-        if let Some(data) = line.strip_prefix("data:") {
-            let data = data.trim();
-            if !data.is_empty() {
-                return Ok(serde_json::from_str(data)?);
-            }
-        }
-    }
-    anyhow::bail!("No data line found in SSE response: {}", body)
-}
-
-async fn response_body(resp: reqwest::Response) -> anyhow::Result<String> {
-    let status = resp.status();
-    let body = resp.text().await?;
-    if !status.is_success() {
-        anyhow::bail!("MCP HTTP request failed with status {status}: {body}");
-    }
-    Ok(body)
-}
-
-impl McpClient {
-    fn next_id() -> u64 {
-        REQUEST_ID.fetch_add(1, Ordering::SeqCst)
-    }
-
-    async fn new(url: String, host: &str) -> anyhow::Result<Self> {
-        let http = reqwest::Client::new();
-
-        // Send initialize request
-        let init_req = json!({
-            "jsonrpc": "2.0",
-            "id": Self::next_id(),
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-03-26",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "golem-mcp-integration-test",
-                    "version": "0.0.1"
-                }
-            }
-        });
-
-        let resp = http
-            .post(&url)
-            .header("Host", host)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .json(&init_req)
-            .send()
-            .await?;
-
-        let session_id = resp
-            .headers()
-            .get("mcp-session-id")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        // Response is SSE, parse the JSON from it
-        let body = response_body(resp).await?;
-        let _init_result = parse_sse_json(&body)?;
-
-        // Send initialized notification
-        let notif = json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        });
-
-        let mut notif_req = http
-            .post(&url)
-            .header("Host", host)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream");
-
-        if let Some(sid) = &session_id {
-            notif_req = notif_req.header("mcp-session-id", sid.as_str());
-        }
-
-        response_body(notif_req.json(&notif).send().await?).await?;
-
-        Ok(McpClient {
-            http,
-            url,
-            host: host.to_string(),
-            session_id,
-        })
-    }
-
-    async fn request(&self, method: &str, params: Value) -> anyhow::Result<Value> {
-        let req_body = json!({
-            "jsonrpc": "2.0",
-            "id": Self::next_id(),
-            "method": method,
-            "params": params
-        });
-
-        let mut builder = self
-            .http
-            .post(&self.url)
-            .header("Host", &self.host)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream");
-
-        if let Some(sid) = &self.session_id {
-            builder = builder.header("mcp-session-id", sid.as_str());
-        }
-
-        let resp = builder.json(&req_body).send().await?;
-        let body = response_body(resp).await?;
-        let json_body = parse_sse_json(&body)?;
-
-        if let Some(error) = json_body.get("error") {
-            anyhow::bail!("MCP error: {}", error);
-        }
-
-        Ok(json_body["result"].clone())
-    }
-
-    async fn list_tools(&self) -> anyhow::Result<Vec<Value>> {
-        let result = self.request("tools/list", json!({})).await?;
-        Ok(result["tools"].as_array().cloned().unwrap_or_default())
-    }
-
-    async fn call_tool(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
-        self.request(
-            "tools/call",
-            json!({
-                "name": name,
-                "arguments": arguments
-            }),
-        )
-        .await
-    }
-
-    async fn list_resources(&self) -> anyhow::Result<Vec<Value>> {
-        let result = self.request("resources/list", json!({})).await?;
-        Ok(result["resources"].as_array().cloned().unwrap_or_default())
-    }
-
-    async fn list_resource_templates(&self) -> anyhow::Result<Vec<Value>> {
-        let result = self.request("resources/templates/list", json!({})).await?;
-        Ok(result["resourceTemplates"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default())
-    }
-
-    async fn read_resource(&self, uri: &str) -> anyhow::Result<Value> {
-        self.request("resources/read", json!({ "uri": uri })).await
-    }
-
-    async fn list_prompts(&self) -> anyhow::Result<Vec<Value>> {
-        let result = self.request("prompts/list", json!({})).await?;
-        Ok(result["prompts"].as_array().cloned().unwrap_or_default())
-    }
-
-    async fn get_prompt(&self, name: &str) -> anyhow::Result<Value> {
-        self.request("prompts/get", json!({ "name": name })).await
-    }
-}
 
 pub struct McpTestContext {
     pub domain: Domain,
@@ -224,8 +53,11 @@ impl McpTestContext {
     }
 
     async fn connect_mcp_client_on(&self, port: u16) -> anyhow::Result<McpClient> {
-        let url = format!("http://{}:{}/mcp", self.mcp_host(), port);
-        McpClient::new(url, &self.domain.0).await
+        McpClient::connect(reqwest::Client::new(), &self.mcp_url(port), &self.domain.0).await
+    }
+
+    fn mcp_url(&self, port: u16) -> String {
+        format!("http://{}:{}/mcp", self.mcp_host(), port)
     }
 
     fn mcp_host(&self) -> &'static str {
@@ -424,6 +256,47 @@ async fn mcp_deployment_is_served_on_the_custom_request_port(
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    Ok(())
+}
+
+/// Each port has its own MCP endpoint with its own replica memory, over one session store. The
+/// session record alone carries the session from the port that issued it to the other.
+#[test]
+#[tag(db_postgres)]
+#[tracing::instrument]
+async fn mcp_session_survives_across_ports(
+    #[tagged_as("postgres")] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
+    let on_mcp_port = McpClient::initialize(
+        reqwest::Client::new(),
+        &ctx.mcp_url(ctx.mcp_port),
+        &ctx.domain.0,
+    )
+    .await?;
+    assert!(on_mcp_port.session_id().is_some());
+
+    let on_custom_request_port = on_mcp_port.at(&ctx.mcp_url(ctx.custom_request_port));
+    on_custom_request_port
+        .send_initialized_notification()
+        .await?;
+    let tools = on_custom_request_port.list_tools().await?;
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "WeatherAgent-get_weather_report_for_city"),
+        "{tools:?}"
+    );
+    let result = on_custom_request_port
+        .call_tool(
+            "WeatherAgent-get_weather_report_for_city",
+            json!({ "name": "across-ports", "city": "Sydney" }),
+        )
+        .await?;
+    assert_eq!(
+        result["structuredContent"]["value"],
+        json!("Agent across-ports: This is a weather report for Sydney")
+    );
 
     Ok(())
 }

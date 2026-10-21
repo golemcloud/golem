@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent::{AgentFileContentHash, PhantomIdBinding, PhantomIdBindingDetails};
-use crate::base_model::json::NormalizedJsonValue;
-use crate::model::component::{AgentFilePath, ArchiveFilePath, CanonicalFilePath};
-use crate::model::{IdempotencyKey, Timestamp};
+use std::borrow::Cow;
+
 use poem_openapi::ApiResponse;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::borrow::Cow;
+
+use crate::base_model::agent::{AgentFileContentHash, PhantomIdBinding, PhantomIdBindingDetails};
+use crate::base_model::json::NormalizedJsonValue;
+use crate::model::component::{AgentFilePath, ArchiveFilePath, CanonicalFilePath};
+use crate::model::{IdempotencyKey, Timestamp, UntypedJsonBody};
 
 #[derive(Debug, Clone, ApiResponse)]
 pub enum NoContentResponse {
@@ -412,16 +415,18 @@ impl poem_openapi::types::ParseFromJSON for AgentFilePath {
 
 #[cfg(test)]
 mod tests {
-    use crate::base_model::agent::AgentFileContentHash;
-    use crate::model::component::{AgentFilePath, InitialAgentFile};
-    use crate::model::{AgentFilePermissions, AgentStatus, Empty, IdempotencyKey};
     use poem_openapi::types::ToJSON;
     use test_r::test;
 
+    use crate::base_model::agent::AgentFileContentHash;
+    use crate::model::component::{AgentFilePath, InitialAgentFile};
+    use crate::model::{AgentFilePermissions, AgentStatus, Empty, IdempotencyKey};
+
     #[test]
     fn phantom_binding_openapi_matches_serde() {
-        use crate::base_model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
         use poem_openapi::types::{ParseFromJSON, Type};
+
+        use crate::base_model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
 
         let mut registry = poem_openapi::registry::Registry::default();
         PhantomIdBinding::register(&mut registry);
@@ -502,5 +507,75 @@ mod tests {
         let serialized = file.to_json_string();
         let deserialized: InitialAgentFile = serde_json::from_str(&serialized).unwrap();
         assert_eq!(file, deserialized);
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
+pub struct Page<
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> {
+    pub values: Vec<T>,
+}
+
+pub trait PoemTypeRequirements:
+    poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON
+{
+}
+
+impl<
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> PoemTypeRequirements for T
+{
+}
+
+pub trait PoemMultipartTypeRequirements: poem_openapi::types::ParseFromMultipartField {}
+
+impl<T: poem_openapi::types::ParseFromMultipartField> PoemMultipartTypeRequirements for T {}
+
+impl poem_openapi::types::Type for UntypedJsonBody {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> Cow<'static, str> {
+        "UntypedJsonBody".into()
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Reference(Self::name().into_owned())
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        registry.create_schema::<Self, _>(Self::name().into_owned(), |_| {
+            let mut schema = poem_openapi::registry::MetaSchema::new("object");
+            schema.description = Some("A json body without a static schema");
+            schema
+        });
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl poem_openapi::types::ToJSON for UntypedJsonBody {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(self.0.clone())
+    }
+}
+
+impl poem_openapi::types::ParseFromJSON for UntypedJsonBody {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(json) => Ok(Self(json)),
+            _ => Err(poem_openapi::types::ParseError::<UntypedJsonBody>::custom(
+                "Received empty value for UntypedJsonBody",
+            )),
+        }
     }
 }

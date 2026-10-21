@@ -386,6 +386,21 @@ mod tests {
             let relative_path = path
                 .strip_prefix(env!("CARGO_MANIFEST_DIR"))
                 .expect("diff source file path should be inside crate root");
+            // A directory module and a single-file module have the same model identity.
+            let relative_path = if relative_path
+                .file_name()
+                .is_some_and(|name| name == "mod.rs")
+                && relative_path.parent().is_some_and(|parent| {
+                    parent != Path::new("src/model/diff")
+                        && parent != Path::new("src/base_model/diff")
+                }) {
+                relative_path
+                    .parent()
+                    .expect("module file should have a parent directory")
+                    .with_extension("rs")
+            } else {
+                relative_path.to_path_buf()
+            };
 
             hasher.update(relative_path.to_string_lossy().as_bytes());
             hasher.update(&[0]);
@@ -401,14 +416,25 @@ mod tests {
         let mut files = Vec::new();
 
         for rel_dir in ["src/model/diff", "src/base_model/diff"] {
-            let dir = root.join(rel_dir);
-            let mut dir_files = fs::read_dir(&dir)
-                .unwrap_or_else(|err| panic!("Failed to list {}: {err}", dir.display()))
-                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-                .collect::<Vec<_>>();
-
-            files.append(&mut dir_files);
+            let mut directories = vec![root.join(rel_dir)];
+            while let Some(dir) = directories.pop() {
+                for entry in fs::read_dir(&dir)
+                    .unwrap_or_else(|err| panic!("Failed to list {}: {err}", dir.display()))
+                {
+                    let path = entry
+                        .expect("failed to read diff source directory entry")
+                        .path();
+                    if path.is_dir() {
+                        if path.file_name().is_some_and(|name| name != "tests") {
+                            directories.push(path);
+                        }
+                    } else if path.extension().is_some_and(|ext| ext == "rs")
+                        && path.file_name().is_some_and(|name| name != "tests.rs")
+                    {
+                        files.push(path);
+                    }
+                }
+            }
         }
 
         files.sort();

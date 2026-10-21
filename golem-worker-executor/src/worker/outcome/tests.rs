@@ -42,5 +42,78 @@ fn monthly_mapping_requires_exact_accepted_kind_and_ephemeral_mode() {
             &config, exhaustion,
         );
         assert_eq!(actual, expected);
+        let trap = monthly_failure::<crate::workerctx::default::Context>(
+            &TrapType::Interrupt(kind),
+            AgentMode::Ephemeral,
+            &accepted,
+            &config,
+            false,
+            OplogIndex::from_u64(37),
+        )
+        .expect("monthly exhaustion converts the accepted suspension");
+        assert!(
+            crate::durable_host::ephemeral_suspend_trap(
+                AgentMode::Ephemeral,
+                &trap,
+                OplogIndex::from_u64(37)
+            )
+            .is_none(),
+            "the active-suspend fallback must not replace the monthly error"
+        );
+        assert_eq!(trap.as_golem_error(""), Some(expected));
+    }
+}
+
+#[test]
+fn monthly_policy_outage_preserves_its_reason_in_ephemeral_suspend_failure() {
+    let config = GolemConfig::default();
+    let retry_from = OplogIndex::from_u64(37);
+    let suspend = TrapType::Interrupt(InterruptKind::Suspend(Timestamp::from(50_u64)));
+    let converted = monthly_failure::<crate::workerctx::default::Context>(
+        &suspend,
+        AgentMode::Ephemeral,
+        &None,
+        &config,
+        true,
+        retry_from,
+    )
+    .expect("an active ephemeral policy outage is terminal");
+    assert!(matches!(&converted,
+        TrapType::Error {
+            error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }),
+            retry_from: anchor,
+            semantic_trap_retry_override: None,
+        } if reason.contains("Monthly enforcement unavailable") && *anchor == retry_from));
+    assert!(
+        crate::durable_host::ephemeral_suspend_trap(AgentMode::Ephemeral, &converted, retry_from)
+            .is_none(),
+        "the generic suspension conversion must preserve the monthly reason"
+    );
+    for (mode, trap, unavailable) in [
+        (AgentMode::Durable, suspend.clone(), true),
+        (AgentMode::Ephemeral, suspend, false),
+        (
+            AgentMode::Ephemeral,
+            TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::from(51_u64))),
+            true,
+        ),
+        (
+            AgentMode::Ephemeral,
+            TrapType::Interrupt(InterruptKind::ShardLost),
+            true,
+        ),
+        (AgentMode::Ephemeral, TrapType::Exit, true),
+    ] {
+        assert!(
+            monthly_failure::<crate::workerctx::default::Context>(
+                &trap,
+                mode,
+                &None,
+                &config,
+                unavailable,
+                retry_from,
+            )
+            .is_none()
+        );
     }
 }

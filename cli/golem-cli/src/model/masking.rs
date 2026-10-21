@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::base_model::json::NormalizedJsonValue;
-use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
+use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue};
 use golem_common::schema::{SchemaType, SchemaValue};
 use serde::Serialize;
@@ -188,7 +188,7 @@ pub fn mask_json_secret_for_deploy_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
+    use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
     use serde_json::json;
     use std::collections::BTreeSet;
     use test_r::test;

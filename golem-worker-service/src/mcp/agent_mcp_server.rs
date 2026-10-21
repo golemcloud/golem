@@ -12,31 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::agent_mcp_capability::McpAgentCapability;
-use crate::mcp::agent_mcp_prompt::{AgentMcpPrompt, PromptRegistry};
-use crate::mcp::agent_mcp_resource::{AgentMcpResource, McpResourceUri, ResourceRegistry};
+use crate::mcp::agent_mcp_resource::McpResourceUri;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::{McpCapabilityLookup, invoke};
+use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, Serving};
+use crate::mcp::{McpCapabilityLookup, McpDeployment, invoke};
 use crate::service::worker::WorkerService;
-use dashmap::DashMap;
-use golem_common::base_model::domain_registration::Domain;
-use golem_common::schema::AgentTypeKind;
 use golem_service_base::mcp::CompiledMcp;
 use poem::http;
-use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
-    model::*, service::RequestContext,
-};
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, model::*, service::RequestContext};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
+/// Serves the MCP requests of one deployment domain. It keeps no state between requests: every
+/// request is served with the deployment that the [`McpServing`] in its extensions names.
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
-    tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
-    tools: Arc<DashMap<String, Tool>>,
-    resources: Arc<RwLock<ResourceRegistry>>,
-    prompts: Arc<RwLock<PromptRegistry>>,
-    deployment: Arc<RwLock<Option<Arc<CompiledMcp>>>>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
     worker_service: Arc<WorkerService>,
 }
@@ -47,11 +36,6 @@ impl GolemAgentMcpServer {
         worker_service: Arc<WorkerService>,
     ) -> Self {
         Self {
-            tool_router: Arc::new(RwLock::new(None)),
-            tools: Arc::new(DashMap::new()),
-            resources: Arc::new(RwLock::new(ResourceRegistry::default())),
-            prompts: Arc::new(RwLock::new(PromptRegistry::default())),
-            deployment: Arc::new(RwLock::new(None)),
             mcp_definitions_lookup,
             worker_service,
         }
@@ -62,93 +46,133 @@ impl GolemAgentMcpServer {
         args_map: JsonObject,
         mcp_tool: &AgentMcpTool,
     ) -> Result<CallToolResult, ErrorData> {
-        invoke::tool::invoke_tool(args_map, mcp_tool, &self.worker_service).await
+        invoke::tool::invoke_tool(args_map, mcp_tool, &self.worker_service, None).await
     }
 
-    async fn build_capabilities(
+    async fn run_tool(
         &self,
-        compiled: &CompiledMcp,
-    ) -> (
-        ToolRouter<GolemAgentMcpServer>,
-        Vec<AgentMcpResource>,
-        Vec<AgentMcpPrompt>,
-    ) {
-        let capabilities = agent_capabilities_from_deployment(compiled);
-
-        let mut router = ToolRouter::<GolemAgentMcpServer>::new();
-
-        for tool in capabilities.tools {
-            router = router.with_route(tool);
-        }
-
-        (router, capabilities.resources, capabilities.prompts)
-    }
-
-    async fn refresh_tools(&self, compiled: Arc<CompiledMcp>) -> Result<Vec<Tool>, ErrorData> {
-        let mut pinned = self.deployment.write().await;
-        if let Some(previous) = pinned.as_ref()
-            && (previous.domain != compiled.domain
-                || previous.environment_id != compiled.environment_id)
+        request: CallToolRequestParams,
+        deployment: Arc<McpDeployment>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let compiled = &deployment.compiled;
+        if let Some(export) = compiled
+            .tools
+            .iter()
+            .find(|tool| tool.mcp_name == request.name)
         {
-            return Err(ErrorData::invalid_params(
-                "MCP session belongs to another deployment domain",
+            let (input, stdin) = export
+                .parse_arguments(request.arguments.unwrap_or_default())
+                .map_err(|error| ErrorData::invalid_params(error, None))?;
+            let result = invoke::native_tool::invoke(
+                &self.worker_service,
+                compiled,
+                export,
+                input,
+                stdin,
+                context.ct.clone(),
                 None,
-            ));
+            )
+            .await;
+            // A cancelled call failed because of its cancel, not because the deployment changed.
+            if result.is_err() && !context.ct.is_cancelled() {
+                self.mcp_definitions_lookup
+                    .invalidate(&compiled.domain)
+                    .await;
+                if let Ok(current) = self.mcp_definitions_lookup.get(&compiled.domain).await
+                    && !same_deployment(compiled, &current.compiled)
+                {
+                    let _ = context.peer.notify_tool_list_changed().await;
+                    return Err(changed_tool_set());
+                }
+            }
+            return result.map(Into::into);
         }
-        let (router, resources, prompts) = self.build_capabilities(&compiled).await;
-        let mut tools = router.list_all();
-        for export in &compiled.tools {
-            tools.push(invoke::native_tool::tool_metadata(export)?);
-        }
-        self.tools.clear();
-        for tool in &tools {
-            self.tools.insert(tool.name.to_string(), tool.clone());
-        }
-        let mut resource_registry = ResourceRegistry::default();
-        for resource in resources {
-            resource_registry.insert(resource);
-        }
-        let mut prompt_registry = PromptRegistry::default();
-        for prompt in prompts {
-            prompt_registry.insert(prompt);
-        }
-        *self.resources.write().await = resource_registry;
-        *self.prompts.write().await = prompt_registry;
-        *self.tool_router.write().await = Some(router);
-        *pinned = Some(compiled);
-        Ok(tools)
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        deployment.capabilities()?.router.call(tcc).await
     }
 
-    async fn require_pinned_deployment(
+    async fn run_resource(
         &self,
-        context: &RequestContext<RoleServer>,
-    ) -> Result<Arc<CompiledMcp>, ErrorData> {
-        let authenticated = authenticated_deployment(context)?;
-        let compiled = self
-            .deployment
-            .read()
+        uri: String,
+        deployment: &McpDeployment,
+    ) -> Result<ReadResourceResponse, McpError> {
+        let resource_registry = &deployment.capabilities()?.resources;
+
+        if let Some(resource) = resource_registry.get_static(&uri) {
+            return invoke::resource::invoke_resource(
+                &self.worker_service,
+                resource,
+                &uri,
+                None,
+                None,
+            )
             .await
-            .clone()
-            .ok_or_else(changed_tool_set)?;
-        if !same_deployment(&compiled, &authenticated) {
-            let _ = context.peer.notify_tool_list_changed().await;
-            return Err(changed_tool_set());
+            .map(Into::into);
         }
-        Ok(compiled)
+
+        let parsed_resource_uri = McpResourceUri::parse(&uri)
+            .map_err(|e| McpError::invalid_params(format!("Invalid resource URI: {e}"), None))?;
+
+        if let Some((resource, params)) =
+            resource_registry.extract_mcp_resource_with_input(&parsed_resource_uri)
+        {
+            return invoke::resource::invoke_resource(
+                &self.worker_service,
+                resource,
+                &uri,
+                Some(params),
+                None,
+            )
+            .await
+            .map(Into::into);
+        }
+
+        Err(McpError::invalid_params(
+            format!("Resource not found for URI: {}", uri),
+            None,
+        ))
     }
 }
 
-fn authenticated_deployment(
+/// The deployment to serve the request with, from the request's [`McpServing`]. A refusal is
+/// turned into the client's error here, the one place for every handler method.
+async fn serve(
     context: &RequestContext<RoleServer>,
-) -> Result<Arc<CompiledMcp>, ErrorData> {
-    context
+    kind: ServeKind,
+) -> Result<Serving, ErrorData> {
+    let serving = context
         .extensions
         .get::<http::request::Parts>()
-        .and_then(|parts| parts.extensions.get::<Arc<CompiledMcp>>())
+        .and_then(|parts| parts.extensions.get::<Arc<dyn McpServing>>())
         .cloned()
         .ok_or_else(|| {
             ErrorData::invalid_params("MCP request has no authenticated deployment", None)
-        })
+        })?;
+    match serving.serve(kind, &context.ct).await {
+        Ok(serving) => Ok(serving),
+        Err(ServeRefusal::ToolSetChanged) => {
+            let _ = context.peer.notify_tool_list_changed().await;
+            Err(changed_tool_set())
+        }
+        Err(ServeRefusal::Gone) => Err(ErrorData::invalid_request("MCP session ended", None)),
+        Err(ServeRefusal::Unavailable) => Err(ErrorData::internal_error(
+            "MCP session could not be read",
+            None,
+        )),
+    }
+}
+
+/// Runs `work` until it completes. The serving's `while_running` work runs next to it; it never
+/// completes.
+async fn while_serving<T>(
+    serving: Serving,
+    work: impl Future<Output = Result<T, ErrorData>>,
+) -> Result<T, ErrorData> {
+    tokio::select! {
+        result = work => result,
+        never = serving.while_running => match never {},
+    }
 }
 
 fn same_deployment(left: &CompiledMcp, right: &CompiledMcp) -> bool {
@@ -159,148 +183,6 @@ fn same_deployment(left: &CompiledMcp, right: &CompiledMcp) -> bool {
 
 fn changed_tool_set() -> ErrorData {
     ErrorData::invalid_params("tool set changed; list tools again", None)
-}
-
-pub struct AgentCapabilities {
-    pub tools: Vec<AgentMcpTool>,
-    pub resources: Vec<AgentMcpResource>,
-    pub prompts: Vec<AgentMcpPrompt>,
-}
-
-pub async fn get_agent_capabilities(
-    domain: &Domain,
-    mcp_definition_lookup: &Arc<dyn McpCapabilityLookup>,
-) -> AgentCapabilities {
-    let compiled_mcp = match mcp_definition_lookup.get(domain).await {
-        Ok(mcp) => mcp,
-        Err(e) => {
-            tracing::error!("Failed to get compiled MCP for domain {}: {}", domain.0, e);
-            return AgentCapabilities {
-                tools: vec![],
-                resources: vec![],
-                prompts: vec![],
-            };
-        }
-    };
-
-    agent_capabilities_from_deployment(&compiled_mcp)
-}
-
-fn agent_capabilities_from_deployment(compiled_mcp: &CompiledMcp) -> AgentCapabilities {
-    let domain = &compiled_mcp.domain;
-    let mut tools = vec![];
-    let mut resources = vec![];
-    let mut prompts = vec![];
-
-    let account_id = compiled_mcp.account_id;
-    let account_email = compiled_mcp.account_email.clone();
-    let environment_id = compiled_mcp.environment_id;
-
-    tracing::info!(
-        "Found {} registered agent types for domain {}: {:?}",
-        compiled_mcp.registered_agent_types.len(),
-        domain.0,
-        compiled_mcp
-            .registered_agent_types
-            .iter()
-            .map(|rat| rat.agent_type.type_name.0.clone())
-            .collect::<Vec<_>>()
-    );
-
-    for registered_agent_type in &compiled_mcp.registered_agent_types {
-        if registered_agent_type.agent_type.kind == AgentTypeKind::HttpRouter {
-            continue;
-        }
-
-        tracing::debug!(
-            "Processing agent type {} for domain {}: implemented by component {}, methods: {:?}",
-            registered_agent_type.agent_type.type_name.0,
-            domain.0,
-            registered_agent_type.implemented_by.component_id.0,
-            registered_agent_type
-                .agent_type
-                .methods
-                .iter()
-                .map(|m| m.name.clone())
-                .collect::<Vec<_>>()
-        );
-
-        let agent_type = &registered_agent_type.agent_type;
-        let component_id = registered_agent_type.implemented_by.component_id;
-        // One `SchemaGraph` per agent type, shared by its constructor and
-        // methods; `SchemaType::Ref` bodies resolve against it both while
-        // rendering MCP schemas and while converting to the legacy invoke
-        // types.
-        let schema_graph = Arc::new(agent_type.schema.clone());
-
-        if let Some(prompt_hint) = &agent_type.constructor.prompt_hint {
-            prompts.push(AgentMcpPrompt::from_constructor_hint(
-                &agent_type.type_name,
-                &agent_type.description,
-                prompt_hint,
-            ));
-        }
-
-        for method in &agent_type.methods {
-            // Validate the method for MCP export before advertising anything.
-            // If the capability cannot be exported, invoking it would always
-            // fail, so skip both the tool/resource and its prompt.
-            let agent_method_mcp = McpAgentCapability::from_agent_method(
-                &account_id,
-                &account_email,
-                &environment_id,
-                &agent_type.type_name,
-                agent_type.mode,
-                schema_graph.clone(),
-                method,
-                &agent_type.constructor,
-                component_id,
-            );
-
-            match agent_method_mcp {
-                Ok(McpAgentCapability::Tool(agent_mcp_tool)) => {
-                    tools.push(*agent_mcp_tool);
-                }
-                Ok(McpAgentCapability::Resource(agent_mcp_resource)) => {
-                    resources.push(*agent_mcp_resource);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Skipping method {} of agent type {} for domain {}: {:#}",
-                        method.name,
-                        agent_type.type_name.0,
-                        domain.0,
-                        e
-                    );
-                    continue;
-                }
-            }
-
-            if let Some(prompt_hint) = &method.prompt_hint {
-                prompts.push(AgentMcpPrompt::from_method_hint(
-                    &agent_type.type_name,
-                    &schema_graph,
-                    method,
-                    &agent_type.constructor,
-                    prompt_hint,
-                ));
-            }
-        }
-    }
-
-    tracing::info!(
-        "Found {} tools, {} resources, and {} prompts for domain {}",
-        tools.len(),
-        resources.len(),
-        prompts.len(),
-        domain.0
-    );
-
-    AgentCapabilities {
-        tools,
-        resources,
-        prompts,
-    }
 }
 
 #[allow(deprecated)]
@@ -321,18 +203,13 @@ impl ServerHandler for GolemAgentMcpServer {
         std::borrow::Cow::Borrowed(ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_03_26))
     }
 
-    fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.tools.get(name).map(|ref_multi| ref_multi.clone())
-    }
-
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = self
-            .refresh_tools(authenticated_deployment(&context)?)
-            .await?;
+        let serving = serve(&context, ServeKind::List).await?;
+        let tools = serving.deployment.capabilities()?.tools.to_vec();
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -341,47 +218,9 @@ impl ServerHandler for GolemAgentMcpServer {
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
-        let compiled = self.require_pinned_deployment(&context).await?;
-        if let Some(export) = compiled
-            .tools
-            .iter()
-            .find(|tool| tool.mcp_name == request.name)
-        {
-            let (input, stdin) = export
-                .parse_arguments(request.arguments.unwrap_or_default())
-                .map_err(|error| ErrorData::invalid_params(error, None))?;
-            let result = invoke::native_tool::invoke(
-                &self.worker_service,
-                &compiled,
-                export,
-                input,
-                stdin,
-                context.ct.clone(),
-            )
-            .await;
-            if result.is_err() {
-                self.mcp_definitions_lookup
-                    .invalidate(&compiled.domain)
-                    .await;
-                if let Ok(current) = self.mcp_definitions_lookup.get(&compiled.domain).await
-                    && !same_deployment(&compiled, &current)
-                {
-                    let _ = context.peer.notify_tool_list_changed().await;
-                    return Err(changed_tool_set());
-                }
-            }
-            return result.map(Into::into);
-        }
-        let tool_router = self.tool_router.read().await;
-        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        if let Some(tool_router) = tool_router.as_ref() {
-            tool_router.call(tcc).await
-        } else {
-            Err(McpError::invalid_params(
-                "tool router not initialized",
-                None,
-            ))
-        }
+        let serving = serve(&context, ServeKind::Invoke).await?;
+        let deployment = serving.deployment.clone();
+        while_serving(serving, self.run_tool(request, deployment, context)).await
     }
 
     async fn list_resources(
@@ -389,10 +228,12 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
-        let registry = self.resources.read().await;
-        let resource_list = registry.list_static_resources();
+        let serving = serve(&context, ServeKind::List).await?;
+        let resource_list = serving
+            .deployment
+            .capabilities()?
+            .resources
+            .list_static_resources();
 
         tracing::info!("Listing {} static resources", resource_list.len());
 
@@ -404,10 +245,12 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
-        let registry = self.resources.read().await;
-        let resource_templates = registry.list_resource_templates();
+        let serving = serve(&context, ServeKind::List).await?;
+        let resource_templates = serving
+            .deployment
+            .capabilities()?
+            .resources
+            .list_resource_templates();
 
         tracing::info!("Listing {} resource templates", resource_templates.len());
 
@@ -421,10 +264,8 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
-        let registry = self.prompts.read().await;
-        let prompt_list = registry.list_prompts();
+        let serving = serve(&context, ServeKind::List).await?;
+        let prompt_list = serving.deployment.capabilities()?.prompts.list_prompts();
 
         tracing::info!("Listing {} prompts", prompt_list.len());
 
@@ -436,15 +277,19 @@ impl ServerHandler for GolemAgentMcpServer {
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, McpError> {
-        self.require_pinned_deployment(&context).await?;
-        let registry = self.prompts.read().await;
-
-        registry
-            .get_by_name(&request.name)
-            .map(|p| p.get_prompt_result().into())
-            .ok_or_else(|| {
-                McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
-            })
+        let serving = serve(&context, ServeKind::Invoke).await?;
+        let deployment = serving.deployment.clone();
+        let prompt = async {
+            deployment
+                .capabilities()?
+                .prompts
+                .get_by_name(&request.name)
+                .map(|p| p.get_prompt_result().into())
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
+                })
+        };
+        while_serving(serving, prompt).await
     }
 
     async fn read_resource(
@@ -452,35 +297,9 @@ impl ServerHandler for GolemAgentMcpServer {
         ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        self.require_pinned_deployment(&context).await?;
-        let resource_registry = self.resources.read().await;
-
-        if let Some(resource) = resource_registry.get_static(&uri) {
-            return invoke::resource::invoke_resource(&self.worker_service, resource, &uri, None)
-                .await
-                .map(Into::into);
-        }
-
-        let parsed_resource_uri = McpResourceUri::parse(&uri)
-            .map_err(|e| McpError::invalid_params(format!("Invalid resource URI: {e}"), None))?;
-
-        if let Some((resource, params)) =
-            resource_registry.extract_mcp_resource_with_input(&parsed_resource_uri)
-        {
-            return invoke::resource::invoke_resource(
-                &self.worker_service,
-                resource,
-                &uri,
-                Some(params),
-            )
-            .await
-            .map(Into::into);
-        }
-
-        Err(McpError::invalid_params(
-            format!("Resource not found for URI: {}", uri),
-            None,
-        ))
+        let serving = serve(&context, ServeKind::Invoke).await?;
+        let deployment = serving.deployment.clone();
+        while_serving(serving, self.run_resource(uri, &deployment)).await
     }
 
     async fn initialize(
@@ -488,15 +307,14 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
-        self.refresh_tools(authenticated_deployment(&context)?)
-            .await?;
+        serve(&context, ServeKind::Initialize).await?;
         Ok(self.get_info())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::agent_capabilities_from_deployment;
+    use crate::mcp::deployment::agent_capabilities_from_deployment;
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
@@ -599,6 +417,185 @@ mod tests {
                 included,
                 case["expect"]["included"].as_bool().unwrap(),
                 "{id}"
+            );
+        }
+    }
+
+    mod serving {
+        use super::super::GolemAgentMcpServer;
+        use crate::config::McpConfig;
+        use crate::mcp::invoke::test_support::streamed_messages;
+        use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, Serving, StatelessServing};
+        use crate::mcp::{
+            InvocationHarness, McpCapabilitiesLookupError, McpCapabilityLookup, McpDeployment,
+            mcp_http_transport_config,
+        };
+        use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition};
+        use golem_common::model::deployment::DeploymentRevision;
+        use golem_common::model::domain_registration::Domain;
+        use poem::endpoint::{BoxEndpoint, TowerCompatExt};
+        use poem::http::Method;
+        use poem::{Endpoint, EndpointExt, Request};
+        use rmcp::ServerHandler;
+        use rmcp::model::ProtocolVersion;
+        use rmcp::transport::StreamableHttpService;
+        use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+        use serde_json::{Value, json};
+        use std::sync::Arc;
+        use test_r::test;
+        use tokio_util::sync::CancellationToken;
+
+        struct NoDeployments;
+
+        #[async_trait::async_trait]
+        impl McpCapabilityLookup for NoDeployments {
+            async fn get(
+                &self,
+                domain: &Domain,
+            ) -> Result<Arc<McpDeployment>, McpCapabilitiesLookupError> {
+                Err(McpCapabilitiesLookupError::UnknownSite(domain.clone()))
+            }
+            async fn invalidate(&self, _: &Domain) {}
+            async fn invalidate_all(&self) {}
+        }
+
+        /// Refuses every request: the client listed another tool set.
+        struct ToolSetChanged;
+
+        #[async_trait::async_trait]
+        impl McpServing for ToolSetChanged {
+            async fn serve(
+                &self,
+                _: ServeKind,
+                _: &CancellationToken,
+            ) -> Result<Serving, ServeRefusal> {
+                Err(ServeRefusal::ToolSetChanged)
+            }
+        }
+
+        fn server(harness: &InvocationHarness) -> GolemAgentMcpServer {
+            GolemAgentMcpServer::new(Arc::new(NoDeployments), harness.worker_service.clone())
+        }
+
+        /// The stateless rmcp service over Golem's handler, with no session layer in front.
+        fn endpoint(harness: &InvocationHarness) -> BoxEndpoint<'static> {
+            let worker_service = harness.worker_service.clone();
+            StreamableHttpService::new(
+                move || {
+                    Ok(GolemAgentMcpServer::new(
+                        Arc::new(NoDeployments),
+                        worker_service.clone(),
+                    ))
+                },
+                Arc::new(NeverSessionManager::default()),
+                mcp_http_transport_config(&McpConfig::default()),
+            )
+            .compat()
+            .map_to_response()
+            .boxed()
+        }
+
+        fn post(body: Value, serving: Arc<dyn McpServing>) -> Request {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri_str("/mcp")
+                .header("host", "tools.example.com")
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .body(serde_json::to_vec(&body).unwrap());
+            request.extensions_mut().insert(serving);
+            request
+        }
+
+        /// The JSON-RPC messages of the streamed response to `request`.
+        async fn messages(endpoint: &BoxEndpoint<'static>, request: Request) -> Vec<Value> {
+            streamed_messages(endpoint.call(request).await.unwrap()).await
+        }
+
+        fn list(id: i64) -> Value {
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/list"})
+        }
+
+        fn call(id: i64, name: &str) -> Value {
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                   "params": {"name": name, "arguments": {}}})
+        }
+
+        fn stateless(harness: &InvocationHarness, native: bool) -> Arc<dyn McpServing> {
+            Arc::new(StatelessServing(Arc::new(McpDeployment::new(
+                harness.compiled_mcp("tools.example.com", DeploymentRevision::INITIAL, native),
+            ))))
+        }
+
+        #[test]
+        async fn the_handler_serves_lists_and_calls_without_the_session_layer() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+            let endpoint = endpoint(&harness);
+            let serving = stateless(&harness, false);
+
+            let listed = messages(&endpoint, post(list(1), serving.clone())).await;
+            assert_eq!(listed[0]["result"]["tools"][0]["name"], "mcp-agent-run");
+            let called = messages(&endpoint, post(call(2, "mcp-agent-run"), serving)).await;
+            assert!(called[0].get("result").is_some(), "{called:?}");
+        }
+
+        #[test]
+        async fn tool_set_changed_gives_the_error_and_tools_list_changed() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+            let refused = messages(
+                &endpoint(&harness),
+                post(call(1, "mcp-agent-run"), Arc::new(ToolSetChanged)),
+            )
+            .await;
+            assert_eq!(refused.len(), 2, "{refused:?}");
+            assert_eq!(refused[0]["method"], "notifications/tools/list_changed");
+            assert_eq!(
+                refused[1]["error"]["message"],
+                "tool set changed; list tools again"
+            );
+        }
+
+        #[test]
+        async fn a_call_without_a_key_keeps_todays_freshness() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Ephemeral);
+            let endpoint = endpoint(&harness);
+            let serving = stateless(&harness, true);
+
+            messages(&endpoint, post(call(1, "mcp-agent-run"), serving.clone())).await;
+            messages(&endpoint, post(call(2, "mcp-agent-run"), serving.clone())).await;
+            messages(&endpoint, post(call(3, "native"), serving.clone())).await;
+            messages(&endpoint, post(call(4, "native"), serving)).await;
+
+            let contexts = harness.contexts.lock().unwrap();
+            assert_eq!(contexts.len(), 2);
+            assert!(
+                contexts
+                    .iter()
+                    .all(|context| context.freshness == InvocationFreshnessDisposition::KnownFresh),
+                "an ephemeral call with no key is known to be fresh"
+            );
+            assert_ne!(contexts[0].idempotency_key, contexts[1].idempotency_key);
+            let native_keys = harness.native_session_keys();
+            assert_eq!(native_keys.len(), 2);
+            assert!(native_keys.iter().all(|key| !key.is_empty()));
+            assert_ne!(
+                native_keys[0], native_keys[1],
+                "each native call has a fresh key"
+            );
+        }
+
+        #[test]
+        fn get_tool_returns_none() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+            assert!(server(&harness).get_tool("mcp-agent-run").is_none());
+        }
+
+        #[test]
+        fn supported_protocol_versions_stay_up_to_2025_03_26() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+            assert_eq!(
+                server(&harness).supported_protocol_versions().as_ref(),
+                ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_03_26)
             );
         }
     }

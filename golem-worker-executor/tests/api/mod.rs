@@ -23,15 +23,15 @@ use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{UpdateMode, log_event};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
+};
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
-use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
-};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
     IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
@@ -117,7 +117,7 @@ enum IntegrationExhaustion {
     EphemeralStorage,
 }
 
-struct MutableResourceLimitsRegistry {
+pub(super) struct MutableResourceLimitsRegistry {
     limits: Mutex<golem_service_base::model::ResourceLimits>,
     delayed_policy: Mutex<Option<DelayedPolicy>>,
     applied_updates: Mutex<Vec<ResourceUsageUpdate>>,
@@ -131,7 +131,7 @@ struct DelayedPolicy {
 }
 
 impl MutableResourceLimitsRegistry {
-    fn new(policy: MonthlyResourcePolicy) -> Self {
+    pub(super) fn new(policy: MonthlyResourcePolicy) -> Self {
         Self {
             limits: Mutex::new(resource_limits_response(policy, 0)),
             delayed_policy: Mutex::new(None),
@@ -150,7 +150,7 @@ impl MutableResourceLimitsRegistry {
         limits.monthly_policy_revision += 1;
     }
 
-    fn set_max_memory_per_worker(&self, max_memory_per_worker: u64) {
+    pub(super) fn set_max_memory_per_worker(&self, max_memory_per_worker: u64) {
         self.limits.lock().unwrap().max_memory_per_worker = max_memory_per_worker;
     }
 

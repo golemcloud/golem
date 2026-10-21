@@ -316,7 +316,7 @@ pub(crate) mod dump {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RedisConfig {
     pub host: String,
     pub port: u16,
@@ -467,7 +467,7 @@ impl DbConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DbSqliteConfig {
     pub database: String,
     pub max_connections: u32,
@@ -503,7 +503,7 @@ impl Default for DbSqliteConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DbPostgresConfig {
     pub host: String,
     pub database: String,

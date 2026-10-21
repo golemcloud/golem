@@ -228,7 +228,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // finalize the parent deletion now that this child is gone.
         if let Some(parent_rep) = parent_rep {
             self.state.rpc_pollable_to_parent.remove(&child_rep);
-            let parent: Resource<crate::durable_host::wasm_rpc::FutureInvokeResultEntry> =
+            let parent: Resource<crate::durable_host::rpc::FutureInvokeResultEntry> =
                 Resource::new_borrow(parent_rep);
             let should_delete = if let Ok(entry) = self.table().get_mut(&parent) {
                 entry.child_pollables.retain(|r| *r != child_rep);
@@ -238,7 +238,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
             };
 
             if should_delete {
-                let parent_owned: Resource<crate::durable_host::wasm_rpc::FutureInvokeResultEntry> =
+                let parent_owned: Resource<crate::durable_host::rpc::FutureInvokeResultEntry> =
                     Resource::new_own(parent_rep);
                 if let Err(err) = self.table().delete(parent_owned) {
                     debug!(

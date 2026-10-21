@@ -6949,8 +6949,8 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
             executor
                 .revert(
                     &caller_id,
-                    golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
-                        golem_common::model::worker::RevertToOplogIndex {
+                    golem_common::model::agent::RevertWorkerTarget::RevertToOplogIndex(
+                        golem_common::model::agent::RevertToOplogIndex {
                             last_oplog_index: cut,
                         },
                     ),
@@ -7591,8 +7591,8 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
     executor
         .revert(
             &target_id,
-            golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
-                golem_common::model::worker::RevertToOplogIndex {
+            golem_common::model::agent::RevertWorkerTarget::RevertToOplogIndex(
+                golem_common::model::agent::RevertToOplogIndex {
                     last_oplog_index: cut,
                 },
             ),
@@ -7698,8 +7698,8 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
     executor
         .revert(
             &worker_id,
-            golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
-                golem_common::model::worker::RevertToOplogIndex {
+            golem_common::model::agent::RevertWorkerTarget::RevertToOplogIndex(
+                golem_common::model::agent::RevertToOplogIndex {
                     last_oplog_index: cut,
                 },
             ),
@@ -7893,7 +7893,7 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+    use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;

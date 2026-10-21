@@ -60,10 +60,10 @@ use golem_common::model::oplog::{
     types::SerializableToolOperationTerminal,
 };
 mod oplog_fixture;
+use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::ToolName;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment,
@@ -9458,7 +9458,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
-        config: Vec<golem_common::model::worker::AgentConfigEntryDto>,
+        config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<SchemaValue, ServiceRpcError> {
@@ -9501,7 +9501,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
-        config: Vec<golem_common::model::worker::AgentConfigEntryDto>,
+        config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
         self.inner

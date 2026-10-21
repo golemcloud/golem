@@ -123,6 +123,7 @@ id = "local-development"
 key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
 
 [mcp]
+session_idle_timeout = "5m"
 sse_keep_alive_interval = "15s"
 
 [registry_service]

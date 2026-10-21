@@ -148,15 +148,11 @@ impl McpAgentCapability {
 
             Ok(Self::Resource(Box::new(AgentMcpResource {
                 kind,
-                environment_id: *environment_id,
-                account_id: *account_id,
                 schema_graph,
-                account_email: account_email.clone(),
                 constructor: constructor.clone(),
                 method: method.clone(),
                 component_id,
                 agent_type_name: agent_type_name.clone(),
-                agent_mode,
             })))
         }
     }

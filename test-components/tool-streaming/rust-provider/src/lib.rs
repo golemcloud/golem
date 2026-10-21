@@ -1838,14 +1838,21 @@ impl Streaming for StreamingImpl {
                             "clock".to_string()
                         }
                         _ => {
-                            // Computes without a host call and lets the other task run in
-                            // between, like an interpreter between two commands.
+                            // A computing tool must periodically block to receive stdin events.
+                            // Keep ordinary interpreter yields between recorded blocking waits.
                             let mut counter: u64 = 0;
+                            let mut yields = 0_u8;
                             loop {
                                 for _ in 0..1_000_000 {
                                     counter = core::hint::black_box(counter.wrapping_add(1));
                                 }
-                                golem_rust::wasip3::wit_bindgen::yield_async().await;
+                                yields += 1;
+                                if yields == 16 {
+                                    yields = 0;
+                                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(0).await;
+                                } else {
+                                    golem_rust::wasip3::wit_bindgen::yield_async().await;
+                                }
                             }
                         }
                     }

@@ -17,7 +17,7 @@
 //! earlier value.
 
 use crate::Tracing;
-use golem_common::model::worker::{RevertLastInvocations, RevertWorkerTarget};
+use golem_common::model::agent::{RevertLastInvocations, RevertWorkerTarget};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{

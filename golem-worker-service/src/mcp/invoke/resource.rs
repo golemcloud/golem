@@ -19,6 +19,7 @@ use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
+use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
@@ -33,11 +34,13 @@ use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use std::sync::Arc;
 
+/// Reads the resource from its agent. Without an idempotency key the invocation gets a fresh one.
 pub async fn invoke_resource(
     worker_service: &Arc<WorkerService>,
     mcp_resource: &AgentMcpResource,
     uri: &str,
     extracted_params: Option<Vec<ConstructorParam>>,
+    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<ReadResourceResult, ErrorData> {
     let constructor_values = match extracted_params {
         None => Vec::new(),
@@ -103,7 +106,7 @@ pub async fn invoke_resource(
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
-            None,
+            idempotency_key,
             None,
             false,
             golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
@@ -606,22 +609,68 @@ mod tests {
         );
         let resource = AgentMcpResource {
             kind: AgentMcpResourceKind::Static(Resource::new(TEST_URI, "mcp-agent-read")),
-            environment_id: harness.environment_id,
-            account_id: harness.account_id,
             schema_graph: Arc::new(SchemaGraph::empty()),
-            account_email: golem_common::model::account::AccountEmail::new("mcp@golem"),
             constructor,
             method,
             component_id: harness.component_id,
             agent_type_name: AgentTypeName("mcp-agent".to_string()),
-            agent_mode: AgentMode::Ephemeral,
         };
 
-        let result = invoke_resource(&harness.worker_service, &resource, TEST_URI, None).await;
+        let result =
+            invoke_resource(&harness.worker_service, &resource, TEST_URI, None, None).await;
 
         assert!(result.is_ok());
         let agent_id = harness.recorded_agent_id();
         assert_eq!(agent_id.component_id, harness.component_id);
         assert!(phantom_id(&agent_id).is_some());
+    }
+
+    #[test]
+    async fn invoke_resource_uses_a_supplied_idempotency_key() {
+        let key = IdempotencyKey::new("supplied-key".to_string());
+        let read_with_key = |mode| {
+            let key = key.clone();
+            async move {
+                let harness = InvocationHarness::with_run_method(mode);
+                let resource = AgentMcpResource {
+                    kind: AgentMcpResourceKind::Static(Resource::new(TEST_URI, "mcp-agent-run")),
+                    schema_graph: Arc::new(SchemaGraph::empty()),
+                    constructor: harness.agent_type.constructor.clone(),
+                    method: harness.agent_type.methods[0].clone(),
+                    component_id: harness.component_id,
+                    agent_type_name: AgentTypeName("mcp-agent".to_string()),
+                };
+                invoke_resource(
+                    &harness.worker_service,
+                    &resource,
+                    TEST_URI,
+                    None,
+                    Some(key),
+                )
+                .await
+                .unwrap();
+                harness
+            }
+        };
+
+        let durable = read_with_key(AgentMode::Durable).await;
+        {
+            let recorded = &durable.contexts.lock().unwrap()[0];
+            assert_eq!(recorded.idempotency_key, key);
+            assert_eq!(
+                recorded.freshness,
+                golem_common::model::agent::InvocationFreshnessDisposition::MayExist
+            );
+        }
+
+        let ephemeral = read_with_key(AgentMode::Ephemeral).await;
+        assert_eq!(
+            phantom_id(&ephemeral.recorded_agent_id()),
+            Some(golem_common::model::agent::ephemeral_invocation_phantom_id(
+                &key
+            )),
+            "the ephemeral agent is the one the key derives"
+        );
+        assert_eq!(ephemeral.contexts.lock().unwrap()[0].idempotency_key, key);
     }
 }
