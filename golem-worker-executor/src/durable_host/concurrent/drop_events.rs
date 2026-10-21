@@ -406,7 +406,7 @@ pub enum DropEvent {
     CleanupAfterTerminal {
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
-        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+        terminal: Option<OrderedAppend>,
         trap_context: DurableCallTrapContext,
         /// Keeps the call counted as in flight until this event is fully consumed (the owned
         /// terminal task joined and the durable-function scope closed), so a positional boundary
