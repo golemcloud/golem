@@ -99,6 +99,51 @@ run. Treat this as an intermittent replay finding, not proof that a passing
 adapter variation fixed it. Its cause is not yet assigned to the SDK, WRQJS or
 the executor. Keep the failure strict while reducing the reproducer.
 
+### Reduced SDK replay fixture
+
+`sdk-replay-minimal.js` reduces the SDK control to one producer call and one Node
+`PassThrough`. It reads one output chunk, writes the bounded prefix to the Node
+stream, cancels and joins the tool call, then ends and joins the Node stream.
+It has no explicit `nextTick`, stderr pipe, write callback or repeated cancellation.
+The producer emits only three 64-KiB chunks. After the reader consumes the first
+chunk, the remaining output exceeds the harness's 64-KiB attachment buffer. This
+keeps cancellation causal without a large producer or a sleep.
+
+```sh
+CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=2 node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-minimal
+```
+
+Use the same executor test and `streams-collect` case. `fresh-sdk-overflow` runs
+the control in the main and fresh runtimes. `main-sdk-overflow` runs it only in
+the main runtime. Both retain the offline effect server, real executor restart,
+exact retained-history comparison and fresh follow-up invocation.
+
+The reduced failing path is:
+
+```text
+start SDK producer → read one chunk → write Node stream → cancel SDK call
+  → cancel reader and join result → end Node stream → await finished(stream)
+```
+
+All observations below use released WRQJS 0.4.13 and identical guest Cargo lockfiles.
+They use the current feature branch, not a new validation of latest `main`.
+
+| Reduction | Offline reconstruction |
+| --- | --- |
+| SDK cancellation without Node streams, main and fresh runtimes | Five fixed trials passed |
+| Original full SDK-only control | Trial one passed; trial two timed out |
+| SDK cancellation and one Node stream, main and fresh runtimes | Trial one timed out |
+| SDK cancellation and one Node stream, main runtime only | Trial one passed; trial two timed out |
+| One Node stream without the nested tool call, main runtime only | Five fixed trials passed |
+| Three-chunk SDK producer and one Node stream, main runtime only | Three trials passed; trial four timed out |
+
+Each timeout above followed successful live execution. The smaller failing case
+does not execute `runJavaScript` and does not link the native bridge. The control
+observations narrow the investigation to SDK cancellation with asynchronous Node
+stream completion, but do not assign the cause to the SDK, WRQJS or the executor.
+They are not fixes or proof that a passing variant is free of the intermittent failure.
+For a repeated trial, fix its count before starting and stop at the first failure.
+
 The fixture is not a release readiness claim. Live completion and successful
 isolated replay are separate checks; the combined lifecycle and fresh-runtime
 overflow replay cases still need deterministic completion before SDK registration.

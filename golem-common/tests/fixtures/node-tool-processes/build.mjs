@@ -20,7 +20,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../../..");
 const destination = process.argv[2];
 if (!destination) throw new Error("Pass an empty output directory");
-const sdkOnly = process.argv[3] === "--sdk-only";
+const sdkMinimal = process.argv[3] === "--sdk-minimal";
+const sdkOnly = sdkMinimal || process.argv[3] === "--sdk-only";
 if (process.argv[3] && !sdkOnly) throw new Error("Unknown probe build option");
 const out = resolve(destination);
 const wrapper = join(out, "wrapper");
@@ -55,7 +56,10 @@ async function bundleModule(input, file) {
 }
 await bundleModule(sdkOnly ? "sdk-only-probe.js" : "tool-probe.js", source);
 const sdkControl = join(out, "sdk-control.mjs");
-await bundleModule("sdk-control.js", sdkControl);
+await bundleModule(
+  sdkMinimal ? "sdk-replay-minimal.js" : "sdk-control.js",
+  sdkControl,
+);
 
 const modules = [
   `user=${source}`,

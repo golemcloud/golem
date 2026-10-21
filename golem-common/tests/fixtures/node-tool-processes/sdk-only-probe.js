@@ -37,7 +37,10 @@ toolDefinition("node-tool-probe", { requiresFilesystem: true })
     async "node-tool-probe"(input, context) {
       const [mode, effectUrl, execution = "all"] = input.args;
       let value;
-      if (execution === "fresh-sdk-overflow") {
+      if (
+        execution === "fresh-sdk-overflow" ||
+        execution === "main-sdk-overflow"
+      ) {
         if (effectUrl) {
           const response = await fetch(`${effectUrl}/${mode}-main`, {
             method: "POST",
@@ -45,8 +48,9 @@ toolDefinition("node-tool-probe", { requiresFilesystem: true })
           await response.arrayBuffer();
         }
         value = await sdkOverflowControl();
-        const job = await runJavaScript({
-          source: `
+        if (execution === "fresh-sdk-overflow") {
+          const job = await runJavaScript({
+            source: `
             const { sdkOverflowControl } = await import('golem-tool-process-sdk-control');
             if (${JSON.stringify(effectUrl)}) {
               const response = await fetch(${JSON.stringify(effectUrl)} + '/' + ${JSON.stringify(mode)} + '-job', { method: 'POST' });
@@ -54,12 +58,13 @@ toolDefinition("node-tool-probe", { requiresFilesystem: true })
             }
             return await sdkOverflowControl();
           `,
-          cwd: "/",
-          timeoutMs: 10000,
-          maxBytes: 4096,
-        });
-        if (job.value !== value || job.stdout || job.stderr || job.overflowed)
-          throw new Error("SDK-only fresh runtime differs");
+            cwd: "/",
+            timeoutMs: 10000,
+            maxBytes: 4096,
+          });
+          if (job.value !== value || job.stdout || job.stderr || job.overflowed)
+            throw new Error("SDK-only fresh runtime differs");
+        }
       } else {
         if (execution !== "all" || mode !== "streams-collect")
           throw new Error("Unsupported SDK-only control");

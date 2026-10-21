@@ -35,6 +35,7 @@ async fn node_guest_tool_process_bridge(
             | "main-overlap"
             | "main-cancel"
             | "main-native-cancel"
+            | "main-sdk-overflow"
             | "fresh-sync"
             | "fresh-async"
             | "fresh-native-cancel"
@@ -55,6 +56,7 @@ async fn node_guest_tool_process_bridge(
                 | "main-native-cancel"
                 | "fresh-native-cancel"
                 | "fresh-sdk-overflow"
+                | "main-sdk-overflow"
         ) || cases == "streams-collect"
     );
     let context = TestContext::new(last_unique_id);
@@ -174,7 +176,7 @@ async fn node_guest_tool_process_bridge(
         .map_err(|_| anyhow::anyhow!("guest bridge timed out: {mode}"))??;
         assert_eq!(result.exit_code, 0, "{mode}: {result:?}");
         assert!(result.stderr.is_empty(), "{mode}: {result:?}");
-        if mode == "streams-pressure-collect" || execution == "fresh-sdk-overflow" {
+        if mode == "streams-pressure-collect" || execution.ends_with("sdk-overflow") {
             assert_eq!(
                 String::from_utf8(result.stdout)?,
                 format!("{label}:overflow:4096\n")
