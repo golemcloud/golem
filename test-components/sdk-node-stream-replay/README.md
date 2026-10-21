@@ -72,3 +72,10 @@ The cause is not yet assigned to the executor, the SDK or WRQJS. Earlier control
 without Node streams and without the nested tool call each completed five fixed
 replay trials; these passing observations do not prove absence of an intermittent
 failure. Live execution alone does not establish replay correctness.
+
+The standalone fixture and focused Rust test were also run together: two trials
+completed live execution and offline reconstruction, then the third completed
+live execution and timed out in reconstruction. The batch stopped there. The
+history-oracle ownership unit test passed. This runtime observation is from main
+with #4286 present, before the module-only reorganization in #4290; the repro
+branch also includes that reorganization.
