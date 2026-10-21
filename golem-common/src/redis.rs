@@ -199,6 +199,33 @@ impl RedisLabelledApi<'_> {
         self.record(start, "GET", self.pool.get(self.prefixed_key(key)).await)
     }
 
+    /// Reads the value of `key` and sets its expiry to `expiry` from now in the same command
+    /// (`GETEX key PX ms`, Redis 6.2 or later). A missing key stays missing.
+    pub async fn getex<R, K>(&self, key: K, expiry: Duration) -> RedisResult<R>
+    where
+        R: FromValue,
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            self.prefixed_key(key).into(),
+            "PX".into(),
+            i64::try_from(expiry.as_millis())
+                .unwrap_or(i64::MAX)
+                .max(1)
+                .into(),
+        ];
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("GETEX"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<R>());
+        self.record(start, "GETEX", result)
+    }
+
     pub async fn exists<R, K>(&self, key: K) -> RedisResult<R>
     where
         R: FromValue,

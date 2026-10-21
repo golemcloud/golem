@@ -1,0 +1,27 @@
+# MCP session latency through the gateway: `initialize`, `notifications/initialized`,
+# `tools/list`, and `tools/call` of a durable and an ephemeral Rust agent method.
+#
+# cloud-perf runs it with `suite: mcp-latency.yaml` against the golem-release cluster, whose
+# replica counts the workflow sets (three worker-service replicas). To compare two server builds,
+# run the same benchmark binary against each build, with the same session affinity on the
+# gateway, and state that affinity in the run note. The benchmark binary must contain
+# `mcp-latency`, so build it from a golem ref that has it, also for the run against the older
+# server.
+#
+# Locally (spawned mode) the benchmark runs against one worker service, for development only:
+#
+#   cargo run --profile benchmarks -p integration-tests --bin benchmarks -- \
+#     suite integration-tests/benchmark_suites/mcp-latency.yaml spawned
+#
+# clusterSize = number of worker executors that spawned mode starts; cloud mode ignores it and
+#               records the cluster it finds
+# size        = number of concurrent MCP sessions
+# length      = warm `tools/call` requests per session and agent kind, after the cold one
+
+name: mcp-latency
+benchmarks:
+  - name: mcp-latency
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 50, 200]
+    length: [20]

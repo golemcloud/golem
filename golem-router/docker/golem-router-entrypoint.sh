@@ -6,7 +6,8 @@
 #
 # Requests for the management host reach the registry service and the management API of the
 # worker service. Requests for every other host reach the custom request port of the worker
-# service, which serves HTTP API and MCP deployments by domain.
+# service, which serves HTTP API and MCP deployments by domain. The requests of one MCP session
+# reach one replica of the worker service, chosen by a hash of the Mcp-Session-Id header.
 set -eu
 
 fail() {
@@ -86,11 +87,17 @@ fi
 # cluster for them. The limits are high, because every client connection of a proxy in front of
 # the router can share one upstream connection. The services advertise HTTP/2 windows of 1 MiB,
 # so larger windows toward them add no throughput; see the listener for the window sizes.
+#
+# The DNS cluster makes one host of each address that the host name resolves to, so the load
+# balancing policy chooses among the replicas. Where the host name resolves to several replicas,
+# LEAST_REQUEST sends a call to the replica with the fewest open calls, because calls can stay
+# open for a long time. MAGLEV sends the requests with the same hash to the same replica.
 cluster() {
   name=$1
   address=$2
   port=$3
   protocol=$4
+  lb_policy=$5
   if [ "${protocol}" = http2 ]; then
     http_config='http2_protocol_options: {initial_stream_window_size: 16777216, initial_connection_window_size: 67108864}'
   else
@@ -105,9 +112,7 @@ cluster() {
         dns_refresh_rate: ${GOLEM_ROUTER_DNS_REFRESH_RATE}
         dns_lookup_family: V4_PREFERRED
     connect_timeout: 5s
-    # Where the host name resolves to several replicas, a call goes to the replica with the
-    # fewest open calls, because calls can stay open for a long time.
-    lb_policy: LEAST_REQUEST
+    lb_policy: ${lb_policy}
     load_assignment:
       cluster_name: ${name}
       endpoints:
@@ -277,6 +282,10 @@ $(route "{prefix: /}" registry_service)
             - name: deployments
               domains: ["*"]
               routes:
+              # The requests of one MCP session go to one replica of the worker service, because
+              # the replica keeps the response streams and the running calls of the session.
+              - match: {prefix: /, headers: [{name: mcp-session-id, present_match: true}]}
+                route: {cluster: custom_request_mcp_session, timeout: 0s, upgrade_configs: [{upgrade_type: websocket, enabled: false}], hash_policy: [{header: {header_name: mcp-session-id}}]}
               - match: {prefix: /}
                 route: {cluster: custom_request, timeout: 0s, upgrade_configs: [{upgrade_type: websocket, enabled: false}]}
           http_filters:
@@ -286,10 +295,11 @@ $(route "{prefix: /}" registry_service)
               suppress_envoy_headers: true
 $(stats_listener)
   clusters:
-$(cluster registry_service "${GOLEM_ROUTER_REGISTRY_SERVICE_HOST}" "${GOLEM_ROUTER_REGISTRY_SERVICE_PORT}" http2)
-$(cluster worker_service "${GOLEM_ROUTER_WORKER_SERVICE_HOST}" "${GOLEM_ROUTER_WORKER_SERVICE_PORT}" http2)
-$(cluster worker_service_websocket "${GOLEM_ROUTER_WORKER_SERVICE_HOST}" "${GOLEM_ROUTER_WORKER_SERVICE_PORT}" http1)
-$(cluster custom_request "${GOLEM_ROUTER_WORKER_SERVICE_HOST}" "${GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT}" http2)
+$(cluster registry_service "${GOLEM_ROUTER_REGISTRY_SERVICE_HOST}" "${GOLEM_ROUTER_REGISTRY_SERVICE_PORT}" http2 LEAST_REQUEST)
+$(cluster worker_service "${GOLEM_ROUTER_WORKER_SERVICE_HOST}" "${GOLEM_ROUTER_WORKER_SERVICE_PORT}" http2 LEAST_REQUEST)
+$(cluster worker_service_websocket "${GOLEM_ROUTER_WORKER_SERVICE_HOST}" "${GOLEM_ROUTER_WORKER_SERVICE_PORT}" http1 LEAST_REQUEST)
+$(cluster custom_request "${GOLEM_ROUTER_WORKER_SERVICE_HOST}" "${GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT}" http2 LEAST_REQUEST)
+$(cluster custom_request_mcp_session "${GOLEM_ROUTER_WORKER_SERVICE_HOST}" "${GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT}" http2 MAGLEV)
 $(stats_cluster)
 EOF
 )

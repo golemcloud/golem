@@ -12,10 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::account::{AccountEmail, AccountId};
-use golem_common::base_model::agent::{AgentMode, AgentTypeName};
+use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::component::ComponentId;
-use golem_common::base_model::environment::EnvironmentId;
 use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, FieldSource};
 use golem_common::schema::graph::SchemaGraph;
 use rmcp::model::{Resource, ResourceTemplate};
@@ -25,17 +23,13 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AgentMcpResource {
     pub kind: AgentMcpResourceKind,
-    pub environment_id: EnvironmentId,
-    pub account_id: AccountId,
     /// Per-agent schema graph that constructor / method `SchemaType::Ref`
     /// bodies resolve against (see [`super::agent_mcp_tool::AgentMcpTool`]).
     pub schema_graph: Arc<SchemaGraph>,
-    pub account_email: AccountEmail,
     pub constructor: AgentConstructorSchema,
     pub method: AgentMethodSchema,
     pub component_id: ComponentId,
     pub agent_type_name: AgentTypeName,
-    pub agent_mode: AgentMode,
 }
 
 #[derive(Clone)]

@@ -383,6 +383,18 @@ fn benchmark_registry() -> BenchmarkRegistry {
         }),
     );
     benchmarks_by_name.insert(
+        "mcp-latency",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::mcp_latency::McpLatency>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
         "sleep",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<benchmarks::sleep::Sleep>(

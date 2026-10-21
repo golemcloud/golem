@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::benchmarks::{
-    cleanup_user_state, delete_workers, invoke_and_await_agent, invoke_and_await_http,
+    cleanup_user_state, delete_workers, deployment_base_url, deployment_domain,
+    invoke_and_await_agent, invoke_and_await_http,
 };
 use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
@@ -643,14 +644,7 @@ impl ThroughputBenchmark {
 
         let client = user.registry_service_client().await;
 
-        // In cloud mode, use the configured apps_base_domain. Fall back to
-        // "golem.cloud" for local/provided modes.
-        let apps_base_domain = self
-            .deps
-            .apps_base_domain()
-            .unwrap_or("golem.cloud")
-            .to_string();
-        let domain = Domain(format!("{}.{}", env.id, apps_base_domain));
+        let domain = deployment_domain(&self.deps, &env.id);
 
         async {
             client
@@ -947,21 +941,17 @@ impl ThroughputBenchmark {
         //                → reqwest connects to localhost; an explicit Host
         //                  header ("{env_id}.golem.cloud") tells the local
         //                  worker-service which deployment to route to.
-        let (http_base_url, client): (String, reqwest::Client) =
-            if let Some(ref cached) = self.cloud_http_client {
-                let base = format!("https://{}", iteration.domain.0);
-                (base, cached.clone())
-            } else {
-                let port = self.deps.worker_service().custom_request_port();
-                let base = format!("http://localhost:{port}");
-                let mut headers = HeaderMap::new();
-                headers.insert("Host", HeaderValue::from_str(&iteration.domain.0).unwrap());
-                let c = reqwest::Client::builder()
-                    .default_headers(headers)
-                    .build()
-                    .expect("Failed to create HTTP client");
-                (base, c)
-            };
+        let http_base_url = deployment_base_url(&self.deps, &iteration.domain);
+        let client: reqwest::Client = if let Some(ref cached) = self.cloud_http_client {
+            cached.clone()
+        } else {
+            let mut headers = HeaderMap::new();
+            headers.insert("Host", HeaderValue::from_str(&iteration.domain.0).unwrap());
+            reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .expect("Failed to create HTTP client")
+        };
 
         async {
             let client = client.clone();

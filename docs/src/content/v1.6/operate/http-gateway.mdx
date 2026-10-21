@@ -139,6 +139,33 @@ Environment variables are `GOLEM__INVOCATION_SESSION__KEEP_ALIVE_INTERVAL`,
 `GOLEM__INVOCATION_SESSION__MAX_PONG_TIMEOUT`, `GOLEM__MCP__SSE_KEEP_ALIVE_INTERVAL`,
 and `GOLEM__DURABLE_STREAMS__LONG_POLL_TIMEOUT`.
 
+## MCP sessions
+
+`initialize` starts an MCP session, and worker-service keeps a record of it in the
+MCP session store. Worker-service defaults are:
+
+```toml
+[mcp]
+session_idle_timeout = "5m"
+```
+
+A session ends at the earliest `session_idle_timeout` after its last request. A running tool call
+keeps its session open, so a call that takes longer than the timeout still returns
+its result.
+
+`mcp.session_storage` selects the store. It is not set by default: the MCP sessions
+then use the connection of `gateway_session_storage`: the same Redis database and
+key prefix, with the keys `mcp_session:<id>`, or the `mcp_session` table of the same
+SQLite file or Postgres schema. To keep them elsewhere, set `mcp.session_storage`
+with `type` `Redis`, `Sqlite` or `Postgres`, and under `mcp.session_storage.config`
+the fields of `gateway_session_storage.config` without `pending_login_expiration`.
+The Redis store needs Redis 6.2 or later. With several worker-service replicas, use
+Redis or Postgres; see [MCP with several replicas](/v1.6/deploy#mcp-with-several-replicas).
+
+Environment variables are `GOLEM__MCP__SESSION_IDLE_TIMEOUT`,
+`GOLEM__MCP__SESSION_STORAGE__TYPE`, and `GOLEM__MCP__SESSION_STORAGE__CONFIG__<FIELD>`,
+for example `GOLEM__MCP__SESSION_STORAGE__CONFIG__DATABASE`.
+
 ## Setting timeouts and resource budgets
 
 Worker-service defaults are:

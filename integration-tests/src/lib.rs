@@ -15,6 +15,7 @@
 pub mod benchmarks;
 pub mod chaos;
 pub mod invocation_session;
+pub mod mcp_client;
 
 #[cfg(test)]
 test_r::enable!();
