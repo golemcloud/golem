@@ -351,22 +351,8 @@ mod tests {
         let harness = crate::mcp::InvocationHarness::with_run_method(
             golem_common::model::agent::AgentMode::Durable,
         );
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let pool = crate::custom_api::oidc::session_store::migrated_sqlite_pool(
-            &golem_common::config::DbSqliteConfig {
-                database: db.path().to_string_lossy().into_owned(),
-                max_connections: 2,
-                foreign_keys: false,
-            },
-        )
-        .await
-        .unwrap();
-        let session_store = crate::custom_api::oidc::session_store::SqliteSessionStore::new(
-            pool,
-            Duration::from_secs(60),
-            Duration::from_secs(3600),
-        )
-        .unwrap();
+        let (session_store, _db) =
+            crate::custom_api::oidc::session_store::sqlite_test_session_store().await;
         // The lookup serves another deployment of the domain, with no tools; the requests must
         // be served with the deployment that the request was authenticated against.
         let endpoint = mcp_endpoint_without_sessions(

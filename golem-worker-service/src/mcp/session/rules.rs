@@ -122,6 +122,16 @@ pub(super) fn request_checks(method: &Method, headers: &HeaderMap) -> Option<Ref
     }
 }
 
+/// The `MCP-Protocol-Version` check for a POST that the session layer answers itself, a cancel
+/// or a reply, as rmcp checks a POST that it serves. Other session requests reach rmcp, which
+/// checks them.
+pub(super) fn local_message_check(kind: &SessionRequest, headers: &HeaderMap) -> Option<Refusal> {
+    match kind {
+        SessionRequest::Cancel(_) | SessionRequest::Reply => protocol_version_check(headers),
+        _ => None,
+    }
+}
+
 fn protocol_version_check(headers: &HeaderMap) -> Option<Refusal> {
     let value = headers.get(HEADER_MCP_PROTOCOL_VERSION)?;
     let Ok(version) = value.to_str() else {

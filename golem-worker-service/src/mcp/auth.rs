@@ -889,25 +889,11 @@ mod tests {
 
     #[test]
     async fn oauth_routes_reject_requests_without_a_resolved_deployment() {
-        let db = tempfile::NamedTempFile::new().unwrap();
+        let (session_store, _db) =
+            crate::custom_api::oidc::session_store::sqlite_test_session_store().await;
         let routes = oauth_proxy_routes(
             Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
-            Arc::new(
-                crate::custom_api::oidc::session_store::SqliteSessionStore::new(
-                    crate::custom_api::oidc::session_store::migrated_sqlite_pool(
-                        &golem_common::config::DbSqliteConfig {
-                            database: db.path().to_string_lossy().into_owned(),
-                            max_connections: 1,
-                            foreign_keys: false,
-                        },
-                    )
-                    .await
-                    .unwrap(),
-                    std::time::Duration::from_secs(60),
-                    std::time::Duration::from_secs(60),
-                )
-                .unwrap(),
-            ),
+            Arc::new(session_store),
         );
         for path in [
             "/.well-known/oauth-protected-resource",

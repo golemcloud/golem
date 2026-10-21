@@ -466,26 +466,13 @@ mod mounted_tests {
 
     #[test]
     async fn shared_auth_and_unsafe_path_corpus_through_request_handler() {
-        use crate::custom_api::oidc::{DefaultIdentityProvider, session_store::SqliteSessionStore};
+        use crate::custom_api::oidc::DefaultIdentityProvider;
         use crate::mcp::InvocationHarness;
         use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
         use golem_common::schema::{AgentConstructorSchema, InputSchema, SchemaValue};
         use golem_service_base::custom_api::{RouteBehaviour, RouterFileIndexEntry};
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let session_store = SqliteSessionStore::new(
-            crate::custom_api::oidc::session_store::migrated_sqlite_pool(
-                &golem_common::config::DbSqliteConfig {
-                    database: db.path().to_string_lossy().into_owned(),
-                    max_connections: 1,
-                    foreign_keys: false,
-                },
-            )
-            .await
-            .unwrap(),
-            std::time::Duration::from_secs(60),
-            std::time::Duration::from_secs(60),
-        )
-        .unwrap();
+        let (session_store, _db) =
+            crate::custom_api::oidc::session_store::sqlite_test_session_store().await;
         let oidc = Arc::new(OidcHandler::new(
             Arc::new(session_store),
             Arc::new(DefaultIdentityProvider),

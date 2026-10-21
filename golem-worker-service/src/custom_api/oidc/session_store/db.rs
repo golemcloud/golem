@@ -100,6 +100,23 @@ pub async fn migrated_sqlite_pool(config: &DbSqliteConfig) -> anyhow::Result<Sql
         .context("SQLite session store pool initialization failed")
 }
 
+/// A session store on a new SQLite file with the session store migrations applied, for tests.
+/// The file exists as long as the returned handle.
+#[cfg(test)]
+pub(crate) async fn sqlite_test_session_store() -> (SqliteSessionStore, tempfile::NamedTempFile) {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let pool = migrated_sqlite_pool(&DbSqliteConfig {
+        database: file.path().to_string_lossy().into_owned(),
+        max_connections: 2,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+    let store =
+        SqliteSessionStore::new(pool, Duration::from_secs(60), Duration::from_secs(3600)).unwrap();
+    (store, file)
+}
+
 /// A pool for a Postgres schema that holds the session store tables, with the session store
 /// migrations applied. `config` names the schema.
 pub async fn migrated_postgres_pool(config: &DbPostgresConfig) -> anyhow::Result<PostgresPool> {

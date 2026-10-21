@@ -54,11 +54,17 @@ impl OpenStream {
     }
 }
 
-/// Adds `new` to the open streams and takes out the oldest ones above the limit, to be closed.
-fn open_stream<S>(open: &mut VecDeque<S>, new: S) -> Vec<S> {
+/// Takes the closed streams out of the open streams, adds `new`, and takes out the oldest ones
+/// above the limit, to be closed. The removed streams are returned so that they are dropped after
+/// the lock is released.
+fn open_stream<S>(open: &mut VecDeque<S>, new: S, is_closed: impl Fn(&S) -> bool) -> Vec<S> {
+    let (mut removed, kept): (Vec<S>, Vec<S>) =
+        std::mem::take(open).into_iter().partition(is_closed);
+    *open = kept.into();
     open.push_back(new);
     let excess = open.len().saturating_sub(MAX_STREAMS_PER_SESSION);
-    open.drain(..excess).collect()
+    removed.extend(open.drain(..excess));
+    removed
 }
 
 /// Takes the closed streams out of every session of a shard, and the sessions left without
@@ -109,7 +115,11 @@ impl OpenStreams {
 
     fn open(&self, session: McpSessionId, stream: OpenStream) {
         let closed = self.sessions.with(&session, |sessions| {
-            open_stream(sessions.entry(session).or_default(), stream)
+            open_stream(
+                sessions.entry(session).or_default(),
+                stream,
+                OpenStream::is_closed,
+            )
         });
         drop(closed);
     }
@@ -167,9 +177,9 @@ mod tests {
     #[test]
     fn open_stream_closes_the_oldest_above_the_limit() {
         let mut open: VecDeque<i32> = (0..31).collect();
-        assert!(open_stream(&mut open, 31).is_empty());
+        assert!(open_stream(&mut open, 31, |_| false).is_empty());
         assert_eq!(open.len(), 32);
-        let closed = open_stream(&mut open, 32);
+        let closed = open_stream(&mut open, 32, |_| false);
         assert_eq!(closed, [0]);
         assert_eq!(open.front(), Some(&1));
         assert_eq!(open.back(), Some(&32));
@@ -210,6 +220,23 @@ mod tests {
         assert!(first.try_recv().is_ok());
         assert!(second.try_recv().is_ok());
         assert!(other.try_recv().is_err());
+        super::super::sharded::lock_check::assert_no_violation();
+    }
+
+    #[test]
+    async fn finished_streams_do_not_count_when_a_stream_opens() {
+        let streams = OpenStreams::new();
+        let mut live = streams.admit(session());
+        let finished: Vec<_> = (0..31).map(|_| streams.admit_resumed(session())).collect();
+        drop(finished);
+        assert_eq!(streams.count(session()), 32, "no sweep has run");
+        let _newest = streams.admit_resumed(session());
+        assert!(
+            live.try_recv()
+                .is_err_and(|error| error == mpsc::error::TryRecvError::Empty),
+            "the live GET stream stays open"
+        );
+        assert_eq!(streams.count(session()), 2);
         super::super::sharded::lock_check::assert_no_violation();
     }
 

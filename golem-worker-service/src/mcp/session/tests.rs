@@ -1254,6 +1254,43 @@ async fn header_checks_come_before_the_session_read() {
 }
 
 #[test]
+async fn a_cancel_or_reply_with_an_unknown_protocol_version_gets_400() {
+    let fx = Fixture::new().await;
+    let session = fx.initialize().await;
+    let mut body = body_of(
+        fx.send(fx.post(Some(&session), call(5, "gated", "a")))
+            .await,
+    );
+    next_frames(&mut body).await;
+    fx.probe.gate("a").started().await;
+    let unknown_version = |mut request: Request| {
+        request
+            .headers_mut()
+            .insert("mcp-protocol-version", "1999-01-01".parse().unwrap());
+        request
+    };
+    let reply = json!({"jsonrpc": "2.0", "id": 9, "result": {}});
+    let statuses: Vec<StatusCode> = stream::iter([
+        unknown_version(fx.post(Some(&session), cancel(5))),
+        unknown_version(fx.post(Some(&session), reply)),
+    ])
+    .then(|request| fx.send(request))
+    .map(|response| response.status())
+    .collect()
+    .await;
+    assert_eq!(statuses, [StatusCode::BAD_REQUEST, StatusCode::BAD_REQUEST]);
+
+    fx.probe.gate("a").open();
+    assert_eq!(
+        fx.probe.gate("a").returned().await,
+        "opened",
+        "the call keeps running"
+    );
+    assert_eq!(messages(&rest(body).await.unwrap()).len(), 1);
+    fx.finish();
+}
+
+#[test]
 async fn other_methods_get_405_with_allow() {
     let fx = Fixture::new().await;
     let response = fx

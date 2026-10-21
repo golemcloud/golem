@@ -63,17 +63,18 @@ impl McpCapabilities {
             .tools
             .into_iter()
             .fold(ToolRouter::new(), |router, tool| router.with_route(tool));
-        let tools = router
-            .list_all()
-            .into_iter()
-            .map(Ok)
-            .chain(
-                compiled
-                    .tools
-                    .iter()
-                    .map(invoke::native_tool::tool_metadata),
-            )
-            .collect::<Result<Box<[_]>, _>>()?;
+        let routed = router.list_all();
+        let mut tools = Vec::with_capacity(routed.len() + compiled.tools.len());
+        tools.extend(routed);
+        let tools = compiled
+            .tools
+            .iter()
+            .map(invoke::native_tool::tool_metadata)
+            .try_fold(tools, |mut tools, native| {
+                tools.push(native?);
+                Ok::<_, ErrorData>(tools)
+            })?
+            .into_boxed_slice();
         let resources = capabilities.resources.into_iter().fold(
             ResourceRegistry::default(),
             |mut registry, resource| {

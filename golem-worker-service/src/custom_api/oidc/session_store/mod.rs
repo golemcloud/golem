@@ -21,6 +21,9 @@ pub use db::{
 };
 pub use redis::RedisSessionStore;
 
+#[cfg(test)]
+pub(crate) use db::sqlite_test_session_store;
+
 use super::model::{
     AuthorizationCode, BearerToken, McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin,
     PendingPkceLogin, PkceAuthorizationCode, PkceBearerCredential, PkceBinding, SessionId,

@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::replica::McpReplica;
-use super::rules::{Admission, Refusal, RequestClass, SessionRequest, classify, request_checks};
+use super::rules::{
+    Admission, Refusal, RequestClass, SessionRequest, classify, local_message_check, request_checks,
+};
 use super::store::McpSessionId;
 use crate::mcp::McpDeployment;
 use crate::mcp::auth::no_mcp_deployment_response;
@@ -111,6 +113,9 @@ impl<E: Endpoint> McpSessionEndpoint<E> {
         let Some(deployment) = request.extensions().get::<Arc<McpDeployment>>().cloned() else {
             return Ok(no_mcp_deployment_response());
         };
+        if let Some(refusal) = local_message_check(&kind, request.headers()) {
+            return Ok(refused(refusal));
+        }
         let pin = match self.replica.admit(session, &deployment.compiled).await {
             Admission::Admitted(pin) => pin,
             Admission::Gone => return Ok(session_not_found()),
