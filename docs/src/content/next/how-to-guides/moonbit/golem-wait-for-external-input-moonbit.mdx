@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Golem promise** lets an agent suspend its execution until an external event completes it. The agent creates a promise, passes the promise ID to an external system (another agent, a webhook, a UI, an HTTP API call), and then awaits the result. The Golem runtime durably suspends the agent — consuming no resources — until the promise is fulfilled.
+A **Golem promise** lets an agent suspend its execution until an external event completes it. The agent creates a promise, passes the promise ID to an external system (another agent, a webhook, a UI, an HTTP API call), and then awaits the result. Creation does not suspend the agent. For durable agents awaiting a pending promise, suspension occurs after the suspension policy delay and frees guest execution resources; persisted state and other resources remain.
 
 ## API
 
@@ -11,19 +11,22 @@ All functions are in the `@api` package of the Golem MoonBit SDK:
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `@api.create_promise` | `() -> PromiseId` | Creates a new promise and returns its ID |
-| `@api.await_promise` | `(PromiseId) -> Bytes` | Blocks until the promise is completed |
+| `@api.await_promise` | `async (PromiseId) -> Bytes` | Suspends until the promise is completed |
 | `@api.complete_promise` | `(PromiseId, Bytes) -> Bool` | Completes a promise with a byte payload |
-| `@api.get_promise` | `(PromiseId) -> PromiseResult` | Gets a handle for polling/getting the result |
+| `@api.get_promise` | `(PromiseId) -> PromiseResult` | Gets an owned handle for async result retrieval |
 
 ## Usage Pattern
 
 ### 1. Create a Promise and Wait
 
+Run this fragment inside an `async fn`. Any helper or agent method that waits,
+and every caller of that helper, must also be async.
+
 ```moonbit
 let promise_id = @api.create_promise()
 // Pass promise_id to an external system...
 
-// Agent is durably suspended here until the promise is completed
+// Awaiting can suspend the durable agent after the suspension policy delay
 let data : Bytes = @api.await_promise(promise_id)
 ```
 
@@ -31,19 +34,17 @@ let data : Bytes = @api.await_promise(promise_id)
 
 ```moonbit
 let payload = "approved"
-@api.complete_promise(promise_id, Bytes::from_array(payload.to_array().map(fn(c) { c.to_int().to_byte() })))
+@api.complete_promise(promise_id, @utf8.encode(payload[:]))
 ```
 
-### 3. Advanced: Poll without Blocking
+### 3. Advanced: Own the Result Handle
+
+Run this fragment inside an `async fn`. There is no `subscribe` or optional synchronous polling API. Release a directly acquired handle, including when the async operation exits with an error:
 
 ```moonbit
 let promise_result = @api.get_promise(promise_id)
-let pollable = promise_result.subscribe()
-// Use pollable with poll infrastructure
-match promise_result.get() {
-  Some(data) => // promise completed
-  None => // not ready yet
-}
+defer promise_result.drop()
+let data : Bytes = promise_result.get()
 ```
 
 ## PromiseId Structure
@@ -53,6 +54,7 @@ A `PromiseId` contains an `agent_id` and an `oplog_idx`. To let an external syst
 ```
 POST /v1/components/{component_id}/workers/{agent_name}/complete
 Content-Type: application/json
+Authorization: Bearer <token-with-agent-invoke-permission>
 
 {"oplogIdx": <oplog_idx>, "data": [<bytes>]}
 ```
@@ -78,19 +80,28 @@ pub fn WorkflowAgent::start_approval(self : Self) -> UInt64 {
 }
 
 /// Wait for the approval to arrive and return the result
-pub fn WorkflowAgent::wait_for_approval(self : Self, oplog_idx : UInt64) -> String {
+pub async fn WorkflowAgent::wait_for_approval(self : Self, oplog_idx : UInt64) -> String {
   let promise_id = @types.PromiseId::{
-    agent_id: @api.get_self_agent_id(),
+    agent_id: @api.get_self_metadata().agent_id,
     oplog_idx,
   }
   let data = @api.await_promise(promise_id)
-  let result = String::from_array(data.to_array().map(fn(b) { Char::from_int(b.to_int()) }))
+  let result = @utf8.decode_lossy(data[:])
   self.last_result = result
   result
 }
 ```
 
 ## Use Cases
+
+Import `"moonbitlang/core/encoding/utf8" @utf8` in `moon.pkg`.
+`get_self_metadata()` requires `self-view` in the effective permission card.
+Call `start_approval` first and publish its returned index together with the known
+component and agent IDs to the approver before invoking `wait_for_approval`.
+External completion requires agent-invoke permission. Async methods propagate
+host errors; external callers must handle invocation failure rather than treating
+it as approval. Lossy decoding replaces invalid UTF-8; validate the approval value
+before acting on it.
 
 - **Human-in-the-loop**: Pause a workflow until a human approves or rejects
 - **Webhook callbacks**: Wait for an external HTTP callback to arrive

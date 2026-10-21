@@ -44,7 +44,7 @@ Define exactly one of `subdomain` or `domain` on each deployment. Prefer `subdom
 
 Do not use `localServer.mcpPort: 0` in the manifest. Port `0` is only allowed when passed directly as `--mcp-port 0` to `golem server run`; manifest deployment domains require stable nonzero ports. The local server routes requests by matching their `Host` header against the expanded `<subdomain>.localhost:<port>`, so the running server must bind the same port the manifest expands to: `golem server run` warns when its `--mcp-port` differs from the manifest value, and such deployments are not reachable until the two match.
 
-`<subdomain>.localhost` resolves only on the machine running the local server, regardless of `localServer.routerAddr` (the MCP listener binds all interfaces). To reach a local MCP deployment from another machine, use `domain` with a host name that resolves there instead of `subdomain`.
+`<subdomain>.localhost` resolves only on the machine running the local server. The MCP listener defaults to `worker_service.bind_address = "127.0.0.1"`, independently of `localServer.routerAddr`. External access requires a reachable `domain`, an appropriate worker-service bind address, and network access rules; DNS alone is insufficient. Replace **all well-known default secrets** before exposing MCP, HTTP, or the main API externally. The server rejects non-loopback listener addresses while any default secret remains. Changing the worker-service bind address also exposes its unauthenticated internal gRPC listener: restrict that listener with a firewall and keep other internal services on loopback. See `golem-local-dev-server` for configuration details.
 
 ### Local Development
 
@@ -178,9 +178,9 @@ Agent methods are automatically mapped to MCP entities based on these rules:
 
 | Agent Type | Method | MCP Entity |
 |---|---|---|
-| Singleton | No parameters | Resource |
-| Non-singleton | No parameters | Resource template |
-| Any | Has parameters | Tool |
+| Singleton | Read-only, no user-supplied parameters | Resource |
+| Non-singleton | Read-only, no user-supplied parameters | Resource template |
+| Any | Has user-supplied parameters, or is not marked read-only | Tool |
 
 ### Tool and Resource Naming
 

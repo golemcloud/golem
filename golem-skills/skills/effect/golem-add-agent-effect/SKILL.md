@@ -30,6 +30,11 @@ const Item = Schema.Struct({
   name: Schema.String,
 });
 
+const ItemNotFound = Schema.Struct({
+  _tag: Schema.Literal("ItemNotFound"),
+  id: Schema.String,
+});
+
 const RepositoryState = Schema.Struct({
   items: Schema.Record(Schema.String, Item),
 });
@@ -52,6 +57,7 @@ export const ItemRepositoryAgent = defineAgent({
     getItem: method({
       input: { id: Schema.String },
       success: Item,
+      error: ItemNotFound,
     }),
     updateItem: method({
       input: { item: Item },
@@ -76,10 +82,10 @@ export const ItemRepositoryAgent = defineAgent({
 
       getItem: ({ id }) =>
         Ref.get(state).pipe(
-          Effect.map(({ items }) => items[id]),
+          Effect.map(({ items }) => Object.hasOwn(items, id) ? items[id] : undefined),
           Effect.flatMap((item) =>
             item === undefined
-              ? Effect.die(new Error(`item not found: ${id}`))
+              ? Effect.fail({ _tag: "ItemNotFound" as const, id })
               : Effect.succeed(item),
           ),
         ),
@@ -91,7 +97,7 @@ export const ItemRepositoryAgent = defineAgent({
 
       deleteItem: ({ id }) =>
         Ref.modify(state, ({ items }) => {
-          if (!(id in items)) return [false, { items }] as const;
+          if (!Object.hasOwn(items, id)) return [false, { items }] as const;
           const { [id]: _, ...remainingItems } = items;
           return [true, { items: remainingItems }] as const;
         }),
@@ -143,7 +149,7 @@ getItem: method({
 Effect.fail({ _tag: "ItemNotFound" as const, id });
 ```
 
-Use defects such as `Effect.dieMessage(...)` only for unexpected failures. An unhandled defect
+Use defects such as `Effect.die(...)` only for unexpected failures. An unhandled defect
 fails the invocation without retry and does not repeat completed effects. Do not use defects to
 represent normal business outcomes.
 

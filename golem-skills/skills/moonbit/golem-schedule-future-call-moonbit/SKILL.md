@@ -13,10 +13,10 @@ This is for **agent-to-agent scheduled calls from code**. To schedule an invocat
 
 ## Usage
 
-Every method on the generated `AgentClient` has a corresponding `schedule_` variant. Use `AgentClient::scoped` to obtain a client and call the schedule method with a `scheduled_at` datetime and the method arguments:
+Methods with recursively stream-free inputs and outputs have a generated `schedule_` variant. These examples use durable clients. Ephemeral clients require `scoped_new_phantom` or `scoped_get_phantom`, not `scoped`. Use `AgentClient::scoped` inside an async function to obtain a client and call the synchronous enqueue method with a `scheduled_at` instant and the method arguments. The scoped helper and its callback are async even though scheduling itself is synchronous:
 
 ```moonbit
-AgentClient::scoped("param", fn(client) raise @common.AgentError {
+AgentClient::scoped("param", async fn(client) {
   client.schedule_increment(scheduled_at)
 })
 ```
@@ -24,10 +24,10 @@ AgentClient::scoped("param", fn(client) raise @common.AgentError {
 ## Full Example
 
 ```moonbit
-AgentClient::scoped("my-counter", fn(client) raise @common.AgentError {
+AgentClient::scoped("my-counter", async fn(client) {
   // Schedule increment to run 60 seconds from now
-  let now = @wallClock.now()
-  let scheduled_at = @wallClock.Datetime::{
+  let now = @systemClock.now()
+  let scheduled_at = @systemClock.Instant::{
     seconds: now.seconds + 60,
     nanoseconds: 0,
   }
@@ -38,8 +38,8 @@ AgentClient::scoped("my-counter", fn(client) raise @common.AgentError {
 ### Schedule with arguments
 
 ```moonbit
-ReportAgentClient::scoped("daily", fn(client) raise @common.AgentError {
-  let scheduled_at = @wallClock.Datetime::{
+ReportAgentClient::scoped("daily", async fn(client) {
+  let scheduled_at = @systemClock.Instant::{
     seconds: tomorrow_midnight,
     nanoseconds: 0,
   }
@@ -49,10 +49,10 @@ ReportAgentClient::scoped("daily", fn(client) raise @common.AgentError {
 
 ## Datetime Type
 
-The `scheduled_at` parameter is a `@wallClock.Datetime` value representing a point in time as seconds + nanoseconds since the Unix epoch:
+Import `"golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock` in `moon.pkg`. The `scheduled_at` parameter is a `@systemClock.Instant` with signed `Int64` seconds and `UInt` nanoseconds since the Unix epoch. `tomorrow_midnight` above must be `Int64`; convert a `UInt64` delay with `.to_int64()` only after checking it fits:
 
 ```moonbit
-let scheduled_at = @wallClock.Datetime::{
+let scheduled_at = @systemClock.Instant::{
   seconds: 1700000000,  // Unix timestamp in seconds
   nanoseconds: 0,       // Sub-second precision
 }
@@ -60,18 +60,19 @@ let scheduled_at = @wallClock.Datetime::{
 
 ## Cancelable Variant
 
-Every method also has a `schedule_cancelable_` variant that returns a `CancellationToken`. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+Stream-free methods on durable clients also have a `schedule_cancelable_` variant that returns a `CancellationToken`. Ephemeral clients return a receipt containing the token and invocation metadata instead. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
 
 ```moonbit
-AgentClient::scoped("my-counter", fn(client) raise @common.AgentError {
-  let now = @wallClock.now()
-  let scheduled_at = @wallClock.Datetime::{
+AgentClient::scoped("my-counter", async fn(client) {
+  let now = @systemClock.now()
+  let scheduled_at = @systemClock.Instant::{
     seconds: now.seconds + 60,
     nanoseconds: 0,
   }
   let token = client.schedule_cancelable_increment(scheduled_at)
+  defer token.drop()
   // Later, to cancel: token.cancel()
-  // If not cancelling, release with: token.drop()
+  // cancel() borrows the token; defer releases it whether cancelled or not.
 })
 ```
 

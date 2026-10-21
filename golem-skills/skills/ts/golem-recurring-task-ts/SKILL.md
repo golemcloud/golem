@@ -13,7 +13,9 @@ Because a method handler's `this` is bound to the agent's **state** (not to its 
 
 ## Basic Pattern
 
-The agent schedules its own `poll` method to run again after a delay:
+The agent schedules its own `poll` method to run again after a delay.
+Call `start` only once per agent identity in the basic and backoff variants;
+each call enqueues another independent recurring chain:
 
 ```typescript
 import { z } from 'zod';
@@ -64,6 +66,9 @@ export const PollerAgentImpl = PollerAgent.implement({
         maxIntervalSecs: 3600n,
     }),
     methods: {
+        start() {
+            scheduleNext(this.name, 0n);
+        },
         poll() {
             const success = tryWork();
 
@@ -88,8 +93,12 @@ export const PollerAgentImpl = PollerAgent.implement({
 
 `.schedule()` returns a `CancellationToken`. Keep it when the pending invocation
 must be canceled immediately, and call `.cancel()` before its scheduled time.
-For a recurring loop, also keep a boolean flag in state so a `poll` that has
-already started exits without rescheduling:
+For a recurring loop, also keep a boolean flag in state so a stale `poll` exits
+without doing work or rescheduling. This variant supports one start per agent
+identity, with no restart: duplicate `start` calls are no-ops, including after
+cancellation or snapshot restoration. Use a new identity to restart. A restartable
+design instead needs generation-based cancellation, with each tick carrying its
+generation and rejecting stale generations; that alternative is not implemented here:
 
 ```typescript
 import type { CancellationToken } from '@golemcloud/golem-ts-sdk';
@@ -97,10 +106,20 @@ import type { CancellationToken } from '@golemcloud/golem-ts-sdk';
 export const PollerAgentImpl = PollerAgent.implement({
     init: ({ id }) => ({
         name: id.name,
+        started: false,
         cancelled: false,
         pending: undefined as CancellationToken | undefined,
     }),
     methods: {
+        start() {
+            if (this.started || this.cancelled) return;
+            this.started = true;
+            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+            this.pending = PollerAgent.client.get({ name: this.name }).poll.schedule({
+                seconds: nowSecs,
+                nanoseconds: 0,
+            });
+        },
         poll() {
             if (this.cancelled) return; // stop the loop
             doWork();
@@ -119,9 +138,35 @@ export const PollerAgentImpl = PollerAgent.implement({
 });
 ```
 
-Do not include `pending` in a typed snapshot schema: it is a live host resource,
-not ordinary serializable state. The boolean flag remains the durable source of
-truth across snapshots and restarts.
+`pending` is a live host resource, not ordinary serializable state. Merely omitting
+it from a typed snapshot schema fails: typed snapshots reject undeclared ordinary
+state fields. For this layout use custom projection/restoration, with an enabled
+policy such as `snapshotting: { everyNInvocations: 10 }` on the definition:
+
+```typescript
+// Add to the cancellation implementation above:
+snapshot: {
+    save() {
+        return new TextEncoder().encode(JSON.stringify({
+            name: this.name, started: this.started, cancelled: this.cancelled,
+        }));
+    },
+    load(bytes) {
+        const saved = z.object({
+            name: z.string(), started: z.boolean(), cancelled: z.boolean(),
+        })
+            .parse(JSON.parse(new TextDecoder().decode(bytes)));
+        return { ...saved, pending: undefined as CancellationToken | undefined };
+    },
+},
+```
+
+After restoration the token is unavailable, so `cancel` cannot immediately remove
+the existing scheduled invocation. The restored `cancelled` flag makes that tick
+exit without doing work or rescheduling. Do not enqueue a replacement during load.
+The restored `started` flag prevents `start` from creating a second chain while
+the old scheduled tick still exists. Cancellation is terminal even before start.
+Also declare `cancel: method({ input: {}, returns: z.void() })` on `PollerAgent`.
 
 ### Cancellation from the CLI
 
@@ -153,10 +198,11 @@ poll() {
 
 ### Periodic Cleanup
 
-Remove expired data or stale resources on a schedule:
+Replace the basic pattern's `poll` handler with cleanup work (and initialize
+`entries` in state):
 
 ```typescript
-cleanup() {
+poll() {
     this.entries = this.entries.filter((e) => !e.isExpired());
     scheduleNext(this.name, 3600n); // run hourly
 }
@@ -164,10 +210,11 @@ cleanup() {
 
 ### Heartbeat / Keep-Alive
 
-Periodically notify an external service that the agent is alive:
+Replace the basic pattern's `poll` handler with heartbeat work (and initialize
+`serviceUrl` in state):
 
 ```typescript
-heartbeat() {
+poll() {
     sendHeartbeat(this.serviceUrl);
     scheduleNext(this.name, 30n); // every 30s
 }
@@ -196,4 +243,4 @@ function scheduleNext(name: string, delaySecs: bigint): void {
 
 Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's oplog. For long-running or high-frequency recurring tasks, the oplog grows unboundedly, and recovery on crash will replay the full history — which becomes slow over time.
 
-**You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. Set `snapshotting` on `defineAgent` — `snapshotting: { everyNInvocations: N }` or `snapshotting: { periodicSeconds: N }` — and, for state the default JSON path can't represent, supply custom `snapshot: { save, load }` on `.implement(...)`. See [`golem-custom-snapshot-ts`](../golem-custom-snapshot-ts/SKILL.md).
+**You cannot opt out of oplog writes for a durable agent.** Use snapshot-based recovery so recovery can start from the latest snapshot instead of replaying every prior tick. For JSON state, provide a schema for every ordinary state field plus a policy, for example `snapshotting: { state: z.object({ name: z.string() }), policy: { everyNInvocations: 10 } }` for the basic pattern above. A bare enabled policy without a state schema requires custom `snapshot: { save, load }` hooks even for JSON state. Use custom hooks for the cancellation-token projection above. See [`golem-custom-snapshot-ts`](../golem-custom-snapshot-ts/SKILL.md).

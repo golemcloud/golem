@@ -102,7 +102,9 @@ The resolved `Response` is the *last* attempt. See the
 [`golem-retry-policies-ts`](/next/how-to-guides/ts/golem-retry-policies-ts) skill for the policy YAML / SDK shape.
 
 This is the recommended path when the retry trigger is a status code (or status-code range). It
-also handles request-body reconstruction, idempotency checks, and replay correctly.
+also handles request-body reconstruction and replay. Retry eligibility is not
+checked against the HTTP method. The host can inject an idempotency key when
+configured, but it does not verify that the peer deduplicates requests.
 
 > **POST/PUT/PATCH are eligible for retry.** The guest cannot opt out with an idempotence-mode
 > switch. Make writes duplicate-safe at the peer: exactly-once processing requires the peer to
@@ -136,16 +138,22 @@ const response = await fetch('https://payments.example.com/charge', {
 });
 
 if (!response.ok) {
-  // The host already retried up to maxRetries times against the 5xx policy;
-  // this is the *final* response after retries were exhausted.
+  // For a matching status (500, 502, 503, 504), this is the last response
+  // after status-policy retries are exhausted. Other error statuses are
+  // returned without retries from this status policy.
   throw new Error(`charge failed: ${response.status}`);
 }
 const charge = await response.json();
 ```
 
-If status retry "doesn't seem to work", See the [`golem-local-dev-server`](/next/how-to-guides/common/golem-local-dev-server) skill and look for the
-`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was not
-retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+If status retry "doesn't seem to work", inspect the configured policy and server logs
+(see [`golem-local-dev-server`](/next/how-to-guides/common/golem-local-dev-server)). A status policy must reference `status-code` and
+match the response; transparent retries require live execution outside snapshotting.
+Policy-resolution failures log `Failed resolving p3 HTTP status retry policy`.
+An observational call or a delay above the in-function threshold can instead
+produce `HTTP status ... matched a status-code retry policy in an observational call`
+or `HTTP status ... matched retry policy but exceeded the in-function retry delay threshold`.
+Do not look for an idempotence-mode skip reason; that switch is not supported.
 
 ### Application-level retry
 

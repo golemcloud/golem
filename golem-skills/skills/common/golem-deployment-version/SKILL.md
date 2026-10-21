@@ -5,7 +5,7 @@ description: "Configuring the deployment logical version in the Golem Applicatio
 
 # Deployment Versions
 
-Every `golem deploy` attaches a **logical version** (a string) to the new deployment. Unlike the
+A `golem deploy` that creates a deployment attaches a **logical version** (a string). Unchanged deployments create no new revision. Unlike the
 server-assigned, per-environment **revision** number, the version is a human-meaningful label you
 control. Use it to tell whether two environments run the *same* logical version, to see at which
 version an environment last changed, and as a rollback target (`golem deploy --version <v>`, see
@@ -87,11 +87,14 @@ are not valid here (the two modes are mutually exclusive).
 
 ## Per-environment override
 
-`environments.<name>.version:` overrides the application-wide `version:`. It is a **partial**
-override — every field is optional and is layered over the root:
+`environments.<name>.version:` overrides the application-wide `version:`. Within the same git
+mode, fields can be omitted to inherit from the root:
 
-- same source (both `git`, both literal, …) → fields merge (the environment wins per field);
+- same git mode (both tag or both hash) → fields merge (the environment wins per field);
+- switching git tag/hash mode → the environment replaces the git source and must stand alone; a switch to tag mode must supply `tagPattern`, and a switch to hash mode must supply `hashOnly: true`;
 - different source → the environment replaces the root wholesale.
+
+Each hash-mode override must repeat `hashOnly: true`, even when the root already uses hash mode. Without it, the override is parsed as tag mode, not as a partial hash-mode override. For example, use `git: {hashOnly: true, allowDirty: true}` to allow dirty hash versions while inheriting other hash settings.
 
 ```yaml
 version:                     # application-wide default
@@ -120,10 +123,11 @@ environments:
       versionCheck: true
 ```
 
-When `true`, a deploy whose computed version already exists in that environment is **rejected**
-(the server returns a conflict). Combined with a git-tag source this enforces "tag a new release
-before deploying" and prevents accidentally re-deploying the same or an older changeset. Default is
-`false` (and `false` for the `local` environment, where iterating on the same version is expected).
+When `true`, a changed deployment whose computed version already exists in that environment is
+**rejected** (the server returns a conflict). An unchanged deployment creates no revision and
+bypasses this uniqueness check. This policy does not require a new git tag or enforce changeset
+ordering: an older changeset with an unused version label can still deploy. Default is `false`
+(and `false` for the `local` environment, where iterating on the same version is expected).
 
 `versionCheck` governs *uniqueness*; the `version:` source governs *how the string is produced* —
 they are independent.
@@ -153,7 +157,7 @@ environments:
 
 A tagged commit deploys as `v1.2.3` (or `v1.2.3-5-gabc1234` between tags); an untagged repo uses
 the short hash; a non-git checkout uses `v0.0.0`. `local` additionally allows dirty deploys; `cloud`
-rejects re-deploying a version that already exists.
+rejects changed deployments with a version that already exists; an unchanged deployment bypasses the check.
 
 ## Common errors
 

@@ -6,7 +6,7 @@ A **fire-and-forget** call enqueues a method invocation on the target agent and 
 
 ## Usage
 
-Access the `.trigger()` method on a per-method wrapper to call methods without awaiting:
+For stream-free methods, access `.trigger()` on the per-method wrapper. Durable guest clients return `Future[Unit]`; ephemeral guest clients return `Future[golem.runtime.rpc.InvocationReceipt]`. Compose or return that future to observe enqueue completion/errors, without waiting for the target's result. Streaming methods require awaited calls; bridge clients omit trigger helpers for those methods, while definition-derived clients can expose unsupported helpers that reject live stream inputs at runtime.
 
 ```scala
 val counter = CounterAgentClient.get("my-counter")
@@ -29,14 +29,19 @@ processor.processBatch.trigger(batchData)
 ## Example: Breaking a Deadlock
 
 ```scala
-// In AgentA — calls AgentB and waits
-val b = AgentBClient.get("b1")
-val result = b.doWork(data) // OK: awaited call
+// In AgentAImpl: return B's Future, keeping A's invocation open until B returns.
+override def run(data: String): Future[String] =
+  AgentBClient.get("b1").doWork(data)
 
-// In AgentB — notifies AgentA without waiting (would deadlock if awaited)
-val a = AgentAClient.get("a1")
-a.onWorkDone.trigger(result) // OK: fire-and-forget
+// In AgentBImpl: enqueue the callback without waiting for A to execute it.
+override def doWork(data: String): Future[String] = {
+  val computed = s"processed: $data"
+  AgentAClient.get("a1").onWorkDone.trigger(computed).map(_ => computed)
+}
 ```
+
+The traits must declare `run`, `doWork`, and `onWorkDone`; use an execution
+context for `map`. B waits for callback enqueue acceptance, not callback execution.
 
 ## CLI Equivalent
 

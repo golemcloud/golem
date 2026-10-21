@@ -8,17 +8,131 @@ description: "Adds provider-backed AI capabilities to a Rust Golem agent. Use fo
 The `golemcloud/golem-ai` project provides provider-neutral core crates and provider crates. Golem
 agents now target `wasm32-wasip2` and WASI HTTP 0.3, so dependency selection matters.
 
-## Compatibility status
+## Select matching dependencies
 
-There is currently no verified `golem-ai` release or revision compatible with this repository's
-Rust SDK. The latest crates.io release, `0.5.2`, predates the WASIp2/WASI P3 migration. The current
-upstream source targets `wasm32-wasip2`, but still expects the older infallible Golem secret API and
-does not compile against this SDK with its default Golem integration enabled.
+Upstream's [v0.5.4 source](https://github.com/golemcloud/golem-ai/tree/9243c29395a4cd85f81f9c7c635d8b0e3fe49216)
+targets `wasm32-wasip2` and uses fallible secret access. Its workspace pins `golem-rust` to
+`=3.0.0-rc5`. A GitHub release does not establish that the same version is on crates.io; the
+following source pins avoid that assumption:
 
-Do not add `0.5.2`, pin the upstream migration commit, disable durability features, or copy an old
-provider example merely to make the dependency resolve. Recheck upstream releases and build the
-chosen version in a current scaffold before documenting or shipping it. Keep every selected core
-and provider crate on the same verified release or revision.
+```toml
+[dependencies]
+golem-rust = { version = "=3.0.0-rc5", features = ["export_golem_agentic"] }
+golem-ai-llm = { git = "https://github.com/golemcloud/golem-ai", rev = "9243c29395a4cd85f81f9c7c635d8b0e3fe49216" }
+golem-ai-llm-openai = { git = "https://github.com/golemcloud/golem-ai", rev = "9243c29395a4cd85f81f9c7c635d8b0e3fe49216" }
+```
+
+Keep the default `golem` features enabled and align the core, provider, and SDK dependencies.
+Start from `golem new --yes --template rust ai-agent`. Before replacing the scaffold's SDK version,
+check its target runtime: this repository's development SDK has version `0.0.0`, not `3.0.0-rc5`.
+
+For an application targeting this source checkout, use a local copy of the same pinned provider
+source and align its SDK dependency explicitly:
+
+1. Clone `https://github.com/golemcloud/golem-ai` and check out
+   `9243c29395a4cd85f81f9c7c635d8b0e3fe49216`.
+2. In that clone's root `Cargo.toml`, replace the `golem-rust` entry under
+   `[workspace.dependencies]` with `{ path = "/absolute/path/to/golem/sdks/rust/golem-rust" }`.
+3. In the application, replace the three dependencies above with these local paths:
+
+```toml
+[dependencies]
+golem-rust = { path = "/absolute/path/to/golem/sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+golem-ai-llm = { path = "/absolute/path/to/golem-ai/llm/llm" }
+golem-ai-llm-openai = { path = "/absolute/path/to/golem-ai/llm/openai" }
+```
+
+The source path override is needed because a crates.io patch to a `0.0.0` SDK does not satisfy
+upstream's `=3.0.0-rc5` requirement. Both paths above support type-checking the OpenAI agent below
+for `wasm32-wasip2`; neither establishes deployed-runtime behavior. Inspect `cargo tree -d` to
+ensure the application and provider use one SDK, run `cargo check --target wasm32-wasip2`, then
+`golem build --yes`. Keep the resulting lockfile. Do not pass config/secret types between two
+different SDK versions.
+
+## Configure and call OpenAI
+
+The provider exports `OpenAiHostConfig` (a `ConfigSchema`) and `OpenAiConfig` (the runtime config).
+Inject `Config<OpenAiHostConfig>` through the constructor. Converting the loaded host config keeps
+the secret handle; the provider reveals it immediately before each request. Do not cache plaintext.
+
+```rust
+use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::agentic::Config as AgentConfig;
+use golem_ai_llm::{LlmProvider, model::{Config, ContentPart, Event, Message, Role}};
+use golem_ai_llm_openai::{OpenAI, OpenAiConfig, OpenAiHostConfig};
+
+#[agent_definition]
+pub trait ChatAgent {
+    fn new(name: String, #[agent_config] config: AgentConfig<OpenAiHostConfig>) -> Self;
+    async fn chat(&self, prompt: String, model: String) -> Result<String, String>;
+}
+
+struct ChatAgentImpl {
+    config: AgentConfig<OpenAiHostConfig>,
+}
+
+#[agent_implementation]
+impl ChatAgent for ChatAgentImpl {
+    fn new(_name: String, #[agent_config] config: AgentConfig<OpenAiHostConfig>) -> Self {
+        Self { config }
+    }
+
+    async fn chat(&self, prompt: String, model: String) -> Result<String, String> {
+        let host = self.config.get().map_err(|_| "Provider configuration unavailable".to_string())?;
+        let response = OpenAI::send(
+            OpenAiConfig::from(host),
+            vec![Event::Message(Message {
+                role: Role::User,
+                name: None,
+                content: vec![ContentPart::Text(prompt)],
+            })],
+            Config {
+                model,
+                temperature: None,
+                max_tokens: Some(256),
+                stop_sequences: None,
+                tools: None,
+                tool_choice: None,
+                provider_options: None,
+            },
+        ).await.map_err(|_| "Provider request failed".to_string())?;
+        Ok(response.content.into_iter().filter_map(|part| match part {
+            ContentPart::Text(text) => Some(text),
+            _ => None,
+        }).collect::<Vec<_>>().join(""))
+    }
+}
+```
+
+Provision the `apiKey` secret in the deployment environment, using the hidden prompt rather than
+putting a credential in the manifest or shell history:
+
+```shell
+golem secret create apiKey --type String
+```
+
+Set the optional provider URL config explicitly in `golem.yaml`:
+
+```yaml
+agents:
+  ChatAgent:
+    config:
+      base_url: "https://openai-proxy.example.com/v1"
+```
+
+Regular config retains the Rust field name `base_url`; the secret path is separately canonicalized
+as `apiKey`. This non-null value projects the custom URL into the provider runtime config.
+Replace the example proxy URL with a reachable OpenAI-compatible endpoint.
+
+Build, deploy, and call `chat` with a model available to the provider account. Check the returned
+domain error separately from invocation failure. Test a real request, secret rotation, and recovery
+before relying on the integration in production. For streaming use `LlmProvider::stream` and the
+upstream chat-stream interface; do not substitute an older release's call signature.
+
+Authoritative API references at the pinned revision:
+[provider config](https://github.com/golemcloud/golem-ai/blob/9243c29395a4cd85f81f9c7c635d8b0e3fe49216/llm/openai/src/config.rs),
+[provider implementation](https://github.com/golemcloud/golem-ai/blob/9243c29395a4cd85f81f9c7c635d8b0e3fe49216/llm/openai/src/lib.rs),
+[request model](https://github.com/golemcloud/golem-ai/blob/9243c29395a4cd85f81f9c7c635d8b0e3fe49216/llm/llm/src/model.rs).
 
 ## Available crate families
 
@@ -40,12 +154,8 @@ Choose one core crate and the provider crate needed by the application:
 The repository also contains `golem-ai-http`, the shared WASI HTTP transport. Provider crate names
 follow `golem-ai-<capability>-<provider>`.
 
-## Safe alternative
+## Direct HTTP alternative
 
-Until a compatible release exists, call a provider's HTTPS API with the supported outgoing HTTP
-client described by `golem-make-http-request-rust`. Store credentials with Golem secrets; load
-`golem-add-secret-rust` for provisioning. External calls made through supported host APIs remain
-durable, while a generic third-party HTTP client may not integrate correctly with replay.
-
-When upstream compatibility is restored, verify the provider configuration, async call signature,
-and secret integration from that exact release rather than relying on the examples from `0.5.2`.
+For a provider without a suitable adapter, call its HTTPS API with `golem_rust::http` as described
+by `golem-make-http-request-rust`. This is an alternative integration, not a requirement to bypass
+`golem-ai`. Store credentials with Golem secrets; load `golem-add-secret-rust` for provisioning.

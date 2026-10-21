@@ -41,8 +41,10 @@ const Pipe = defineAgent({
 
 Implement the transform lazily with `AgentStream.from(asyncIterable)`. Slots are top-level stream
 inputs or outputs. `$result` selects a direct stream result or scalar result; an all-stream record
-result creates one slot per field. A public `name` replaces the canonical URL name. Only direct
-`s.stream(s.u8())` slots may set `contentType`; other slots use JSON. Add the agent to an `httpApi`
+result creates one slot per field. A public `name` replaces the canonical URL name. JSON slots
+may explicitly set `contentType: 'application/json'` only. Direct `s.stream(s.u8())` byte slots
+may override it with a concrete non-text, non-JSON MIME type (including no `+json` suffix),
+without parameters or wildcards. Add the agent to an `httpApi`
 deployment in `golem.yaml`.
 
 The protocol paths are `<base>`, `<base>/invocations/<session>`, and
@@ -81,8 +83,13 @@ import { z } from 'zod';
 
 async function copy(source: string, target: string): Promise<string[]> {
   const values: string[] = [];
-  for await (const value of readDurableJsonStream(z.string(), { url: source })) {
-    values.push(value);
+  const reader = readDurableJsonStream(z.string(), { url: source });
+  try {
+    for await (const value of reader) {
+      values.push(value);
+    }
+  } finally {
+    await reader.return();
   }
   const writer = createDurableJsonWriter(z.string(), { url: target });
   await writer.append(values, { close: true });
@@ -109,9 +116,10 @@ errors remain typed `DurableStreamError`s. Replay reconstructs checkpoints, buff
 producer state, pending data, and retry budgets and does not repeat completed HTTP. Do not add a
 custom durable/atomic wrapper.
 
-`auth` must be a borrowed raw host `Secret` capability, such as an `s.secret(z.string())` method
-argument. Pass it directly; do not call `.get()`. The `this.config` `Secret<T>` wrapper is not the
-raw capability accepted by this API. HTTPS is required except when the host is `localhost`, a
+`auth` accepts an SDK `Secret<string>`, including a config field declared with
+`s.secret(z.string())`: pass `{ url, auth: this.config.apiKey }` directly. The SDK
+unwraps the borrowed capability internally; do not call `.get()` or reveal the token.
+HTTPS is required except when the host is `localhost`, a
 dot-delimited subdomain such as `app.localhost`, or a loopback IP. Localhost names are
 case-insensitive and may have one terminal DNS dot. The URL authority stays unchanged. Redirects
 and URL credentials are rejected.

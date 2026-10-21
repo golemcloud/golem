@@ -7,7 +7,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 ## Overview
 
-Golem agents process invocations **sequentially** — a single agent cannot run work in parallel. To execute work concurrently, distribute it across **multiple agent instances**. This skill covers two approaches:
+Golem agents process invocations **sequentially**. Async work within one invocation can overlap cooperatively, but this does not provide CPU-thread parallelism. Distribute independent CPU work across **multiple agent instances**. This skill covers two approaches:
 
 1. **Child agents via `AgentClient::scoped`** — spawn separate agent instances, dispatch work, and collect results
 2. **`@api.fork()`** — clone the current agent at the current execution point for lightweight parallel execution
@@ -15,6 +15,10 @@ Golem agents process invocations **sequentially** — a single agent cannot run 
 ## Approach 1: Child Agent Fan-Out
 
 Spawn child agents, dispatch work via fire-and-forget triggers, and collect results via Golem promises.
+
+Import `"moonbitlang/core/encoding/utf8" @utf8` in `moon.pkg`.
+Raw `@types.PromiseId` has no `IntoWire` implementation. Transport its primitive
+fields across RPC, then reconstruct the host record in the worker.
 
 ### Basic Pattern with Promises
 
@@ -27,7 +31,7 @@ struct Coordinator {
 fn Coordinator::new() -> Coordinator { {  } }
 
 /// Fan out work to child agents and collect results
-pub fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[String] {
+pub async fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[String] {
   // Create one promise per child
   let promise_ids : Array[@types.PromiseId] = []
   for _ in items {
@@ -36,8 +40,10 @@ pub fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[String]
 
   // Fire-and-forget: trigger each child with its promise ID
   for i, item in items {
-    WorkerClient::scoped(i.to_uint64(), fn(child) raise @common.AgentError {
-      child.trigger_process(item, promise_ids[i])
+    WorkerClient::scoped(i.to_uint64(), async fn(child) {
+      let pid = promise_ids[i]
+      let uuid = pid.agent_id.component_id.uuid
+      child.trigger_process(item, uuid.high_bits, uuid.low_bits, pid.agent_id.agent_id, pid.oplog_idx)
     })
   }
 
@@ -45,7 +51,7 @@ pub fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[String]
   let results : Array[String] = []
   for pid in promise_ids {
     let bytes = @api.await_promise(pid)
-    results.push(String::from_array(bytes.to_array().map(fn(b) { Char::from_int(b.to_int()) })))
+    results.push(@utf8.decode_lossy(bytes[:]))
   }
   results
 }
@@ -63,10 +69,20 @@ fn Worker::new(id : UInt64) -> Worker { { id, } }
 pub fn Worker::process(
   self : Self,
   data : String,
-  promise_id : @types.PromiseId,
+  component_high : UInt64,
+  component_low : UInt64,
+  agent_name : String,
+  oplog_idx : UInt64,
 ) -> Unit {
+  let promise_id = @types.PromiseId::{
+    agent_id: {
+      component_id: { uuid: { high_bits: component_high, low_bits: component_low } },
+      agent_id: agent_name,
+    },
+    oplog_idx,
+  }
   let result = "processed-\{data}"
-  let payload = Bytes::from_array(result.to_array().map(fn(c) { c.to_int().to_byte() }))
+  let payload = @utf8.encode(result[:])
   let _ = @api.complete_promise(promise_id, payload)
 }
 ```
@@ -76,7 +92,7 @@ pub fn Worker::process(
 Batch children to limit concurrency:
 
 ```moonbit
-pub fn Coordinator::fan_out_chunked(
+pub async fn Coordinator::fan_out_chunked(
   self : Self,
   items : Array[String],
 ) -> Array[String] {
@@ -90,13 +106,14 @@ pub fn Coordinator::fan_out_chunked(
     for i = offset; i < end; i = i + 1 {
       let pid = @api.create_promise()
       promise_ids.push(pid)
-      WorkerClient::scoped(i.to_uint64(), fn(child) raise @common.AgentError {
-        child.trigger_process(items[i], pid)
+      WorkerClient::scoped(i.to_uint64(), async fn(child) {
+        let uuid = pid.agent_id.component_id.uuid
+        child.trigger_process(items[i], uuid.high_bits, uuid.low_bits, pid.agent_id.agent_id, pid.oplog_idx)
       })
     }
     for pid in promise_ids {
       let bytes = @api.await_promise(pid)
-      results.push(String::from_array(bytes.to_array().map(fn(c) { Char::from_int(c.to_int()) })))
+      results.push(@utf8.decode_lossy(bytes[:]))
     }
     offset = end
   }
@@ -119,24 +136,20 @@ struct ForkAgent {
 fn ForkAgent::new() -> ForkAgent { { result: "" } }
 
 /// Fork the agent and collect result via a promise
-pub fn ForkAgent::parallel_compute(self : Self) -> String {
+pub async fn ForkAgent::parallel_compute(self : Self) -> String {
   let promise_id = @api.create_promise()
 
   match @api.fork() {
     Original(_details) => {
       // Wait for the forked agent to complete the promise
       let bytes = @api.await_promise(promise_id)
-      let forked_result = String::from_array(
-        bytes.to_array().map(fn(b) { Char::from_int(b.to_int()) }),
-      )
+      let forked_result = @utf8.decode_lossy(bytes[:])
       "Combined: original + \{forked_result}"
     }
     Forked(_details) => {
       // Do work in the forked copy
       let computed = "forked-result"
-      let payload = Bytes::from_array(
-        computed.to_array().map(fn(c) { c.to_int().to_byte() }),
-      )
+      let payload = @utf8.encode(computed[:])
       let _ = @api.complete_promise(promise_id, payload)
       "forked done" // Only seen by the forked agent
     }
@@ -149,7 +162,7 @@ pub fn ForkAgent::parallel_compute(self : Self) -> String {
 Fork multiple times for N-way parallelism:
 
 ```moonbit
-pub fn ForkAgent::multi_fork(self : Self, n : UInt64) -> Array[String] {
+pub async fn ForkAgent::multi_fork(self : Self, n : UInt64) -> Array[String] {
   let promise_ids : Array[@types.PromiseId] = []
   for _ = 0L; _ < n.to_int64(); _ = _ + 1L {
     promise_ids.push(@api.create_promise())
@@ -163,9 +176,7 @@ pub fn ForkAgent::multi_fork(self : Self, n : UInt64) -> Array[String] {
       Forked(_) => {
         // Each forked agent does its slice of work
         let output = "result-from-fork-\{i}"
-        let payload = Bytes::from_array(
-          output.to_array().map(fn(c) { c.to_int().to_byte() }),
-        )
+        let payload = @utf8.encode(output[:])
         let _ = @api.complete_promise(promise_ids[i], payload)
         return [] // Forked agent exits here
       }
@@ -176,9 +187,7 @@ pub fn ForkAgent::multi_fork(self : Self, n : UInt64) -> Array[String] {
   let results : Array[String] = []
   for pid in promise_ids {
     let bytes = @api.await_promise(pid)
-    results.push(String::from_array(
-      bytes.to_array().map(fn(b) { Char::from_int(b.to_int()) }),
-    ))
+    results.push(@utf8.decode_lossy(bytes[:]))
   }
   results
 }

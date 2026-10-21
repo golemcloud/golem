@@ -13,7 +13,7 @@ For the normal build workflow and `golem build` usage, load `golem-build`. This 
 
 `golem build` executes a multi-step pipeline. Understanding which step failed is the first step to diagnosing problems:
 
-1. **Check** — verifies build tools are installed and dependencies are correct
+1. **Check** — proposes dependency and configuration fixes first, then verifies build tools
 2. **Build** — runs language-specific compilation commands
 3. **Add Metadata** — embeds component name and version into the output WASM
 4. **Generate Bridge** — generates bridge SDK code for inter-component communication
@@ -25,14 +25,13 @@ golem build --step check --yes      # Run only the check step
 golem build --step build --yes      # Run only the build step
 ```
 
-## Step 1: Build Tool Requirement Checks
+## Build Tool Requirement Checks (After Dependency Fixes)
 
 The **check** step verifies that required system tools are installed and meet minimum version requirements. The checks are language-specific:
 
 ### Rust Projects
 | Tool | Check | Install Hint |
 |------|-------|--------------|
-| `rustup` | `rustup --version` (minimum version enforced) | https://www.rust-lang.org/tools/install |
 | `rustc` | `rustc --version` (minimum version enforced) | `rustup install stable && rustup default stable` |
 | `cargo` | `cargo version` (minimum version enforced) | Installed with Rust toolchain |
 | `wasm32-wasip2` target | `rustup target list --installed` | `rustup target add wasm32-wasip2` |
@@ -47,12 +46,13 @@ The **check** step verifies that required system tools are installed and meet mi
 | Tool | Check | Install Hint |
 |------|-------|--------------|
 | `moon` | `moon version` (minimum version enforced) | https://docs.moonbitlang.com |
+| `wasm-tools` | `wasm-tools --version` (minimum version enforced) | https://github.com/bytecodealliance/wasm-tools |
 
 If a tool is missing or below the minimum version, the check step fails with an error message and an install hint. To skip these checks (e.g., if you know tools are installed but detection fails), use `--skip-check`.
 
-## Step 2: Dependency Validation and Auto-Fix
+## Dependency Validation and Auto-Fix (Before Tool Checks)
 
-After tool checks, `golem build` validates project dependencies and can auto-fix them:
+Before tool checks, `golem build` validates project dependencies and can apply confirmed fixes. Accepted writes can remain even if a later tool check fails. Rust target detection can use `rustup`, but there is no separate minimum-version check for `rustup` itself.
 
 ### Rust Dependency Checks
 The CLI inspects every Rust component's `Cargo.toml` (and workspace `Cargo.toml` if present) for:
@@ -76,10 +76,10 @@ The CLI also validates `tsconfig.json` settings:
 The CLI inspects the root `package.json` for `@golemcloud/effect-golem`, `effect`, and the shared Rollup/TypeScript build tooling. Effect components require `compilerOptions.moduleResolution` to be `"bundler"`, but do not require the TypeScript SDK package.
 
 ### AGENTS.md and Skill Files
-The CLI checks that the project's `AGENTS.md` and `.agents/skills/` directory contain up-to-date content matching the current CLI version's templates. If they are stale, the CLI updates them automatically during the build.
+The CLI checks that the project's `AGENTS.md` and `.agents/skills/` directory contain up-to-date content matching the current CLI version's templates. Stale guidance updates are part of the confirmation-controlled dependency and configuration fix plan; `--yes` accepts them.
 
-### Viewing Planned Fixes Without Applying
-Run the check step alone to see what the CLI wants to fix without building:
+### Checking and Applying Fixes Without Compilation
+Run the check step alone to validate and apply fixes without compiling components. This is **not a dry run**: `--yes` accepts dependency and configuration writes, including template guidance updates. Omit `--yes` to review the proposed dependency fixes at the confirmation prompt and decline them; do not treat the check step as a read-only inspection command.
 
 ```shell
 golem build --step check --yes
@@ -133,7 +133,7 @@ golem component manifest-trace
 This command outputs a detailed trace for each component showing:
 
 - **Applied Layers** — the ordered list of configuration layers that contributed to the final values (e.g., component template, component definition, agent template, agent common, environment presets, custom presets)
-- **Property Values and Origins** — for each property (`config`, `env`, `wasiConfig`, `plugins`, `files`, `build`, `clean`, `componentWasm`, `outputWasm`), the final resolved value plus a trace of which layer introduced or modified it
+- **Property Values and Origins** — for each property (`config`, `env`, `plugins`, `files`, `build`, `clean`, `componentWasm`, `outputWasm`), the final resolved value plus a trace of which layer introduced or modified it
 - **Merge Operations** — whether values were merged (showing inserted/updated entries) or entirely replaced, and from which layer
 
 ### Example Usage
@@ -141,10 +141,9 @@ This command outputs a detailed trace for each component showing:
 ```shell
 # Trace all components
 golem component manifest-trace
-
-# Trace a specific component
-golem component manifest-trace my-app:main
 ```
+
+The handler currently ignores component-name arguments and traces all components. Find the component of interest in the output rather than relying on a name argument to filter it.
 
 ### What to Look For
 

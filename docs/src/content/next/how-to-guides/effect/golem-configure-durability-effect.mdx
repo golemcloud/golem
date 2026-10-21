@@ -77,9 +77,14 @@ Keep the saved value schema-serializable. `everyN` accepts a positive
 integer from 1 through 65,535. `periodic` accepts an Effect `Duration.Input` such as
 `Duration.seconds(30)`.
 
+These policies request snapshots at invocation boundaries or while the agent is idle, not in
+the middle of a running handler. `periodic` does not interrupt a long-running method every thirty
+seconds, and `everyN` does not count arbitrary effects inside that method.
+
 ## Ephemeral Agents
 
-An ephemeral agent has no persistent oplog. Use it only when the work does not require durable
+An ephemeral agent writes oplog history to archive storage but does not replay it for recovery.
+Use it only when the work does not require durable
 recovery, such as stateless transformations or request adapters:
 
 ```typescript
@@ -113,8 +118,10 @@ mode: "durable",
 ```
 
 The values are lowercase TypeScript string literals. Preserve the agent's name, constructor
-parameters, methods, implementation registration, and snapshot definition when the task only asks
-for a mode change. Run `golem build` after editing; do not edit generated files under `golem-temp/`.
+parameters, methods, and implementation registration when the task only asks for a mode change.
+When switching to ephemeral, remove the `snapshotting` definition and associated implementation
+`snapshot` strategy: ephemeral agents cannot declare snapshotting. Run `golem build` after editing;
+do not edit generated files under `golem-temp/`.
 
 ## Custom Durable Functions
 

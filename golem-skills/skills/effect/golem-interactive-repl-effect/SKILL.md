@@ -26,10 +26,10 @@ explicitly, use `--language ts` or `--language typescript`, not `--language effe
 
 The REPL puts the generated agent client classes in the global scope. A client's class name is the
 agent's exact `defineAgent` `name`. For example, the default Effect project defines an agent named
-`Counter`, so its client is `Counter`, not `CounterAgent`:
+`CounterAgent`, so its client is `CounterAgent`:
 
 ```typescript
-const c1 = await Counter.get("c1")
+const c1 = await CounterAgent.get("c1")
 await c1.increment()
 await c1.increment()
 const value = await c1.value()
@@ -67,7 +67,7 @@ Write a TypeScript file; the generated clients are globals here too:
 
 ```typescript
 // test.ts
-const c2 = await Counter.get("c2")
+const c2 = await CounterAgent.get("c2")
 await c2.increment()
 await c2.increment()
 ```
