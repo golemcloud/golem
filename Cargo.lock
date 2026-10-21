@@ -4835,6 +4835,7 @@ dependencies = [
  "proptest",
  "prost",
  "prost-types",
+ "rand 0.9.5",
  "redis",
  "regex",
  "reqwest 0.13.4",
@@ -8939,9 +8940,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.4.0"
+version = "3.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b23c62fe489ac1d401ab32688cfacac3737a8978dc3343e5361464c7724fd3cb"
+checksum = "ceb42e9e47443cd83a834dea57b5816d35481417bae72ade5dc5615c59122e26"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -8952,6 +8953,7 @@ dependencies = [
  "http-body 1.1.0",
  "http-body-util",
  "indexmap 2.14.0",
+ "libc",
  "pastey",
  "pin-project-lite",
  "rand 0.10.2",
@@ -8971,9 +8973,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.4.0"
+version = "3.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd740c45d66ceb87e5579082abc27bd771665e464e9660a17a048c721b2a6025"
+checksum = "2f55ef2d84752d676d735604548fcb65811504e23330d85670b0eff5f8735144"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",

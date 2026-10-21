@@ -1008,7 +1008,9 @@ impl EntityInvocationDurability {
                 (
                     ctx.state.replay_state.clone(),
                     ctx.state.oplog.clone(),
-                    ctx.state.completion_marker_recorder(),
+                    ctx.state
+                        .completion_marker_recorder()
+                        .for_store(ctx.runtime_suspension.clone()),
                 )
             });
             let active_reconstruction_bodies = replay_state.historical_reconstruction_bodies();

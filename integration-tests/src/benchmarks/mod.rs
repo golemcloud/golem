@@ -15,11 +15,13 @@
 use futures_concurrency::future::Join;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
-use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
+use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use opentelemetry::propagation::TextMapPropagator;
 use reqwest::header::{HeaderName, HeaderValue};
@@ -36,6 +38,7 @@ pub mod density;
 pub mod durability_overhead;
 pub mod idempotency_key;
 pub mod latency;
+pub mod mcp_latency;
 mod public_invocation;
 pub mod sleep;
 pub mod streaming;
@@ -62,6 +65,28 @@ fn inject_trace_context(request: &mut Request) {
         if let (Ok(name), Ok(val)) = (HeaderName::from_str(&key), HeaderValue::from_str(&value)) {
             request.headers_mut().insert(name, val);
         }
+    }
+}
+
+/// The domain of an environment's deployment: under the cloud's apps base domain in cloud mode,
+/// under `golem.cloud` otherwise.
+pub fn deployment_domain(deps: &BenchmarkTestDependencies, env_id: &EnvironmentId) -> Domain {
+    Domain(format!(
+        "{env_id}.{}",
+        deps.apps_base_domain().unwrap_or("golem.cloud")
+    ))
+}
+
+/// The base URL that reaches `domain`. Cloud mode reaches the domain itself through the apps
+/// gateway. The other modes reach the worker service's custom request port, so the requests
+/// must name the domain in their `Host` header.
+pub fn deployment_base_url(deps: &BenchmarkTestDependencies, domain: &Domain) -> String {
+    match deps.apps_base_domain() {
+        Some(_) => format!("https://{}", domain.0),
+        None => format!(
+            "http://localhost:{}",
+            deps.worker_service().custom_request_port()
+        ),
     }
 }
 

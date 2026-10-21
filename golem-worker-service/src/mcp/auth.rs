@@ -17,6 +17,7 @@ use crate::custom_api::oidc::model::{McpPendingAuth, McpProxyCodeEntry};
 use crate::custom_api::oidc::session_store::SessionStore;
 use crate::ingress::PublicOrigin;
 use crate::mcp::McpRequest;
+use crate::mcp::serving::{McpServing, StatelessServing};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -131,7 +132,8 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
         let Some(mcp_request) = req.extensions().get::<McpRequest>().cloned() else {
             return Ok(no_mcp_deployment_response());
         };
-        let compiled = mcp_request.deployment;
+        let deployment = mcp_request.deployment;
+        let compiled = &deployment.compiled;
         if compiled.security_scheme_name.is_some() && compiled.security_scheme.is_none() {
             return Ok(Response::builder()
                 .status(http::StatusCode::SERVICE_UNAVAILABLE)
@@ -153,7 +155,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
                 }
             };
 
-            let hash = McpBearerAuth::token_hash(&token, &compiled, scheme);
+            let hash = McpBearerAuth::token_hash(&token, compiled, scheme);
             let identity_provider = self.identity_provider.clone();
 
             let result = self
@@ -172,7 +174,9 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
             }
         }
 
-        req.extensions_mut().insert(compiled);
+        let serving: Arc<dyn McpServing> = Arc::new(StatelessServing(deployment.clone()));
+        req.extensions_mut().insert(deployment);
+        req.extensions_mut().insert(serving);
         self.inner.call(req).await.map(|resp| resp.into_response())
     }
 }
@@ -237,7 +241,7 @@ fn validate_redirect_url(scheme: &SecuritySchemeDetails) -> std::result::Result<
 }
 
 pub fn authorization_server_metadata(mcp_request: &McpRequest) -> Response {
-    match &mcp_request.deployment.security_scheme {
+    match &mcp_request.deployment.compiled.security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
             let base = resolve_resource_origin(&mcp_request.origin, scheme);
@@ -268,7 +272,7 @@ pub fn authorization_server_metadata(mcp_request: &McpRequest) -> Response {
 /// Returns JSON metadata pointing MCP clients to Golem's own authorization server
 /// so they can perform the OAuth dance to obtain a token.
 pub fn protected_resource_metadata(mcp_request: &McpRequest) -> Response {
-    match &mcp_request.deployment.security_scheme {
+    match &mcp_request.deployment.compiled.security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
             let resource_base = resolve_resource_origin(&mcp_request.origin, scheme);
@@ -306,7 +310,7 @@ pub async fn oauth_register(mut req: Request, mcp_request: &McpRequest) -> Respo
         Err(_) => serde_json::json!([]),
     };
 
-    match &mcp_request.deployment.security_scheme {
+    match &mcp_request.deployment.compiled.security_scheme {
         Some(scheme) => {
             let response = serde_json::json!({
                 "client_id": scheme.client_id.as_str(),
@@ -340,7 +344,7 @@ pub async fn oauth_authorize(
     identity_provider: &dyn IdentityProvider,
     session_store: &dyn SessionStore,
 ) -> Response {
-    let scheme = match &mcp_request.deployment.security_scheme {
+    let scheme = match &mcp_request.deployment.compiled.security_scheme {
         Some(s) => s,
         None => {
             return Response::builder()
@@ -498,7 +502,7 @@ pub async fn oauth_callback(
         }
     };
 
-    let scheme = match &mcp_request.deployment.security_scheme {
+    let scheme = match &mcp_request.deployment.compiled.security_scheme {
         Some(s) => s,
         None => {
             return Response::builder()
@@ -720,6 +724,7 @@ fn with_mcp_request(req: &Request, handler: impl FnOnce(&McpRequest) -> Response
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::McpDeployment;
     use golem_common::model::domain_registration::Domain;
     use test_r::test;
 
@@ -748,7 +753,7 @@ mod tests {
     fn mcp_request(deployment: CompiledMcp, origin: PublicOrigin) -> McpRequest {
         McpRequest {
             origin,
-            deployment: Arc::new(deployment),
+            deployment: Arc::new(McpDeployment::new(deployment)),
         }
     }
 
@@ -823,8 +828,8 @@ mod tests {
         let middleware =
             McpBearerAuth::new(Arc::new(crate::custom_api::oidc::DefaultIdentityProvider));
         let endpoint = middleware.transform(poem::endpoint::make_sync(move |req: Request| {
-            let compiled = req.extensions().get::<Arc<CompiledMcp>>().unwrap();
-            assert_eq!(compiled.environment_id, expected_environment);
+            let deployment = req.extensions().get::<Arc<McpDeployment>>().unwrap();
+            assert_eq!(deployment.compiled.environment_id, expected_environment);
             Response::builder()
                 .status(http::StatusCode::NO_CONTENT)
                 .finish()
@@ -884,24 +889,11 @@ mod tests {
 
     #[test]
     async fn oauth_routes_reject_requests_without_a_resolved_deployment() {
-        let db = tempfile::NamedTempFile::new().unwrap();
+        let (session_store, _db) =
+            crate::custom_api::oidc::session_store::sqlite_test_session_store().await;
         let routes = oauth_proxy_routes(
             Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
-            Arc::new(
-                crate::custom_api::oidc::session_store::SqliteSessionStore::configured(
-                    &crate::config::SqliteSessionStoreConfig {
-                        pending_login_expiration: std::time::Duration::from_secs(60),
-                        cleanup_interval: std::time::Duration::from_secs(60),
-                        sqlite_config: golem_common::config::DbSqliteConfig {
-                            database: db.path().to_string_lossy().into_owned(),
-                            max_connections: 1,
-                            foreign_keys: false,
-                        },
-                    },
-                )
-                .await
-                .unwrap(),
-            ),
+            Arc::new(session_store),
         );
         for path in [
             "/.well-known/oauth-protected-resource",

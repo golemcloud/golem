@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::mcp_http_transport_config;
+use super::{mcp_http_transport_config, mcp_transport};
+use crate::mcp::McpDeployment;
+use crate::mcp::serving::{McpServing, StatelessServing};
+use crate::mcp::session::McpReplica;
+use crate::mcp::session::store::SqliteMcpSessionStore;
+use golem_service_base::mcp::CompiledMcp;
 use poem::endpoint::TowerCompatExt;
 use poem::{
     Body, Endpoint, Request,
     http::{Method, StatusCode},
 };
 use rmcp::transport::StreamableHttpService;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use serde_json::json;
+use std::sync::Arc;
 use test_r::test;
 
 #[derive(Clone)]
@@ -32,7 +38,7 @@ impl rmcp::ServerHandler for Server {}
 async fn mcp_export_transport_accepts_deployment_domain_hosts() {
     let endpoint = StreamableHttpService::new(
         || Ok(Server),
-        LocalSessionManager::default().into(),
+        NeverSessionManager::default().into(),
         mcp_http_transport_config(&Default::default()),
     )
     .compat();
@@ -59,21 +65,58 @@ async fn mcp_export_transport_accepts_deployment_domain_hosts() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// Opens a session's GET stream through an idle proxy, with or without keep-alive comments, and
+/// returns whether the stream was closed within `SILENCE` and what it carried.
 async fn idle_mcp_stream(keep_alive: bool) -> (bool, Vec<u8>) {
     use crate::config::McpConfig;
     use crate::transport_test_support::{INTERVAL, SILENCE, idle_proxy, server};
     use poem::EndpointExt;
 
-    let mut config = mcp_http_transport_config(&McpConfig {
-        sse_keep_alive_interval: INTERVAL,
-    });
-    if !keep_alive {
-        config = config.with_sse_keep_alive(None);
-    }
-    let endpoint =
-        StreamableHttpService::new(|| Ok(Server), LocalSessionManager::default().into(), config)
-            .compat()
-            .map_to_response();
+    let config = McpConfig {
+        sse_keep_alive_interval: if keep_alive {
+            INTERVAL
+        } else {
+            std::time::Duration::from_secs(3600)
+        },
+        ..McpConfig::default()
+    };
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let pool = crate::custom_api::oidc::session_store::migrated_sqlite_pool(
+        &golem_common::config::DbSqliteConfig {
+            database: db.path().to_string_lossy().into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        },
+    )
+    .await
+    .unwrap();
+    let store = Arc::new(SqliteMcpSessionStore::new(
+        pool,
+        std::time::Duration::from_secs(3600),
+    ));
+    let replica = McpReplica::new(store, &config);
+    let deployment = Arc::new(McpDeployment::new(CompiledMcp {
+        account_id: golem_common::model::account::AccountId::new(),
+        account_email: golem_common::model::account::AccountEmail::new("owner@example.com"),
+        application_name: golem_common::model::application::ApplicationName("app".into()),
+        environment_id: golem_common::model::environment::EnvironmentId::new(),
+        environment_name: golem_common::model::environment::EnvironmentName("env".into()),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
+        domain: golem_common::model::domain_registration::Domain("127.0.0.1".into()),
+        security_scheme_name: None,
+        security_scheme: None,
+        registered_agent_types: vec![],
+        tools: vec![],
+    }));
+    let events = replica.event_store();
+    let endpoint = mcp_transport(|| Server, replica, events, &config)
+        .before(move |mut request: Request| {
+            let serving: Arc<dyn McpServing> = Arc::new(StatelessServing(deployment.clone()));
+            request.extensions_mut().insert(deployment.clone());
+            request.extensions_mut().insert(serving);
+            async move { Ok(request) }
+        })
+        .map_to_response();
     let (address, _server) = server(endpoint).await;
     let (proxy, _proxy) = idle_proxy(address).await;
     let url = format!("http://{proxy}/mcp");

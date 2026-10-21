@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -37,7 +38,6 @@ use golem_common::model::oplog::{
     HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
     PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
-use golem_common::model::worker::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
 use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};

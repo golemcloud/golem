@@ -27,9 +27,9 @@ use crate::worker::agent_config::{effective_agent_config, validate_agent_config}
 use crate::worker::owner_wallet::WalletCards;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::component::{ComponentId, ComponentRevision, InitialAgentFile};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component;
 use std::collections::HashMap;

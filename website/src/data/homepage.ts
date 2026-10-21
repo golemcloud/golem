@@ -66,8 +66,8 @@ export const customerLogos = {
 export const coreVm = {
   eyebrow: "The core of Golem",
   heading: "A lightweight, durable VM with permissions agents can't bypass",
-  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which checks it against your permissions and records it, so the VM can resume anywhere.",
-  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks and records every call: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of every call stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2 from the oplog. It resumes where it left off, with its memory, call stack and files restored, and the Orders API is not called again: the recorded result is used.",
+  lead: "Golem runs every agent, every tool call and every artifact in its own WebAssembly VM. Every call out of a VM goes through Golem, which enforces your permissions and records external interactions so the VM can resume anywhere.",
+  alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks every call against your permissions: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of external interactions stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2. It resumes where it left off, with its memory, call stack, files and environment restored, and the Orders API is not called again: the recorded result is used.",
   vm: { name: "Agent", where: "node 1", sub: "in its own WebAssembly VM" },
   golem: { name: "Golem", sub: "the VM's only way out" },
   calls: [
@@ -77,7 +77,7 @@ export const coreVm = {
   recorded: "recorded",
   oplog: {
     title: "Oplog",
-    sub: "a log of every call, stored off the node",
+    sub: "external interactions, stored off the node",
     entries: [{ name: "Orders API", value: "result" }],
   },
   rebuilt: "restored after a restart, a crash or an idle wait",
@@ -92,15 +92,15 @@ export const coreVm = {
   explanations: [
     {
       title: "Lightweight",
-      body: "WebAssembly, not Linux: each VM has private memory, files and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
+      body: "WebAssembly, not Linux: each VM has its own memory, file system and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
     },
     {
       title: "Durable",
-      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, without repeating completed calls.",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, with its files, without repeating completed calls.",
     },
     {
       title: "Secure",
-      body: "A VM can't reach files, the network, secrets or other VMs directly. Every call out goes through Golem's permission checks, which no code, including AI-generated code, can bypass.",
+      body: "A VM reaches its own files, the network, secrets and other VMs only through Golem's permission checks, which no code, including AI-generated code, can bypass.",
     },
   ],
 };
@@ -149,12 +149,24 @@ export type ChapterFigure = Record<CodeLanguage, ChapterCode>;
 export const agentsChapter = {
   eyebrow: "Agents",
   heading: "Agents are your own arbitrary code, not prompts",
-  lead: "Each agent's VM keeps its whole execution durable.",
+  lead: "Each agent's VM keeps its whole execution durable, files included.",
   figure: {
     ts: {
       filename: "support-agent.ts",
-      highlight: [11, 12],
-      code: `export const SupportImpl = Support.implement({
+      highlight: [23, 24],
+      code: `export const Support = defineAgent({
+  name: 'SupportAgent',
+  id: { customer: z.string() },
+  http: http.mount('/support/{customer}'),
+  methods: {
+    handle: method({
+      input: { message: z.string(), orderId: z.string() },
+      returns: z.string(),
+    }),
+  },
+})
+
+export const SupportImpl = Support.implement({
   init: () => ({ history: [] as Message[] }),
   methods: {
     async handle({ message, orderId }) {
@@ -176,8 +188,20 @@ export const agentsChapter = {
     },
     effect: {
       filename: "support-agent.ts",
-      highlight: [11, 12, 13],
-      code: `export const SupportImpl = Support.implement({
+      highlight: [23, 24, 25],
+      code: `export const Support = defineAgent({
+  name: "SupportAgent",
+  id: { customer: Schema.String },
+  http: Http.mount("/support/{customer}"),
+  methods: {
+    handle: method({
+      input: { message: Schema.String, orderId: Schema.String },
+      success: Schema.String,
+    }),
+  },
+})
+
+export const SupportImpl = Support.implement({
   init: () => Effect.succeed({ history: [] as Message[] }),
   methods: (state) => ({
     handle: ({ message, orderId }) => Effect.gen(function* () {
@@ -200,18 +224,26 @@ export const agentsChapter = {
     },
     rust: {
       filename: "support_agent.rs",
-      highlight: [18, 19],
-      code: `#[agent_implementation]
+      highlight: [26, 27],
+      code: `#[agent_definition(mount = "/support")]
+pub trait Support {
+  fn new() -> Self;
+  async fn handle(&mut self, message: String, order_id: String)
+    -> String;
+}
+
+struct SupportImpl {
+  history: Vec<Message>,
+}
+
+#[agent_implementation]
 impl Support for SupportImpl {
   fn new() -> Self {
     Self { history: vec![] }
   }
 
-  async fn handle(
-    &mut self,
-    message: String,
-    order_id: String,
-  ) -> String {
+  async fn handle(&mut self, message: String, order_id: String)
+    -> String {
     self.history.push(Message::user(message));
     // Golem lets lookup_order reach only the orders API:
     let reply = llm::run(&self.history, &[lookup_order]).await;
@@ -231,8 +263,13 @@ impl Support for SupportImpl {
     },
     scala: {
       filename: "SupportAgent.scala",
-      highlight: [16, 17],
-      code: `@agentImplementation()
+      highlight: [21, 22],
+      code: `@agentDefinition(mount = "/support/{id}")
+trait SupportAgent extends BaseAgent:
+  class Id(val id: String)
+  def handle(message: String, orderId: String): Future[String]
+
+@agentImplementation()
 final class SupportAgentImpl(id: String) extends SupportAgent:
   private val history = ArrayBuffer.empty[Message]
 
@@ -257,8 +294,14 @@ final class SupportAgentImpl(id: String) extends SupportAgent:
     },
     moonbit: {
       filename: "support_agent.mbt",
-      highlight: [16, 17, 18],
-      code: `fn SupportAgent::new() -> SupportAgent {
+      highlight: [22, 23, 24],
+      code: `#derive.agent
+#derive.mount("/support")
+struct SupportAgent {
+  history : Array[Message]
+}
+
+fn SupportAgent::new() -> SupportAgent {
   { history: [] }
 }
 
@@ -284,8 +327,22 @@ pub async fn SupportAgent::handle(
     },
     go: {
       filename: "support_agent.go",
-      highlight: [17, 18],
-      code: `type state struct{ history []Message }
+      highlight: [31, 32],
+      code: `type SupportID struct{ Customer string }
+
+type HandleIn struct {
+    Message string
+    OrderID string
+}
+
+var Support = golem.DefineAgent[SupportID](golem.Spec{
+    Name: "SupportAgent",
+    HTTP: &golem.Mount{Path: "/support/{customer}"},
+})
+
+var Handle = Support.Method[HandleIn, string]("handle")
+
+type state struct{ history []Message }
 
 var impl = Support.Implement(func(SupportID) *state {
     return &state{}
@@ -517,7 +574,7 @@ var _ = Body.Handle(func(_ *tool.Context, a Args) (Result, error) {
   items: [
     {
       title: "Bundled and custom tools",
-      body: "Shell, Git, Node.js, npm and TypeScript come bundled. Build your own tools with any Golem SDK; no separate sandbox service needed.",
+      body: "Shell, Git, Node.js, npm and TypeScript come bundled, and can work on the agent's own files. Build your own tools with any Golem SDK; no separate sandbox service needed.",
     },
     {
       title: "External requests",
@@ -692,7 +749,7 @@ var _ = impl.Handle(Publish, func(
   items: [
     {
       title: "Routes and files",
-      body: "Agents deploy front-ends and back ends under the permissions you grant. HTTP routes are declared in agent code; static files are served directly from storage.",
+      body: "Agents deploy front-ends and back ends under the permissions you grant. Routes are declared in agent code; files are served from storage or live from an agent's files.",
     },
     {
       title: "Durable streaming",
@@ -704,7 +761,7 @@ var _ = impl.Handle(Publish, func(
     },
     {
       title: "Read-only methods",
-      body: "Methods marked read-only can't change state; the runtime enforces it. Responses are cached until the agent next writes, served without waking it.",
+      body: "Golem blocks writes to anything outside the agent in methods marked read-only. Responses are cached until the agent next writes, served without waking it.",
     },
   ] as ChapterItem[],
 };
@@ -830,7 +887,7 @@ export const faq = {
     {
       q: "Do I still need my database?",
       aHtml:
-        "Probably not. Each agent's whole execution is durable, and each agent has its own file system and can have its own database. Golem Social, a whole social network, runs on Golem with no external database. The same holds for your agents and tools, and for the artifacts your agents deploy. Keep existing databases where other systems share the data.",
+        "Probably not. Each agent's whole execution is durable, and each agent has its own durable file system and can have its own database. Golem Social, a whole social network, runs on Golem with no external database. The same holds for your agents and tools, and for the artifacts your agents deploy. Keep existing databases where other systems share the data.",
     },
     {
       q: "Can I keep my agent framework?",
@@ -845,7 +902,7 @@ export const faq = {
     {
       q: "How does it compare with a workflow engine?",
       aHtml:
-        "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM and runtime-checked permissions.",
+        "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM, with a durable file system, and runtime-checked permissions.",
     },
     {
       q: "Is Golem open source?",

@@ -21,6 +21,7 @@ use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
+use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::schema::FALLBACK_OUTPUT_FIELD_NAME;
 use golem_common::schema::agent::OutputSchema;
@@ -39,10 +40,12 @@ use rmcp::model::{
 use serde_json::json;
 use std::sync::Arc;
 
+/// Invokes the tool's agent method. Without an idempotency key the invocation gets a fresh one.
 pub async fn invoke_tool(
     args_map: JsonObject,
     mcp_tool: &AgentMcpTool,
     worker_service: &Arc<WorkerService>,
+    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<CallToolResult, ErrorData> {
     // The advertised tool schema disambiguates constructor/method parameter
     // names that collide (see `combined_input_schema`). Recompute the same
@@ -111,7 +114,7 @@ pub async fn invoke_tool(
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
-            None,
+            idempotency_key,
             None,
             false,
             golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
@@ -713,7 +716,7 @@ mod tests {
             agent_mode: AgentMode::Ephemeral,
         };
 
-        let result = invoke_tool(JsonObject::default(), &tool, &harness.worker_service).await;
+        let result = invoke_tool(JsonObject::default(), &tool, &harness.worker_service, None).await;
 
         assert!(result.is_ok());
         let agent_id = harness.recorded_agent_id();
@@ -783,7 +786,7 @@ mod tests {
             .unwrap()
             .clone();
 
-        let result = invoke_tool(args, &tool, &harness.worker_service).await;
+        let result = invoke_tool(args, &tool, &harness.worker_service, None).await;
         assert!(result.is_ok(), "invoke failed: {result:?}");
 
         // The method received the u32 value, not the constructor's string.
@@ -803,5 +806,64 @@ mod tests {
             "constructor value missing from agent id: {}",
             agent_id.agent_id
         );
+    }
+
+    /// A harness with one method `run`, and that method as an MCP tool.
+    fn run_harness(mode: AgentMode) -> (InvocationHarness, AgentMcpTool) {
+        let harness = InvocationHarness::with_run_method(mode);
+        let tool = AgentMcpTool {
+            tool: Tool::new("mcp-agent-run", "", JsonObject::default()),
+            environment_id: harness.environment_id,
+            account_id: harness.account_id,
+            schema_graph: Arc::new(SchemaGraph::empty()),
+            account_email: harness.account_email.clone(),
+            constructor: harness.agent_type.constructor.clone(),
+            method: harness.agent_type.methods[0].clone(),
+            component_id: harness.component_id,
+            agent_type_name: AgentTypeName("mcp-agent".to_string()),
+            agent_mode: mode,
+        };
+        (harness, tool)
+    }
+
+    #[test]
+    async fn invoke_tool_uses_a_supplied_idempotency_key() {
+        let key = IdempotencyKey::new("supplied-key".to_string());
+
+        let (durable, tool) = run_harness(AgentMode::Durable);
+        invoke_tool(
+            JsonObject::default(),
+            &tool,
+            &durable.worker_service,
+            Some(key.clone()),
+        )
+        .await
+        .unwrap();
+        {
+            let recorded = &durable.contexts.lock().unwrap()[0];
+            assert_eq!(recorded.idempotency_key, key);
+            assert_eq!(
+                recorded.freshness,
+                golem_common::model::agent::InvocationFreshnessDisposition::MayExist
+            );
+        }
+
+        let (ephemeral, tool) = run_harness(AgentMode::Ephemeral);
+        invoke_tool(
+            JsonObject::default(),
+            &tool,
+            &ephemeral.worker_service,
+            Some(key.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            phantom_id(&ephemeral.recorded_agent_id()),
+            Some(golem_common::model::agent::ephemeral_invocation_phantom_id(
+                &key
+            )),
+            "the ephemeral agent is the one the key derives"
+        );
+        assert_eq!(ephemeral.contexts.lock().unwrap()[0].idempotency_key, key);
     }
 }

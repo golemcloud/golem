@@ -8,7 +8,7 @@ Rules for code under `durable_host/`. Mechanisms, timelines and crash matrices a
 Vocabulary: a durable call is a `Start` entry plus its *terminal* (`End` or `Cancelled`), both
 identified by the `Start` index. A *claim* is the replay step that matches the host call the
 guest is making now against the next recorded `Start` (`ReplayState::claim_start`,
-`replay_state/cursor.rs`; the identity is a `StartClaim` from `replay_state/claims.rs`: function
+`replay_state/cursor/`; the identity is a `StartClaim` from `replay_state/claims.rs`: function
 name, owner, optional request payload). *Observe* is the guest reading the result.
 
 - **Execute** a live effect only when the durable context reports live
@@ -18,8 +18,8 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   the shared flag; an entity Store is live only after its own `PendingReplayToLive::finish_at` set
   `local_live_tail` (a `ReplayingCompleted` entity Store is never live).
 - **Append** `Start` eagerly when a durable call begins and `End`/`Cancelled` when it terminates,
-  through `begin_durable_function` / `end_durable_function` (`durability.rs`) and a
-  `DurableCallSession` (`concurrent/call.rs`). A trap leaves `Start` incomplete
+  through `begin_durable_function` / `end_durable_function` (`durability/`) and a
+  `DurableCallSession` (`concurrent/call/`). A trap leaves `Start` incomplete
   (`abandon_for_trap`); never write `Cancelled` for a trap.
 - **Claim** during replay by identity (`StartClaim`, optional request-payload match). Scan-ahead
   claiming exists only to route concurrent completions to the right awaiter; a `Start` that does
@@ -30,7 +30,10 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   `CompletionDiscarded` as the tail operation of the host function
   (`supersede_prior_completion_delivery` hard-errors otherwise). This applies to accessor
   (concurrent) calls whose results reach the guest: replay releases each completion at its recorded boundary
-  (`CompletionDelivery::AtMarker`); a guest-facing accessor `End` without a marker is a
+  (`CompletionDelivery::AtMarker`). Live and replay release recorded async events only at a
+  blocked wait, at most one event per block, through the consuming Store's
+  `RuntimeStore::await_guest_blocked`. Non-blocking polls and yields do not admit events; a
+  busy guest must ask through recorded synchronous host calls. A guest-facing accessor `End` without a marker is a
   crash-after-completion and is withheld until the natural replay tail (`AtReplayTail`), never
   re-executed and never delivered early. `CompletionDiscarded` means the *guest* dropped the
   completion unread; an armed token or terminal guard torn by Store unload or executor shutdown
@@ -146,7 +149,11 @@ not add a feature-specific recovery path or immediate restart.
   guest; do not assume an open stream implies an incomplete RPC `Start`.
 - Native guest reads append one consumer journal record at Wasmtime's per-read consumption
   observer, not at host take time. Its oplog position is the guest boundary; there is no extra
-  durable call or delivery marker. Packed bytes record only the consumed portion. A crash before
+  durable call or delivery marker. After cursor/source readiness, guest observations wait for
+  a fresh blocked wait and share the Store's one-event-per-block gate with accessor completions,
+  live and replay alike. Replay first claims every earlier retained Start of the consuming
+  invocation, including host-internal descendants; import issuance alone does not release a read.
+  Host-side takes do not use this gate. Packed bytes record only the consumed portion. A crash before
   consumption leaves no record and recovery re-reads the source by offset. Host projections keep
   take-time journaling. A zero-progress native read cancellation retains the producer's receive
   and prepared observation for the next read; only dropping the readable end cancels the durable

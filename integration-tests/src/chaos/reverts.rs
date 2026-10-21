@@ -47,7 +47,7 @@ use crate::chaos::history::{Outcome, Stream};
 use crate::chaos::workload::{self, WorkloadContext};
 use crate::chaos::{RetryPolicy, RevertConfig};
 use chrono::{DateTime, Utc};
-use golem_common::model::worker::{RevertLastInvocations, RevertWorkerTarget};
+use golem_common::model::agent::{RevertLastInvocations, RevertWorkerTarget};
 use golem_test_framework::dsl::TestDsl;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};

@@ -44,11 +44,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::{
     AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal,
     InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
     ephemeral_invocation_phantom_id,
 };
+use golem_common::model::agent::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
@@ -72,9 +75,6 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
-use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
@@ -3643,6 +3643,10 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
+        AgentConfigEntryDto, AgentMetadataDto, AgentUpdateMode, ResolvedRevert,
+        RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+    };
+    use golem_common::model::agent::{
         AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
         InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal, RegisteredAgentType,
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
@@ -3670,10 +3674,6 @@ mod tests {
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
-    use golem_common::model::worker::{
-        AgentConfigEntryDto, AgentMetadataDto, AgentUpdateMode, ResolvedRevert,
-        RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
-    };
     use golem_common::model::{
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, ScanCursor, Timestamp,
     };
@@ -4541,7 +4541,7 @@ mod tests {
         async fn update(
             &self,
             _: &AgentId,
-            _: golem_common::model::worker::AgentUpdateMode,
+            _: golem_common::model::agent::AgentUpdateMode,
             _: ComponentRevision,
             _: bool,
             _: EnvironmentId,

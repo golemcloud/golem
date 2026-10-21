@@ -1193,6 +1193,7 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
         replay_state: replay_state.clone(),
         start_index: idx(2),
         marker_index: idx(5),
+        runtime: None,
     });
     let tracker = TailWorkTracker::new();
     let activity = tracker.activity();

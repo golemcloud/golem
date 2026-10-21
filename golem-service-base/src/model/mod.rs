@@ -26,13 +26,13 @@ use derive_more::Display;
 use desert_rust::BinaryCodec;
 use futures::Stream;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode};
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::component::{
     AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
 use golem_common::model::filesystem::{FileReadError, FileReadHead};
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode};
 use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};

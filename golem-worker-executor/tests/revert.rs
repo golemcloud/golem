@@ -18,9 +18,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ResolveRevertLastInvocationsRequest, RevertWorkerRequest,
     resolve_revert_last_invocations_response, revert_worker_response,
 };
+use golem_common::model::agent::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
-use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};

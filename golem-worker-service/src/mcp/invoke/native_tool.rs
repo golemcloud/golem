@@ -93,6 +93,8 @@ fn invocation_auth(
     )
 }
 
+/// Runs the native tool in a new external-tool instance. Without an idempotency key the
+/// invocation gets a fresh one.
 pub async fn invoke(
     worker_service: &Arc<WorkerService>,
     deployment: &CompiledMcp,
@@ -100,9 +102,10 @@ pub async fn invoke(
     input: TypedSchemaValue,
     stdin: Option<Vec<u8>>,
     cancellation: CancellationToken,
+    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<CallToolResult, ErrorData> {
     let (_, body) = export.command().map_err(invalid)?;
-    let key = IdempotencyKey::fresh();
+    let key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
     let auth = invocation_auth(deployment, export, &key);
     let input = PublicTypedValue {
         graph: input.graph().clone(),
@@ -1183,5 +1186,33 @@ mod tests {
             record_result.structured_content,
             Some(json!({"answer":"direct"}))
         );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn native_invoke_uses_a_supplied_idempotency_key() {
+        use crate::mcp::invoke::test_support::InvocationHarness;
+        use golem_common::model::agent::AgentMode;
+        use golem_common::model::deployment::DeploymentRevision;
+        let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+        let deployment =
+            harness.compiled_mcp("tools.example.com", DeploymentRevision::INITIAL, true);
+        let export = &deployment.tools[0];
+        let (input, stdin) = export.parse_arguments(Default::default()).unwrap();
+        let key = IdempotencyKey::new("supplied-key".to_string());
+
+        let refused = invoke(
+            &harness.worker_service,
+            &deployment,
+            export,
+            input,
+            stdin,
+            CancellationToken::new(),
+            Some(key.clone()),
+        )
+        .await;
+
+        assert!(refused.is_err(), "the harness refuses the session");
+        assert_eq!(harness.native_session_keys(), [Arc::from(key.value)]);
     }
 }

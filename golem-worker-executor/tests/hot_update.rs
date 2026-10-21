@@ -21,13 +21,13 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::oplog::PublicUpdateDescription;
+use golem_common::model::agent::{
+    AgentUpdateMode, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
+};
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     OplogErrorKind, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
-};
-use golem_common::model::worker::{
-    AgentUpdateMode, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
 };
 use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCursor};
 use golem_common::{agent_id, data_value, phantom_agent_id};
@@ -373,7 +373,7 @@ async fn wait_for_update_counts(
     executor: &TestWorkerExecutor,
     worker_id: &AgentId,
     expected: (usize, usize, usize),
-) -> anyhow::Result<golem_common::model::worker::AgentMetadataDto> {
+) -> anyhow::Result<golem_common::model::agent::AgentMetadataDto> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let metadata = executor.get_worker_metadata(worker_id).await?;

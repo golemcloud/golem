@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
+};
+use im::OrdMap;
+use uuid::Uuid;
+
 pub use crate::base_model::card::*;
 
 const SCOPE_CARD_ENCODING_VERSION: u32 = 1;
@@ -89,8 +98,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EncodedScopeCard> for ScopeCa
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use test_r::test;
+
+    use super::*;
 
     fn scope_card() -> ScopeCard {
         let grant = parse_permission(
@@ -132,5 +142,78 @@ mod tests {
         encoded.encoding_version += 1;
 
         assert!(ScopeCard::try_from(encoded).is_err());
+    }
+}
+/// The durable target-side identity associated with a permission-card transfer ID.
+///
+/// This is stored behind an `Arc` in [`ReceivedCardTransferIndex`]. Boxing the common `Received`
+/// payload separately would add an allocation and pointer indirection to every indexed transfer.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum ReceivedCardTransferState {
+    Received {
+        source_card_id: CardId,
+        card: StoredCard,
+    },
+    Conflict,
+}
+
+/// An oplog-derived, sticky index of target-side permission-card receipts.
+///
+/// Receipts remain indexed even when their oplog entries are in skipped or deleted regions, so a
+/// retry cannot redeliver a transfer that the target has already observed. The persistent map
+/// keeps status clones and delta comparisons proportional to the changed paths rather than the
+/// total number of transfers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReceivedCardTransferIndex(OrdMap<Uuid, Arc<ReceivedCardTransferState>>);
+
+impl ReceivedCardTransferIndex {
+    pub fn get(&self, transfer_id: &Uuid) -> Option<&ReceivedCardTransferState> {
+        self.0.get(transfer_id).map(Arc::as_ref)
+    }
+
+    pub fn insert(&mut self, transfer_id: Uuid, state: ReceivedCardTransferState) {
+        self.0.insert(transfer_id, Arc::new(state));
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Uuid, &ReceivedCardTransferState)> {
+        self.0
+            .iter()
+            .map(|(transfer_id, state)| (transfer_id, state.as_ref()))
+    }
+
+    pub fn changes_from<'a>(
+        &'a self,
+        previous: &'a Self,
+    ) -> impl Iterator<Item = (Uuid, Option<&'a ReceivedCardTransferState>)> + 'a {
+        use im::ordmap::DiffItem;
+
+        previous.0.diff(&self.0).map(|change| match change {
+            DiffItem::Add(transfer_id, state) => (*transfer_id, Some(state.as_ref())),
+            DiffItem::Update {
+                new: (transfer_id, state),
+                ..
+            } => (*transfer_id, Some(state.as_ref())),
+            DiffItem::Remove(transfer_id, _) => (*transfer_id, None),
+        })
+    }
+}
+
+impl BinarySerializer for ReceivedCardTransferIndex {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::serialize_iterator(&mut self.0.iter(), context)
+    }
+}
+
+impl BinaryDeserializer for ReceivedCardTransferIndex {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let entries =
+            desert_rust::deserialize_iterator::<(Uuid, Arc<ReceivedCardTransferState>)>(context)
+                .0
+                .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
+        Ok(Self(entries))
     }
 }

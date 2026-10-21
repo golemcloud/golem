@@ -99,7 +99,7 @@ owns the one replay/tool-generation reset. Acceptance and typed notification are
 | After `AgentInvocationFinished` commits, before waiters are notified | `Finished` | `lookup_invocation_result(key)` returns the recorded result; the guest does not run | `CommitLevel::Always` before notification |
 | Spawned store task still active at finish | must not happen | `tail_work.rs` blocks `Finished` until no task is active (bounded by tail-drain timeout) | `AgentInvocationFinished` is the last *positional* entry of the invocation; hints (stream session completion) may follow |
 
-## Durable RPC (`durable_host/wasm_rpc/mod.rs`)
+## Durable RPC (`durable_host/rpc/mod.rs`)
 
 | Crash window (caller) | Caller oplog | Reconstruction behaviour | Durable fact |
 |---|---|---|---|

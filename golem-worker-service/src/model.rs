@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::ScanCursor;
-use golem_common::model::worker::AgentMetadataDto;
+use golem_common::model::agent::AgentMetadataDto;
 use poem_openapi::Object;
 use std::fmt::Debug;
 

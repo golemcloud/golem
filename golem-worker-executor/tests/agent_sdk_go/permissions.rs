@@ -26,6 +26,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     DeliverCardTransferRequest, deliver_card_transfer_response,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
     AgentInvocationMode, AgentTypeName, InvocationFreshnessDisposition, Principal,
 };
@@ -40,7 +41,6 @@ use golem_common::model::durable_stream::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PromiseId,

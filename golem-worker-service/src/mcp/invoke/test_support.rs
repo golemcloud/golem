@@ -26,6 +26,9 @@ use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
+};
 use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::StoredCard;
@@ -37,9 +40,6 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::FileByteSelection;
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
-use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
-};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -342,6 +342,29 @@ pub(crate) struct RecordedInvocationContext {
     pub auth: AuthCtx,
     pub principal: golem_api_grpc::proto::golem::component::Principal,
     pub context: Option<InvocationContext>,
+    pub idempotency_key: IdempotencyKey,
+    pub freshness: golem_common::model::agent::InvocationFreshnessDisposition,
+}
+
+/// How the recording worker client answers an invocation session, which a native tool call
+/// opens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum NativeSessions {
+    /// The session is refused.
+    Refuse,
+    /// The session is accepted and never answers; its request stream is kept for the test.
+    Hold,
+}
+
+/// The invocation sessions that the recording worker client received.
+pub(crate) struct NativeSessionLog {
+    pub(crate) mode: NativeSessions,
+    /// The idempotency key of each session's start.
+    pub(crate) keys: Vec<Arc<str>>,
+    /// The rest of each held session's request stream, after its start.
+    pub(crate) tails: VecDeque<crate::service::worker::InvocationRequestStream>,
+    /// The number of sessions received so far.
+    pub(crate) opened: tokio::sync::watch::Sender<usize>,
 }
 
 struct RecordingWorkerClient {
@@ -365,6 +388,7 @@ struct RecordingWorkerClient {
     contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     invocation_output: AgentInvocationOutput,
     file_reads: Arc<FileReadMock>,
+    native_sessions: Arc<Mutex<NativeSessionLog>>,
 }
 
 #[async_trait]
@@ -483,7 +507,7 @@ impl WorkerClient for RecordingWorkerClient {
     async fn update(
         &self,
         _: &AgentId,
-        _: golem_common::model::worker::AgentUpdateMode,
+        _: golem_common::model::agent::AgentUpdateMode,
         _: ComponentRevision,
         _: bool,
         _: EnvironmentId,
@@ -649,10 +673,10 @@ impl WorkerClient for RecordingWorkerClient {
         method_params: Option<golem_schema::proto::golem::schema::SchemaValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
-        _: IdempotencyKey,
+        idempotency_key: IdempotencyKey,
         context: Option<InvocationContext>,
-        _: golem_common::model::agent::InvocationFreshnessDisposition,
-        _: Vec<golem_common::model::worker::AgentConfigEntryDto>,
+        freshness: golem_common::model::agent::InvocationFreshnessDisposition,
+        _: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         _: EnvironmentId,
         _: AccountId,
         auth: AuthCtx,
@@ -668,8 +692,40 @@ impl WorkerClient for RecordingWorkerClient {
                 auth,
                 principal,
                 context,
+                idempotency_key,
+                freshness,
             });
         Ok(self.invocation_output.clone())
+    }
+
+    async fn invoke_agent_session(
+        &self,
+        _: &AgentId,
+        request: crate::service::worker::InvocationRequestStream,
+    ) -> WorkerResult<crate::service::worker::InvocationResponseStream> {
+        let (start, tail) = futures::StreamExt::into_future(request).await;
+        let key = match start.and_then(|start| start.request) {
+            Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
+                start,
+            )) => start.idempotency_key.map(|key| key.value),
+            _ => None,
+        };
+        let mut log = self.native_sessions.lock().unwrap();
+        log.keys.push(Arc::from(key.unwrap_or_default()));
+        let answer: crate::service::worker::InvocationResponseStream = match log.mode {
+            NativeSessions::Refuse => {
+                log.opened.send_modify(|opened| *opened += 1);
+                return Err(WorkerServiceError::Internal(
+                    "invocation session refused".to_string(),
+                ));
+            }
+            NativeSessions::Hold => {
+                log.tails.push_back(tail);
+                Box::pin(futures::stream::pending())
+            }
+        };
+        log.opened.send_modify(|opened| *opened += 1);
+        Ok(answer)
     }
 
     async fn control_export_stream(
@@ -775,6 +831,8 @@ pub(crate) struct InvocationHarness {
         golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess,
     >>>,
     pub(crate) contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
+    pub(crate) native_sessions: Arc<Mutex<NativeSessionLog>>,
+    pub(crate) agent_type: AgentTypeSchema,
 }
 
 impl InvocationHarness {
@@ -786,12 +844,60 @@ impl InvocationHarness {
         Self::new_with_agent_mode(invocation_output, AgentMode::Durable, constructor, methods)
     }
 
+    /// A harness whose agent type `mcp-agent` has one method `run` without parameters or
+    /// output. Its invocations answer at once.
+    pub(crate) fn with_run_method(agent_mode: AgentMode) -> Self {
+        use golem_common::schema::{AgentMethodSchema, InputSchema, OutputSchema};
+        Self::new_with_agent_mode(
+            AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            },
+            agent_mode,
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![AgentMethodSchema {
+                name: "run".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+        )
+    }
+
     pub(crate) fn new_with_agent_mode(
         invocation_output: AgentInvocationOutput,
         agent_mode: AgentMode,
         constructor: AgentConstructorSchema,
         methods: Vec<golem_common::schema::AgentMethodSchema>,
     ) -> Self {
+        let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
+            type_name: AgentTypeName("mcp-agent".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor,
+            methods,
+            dependencies: vec![],
+            mode: agent_mode,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(golem_common::model::Empty {}),
+            config: vec![],
+        };
         let component_id = ComponentId(Uuid::new_v4());
         let environment_id = EnvironmentId(Uuid::new_v4());
         let account_id = AccountId(Uuid::new_v4());
@@ -813,20 +919,7 @@ impl InvocationHarness {
                 vec![],
                 None,
                 None,
-                vec![AgentTypeSchema {
-                    kind: golem_common::schema::agent::AgentTypeKind::Regular,
-                    type_name: AgentTypeName("mcp-agent".to_string()),
-                    description: String::new(),
-                    source_language: String::new(),
-                    schema: SchemaGraph::empty(),
-                    constructor,
-                    methods,
-                    dependencies: vec![],
-                    mode: agent_mode,
-                    http_mount: None,
-                    snapshotting: Snapshotting::Disabled(golem_common::model::Empty {}),
-                    config: vec![],
-                }],
+                vec![agent_type.clone()],
                 BTreeMap::new(),
             ),
             created_at: Utc::now(),
@@ -844,6 +937,12 @@ impl InvocationHarness {
         let durable_stream_reads = Arc::new(Mutex::new(VecDeque::new()));
         let file_reads = Arc::new(FileReadMock::default());
         let contexts = Arc::new(Mutex::new(Vec::new()));
+        let native_sessions = Arc::new(Mutex::new(NativeSessionLog {
+            mode: NativeSessions::Refuse,
+            keys: Vec::new(),
+            tails: VecDeque::new(),
+            opened: tokio::sync::watch::Sender::new(0),
+        }));
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
             metadata: metadata.clone(),
@@ -857,6 +956,7 @@ impl InvocationHarness {
             contexts: contexts.clone(),
             invocation_output,
             file_reads: file_reads.clone(),
+            native_sessions: native_sessions.clone(),
         });
 
         Self {
@@ -886,7 +986,124 @@ impl InvocationHarness {
             durable_stream_fork_result,
             durable_stream_reads,
             contexts,
+            native_sessions,
+            agent_type,
         }
+    }
+
+    /// An MCP deployment of `domain` at `revision` that exports the harness's agent type and,
+    /// when `native` is set, one native tool of the harness's component.
+    pub(crate) fn compiled_mcp(
+        &self,
+        domain: &str,
+        revision: golem_common::model::deployment::DeploymentRevision,
+        native: bool,
+    ) -> golem_service_base::mcp::CompiledMcp {
+        golem_service_base::mcp::CompiledMcp {
+            account_id: self.account_id,
+            account_email: self.account_email.clone(),
+            application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
+            environment_id: self.environment_id,
+            environment_name: EnvironmentName::try_from("test-env").unwrap(),
+            deployment_revision: revision,
+            domain: golem_common::model::domain_registration::Domain(domain.to_string()),
+            security_scheme_name: None,
+            security_scheme: None,
+            registered_agent_types: vec![golem_common::schema::RegisteredAgentTypeSchema {
+                agent_type: self.agent_type.clone(),
+                implemented_by: golem_common::model::agent::RegisteredAgentTypeImplementer {
+                    component_id: self.component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    component_name: "mcp-component".to_string(),
+                    account_id: self.account_id,
+                    account_email: self.account_email.clone(),
+                },
+            }],
+            tools: if native {
+                vec![self.native_export()]
+            } else {
+                vec![]
+            },
+        }
+    }
+
+    /// A native tool `native` of the harness's component, without input or output streams.
+    fn native_export(&self) -> golem_service_base::mcp::CompiledMcpToolExport {
+        use golem_common::schema::tool::{
+            CommandBody, CommandNode, CommandTree, Doc, Positionals, Tool,
+        };
+        let definition = Tool {
+            version: "1.0.0".to_string(),
+            requires_filesystem: false,
+            schema: SchemaGraph::empty(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: "native".to_string(),
+                    aliases: vec![],
+                    doc: Doc::default(),
+                    globals: Default::default(),
+                    subcommands: vec![],
+                    body: Some(CommandBody {
+                        positionals: Positionals::default(),
+                        options: vec![],
+                        flags: vec![],
+                        constraints: vec![],
+                        stdin: None,
+                        stdout: None,
+                        stderr: None,
+                        result: None,
+                        errors: vec![],
+                        annotations: None,
+                    }),
+                }],
+            },
+        };
+        let mut export = golem_service_base::mcp::native_tool::compile_native_tool_exports(
+            self.component_id,
+            "test:owner".try_into().unwrap(),
+            "native".try_into().unwrap(),
+            &definition,
+            None,
+            None,
+        )
+        .unwrap()
+        .remove(0);
+        export.owner_component_name = ComponentName("mcp-component".to_string());
+        export
+    }
+
+    /// Answers the next invocation sessions as `mode` says.
+    pub(crate) fn answer_native_sessions(&self, mode: NativeSessions) {
+        self.native_sessions.lock().unwrap().mode = mode;
+    }
+
+    /// Waits until `count` invocation sessions were received.
+    pub(crate) async fn native_sessions_opened(&self, count: usize) {
+        let mut opened = self.native_sessions.lock().unwrap().opened.subscribe();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            opened.wait_for(|opened| *opened >= count),
+        )
+        .await
+        .expect("the native sessions open")
+        .unwrap();
+    }
+
+    /// The idempotency keys of the invocation sessions received so far.
+    pub(crate) fn native_session_keys(&self) -> Vec<Arc<str>> {
+        self.native_sessions.lock().unwrap().keys.clone()
+    }
+
+    /// The request stream of the oldest held session, after its start.
+    pub(crate) fn take_native_session_tail(
+        &self,
+    ) -> crate::service::worker::InvocationRequestStream {
+        self.native_sessions
+            .lock()
+            .unwrap()
+            .tails
+            .pop_front()
+            .expect("a held native session")
     }
 
     pub(crate) fn recorded_agent_id(&self) -> AgentId {
@@ -936,4 +1153,17 @@ pub(crate) fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
         .rsplit_once('[')
         .and_then(|(_, phantom_id)| phantom_id.strip_suffix(']'))
         .and_then(|phantom_id| Uuid::parse_str(phantom_id).ok())
+}
+
+/// The JSON-RPC messages of a streamed MCP response, which must have status 200.
+pub(crate) async fn streamed_messages(response: poem::Response) -> Vec<serde_json::Value> {
+    let status = response.status();
+    let text = response.into_body().into_string().await.unwrap();
+    assert_eq!(status, poem::http::StatusCode::OK, "{text}");
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .filter(|data| !data.is_empty())
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect()
 }

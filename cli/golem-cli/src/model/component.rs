@@ -29,6 +29,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::recipient::{
     RecipientMonomorphizationContext, RecipientOwnerContext, RecipientPattern,
@@ -49,7 +50,6 @@ use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
 use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
-use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{diff, tool};
 use golem_common::schema::agent::{
     AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, OutputSchema,

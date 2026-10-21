@@ -256,8 +256,8 @@ struct StaticApiDefinitionsLookup;
 #[test]
 async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::agent::AgentMetadataDto;
     use golem_common::model::agent::{CachePolicy, OwnerKind, ReadOnlyConfig};
-    use golem_common::model::worker::AgentMetadataDto;
     use golem_common::model::{AgentFingerprint, AgentId, AgentStatus, OplogIndex, Timestamp};
     use golem_service_base::custom_api::PhantomSelection;
     use poem::IntoResponse;

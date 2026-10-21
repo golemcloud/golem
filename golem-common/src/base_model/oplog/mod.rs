@@ -17,7 +17,7 @@ pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
 
-use crate::base_model::agent::AgentMode;
+use crate::base_model::agent::{AgentMode, OwnerKind};
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
@@ -83,7 +83,7 @@ oplog_entry! {
         }
         public {
             agent_id: AgentId,
-            owner_kind: crate::base_model::agent::OwnerKind,
+            owner_kind: OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: BTreeMap<String, String>,

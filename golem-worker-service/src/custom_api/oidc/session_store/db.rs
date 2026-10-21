@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::{SessionStore, SessionStoreError, credential_digest, records};
-use crate::config::{PostgresSessionStoreConfig, SqliteSessionStoreConfig};
 use crate::custom_api::model::OidcSession;
 use crate::custom_api::oidc::model::{
     AuthorizationCode, BearerToken, McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin,
@@ -24,6 +23,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeDelta, Utc};
 use conditional_trait_gen::trait_gen;
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
@@ -87,50 +87,47 @@ impl<P> Drop for DbSessionStore<P> {
     }
 }
 
-impl DbSessionStore<SqlitePool> {
-    pub async fn configured(config: &SqliteSessionStoreConfig) -> anyhow::Result<Self> {
-        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-        golem_service_base::db::sqlite::migrate(
-            &config.sqlite_config,
-            migrations.sqlite_migrations(),
-        )
+/// A pool for a SQLite database that holds the session store tables, with the session store
+/// migrations applied.
+pub async fn migrated_sqlite_pool(config: &DbSqliteConfig) -> anyhow::Result<SqlitePool> {
+    let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+    golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
         .await
         .context("SQLite session store migration failed")?;
 
-        let pool = SqlitePool::configured(&config.sqlite_config)
-            .await
-            .context("SQLite session store pool initialization failed")?;
-
-        Self::new(
-            pool,
-            config.pending_login_expiration,
-            config.cleanup_interval,
-        )
-    }
+    SqlitePool::configured(config)
+        .await
+        .context("SQLite session store pool initialization failed")
 }
 
-impl DbSessionStore<PostgresPool> {
-    pub async fn configured(config: &PostgresSessionStoreConfig) -> anyhow::Result<Self> {
-        let postgres_config = config.postgres_config_with_schema();
+/// A session store on a new SQLite file with the session store migrations applied, for tests.
+/// The file exists as long as the returned handle.
+#[cfg(test)]
+pub(crate) async fn sqlite_test_session_store() -> (SqliteSessionStore, tempfile::NamedTempFile) {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let pool = migrated_sqlite_pool(&DbSqliteConfig {
+        database: file.path().to_string_lossy().into_owned(),
+        max_connections: 2,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+    let store =
+        SqliteSessionStore::new(pool, Duration::from_secs(60), Duration::from_secs(3600)).unwrap();
+    (store, file)
+}
 
-        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-        golem_service_base::db::postgres::migrate(
-            &postgres_config,
-            migrations.postgres_migrations(),
-        )
+/// A pool for a Postgres schema that holds the session store tables, with the session store
+/// migrations applied. `config` names the schema.
+pub async fn migrated_postgres_pool(config: &DbPostgresConfig) -> anyhow::Result<PostgresPool> {
+    let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+    golem_service_base::db::postgres::migrate(config, migrations.postgres_migrations())
         .await
         .context("Postgres session store migration failed")?;
 
-        let pool = PostgresPool::configured(&postgres_config)
-            .await
-            .context("Postgres session store pool initialization failed")?;
-
-        Self::new(
-            pool,
-            config.pending_login_expiration,
-            config.cleanup_interval,
-        )
-    }
+    PostgresPool::configured(config)
+        .await
+        .context("Postgres session store pool initialization failed")
 }
 
 fn now_millis() -> i64 {
@@ -155,7 +152,9 @@ fn encode_record<R: desert_rust::BinarySerializer>(
 
 #[trait_gen(SqlitePool -> SqlitePool, PostgresPool)]
 impl DbSessionStore<SqlitePool> {
-    fn new(
+    /// A store on `pool`, which must hold the session store tables (see
+    /// [`migrated_sqlite_pool`] and [`migrated_postgres_pool`]).
+    pub fn new(
         pool: SqlitePool,
         pending_login_expiration: Duration,
         cleanup_interval: Duration,

@@ -15,6 +15,7 @@
 use crate::Tracing;
 use golem_client::api::RegistryServiceClient;
 use golem_client::model::{AgentSecretCreation, DeploymentCreation};
+use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::component::ComponentDto;
@@ -38,7 +39,6 @@ use golem_common::model::tool::{
     ToolProvisionConfig,
 };
 use golem_common::model::tool_release::{ToolReleaseByCoordinates, ToolReleaseReference};
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::dsl_impl::TestUserContext;

@@ -309,6 +309,8 @@ trait EphemeralCounter {
     /// See [`Counter::allocate_memory`].
     fn allocate_memory(&mut self, bytes: u32) -> u32;
 
+    fn allocate_memory_and_busy_for(&mut self, bytes: u32, millis: u32) -> u32;
+
     fn get_id(&self) -> String;
     async fn increment_via_self_rpc(&mut self) -> u32;
     async fn increment_remote_then_fail(&mut self, target: String) -> u32;
@@ -345,6 +347,11 @@ impl EphemeralCounter for EphemeralCounterImpl {
         retain_memory(&mut self.retained, bytes);
         self.count += 1;
         self.count
+    }
+
+    fn allocate_memory_and_busy_for(&mut self, bytes: u32, millis: u32) -> u32 {
+        retain_memory(&mut self.retained, bytes);
+        self.busy_for(millis)
     }
 
     fn get_id(&self) -> String {

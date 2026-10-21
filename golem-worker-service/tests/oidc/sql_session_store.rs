@@ -24,13 +24,14 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_service::config::{
-    DEFAULT_POSTGRES_SESSION_STORE_SCHEMA, PostgresSessionStoreConfig, SqliteSessionStoreConfig,
+    DEFAULT_POSTGRES_SESSION_STORE_SCHEMA, with_session_store_schema,
 };
 use golem_worker_service::custom_api::oidc::model::{
     AuthorizationCode, BearerToken, McpPendingAuth, McpProxyCodeEntry, SessionId,
 };
 use golem_worker_service::custom_api::oidc::session_store::{
-    PostgresSessionStore, SessionStore, SqliteSessionStore,
+    PostgresSessionStore, SessionStore, SqliteSessionStore, migrated_postgres_pool,
+    migrated_sqlite_pool,
 };
 use sqlx::{Connection, Executor, Row};
 use std::time::Duration;
@@ -41,7 +42,7 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 inherit_test_dep!(DockerPostgresRdb);
 
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "oidc_pending_login",
     "oidc_session",
     "oidc_pkce_pending",
@@ -49,6 +50,7 @@ const TABLES: [&str; 7] = [
     "oidc_pkce_bearer",
     "mcp_pending_auth",
     "mcp_proxy_code",
+    "mcp_session",
 ];
 
 /// Every record that the writer store stores, except the live session, expires after this delay.
@@ -134,7 +136,7 @@ async fn postgres_row_count(pool: &PostgresPool) -> anyhow::Result<i64> {
     Ok(total)
 }
 
-async fn wait_for_row_count<F, Fut>(expected: i64, count: F) -> anyhow::Result<()>
+pub(crate) async fn wait_for_row_count<F, Fut>(expected: i64, count: F) -> anyhow::Result<()>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = anyhow::Result<i64>>,
@@ -150,26 +152,26 @@ where
     anyhow::bail!("expected {expected} rows, found {last}")
 }
 
-fn sqlite_store_config(
+async fn sqlite_store_with_cleanup(
     sqlite_config: &DbSqliteConfig,
     cleanup_interval: Duration,
-) -> SqliteSessionStoreConfig {
-    SqliteSessionStoreConfig {
-        pending_login_expiration: WRITER_EXPIRATION,
+) -> anyhow::Result<SqliteSessionStore> {
+    SqliteSessionStore::new(
+        migrated_sqlite_pool(sqlite_config).await?,
+        WRITER_EXPIRATION,
         cleanup_interval,
-        sqlite_config: sqlite_config.clone(),
-    }
+    )
 }
 
-fn postgres_store_config(
+async fn postgres_store_with_cleanup(
     postgres_config: &DbPostgresConfig,
     cleanup_interval: Duration,
-) -> PostgresSessionStoreConfig {
-    PostgresSessionStoreConfig {
-        pending_login_expiration: WRITER_EXPIRATION,
+) -> anyhow::Result<PostgresSessionStore> {
+    PostgresSessionStore::new(
+        migrated_postgres_pool(&with_session_store_schema(postgres_config)).await?,
+        WRITER_EXPIRATION,
         cleanup_interval,
-        postgres_config: postgres_config.clone(),
-    }
+    )
 }
 
 // The writer store runs its cleanup only once, at construction. That first cleanup can run while
@@ -185,18 +187,14 @@ async fn sqlite_cleanup_deletes_only_expired_records(_tracing: &Tracing) -> anyh
         max_connections: 10,
         foreign_keys: false,
     };
-    let writer =
-        SqliteSessionStore::configured(&sqlite_store_config(&config, Duration::from_secs(3600)))
-            .await?;
+    let writer = sqlite_store_with_cleanup(&config, Duration::from_secs(3600)).await?;
     let pool = SqlitePool::configured(&config).await?;
 
     let live = store_expiring_and_live_records(&writer).await?;
     assert_eq!(sqlite_row_count(&pool).await?, 8);
 
     tokio::time::sleep(WRITER_EXPIRATION).await;
-    let _cleaner =
-        SqliteSessionStore::configured(&sqlite_store_config(&config, Duration::from_millis(50)))
-            .await?;
+    let _cleaner = sqlite_store_with_cleanup(&config, Duration::from_millis(50)).await?;
     wait_for_row_count(1, || sqlite_row_count(&pool)).await?;
     assert!(writer.get_authenticated_session(&live).await?.is_some());
     Ok(())
@@ -209,22 +207,14 @@ async fn postgres_cleanup_deletes_only_expired_records(
     postgres: &DockerPostgresRdb,
 ) -> anyhow::Result<()> {
     let config = unique_postgres_config(postgres);
-    let writer = PostgresSessionStore::configured(&postgres_store_config(
-        &config,
-        Duration::from_secs(3600),
-    ))
-    .await?;
+    let writer = postgres_store_with_cleanup(&config, Duration::from_secs(3600)).await?;
     let pool = PostgresPool::configured(&config).await?;
 
     let live = store_expiring_and_live_records(&writer).await?;
     assert_eq!(postgres_row_count(&pool).await?, 8);
 
     tokio::time::sleep(WRITER_EXPIRATION).await;
-    let _cleaner = PostgresSessionStore::configured(&postgres_store_config(
-        &config,
-        Duration::from_millis(50),
-    ))
-    .await?;
+    let _cleaner = postgres_store_with_cleanup(&config, Duration::from_millis(50)).await?;
     wait_for_row_count(1, || postgres_row_count(&pool)).await?;
     assert!(writer.get_authenticated_session(&live).await?.is_some());
     Ok(())
@@ -323,10 +313,10 @@ async fn postgres_stores_started_together_on_a_new_schema_all_start(
     postgres: &DockerPostgresRdb,
 ) -> anyhow::Result<()> {
     for _ in 0..5 {
-        let store_config =
-            postgres_store_config(&unique_postgres_config(postgres), Duration::from_secs(3600));
+        let postgres_config = unique_postgres_config(postgres);
         let results = futures::future::join_all(
-            (0..8).map(|_| PostgresSessionStore::configured(&store_config)),
+            (0..8)
+                .map(|_| postgres_store_with_cleanup(&postgres_config, Duration::from_secs(3600))),
         )
         .await;
         for result in results {

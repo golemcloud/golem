@@ -35,6 +35,9 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::extraction::extract_component_metadata;
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
+};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -54,9 +57,6 @@ use golem_common::model::environment::{
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::ToolName;
-use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
-};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };

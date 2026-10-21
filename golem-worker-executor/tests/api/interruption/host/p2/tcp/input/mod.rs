@@ -1,6 +1,7 @@
 mod completion;
 mod cross_socket;
 mod periodic_refresh;
+#[cfg(target_os = "linux")]
 mod repeated_stop;
 mod request_tasks;
 

@@ -30,6 +30,20 @@ mcp:
 
 After `golem deploy`, the MCP server is available at `http://mcp-demo.localhost:9007/mcp` using the streamable HTTP protocol.
 
+## Sessions
+
+`initialize` starts a session. Its response carries the `Mcp-Session-Id` header, and the client sends that header with every later request of the session. The server keeps the session in a shared store, so the session continues when a server replica stops or restarts.
+
+A session ends:
+
+- When it gets no request for the server's [`mcp.session_idle_timeout`](/v1.6/operate/http-gateway#mcp-sessions), 5 minutes by default. A running tool call keeps its session open, so a call that takes longer than the idle timeout returns its result, and the session stays usable.
+- When the client sends `DELETE` to `/mcp` with the session ID. The server also cancels the running calls of the session.
+- When the server's session store loses the session.
+
+After a session ends, a request with its session ID gets `404 Not Found` with the body `Not Found: Session not found`. The client must send `initialize` again to start a new session.
+
+A session remembers the deployment that served its last `initialize` or list request (`tools/list`, `resources/list`, `resources/templates/list` or `prompts/list`). When the server serves a later `tools/call`, `resources/read` or `prompts/get` with another deployment, it sends a `notifications/tools/list_changed` notification, and the request fails with the JSON-RPC error `-32602` `tool set changed; list tools again`. The client lists again and then repeats the request. Shortly after a deployment, a request can get this error once even when the client listed just before.
+
 ## Exporting native tools
 
 Native Golem tools can be exported without deploying an agent. A complete tools-only application declares the implementation, binds it to an owner component, and selects commands for the MCP deployment:

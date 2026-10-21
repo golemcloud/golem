@@ -52,7 +52,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 3. **Durable agent RPC is exactly-once at the logical callee-invocation level.** Dispatch attempts
    (replay, transport retry, incomplete-call repair) share a durable key. An executing target persists one
    invocation and result; read-only cache hits/followers persist neither. Attempts are not executions. Owner:
-   `durable_host/wasm_rpc/mod.rs`
+   `durable_host/rpc/mod.rs`
    (`derive_idempotency_key(begin_index)`), `worker/mod.rs::enqueue_worker_invocation_with_effect`
    (`lookup_invocation_result` dedupe before appending `PendingAgentInvocation`).
 
@@ -184,7 +184,7 @@ replay tolerance.
 | Durability guard | `durable_host/durability.rs` | `begin_durable_function`/`end_durable_function`, `DurableFunctionType`, in-function retry |
 | Host context | `durable_host/mod.rs` | `prepare_instance`, `resume_replay`, `switch_to_live`, `PendingReplayToLive`, idempotency-key derivation, snapshot boundary checks |
 | Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before `AgentInvocationFinished` |
-| RPC | `durable_host/wasm_rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
+| RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Owner wallet | `worker/owner_wallet.rs`, `worker/instance/mod.rs` | Generation-bound live wallet, recorded replay baseline and shared cursor installation |
 | Cut points | `worker/cut_point.rs` | Validates operator cuts; calls recover from the exact retained prefix |
@@ -209,7 +209,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │ outer loop (one iteration = one resident instance)                  │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ resume_replay│
-│    ephemeral:      replay typed initialization only, append Restart │
+│    ephemeral:      constructor-only replay, append Restart          │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
 │  ──▶ instance ends (idle / interrupt / trap / suspend)               │
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
@@ -221,6 +221,18 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 `AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
+Constructor-only replay covers restarts before the accepted invocation ran. An ephemeral agent
+never reconstructs in process once its Store has run: `on_invocation_failure` turns traps that
+would restart it into terminal failures and notifies the caller. Any other `Immediate`, `Delayed`,
+or `ReacquirePermits` decision reaching the outer loop becomes a terminal interruption plus archive,
+without replacing an already published outcome. An active `Suspend` also becomes a terminal
+`EphemeralCannotSuspend` failure after interrupt acknowledgement and monthly-exhaustion conversion,
+so a lowered memory limit or failed monthly monitor cannot leave a method suffix for constructor-only
+replay. Monthly capacity exhaustion retains its specific monthly error, and a monthly-policy outage
+keeps its `Monthly enforcement unavailable` reason. Idle and pre-method suspension remain safe:
+ordinary ephemeral agents keep their outer-loop `TryStop` unchanged;
+ephemeral external-tool owners also treat it as terminal. Startup retries before a Store exists
+remain unchanged. A started method never runs again live.
 Replay starts from the chosen snapshot baseline
 (see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
 scans the replayed range for recovery metadata (delivery markers, guest stream observations and
@@ -2487,6 +2499,23 @@ that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` 
 failure table in the executor walkthrough.
 
 ## Concurrency and guest completion delivery
+
+Recorded async events reach the guest only at a blocked wait, at most one event per block,
+live and replay alike. Native stream items and terminals (including producer cancellation),
+timers and accessor completions share `RuntimeStore::await_guest_blocked` in the consuming
+Store; an entity body uses its own Store, not the owner's. The gate consumes one unconsumed
+`DriverBlocked` edge, promoted only after the outer driver returns Pending. A delivery that
+becomes ready after the guest blocked consumes that already-published edge immediately.
+Waking the waiting host future invalidates the blocked generation, so checking the current
+blocked level would deadlock. Non-blocking waitable polls and yields admit no recorded events.
+A busy guest must ask through recorded synchronous host calls. Host-side takes and direct
+non-accessor host returns do not use this gate. Native guest write completions are not
+instrumented by this rule. Every bash script has a time limit and blocks with recorded
+`wait-for(0)` every 1024 yields so a computing script can observe its stop request or time limit.
+
+Before the blocked-wait gate, a replayed native read waits for every earlier retained Start of
+its invocation, including host-internal descendants, to be claimed or adopted as replay-inert;
+reserving an import's ordinal alone does not release the read.
 
 `Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
 the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock reads and monotonic `now` remain
