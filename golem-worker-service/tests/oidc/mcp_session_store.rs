@@ -16,6 +16,7 @@ use super::sql_session_store::wait_for_row_count;
 use super::{Tracing, unique_postgres_config};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
+use futures::StreamExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
@@ -31,11 +32,13 @@ use golem_worker_service::mcp::session::store::{
     McpSessionId, McpSessionRecord, McpSessionStore, PostgresMcpSessionStore, SqliteMcpSessionStore,
 };
 use sqlx::Row;
+use std::future::ready;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 use tokio::time::{Instant, sleep, sleep_until};
+use tokio_stream::wrappers::IntervalStream;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(DockerPostgresRdb);
@@ -302,9 +305,35 @@ async fn postgres_cleanup_deletes_expired_mcp_sessions(
 /// while a write waits for a row lock, so each of these tests waits this long once.
 const LOCK_WAIT_EXPIRY: Duration = Duration::from_secs(2);
 
+/// Completes when one backend waits for a lock that the backend `holder` holds. Postgres gives no
+/// signal when a statement starts to wait, so this is a bounded wait on that database condition:
+/// it checks every 10 ms, for at most 5 s.
+async fn blocked_behind(pool: &PostgresPool, holder: i32) -> anyhow::Result<()> {
+    let blocked = IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
+        .then(|_| async move {
+            pool.with_ro("mcp_session_store_test", "blocked")
+                .fetch_one(
+                    sqlx::query(
+                        "SELECT COUNT(*) FROM pg_stat_activity \
+                         WHERE $1 = ANY(pg_blocking_pids(pid))",
+                    )
+                    .bind(holder),
+                )
+                .await
+                .map(|row| row.get::<i64, _>(0))
+        })
+        .any(|count| ready(matches!(count, Ok(1))));
+    anyhow::ensure!(
+        tokio::time::timeout(Duration::from_secs(5), blocked).await?,
+        "no backend waits behind the holder"
+    );
+    Ok(())
+}
+
 /// A Postgres store and a pool for another transaction on the same schema, with one session
-/// that expires after [`LOCK_WAIT_EXPIRY`]. Then the other transaction holds an uncommitted
-/// update of the session's row, which `write` waits behind.
+/// that expires after [`LOCK_WAIT_EXPIRY`]. The other transaction holds an uncommitted update of
+/// the session's row. `write` starts behind it; once the write waits on the row lock and while
+/// the session is still live, the session expires, and then the holder rolls back.
 async fn postgres_write_behind_a_held_row_lock<T: Send + 'static>(
     postgres: &DockerPostgresRdb,
     write: impl FnOnce(Arc<PostgresMcpSessionStore>, McpSessionId) -> tokio::task::JoinHandle<T>,
@@ -316,29 +345,43 @@ async fn postgres_write_behind_a_held_row_lock<T: Send + 'static>(
     ));
     let holder_pool = PostgresPool::configured(&config).await?;
     let id = new_id();
-    let created = Instant::now();
     assert!(
         store
             .create(id, &record(EnvironmentId::new(), 1), LOCK_WAIT_EXPIRY)
             .await?
     );
+    let created = Instant::now();
 
     let mut holder = holder_pool
         .with_rw("mcp_session_store_test", "hold")
         .begin()
         .await?;
+    let holder_pid: i32 = holder
+        .fetch_one(sqlx::query("SELECT pg_backend_pid()"))
+        .await?
+        .get(0);
     holder
         .execute(sqlx::query("UPDATE mcp_session SET value = value"))
         .await?;
     let waiting = write(store.clone(), id);
+    blocked_behind(&holder_pool, holder_pid).await?;
+    assert!(
+        store.get(id, None).await?.is_some(),
+        "the write waits on the row lock before the session expires"
+    );
+
     sleep_until(created + LOCK_WAIT_EXPIRY + Duration::from_millis(200)).await;
     assert_eq!(
         store.get(id, None).await?,
         None,
         "another reader sees the expiry"
     );
+    assert!(
+        !waiting.is_finished(),
+        "the write still waits on the row lock"
+    );
     holder.rollback().await?;
-    Ok((store.clone(), id, waiting.await?))
+    Ok((store, id, waiting.await?))
 }
 
 // Postgres evaluates a statement's row filter before the statement waits for a row lock, and

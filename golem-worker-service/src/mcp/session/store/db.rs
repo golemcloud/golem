@@ -30,7 +30,7 @@ use conditional_trait_gen::trait_gen;
 use futures::StreamExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use sqlx::Row;
 use std::time::Duration;
 use tokio_stream::wrappers::IntervalStream;
@@ -62,9 +62,10 @@ trait McpSessionSql {
     const LOCK: Option<&'static str>;
 }
 
-/// Implements [`McpSessionSql`] for the store type `$store`. `$now` is the database clock in Unix milliseconds
-/// at its evaluation. `$cleanup_now` is the same clock at the start of the statement, which an
-/// index scan of `expires_at` can use; an earlier clock only deletes fewer rows.
+/// Implements [`McpSessionSql`] for the store type `$store`. `$now` is the database clock in Unix
+/// milliseconds at its evaluation. `$cleanup_now` is the same clock at the start of the
+/// statement, which an index scan of `expires_at` can use; an earlier clock only deletes fewer
+/// rows. `$lock` is the statement that takes the row lock, if any.
 macro_rules! mcp_session_sql {
     ($store:ty, $now:literal, $cleanup_now:literal, $lock:expr) => {
         impl McpSessionSql for $store {
@@ -182,6 +183,18 @@ impl DbMcpSessionStore<SqlitePool> {
         }
     }
 
+    /// Takes the session row's write lock in `tx`, unless beginning the transaction already took
+    /// the database write lock.
+    async fn lock_row(
+        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        id: McpSessionId,
+    ) -> Result<(), McpSessionStoreError> {
+        if let Some(lock) = Self::LOCK {
+            tx.execute(sqlx::query(lock).bind(id.uuid())).await?;
+        }
+        Ok(())
+    }
+
     /// Keeps the session live for at least `idle` from now, under the row's write lock. Returns
     /// the record's value when the row is live after the lock is taken and, where
     /// [`expiry_write`] asks for a write, still live when the write executes; otherwise `None`.
@@ -193,9 +206,7 @@ impl DbMcpSessionStore<SqlitePool> {
         self.pool
             .with_tx_err(SVC_NAME, "refresh", |tx| {
                 Box::pin(async move {
-                    if let Some(lock) = Self::LOCK {
-                        tx.execute(sqlx::query(lock).bind(id.uuid())).await?;
-                    }
+                    Self::lock_row(tx, id).await?;
                     let Some(row) = tx
                         .fetch_optional(sqlx::query(Self::GET).bind(id.uuid()))
                         .await?
@@ -259,6 +270,8 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
             expires_at: row.get(1),
             read_at: row.get(2),
         };
+        // This read decides without the row lock whether a refresh is due; the refresh takes the
+        // lock and decides again.
         let value = match extend.filter(|idle| expiry_write(read, *idle).is_some()) {
             Some(idle) => self.refresh(id, idle).await?,
             None => Some(row.get(0)),
@@ -277,9 +290,7 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
         self.pool
             .with_tx_err(SVC_NAME, "replace", |tx| {
                 Box::pin(async move {
-                    if let Some(lock) = Self::LOCK {
-                        tx.execute(sqlx::query(lock).bind(id.uuid())).await?;
-                    }
+                    Self::lock_row(tx, id).await?;
                     let replaced = tx
                         .execute(sqlx::query(Self::REPLACE).bind(id.uuid()).bind(value))
                         .await?;
@@ -371,7 +382,7 @@ mod tests {
     // and writes nothing, so the read returns no record. The read pool tells the test when the
     // first read is done; the store runs no cleanup task.
     #[test]
-    async fn a_refresh_that_waits_past_the_expiry_returns_no_record() {
+    async fn a_refresh_after_a_committed_expiry_returns_no_record() {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let config = DbSqliteConfig {
             database: db_file.path().to_string_lossy().to_string(),

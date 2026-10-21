@@ -1635,6 +1635,8 @@ async fn the_33rd_resume_closes_the_oldest_resumed_stream() {
     fx.finish();
 }
 
+/// The stream checks the record once per idle timeout, so the test waits one real `record_gone`
+/// interval of 1 s.
 #[test]
 #[test_r::timeout("30s")]
 async fn a_resumed_stream_ends_when_the_record_is_gone() {
@@ -1749,11 +1751,8 @@ async fn cancelled_native_calls_store_no_terminal() {
                     fx.send(fx.post(Some(session), call(9, "native", gate)))
                         .await,
                 );
-                let priming: Arc<str> = next_frames(&mut body).await[0]
-                    .id
-                    .as_deref()
-                    .map(Arc::from)
-                    .unwrap();
+                let priming = next_frames(&mut body).await.remove(0).id.unwrap();
+                let priming: Arc<str> = Arc::from(priming);
                 fx.probe.gate(gate).started().await;
                 (body, priming)
             }
@@ -1823,7 +1822,9 @@ async fn cancelled_native_calls_store_no_terminal() {
         .then(|priming| {
             let fx = &fx;
             let session = &session;
-            async move { read_to_end(fx.send(fx.get(Some(session), Some(&**priming))).await).await }
+            async move {
+                read_to_end(fx.send(fx.get(Some(session), Some(priming.as_ref()))).await).await
+            }
         })
         .collect()
         .await;
