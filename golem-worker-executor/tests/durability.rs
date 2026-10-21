@@ -19,12 +19,12 @@ use axum::extract::Query;
 use axum::routing::{any, get};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{GolemUserPrincipal, Principal};
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
     PublicOplogPageEntry, PublicSnapshotData,
 };
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::TestDsl;

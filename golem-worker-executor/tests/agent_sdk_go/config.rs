@@ -16,7 +16,7 @@
 //! nested path) are resolved and read back by a configured agent at runtime.
 
 use crate::Tracing;
-use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{

@@ -37,11 +37,11 @@ use colored::control::SHOULD_COLORIZE;
 use comfy_table::Color as ComfyColor;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogErrorKind;
-use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize, Serializer};
@@ -561,10 +561,10 @@ impl MessageWithFields for AgentGetView {
         let mut fields = FieldsBuilder::new();
 
         let mut update_history = String::new();
-        let update_diagnostics = |mode: &golem_common::model::worker::AgentUpdateMode,
+        let update_diagnostics = |mode: &golem_common::model::agent::AgentUpdateMode,
                                   pending_update_index: Option<OplogIndex>,
                                   assisted: Option<
-            &golem_common::model::worker::SnapshotAssistedUpdateMetadata,
+            &golem_common::model::agent::SnapshotAssistedUpdateMetadata,
         >| {
             let request = pending_update_index
                 .map(|index| format!(", request oplog index {index}"))

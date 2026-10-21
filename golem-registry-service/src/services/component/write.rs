@@ -36,7 +36,9 @@ use golem_common::base_model::component_metadata::{
     AgentTypeProvisionConfig, ComponentProvisionConfig,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentConfigSource;
+use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName, InitialAgentFileUpload};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
@@ -59,8 +61,6 @@ use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
 use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
-use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::{
     AgentTypeSchema, ComponentConfigSchema, typed_schema_value_with_projected_defs,
@@ -2482,7 +2482,7 @@ mod tests {
         validate_component_config_schema(&schema, &[]).unwrap();
         let values = validate_and_transform_component_config_entries(
             &schema,
-            vec![golem_common::model::worker::AgentConfigEntryDto {
+            vec![golem_common::model::agent::AgentConfigEntryDto {
                 path: vec!["feature".to_string(), "enabled".to_string()],
                 value: NormalizedJsonValue::new(serde_json::json!(true)),
             }],
@@ -2496,7 +2496,7 @@ mod tests {
         let schema = bool_component_schema(AgentConfigSource::Secret);
         let error = validate_and_transform_component_config_entries(
             &schema,
-            vec![golem_common::model::worker::AgentConfigEntryDto {
+            vec![golem_common::model::agent::AgentConfigEntryDto {
                 path: vec!["feature".to_string(), "enabled".to_string()],
                 value: NormalizedJsonValue::new(serde_json::json!(true)),
             }],

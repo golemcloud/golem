@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(target_os = "linux")]
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 
 mod compute;

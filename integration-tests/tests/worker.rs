@@ -24,12 +24,12 @@ use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::{RegistryServiceClient, WorkerClient, WorkerError};
 use golem_client::model::WorkersMetadataRequest;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
-};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator,

@@ -14,6 +14,13 @@
 
 //! Transport conversion for the Worker's domain stream-slot operations.
 
+use super::{
+    AgentInvocation, Arc, AuthCtx, CanStartWorker, DurableStreamRemoteError, HasAll,
+    HasComponentService, HasConfig, InvocationFreshnessDisposition, Message, OwnedAgentId,
+    ParsedAgentId, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorImpl,
+    build_durable_streaming_request, decode_invocation_input, extract_owned_agent_id,
+    from_proto_invocation_context, golem, stream_slots,
+};
 use crate::worker;
 use golem_api_grpc::proto::golem::workerexecutor::v1 as proto;
 use golem_common::model::durable_stream::{StreamOffset, StreamSessionExpiryPolicy};
@@ -252,6 +259,141 @@ impl From<worker::ExportStreamControlResult> for proto::ExportStreamControlResul
             worker::ExportStreamControlResult::NotFound => Self::NotFound,
             worker::ExportStreamControlResult::Gone => Self::Gone,
         }
+    }
+}
+
+impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
+    WorkerExecutorImpl<Ctx, Svcs>
+{
+    pub(super) async fn stream_slot_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        auth_ctx: Option<golem::auth::AuthCtx>,
+    ) -> Result<
+        (
+            Arc<Worker<Ctx>>,
+            Option<Arc<crate::worker::EphemeralResponseLease>>,
+        ),
+        DurableStreamRemoteError<WorkerExecutorError>,
+    > {
+        self.ensure_worker_belongs_to_this_executor(owned_agent_id)?;
+        let auth_ctx: AuthCtx = auth_ctx
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("access authorized Durable Streams slot")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+        Worker::<Ctx>::find_durable_stream_worker(self, owned_agent_id)
+            .await?
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
+            .map_err(Into::into)
+    }
+
+    pub(super) async fn create_stream_session_internal(
+        &self,
+        request: golem::workerexecutor::v1::CreateStreamSessionRequest,
+    ) -> Result<golem::workerexecutor::v1::CreateStreamSessionSuccess, WorkerExecutorError> {
+        let public_session_id = request.public_session_id;
+        golem_common::model::invocation_session_public::validate_durable_stream_session_id(
+            &public_session_id,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
+        let expiry_policy = stream_slots::expiry_policy_from_proto(request.expiry_policy)?;
+        let creation_intent = stream_slots::creation_intent_from_proto(request.creation_intent)?;
+        let mut request = request
+            .invocation
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation not found"))?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth.authorize_system_only("create authorized Durable Streams session")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+        let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        self.ensure_worker_belongs_to_this_executor(&id)?;
+        let (worker, _response_lease) =
+            match self.get_or_create_pending_for_lookup(&request).await? {
+                Some(worker) => worker,
+                None => {
+                    self.get_or_create_pending_with_freshness(
+                        &request,
+                        InvocationFreshnessDisposition::MayExist,
+                    )
+                    .await?
+                }
+            };
+        let admission = worker
+            .begin_stream_session_creation(public_session_id, expiry_policy, creation_intent)
+            .await?;
+        let key = admission.invocation_key().clone();
+        request.idempotency_key = Some(key.clone().into());
+        let revision = worker.stream_session_revision(&key).await?;
+        let component = worker
+            .component_service()
+            .get_metadata(worker.component_id(), Some(revision))
+            .await?;
+        let method_name = request
+            .method_name
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name not found"))?;
+        let proto_input = request
+            .input
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("input not found"))?;
+        let input_len = proto_input.encoded_len();
+        let input =
+            decode_invocation_input(proto_input).map_err(WorkerExecutorError::invalid_request)?;
+        let parsed = ParsedAgentId::parse(&worker.agent_id().agent_id, &component.metadata)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if !crate::worker::invocation::validate_agent_method_invocation(
+            &component.metadata,
+            Some(&parsed),
+            &method_name,
+            &input,
+        )? {
+            return Err(WorkerExecutorError::invalid_request(
+                "Durable Streams requires a streaming method",
+            ));
+        }
+        request.attempt_id = Some(uuid::Uuid::new_v4().into());
+        request.expected_callee_fingerprint =
+            Some(worker.get_initial_worker_metadata().fingerprint.0.into());
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key: key.clone(),
+            method_name,
+            input,
+            invocation_context: from_proto_invocation_context(&request.context)
+                .limit_depth(worker.config().limits.max_invocation_context_stack_depth),
+            principal: request.principal(),
+            scope_card: request
+                .scope_card
+                .clone()
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(WorkerExecutorError::permission_denied)?,
+        };
+        let (committed, _receipt) = tokio::sync::oneshot::channel();
+        let domain_request = build_durable_streaming_request(
+            &request,
+            &component.metadata,
+            revision,
+            worker.get_initial_worker_metadata().fingerprint,
+            invocation,
+            input_len,
+            committed,
+            worker
+                .config()
+                .limits
+                .live_stream_event_broadcast_capacity
+                .get(),
+        )?;
+        let result = worker
+            .create_stream_session(domain_request, admission)
+            .await?;
+        Ok(result.into())
     }
 }
 

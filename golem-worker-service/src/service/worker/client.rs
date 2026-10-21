@@ -44,7 +44,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::agent::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -56,9 +59,6 @@ use golem_common::model::filesystem::{
 };
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex, PublicOplogPageEntry};
-use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
     PromiseId, ScanCursor,

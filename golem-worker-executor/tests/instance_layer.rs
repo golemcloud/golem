@@ -4477,19 +4477,19 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         .with_agent_config(
             "ConfigAgent",
             vec![
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["foo".to_string()],
                     value: serde_json::json!(7).into(),
                 },
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["bar".to_string()],
                     value: serde_json::json!("owner-config").into(),
                 },
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "a".to_string()],
                     value: serde_json::json!(true).into(),
                 },
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "b".to_string()],
                     value: serde_json::json!([1, 2]).into(),
                 },
@@ -4985,19 +4985,19 @@ async fn entity_agent_config_uses_owner_component_declarations(
         .with_agent_config(
             "LocalConfigAgent",
             vec![
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["foo".to_string()],
                     value: serde_json::json!(7).into(),
                 },
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["bar".to_string()],
                     value: serde_json::json!("owner-config").into(),
                 },
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "a".to_string()],
                     value: serde_json::json!(true).into(),
                 },
-                golem_common::model::worker::AgentConfigEntryDto {
+                golem_common::model::agent::AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "b".to_string()],
                     value: serde_json::json!([1, 2]).into(),
                 },

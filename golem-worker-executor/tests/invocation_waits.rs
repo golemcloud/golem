@@ -31,7 +31,7 @@ fn collector() -> &'static Collector {
 
 fn is_result_wait(metadata: &tracing::Metadata<'_>) -> bool {
     metadata.is_span()
-        && metadata.target() == "golem_worker_executor::worker"
+        && metadata.target() == "golem_worker_executor::worker::outcome"
         && metadata.name() == "wait_for_invocation_result"
 }
 
@@ -152,7 +152,7 @@ fn fixture_identity() -> Identity {
 }
 
 fn result_span(identity: &Identity) -> tracing::Span {
-    tracing::info_span!(target: "golem_worker_executor::worker", parent: None,
+    tracing::info_span!(target: "golem_worker_executor::worker::outcome", parent: None,
         "wait_for_invocation_result", agent_id = %identity.agent, idempotency_key = %identity.key)
 }
 

@@ -18,10 +18,10 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentMode, Principal};
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId,
 };

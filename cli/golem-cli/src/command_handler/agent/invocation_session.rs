@@ -33,13 +33,13 @@ use golem_client::invocation_session::{
     StableStreamIdentity, send_replayable_input,
 };
 use golem_common::model::IdempotencyKey;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientCancelReason, PublicClientMessage,
     PublicConfigEntry, PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
     PublicResumeOperation, PublicServerCancelReason, PublicServerMessage,
 };
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::schema::agent::{
     AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentId,
 };

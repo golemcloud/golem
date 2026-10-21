@@ -1,0 +1,2371 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::services::oplog::tests::ReadCountingIndexedStorage;
+use crate::services::oplog::{ArchiveWait, OplogService, PrimaryOplogService};
+use crate::services::promise::PromiseServiceMock;
+use crate::services::scheduler::{
+    SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
+};
+use crate::services::shard::{ShardService, ShardServiceDefault};
+use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
+use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
+use crate::storage::indexed::memory::InMemoryIndexedStorage;
+use crate::storage::scheduler::memory::InMemorySchedulerStorage;
+use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
+use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
+use crate::worker::INACTIVE_EPHEMERAL_AGENT_ERROR;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use futures::FutureExt;
+use golem_common::config::DbSqliteConfig;
+use golem_common::model::AgentStatusRecord;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
+    RetryConfig, ScheduleId, ScheduledAction, ShardAssignment, ShardEpoch, ShardId,
+};
+use golem_common::schema::SchemaValue;
+use golem_common::serialization::serialize;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use proptest::prelude::*;
+use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use test_r::test;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+// Resume scheduling tests share a process-global histogram with exact-count assertions.
+static RESUME_METRIC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct SchedulerWorkerAccessMock;
+
+type ExpiryDelivery = (OwnedAgentId, AgentFingerprint, String, IdempotencyKey, u64);
+
+struct ExpiryWorkerAccessMock {
+    deliveries: Arc<Mutex<Vec<ExpiryDelivery>>>,
+}
+
+#[async_trait]
+impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
+    async fn active_worker_fingerprint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        unimplemented!()
+    }
+
+    async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        unimplemented!()
+    }
+
+    async fn activate_worker(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn archive_oplog(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _last_oplog_index: OplogIndex,
+        _wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn expire_durable_stream_session(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        target_agent_fingerprint: AgentFingerprint,
+        public_session_id: String,
+        session_key: IdempotencyKey,
+        expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        self.deliveries.lock().unwrap().push((
+            owned_agent_id.clone(),
+            target_agent_fingerprint,
+            public_session_id,
+            session_key,
+            expected_deadline_millis,
+        ));
+        Ok(())
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _worker_env: Option<Vec<(String, String)>>,
+        _worker_agent_config: Vec<AgentConfigEntryDto>,
+        _component_revision: Option<ComponentRevision>,
+        _worker_parent: Option<AgentId>,
+        _worker_creation_principal: Principal,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_worker_fingerprint: AgentFingerprint,
+        _invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+}
+
+#[async_trait]
+impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
+    async fn expire_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_agent_fingerprint: AgentFingerprint,
+        _public_session_id: String,
+        _session_key: IdempotencyKey,
+        _expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn active_worker_fingerprint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        None
+    }
+
+    async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        unimplemented!()
+    }
+
+    async fn activate_worker(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+
+    async fn archive_oplog(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _last_oplog_index: OplogIndex,
+        _wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _worker_env: Option<Vec<(String, String)>>,
+        _worker_agent_config: Vec<AgentConfigEntryDto>,
+        _component_revision: Option<ComponentRevision>,
+        _worker_parent: Option<golem_common::model::AgentId>,
+        _worker_creation_principal: Principal,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_worker_fingerprint: AgentFingerprint,
+        _invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+}
+
+struct ActiveWorkerAccessMock {
+    fingerprint: AgentFingerprint,
+    enqueue_count: Arc<AtomicUsize>,
+}
+
+struct RecordingActiveWorkerAccess {
+    fingerprint: AgentFingerprint,
+    executions: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
+    async fn expire_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_agent_fingerprint: AgentFingerprint,
+        _public_session_id: String,
+        _session_key: IdempotencyKey,
+        _expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn active_worker_fingerprint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        Some(self.fingerprint)
+    }
+
+    async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        unimplemented!()
+    }
+
+    async fn activate_worker(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+
+    async fn archive_oplog(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _last_oplog_index: OplogIndex,
+        _wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
+        _worker_env: Option<Vec<(String, String)>>,
+        _worker_agent_config: Vec<AgentConfigEntryDto>,
+        _component_revision: Option<ComponentRevision>,
+        _worker_parent: Option<golem_common::model::AgentId>,
+        _worker_creation_principal: Principal,
+    ) -> Result<(), WorkerExecutorError> {
+        let AgentInvocation::AgentMethod {
+            idempotency_key, ..
+        } = invocation
+        else {
+            unreachable!()
+        };
+        self.executions.lock().unwrap().push(idempotency_key.value);
+        Ok(())
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        if target_worker_fingerprint != self.fingerprint {
+            return Ok(false);
+        }
+        let AgentInvocation::AgentMethod {
+            idempotency_key, ..
+        } = invocation
+        else {
+            unreachable!()
+        };
+        self.executions.lock().unwrap().push(idempotency_key.value);
+        Ok(true)
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        unreachable!()
+    }
+}
+
+type RecordedEphemeralEnqueue = (
+    OwnedAgentId,
+    Option<Vec<(String, String)>>,
+    Vec<AgentConfigEntryDto>,
+    Option<ComponentRevision>,
+    Option<AgentId>,
+    Principal,
+);
+
+struct EphemeralWorkerAccessMock {
+    recorded: Arc<Mutex<Option<RecordedEphemeralEnqueue>>>,
+    terminal: bool,
+    fail_first_transiently: bool,
+    enqueue_count: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl SchedulerWorkerAccess for EphemeralWorkerAccessMock {
+    async fn expire_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_agent_fingerprint: AgentFingerprint,
+        _public_session_id: String,
+        _session_key: IdempotencyKey,
+        _expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn active_worker_fingerprint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        panic!("ephemeral schedules must not look up a target fingerprint")
+    }
+
+    async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        unimplemented!()
+    }
+
+    async fn activate_worker(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        unreachable!()
+    }
+
+    async fn archive_oplog(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _last_oplog_index: OplogIndex,
+        _wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        unreachable!()
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        worker_parent: Option<AgentId>,
+        worker_creation_principal: Principal,
+    ) -> Result<(), WorkerExecutorError> {
+        let attempt = self.enqueue_count.fetch_add(1, Ordering::SeqCst);
+        *self.recorded.lock().unwrap() = Some((
+            owned_agent_id.clone(),
+            worker_env,
+            worker_agent_config,
+            component_revision,
+            worker_parent,
+            worker_creation_principal,
+        ));
+        if self.terminal {
+            Err(WorkerExecutorError::invalid_request(
+                INACTIVE_EPHEMERAL_AGENT_ERROR,
+            ))
+        } else if self.fail_first_transiently && attempt == 0 {
+            Err(WorkerExecutorError::invalid_request(
+                "Failed to upload invocation payload: temporary storage failure",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_worker_fingerprint: AgentFingerprint,
+        _invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        unreachable!()
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
+        component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        let principal = invocation
+            .principal()
+            .cloned()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("missing principal"))?;
+        self.enqueue_invocation(
+            owned_agent_id,
+            invocation,
+            None,
+            Vec::new(),
+            Some(component_revision),
+            None,
+            principal,
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
+    async fn expire_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_agent_fingerprint: AgentFingerprint,
+        _public_session_id: String,
+        _session_key: IdempotencyKey,
+        _expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn active_worker_fingerprint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        Some(self.fingerprint)
+    }
+
+    async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        unimplemented!()
+    }
+
+    async fn activate_worker(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+
+    async fn archive_oplog(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _last_oplog_index: OplogIndex,
+        _wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _worker_env: Option<Vec<(String, String)>>,
+        _worker_agent_config: Vec<AgentConfigEntryDto>,
+        _component_revision: Option<ComponentRevision>,
+        _worker_parent: Option<golem_common::model::AgentId>,
+        _worker_creation_principal: Principal,
+    ) -> Result<(), WorkerExecutorError> {
+        self.enqueue_count.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
+        _invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        if target_worker_fingerprint != self.fingerprint {
+            return Ok(false);
+        }
+        self.enqueue_count.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        unreachable!()
+    }
+}
+
+struct FailingActivationWorkerAccess {
+    attempts: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
+    async fn expire_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_agent_fingerprint: AgentFingerprint,
+        _public_session_id: String,
+        _session_key: IdempotencyKey,
+        _expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn active_worker_fingerprint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        None
+    }
+
+    async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        unimplemented!()
+    }
+
+    async fn activate_worker(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        Err(WorkerExecutorError::runtime("injected activation failure"))
+    }
+
+    async fn archive_oplog(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _last_oplog_index: OplogIndex,
+        _wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _worker_env: Option<Vec<(String, String)>>,
+        _worker_agent_config: Vec<AgentConfigEntryDto>,
+        _component_revision: Option<ComponentRevision>,
+        _worker_parent: Option<golem_common::model::AgentId>,
+        _worker_creation_principal: Principal,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_worker_fingerprint: AgentFingerprint,
+        _invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+}
+
+struct DelayedActiveWorkerAccessMock {
+    fingerprint: AgentFingerprint,
+    in_flight: Arc<AtomicUsize>,
+    max_in_flight: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
+    async fn expire_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _target_agent_fingerprint: AgentFingerprint,
+        _public_session_id: String,
+        _session_key: IdempotencyKey,
+        _expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn active_worker_fingerprint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        Some(self.fingerprint)
+    }
+
+    async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        unimplemented!()
+    }
+
+    async fn activate_worker(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+
+    async fn archive_oplog(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _last_oplog_index: OplogIndex,
+        _wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _worker_env: Option<Vec<(String, String)>>,
+        _worker_agent_config: Vec<AgentConfigEntryDto>,
+        _component_revision: Option<ComponentRevision>,
+        _worker_parent: Option<golem_common::model::AgentId>,
+        _worker_creation_principal: Principal,
+    ) -> Result<(), WorkerExecutorError> {
+        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
+        _invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        if target_worker_fingerprint != self.fingerprint {
+            return Ok(false);
+        }
+        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(true)
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _invocation: AgentInvocation,
+        _component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        unreachable!()
+    }
+}
+
+struct WorkerServiceMock;
+
+#[async_trait]
+impl WorkerService for WorkerServiceMock {
+    async fn lookup_durable_stream_public_binding(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _public_session_id: &str,
+    ) -> Result<
+        Option<golem_common::model::DurableStreamPublicBinding>,
+        crate::durable_host::durable_stream::SessionError,
+    > {
+        unimplemented!()
+    }
+
+    async fn get(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn lookup_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _status: &AgentStatusRecord,
+        _key: &golem_common::model::IdempotencyKey,
+    ) -> Result<
+        Option<golem_common::model::DurableStreamSessionStatus>,
+        crate::durable_host::durable_stream::SessionError,
+    > {
+        unimplemented!()
+    }
+
+    async fn get_running_workers_in_shards(
+        &self,
+        _on_stale: crate::services::worker::OnStale<'_>,
+    ) -> Result<Vec<crate::services::worker::GetWorkerMetadataResult>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn remove(
+        &self,
+        _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _expected_epoch: Option<golem_common::model::ShardEpoch>,
+        _after_oplog_delete: &(dyn Fn(golem_common::model::AgentFingerprint) + Send + Sync),
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+
+    async fn remove_cached_status(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: golem_common::model::AgentFingerprint,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+
+    async fn resolve_agent_identity(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn write_cached_status(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _previous_status: Option<&AgentStatusRecord>,
+        status_value: AgentStatusRecord,
+    ) -> Result<AgentStatusRecord, WorkerExecutorError> {
+        Ok(status_value)
+    }
+
+    async fn read_status_checkpoint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _agent_mode: AgentMode,
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn write_status_checkpoint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _previous_checkpoint: Option<&AgentStatusRecord>,
+        checkpoint: AgentStatusRecord,
+    ) -> Result<AgentStatusRecord, WorkerExecutorError> {
+        Ok(checkpoint)
+    }
+
+    async fn set_assignment_tracking(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _status_value: &AgentStatusRecord,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn remove_if_stale(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _on_stale: crate::services::worker::OnStale<'_>,
+    ) -> Result<bool, WorkerExecutorError> {
+        Ok(false)
+    }
+}
+
+fn create_shard_service_mock() -> Arc<dyn ShardService> {
+    let result = Arc::new(ShardServiceDefault::new());
+    result.install_unexpiring(
+        1,
+        &HashMap::from([(ShardId::new(0), ShardEpoch::default())]),
+    );
+    result
+}
+
+fn create_promise_service_mock() -> Arc<PromiseServiceMock> {
+    Arc::new(PromiseServiceMock::new())
+}
+
+fn create_worker_access_mock() -> Arc<dyn SchedulerWorkerAccess + Send + Sync> {
+    Arc::new(SchedulerWorkerAccessMock)
+}
+
+async fn create_oplog_service_mock() -> Arc<dyn OplogService> {
+    Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            1024,
+            golem_common::model::RetryConfig::default(),
+        )
+        .await,
+    )
+}
+
+fn create_worker_service_mock() -> Arc<dyn WorkerService> {
+    Arc::new(WorkerServiceMock)
+}
+
+async fn create_scheduler(
+    scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    promise_service: Arc<PromiseServiceMock>,
+) -> Arc<SchedulerServiceDefault> {
+    create_scheduler_with(
+        scheduler_storage,
+        promise_service,
+        create_worker_access_mock(),
+    )
+    .await
+}
+
+async fn create_scheduler_with_worker_access(
+    scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
+) -> Arc<SchedulerServiceDefault> {
+    create_scheduler_with(
+        scheduler_storage,
+        create_promise_service_mock(),
+        worker_access,
+    )
+    .await
+}
+
+async fn create_scheduler_with(
+    scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    promise_service: Arc<PromiseServiceMock>,
+    worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
+) -> Arc<SchedulerServiceDefault> {
+    SchedulerServiceDefault::new(
+        scheduler_storage,
+        create_shard_service_mock(),
+        promise_service,
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    )
+}
+
+async fn create_scheduler_with_oplog(
+    scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
+) -> Arc<SchedulerServiceDefault> {
+    SchedulerServiceDefault::new(
+        scheduler_storage,
+        create_shard_service_mock(),
+        create_promise_service_mock(),
+        create_worker_access_mock(),
+        oplog_service,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    )
+}
+
+/// Scheduler storage wrapper whose `insert` fails with a transient error the
+/// first `transient_failures` times, then delegates to the inner storage.
+#[derive(Debug)]
+struct FlakyInsertSchedulerStorage {
+    inner: InMemorySchedulerStorage,
+    transient_failures: AtomicU32,
+    insert_attempts: Arc<AtomicUsize>,
+    inserted_actions: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+#[async_trait]
+impl SchedulerStorage for FlakyInsertSchedulerStorage {
+    async fn insert(
+        &self,
+        schedule_id: ScheduleId,
+        due_at: DateTime<Utc>,
+        shard_id: ShardId,
+        action: &[u8],
+    ) -> Result<(), SchedulerStorageError> {
+        self.insert_attempts.fetch_add(1, Ordering::SeqCst);
+        self.inserted_actions.lock().unwrap().push(action.to_vec());
+        let remaining =
+            self.transient_failures
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        if remaining.is_ok() {
+            return Err(SchedulerStorageError::Transient(
+                "simulated pool timeout".to_string(),
+            ));
+        }
+        self.inner
+            .insert(schedule_id, due_at, shard_id, action)
+            .await
+    }
+
+    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+        self.inner.cancel(schedule_id).await
+    }
+
+    async fn claim_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+        limit: u32,
+        lease_ttl: Duration,
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+        self.inner
+            .claim_due(now, assignment, limit, lease_ttl)
+            .await
+    }
+
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, SchedulerStorageError> {
+        self.inner.count_due(now, assignment).await
+    }
+
+    async fn extend_lease(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+        lease_until: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner
+            .extend_lease(schedule_id, lease_owner, lease_until)
+            .await
+    }
+
+    async fn ack(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(schedule_id, lease_owner).await
+    }
+}
+
+/// Claims everything due at `now`, which for an action left unacknowledged by a previous tick
+/// means its lease has expired and it is offered again.
+async fn claim_all(
+    storage: &Arc<InMemorySchedulerStorage>,
+    now: &str,
+) -> Vec<ClaimedScheduledAction> {
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    storage
+        .claim_due(
+            DateTime::from_str(now).unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+}
+
+fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
+    PromiseId {
+        agent_id,
+        oplog_idx: OplogIndex::from_u64(idx),
+    }
+}
+
+#[derive(Debug)]
+struct RecordingSchedulerStorage {
+    inner: Arc<InMemorySchedulerStorage>,
+    failed_ack_ids: Arc<Mutex<HashSet<Uuid>>>,
+    failed_acknowledgements: Arc<Mutex<HashSet<Uuid>>>,
+    claimed_batches: Arc<Mutex<Vec<Vec<ClaimedScheduledAction>>>>,
+    ack_failures: AtomicUsize,
+    claims_after_ack_failure: AtomicUsize,
+}
+
+#[async_trait]
+impl SchedulerStorage for RecordingSchedulerStorage {
+    async fn insert(
+        &self,
+        schedule_id: ScheduleId,
+        due_at: DateTime<Utc>,
+        shard_id: ShardId,
+        action: &[u8],
+    ) -> Result<(), SchedulerStorageError> {
+        self.inner
+            .insert(schedule_id, due_at, shard_id, action)
+            .await
+    }
+
+    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+        self.inner.cancel(schedule_id).await
+    }
+
+    async fn claim_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+        limit: u32,
+        lease_ttl: Duration,
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+        if self.ack_failures.load(Ordering::SeqCst) > 0 {
+            self.claims_after_ack_failure.fetch_add(1, Ordering::SeqCst);
+        }
+        let claimed = self
+            .inner
+            .claim_due(now, assignment, limit, lease_ttl)
+            .await?;
+        self.claimed_batches.lock().unwrap().push(claimed.clone());
+        Ok(claimed)
+    }
+
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, SchedulerStorageError> {
+        self.inner.count_due(now, assignment).await
+    }
+
+    async fn extend_lease(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+        lease_until: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner
+            .extend_lease(schedule_id, lease_owner, lease_until)
+            .await
+    }
+
+    async fn ack(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+    ) -> Result<bool, SchedulerStorageError> {
+        if self.failed_ack_ids.lock().unwrap().remove(&schedule_id.id) {
+            self.ack_failures.fetch_add(1, Ordering::SeqCst);
+            self.failed_acknowledgements
+                .lock()
+                .unwrap()
+                .insert(schedule_id.id);
+            return Err(SchedulerStorageError::Transient(
+                "simulated transient acknowledgement failure".to_string(),
+            ));
+        }
+        self.inner.ack(schedule_id, lease_owner).await
+    }
+}
+
+#[test]
+async fn schedule_retries_transient_storage_errors() {
+    let insert_attempts = Arc::new(AtomicUsize::new(0));
+    let inserted_actions = Arc::new(Mutex::new(Vec::new()));
+    let storage = Arc::new(FlakyInsertSchedulerStorage {
+        inner: InMemorySchedulerStorage::new(),
+        transient_failures: AtomicU32::new(2),
+        insert_attempts: insert_attempts.clone(),
+        inserted_actions: inserted_actions.clone(),
+    });
+    let promise_service = create_promise_service_mock();
+    let svc = create_scheduler(storage.clone(), promise_service).await;
+
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let expected_action = serialize(&action).unwrap();
+    let schedule_id = ScheduleId::fresh();
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+    // Two transient failures are retried; the third attempt succeeds without panicking.
+    assert_eq!(
+        svc.schedule_with_id(schedule_id, due_at, action).await,
+        schedule_id
+    );
+    assert_eq!(insert_attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(*inserted_actions.lock().unwrap(), vec![expected_action; 3]);
+
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let claimed = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].schedule_id, schedule_id);
+}
+
+#[test]
+async fn schedule_size_is_observed_once_for_duplicates_and_terminal_failures() {
+    let _metric_guard = RESUME_METRIC_LOCK.lock().await;
+    let action = ScheduledAction::Resume {
+        agent_created_by: AccountId::new(),
+        owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("metric")),
+    };
+    let labels = [
+        crate::metrics::storage::executor_id(),
+        crate::metrics::scheduler::action_kind_label(&action),
+    ];
+    let histogram =
+        crate::metrics::scheduler::SCHEDULED_ACTION_SIZE_BYTES.with_label_values(&labels);
+    let before = histogram.get_sample_count();
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let svc = create_scheduler(storage, create_promise_service_mock()).await;
+    let schedule_id = ScheduleId::fresh();
+    svc.schedule_with_id(schedule_id, due_at, action.clone())
+        .await;
+    svc.schedule_with_id(schedule_id, due_at, action.clone())
+        .await;
+    assert_eq!(histogram.get_sample_count(), before + 2);
+
+    let failing_storage = Arc::new(FlakyInsertSchedulerStorage {
+        inner: InMemorySchedulerStorage::new(),
+        transient_failures: AtomicU32::new(3),
+        insert_attempts: Arc::new(AtomicUsize::new(0)),
+        inserted_actions: Arc::new(Mutex::new(Vec::new())),
+    });
+    let failing_svc = create_scheduler(failing_storage, create_promise_service_mock()).await;
+    let result =
+        AssertUnwindSafe(failing_svc.schedule_with_id(ScheduleId::fresh(), due_at, action))
+            .catch_unwind()
+            .await;
+
+    assert!(result.is_err());
+    assert_eq!(histogram.get_sample_count(), before + 3);
+}
+
+fn agent(name: &str) -> AgentId {
+    AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: name.to_string(),
+    }
+}
+
+fn complete_promise_action(promise_id: PromiseId) -> ScheduledAction {
+    ScheduledAction::CompletePromise {
+        account_id: AccountId::new(),
+        environment_id: EnvironmentId::new(),
+        promise_id,
+    }
+}
+
+fn scheduled_action_variants() -> Vec<ScheduledAction> {
+    let environment_id = EnvironmentId::new();
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent("scheduled-action"));
+    vec![
+        complete_promise_action(promise(owned_agent_id.agent_id.clone(), 101)),
+        ScheduledAction::ArchiveOplog {
+            account_id: AccountId::new(),
+            owned_agent_id: owned_agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+            last_oplog_index: OplogIndex::from_u64(42),
+            next_after: Duration::from_secs(60),
+        },
+        ScheduledAction::Invoke {
+            account_id: AccountId::new(),
+            owned_agent_id: owned_agent_id.clone(),
+            invocation: Box::new(agent_method_invocation()),
+            target_worker_fingerprint: AgentFingerprint::new(),
+        },
+        ScheduledAction::Resume {
+            agent_created_by: AccountId::new(),
+            owned_agent_id: owned_agent_id.clone(),
+        },
+        ScheduledAction::InvokeEphemeral {
+            account_id: AccountId::new(),
+            owned_agent_id,
+            invocation: Box::new(agent_method_invocation()),
+            component_revision: ComponentRevision::INITIAL,
+            env: vec![("KEY".to_string(), "value".to_string())],
+            config: vec![AgentConfigEntryDto {
+                path: vec!["database".to_string()],
+                value: serde_json::Value::String("test".to_string()).into(),
+            }],
+            parent: Some(agent("parent")),
+            creation_principal: Box::new(Principal::anonymous()),
+        },
+    ]
+}
+
+async fn assert_storage_roundtrips_all_action_variants(
+    storage: Arc<dyn SchedulerStorage + Send + Sync>,
+) {
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    let shard_id = ShardId::new(0);
+    let actions = scheduled_action_variants();
+    let mut expected = HashMap::new();
+    for action in actions {
+        let schedule_id = ScheduleId::fresh();
+        storage
+            .insert(schedule_id, due_at, shard_id, &serialize(&action).unwrap())
+            .await
+            .unwrap();
+        expected.insert(schedule_id, action);
+    }
+
+    let claimed = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+            &ShardAssignment::unexpiring(1, [shard_id]),
+            expected.len() as u32,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(claimed.len(), expected.len());
+    for claimed_action in claimed {
+        assert_eq!(
+            claimed_action.action,
+            expected.remove(&claimed_action.schedule_id).unwrap()
+        );
+    }
+    assert!(expected.is_empty());
+}
+
+#[test]
+async fn in_memory_scheduler_storage_roundtrips_all_action_variants() {
+    assert_storage_roundtrips_all_action_variants(Arc::new(InMemorySchedulerStorage::new())).await;
+}
+
+#[test]
+async fn sqlite_scheduler_storage_roundtrips_all_action_variants() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let storage = SqliteSchedulerStorage::configured(&DbSqliteConfig {
+        database: tempdir
+            .path()
+            .join("scheduler.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 1,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+
+    assert_storage_roundtrips_all_action_variants(Arc::new(storage)).await;
+}
+
+fn agent_method_invocation() -> AgentInvocation {
+    AgentInvocation::AgentMethod {
+        idempotency_key: IdempotencyKey::fresh(),
+        method_name: "run".to_string(),
+        input: SchemaValue::Record { fields: vec![] },
+        invocation_context: InvocationContextStack::fresh_rounded(),
+        principal: Principal::anonymous(),
+        scope_card: None,
+    }
+}
+
+fn agent_method_invocation_with_idempotency_key(idempotency_key: String) -> AgentInvocation {
+    AgentInvocation::AgentMethod {
+        idempotency_key: IdempotencyKey::new(idempotency_key),
+        method_name: "run".to_string(),
+        input: SchemaValue::Record { fields: vec![] },
+        invocation_context: InvocationContextStack::fresh(),
+        principal: Principal::anonymous(),
+        scope_card: None,
+    }
+}
+
+/// The scheduler's span must cover one tick, not the whole background loop. A
+/// loop-lifetime span never closes, so it is never exported and it retains
+/// every event recorded inside it for as long as the process runs.
+#[test]
+async fn process_records_one_closed_span_per_tick(tracing: &Tracing) {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let promise_service = create_promise_service_mock();
+    let svc = create_scheduler(storage, promise_service).await;
+
+    let recorder = crate::span_test_support::record_spans(tracing);
+    svc.process(Utc::now()).await.unwrap();
+
+    recorder.assert_closed_span("scheduler_tick");
+    recorder.assert_all_closed();
+}
+
+#[test]
+async fn schedule_returns_uuid_backed_id_and_cancel_removes_entry() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let promise_service = create_promise_service_mock();
+    let svc = create_scheduler(storage.clone(), promise_service).await;
+
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let schedule_id = svc
+        .schedule(DateTime::from_str("2023-07-17T10:05:00Z").unwrap(), action)
+        .await;
+
+    svc.cancel(schedule_id).await;
+
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let claimed = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+    assert!(claimed.is_empty());
+}
+
+#[test]
+fn schedule_id_uses_same_deterministic_derivation_as_rpc_idempotency_keys() {
+    let base = IdempotencyKey::new("caller-provided-idempotency-key".to_string());
+    let oplog_index = OplogIndex::from_u64(42);
+
+    let rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
+    let schedule_id = ScheduleId::from_idempotency_key(&rpc_idempotency_key);
+    let same_rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
+    let different_rpc_idempotency_key = IdempotencyKey::derived(&base, OplogIndex::from_u64(43));
+
+    assert_eq!(schedule_id.id.to_string(), rpc_idempotency_key.value);
+    assert_eq!(
+        schedule_id,
+        ScheduleId::from_idempotency_key(&same_rpc_idempotency_key)
+    );
+    assert_ne!(
+        schedule_id,
+        ScheduleId::from_idempotency_key(&different_rpc_idempotency_key)
+    );
+}
+
+#[test]
+async fn schedule_with_id_is_idempotent() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let promise_service = create_promise_service_mock();
+    let svc = create_scheduler(storage.clone(), promise_service).await;
+
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let schedule_id = ScheduleId::fresh();
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+    assert_eq!(
+        svc.schedule_with_id(schedule_id, due_at, action.clone())
+            .await,
+        schedule_id
+    );
+    assert_eq!(
+        svc.schedule_with_id(schedule_id, due_at, action.clone())
+            .await,
+        schedule_id
+    );
+
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let claimed = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].schedule_id, schedule_id);
+}
+
+#[test]
+async fn process_completes_entries_older_than_previous_hour() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let promise_service = create_promise_service_mock();
+    let svc = create_scheduler(storage, promise_service.clone()).await;
+
+    let promise_id = promise(agent("inst1"), 101);
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        complete_promise_action(promise_id.clone()),
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    let completed_promises = promise_service.all_completed().await;
+    assert!(completed_promises.contains(&promise_id));
+}
+
+#[test]
+async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_lookup() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let promise_service = create_promise_service_mock();
+    let fingerprint = AgentFingerprint::new();
+    let enqueue_count = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(ActiveWorkerAccessMock {
+            fingerprint,
+            enqueue_count: enqueue_count.clone(),
+        });
+    let svc = SchedulerServiceDefault::new(
+        storage,
+        create_shard_service_mock(),
+        promise_service,
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    );
+
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("inst1"));
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        ScheduledAction::Invoke {
+            account_id: AccountId::new(),
+            owned_agent_id,
+            invocation: Box::new(agent_method_invocation()),
+            target_worker_fingerprint: fingerprint,
+        },
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+async fn scheduled_stream_expiry_preserves_all_fences() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let deliveries = Arc::new(Mutex::new(Vec::new()));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(ExpiryWorkerAccessMock {
+            deliveries: deliveries.clone(),
+        });
+    let svc = SchedulerServiceDefault::new(
+        storage,
+        create_shard_service_mock(),
+        create_promise_service_mock(),
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    );
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("expiry"));
+    let fingerprint = AgentFingerprint::new();
+    let session_key = IdempotencyKey::new("internal-key".into());
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        ScheduledAction::ExpireDurableStreamSession {
+            owned_agent_id: owned_agent_id.clone(),
+            target_agent_fingerprint: fingerprint,
+            public_session_id: "public-id".into(),
+            session_key: session_key.clone(),
+            expected_deadline_millis: 1_689_577_500_000,
+        },
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        deliveries.lock().unwrap().as_slice(),
+        &[(
+            owned_agent_id,
+            fingerprint,
+            "public-id".into(),
+            session_key,
+            1_689_577_500_000,
+        )]
+    );
+}
+
+/// Nothing else wakes an agent whose resume was already acknowledged, so an activation that
+/// failed must leave the action in place to be claimed again.
+#[test]
+async fn failed_resume_is_not_acknowledged() {
+    let _metric_guard = RESUME_METRIC_LOCK.lock().await;
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(FailingActivationWorkerAccess {
+            attempts: attempts.clone(),
+        });
+    let svc = create_scheduler_with_worker_access(storage.clone(), worker_access).await;
+
+    let schedule_id = svc
+        .schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            ScheduledAction::Resume {
+                agent_created_by: AccountId::new(),
+                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("inst1")),
+            },
+        )
+        .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+    let claimed = claim_all(&storage, "2023-07-17T10:16:00Z").await;
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].schedule_id, schedule_id);
+}
+
+#[test]
+async fn failed_archive_existence_check_is_not_acknowledged() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let oplog_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let oplog_service: Arc<dyn OplogService> = Arc::new(
+        PrimaryOplogService::new(
+            oplog_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            1024,
+            RetryConfig {
+                max_attempts: 1,
+                min_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            },
+        )
+        .await,
+    );
+    let svc = create_scheduler_with_oplog(storage.clone(), oplog_service).await;
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("archive-exists"));
+    oplog_storage.fail_next_exists();
+
+    let schedule_id = svc
+        .schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            ScheduledAction::ArchiveOplog {
+                account_id: AccountId::new(),
+                owned_agent_id,
+                agent_mode: AgentMode::Durable,
+                last_oplog_index: OplogIndex::from_u64(42),
+                next_after: Duration::from_secs(60),
+            },
+        )
+        .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    let claimed = claim_all(&storage, "2023-07-17T10:16:00Z").await;
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].schedule_id, schedule_id);
+}
+
+/// The counterpart: a resume that did activate its worker is acknowledged and gone.
+#[test]
+async fn successful_resume_is_acknowledged() {
+    let _metric_guard = RESUME_METRIC_LOCK.lock().await;
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let svc =
+        create_scheduler_with_worker_access(storage.clone(), create_worker_access_mock()).await;
+
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        ScheduledAction::Resume {
+            agent_created_by: AccountId::new(),
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("inst1")),
+        },
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert!(claim_all(&storage, "2023-07-17T10:16:00Z").await.is_empty());
+}
+
+/// Completing the promise is only half of the action: an agent that was not woken is still
+/// suspended on it, so a failed activation keeps the action claimable. The retry re-completes
+/// the (already completed) promise, which is a no-op.
+#[test]
+async fn failed_activation_after_promise_completion_is_not_acknowledged() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(FailingActivationWorkerAccess {
+            attempts: attempts.clone(),
+        });
+    let promise_service = create_promise_service_mock();
+    let svc = create_scheduler_with(storage.clone(), promise_service.clone(), worker_access).await;
+
+    let promise_id = promise(agent("inst1"), 101);
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        complete_promise_action(promise_id.clone()),
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert!(promise_service.all_completed().await.contains(&promise_id));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(claim_all(&storage, "2023-07-17T10:16:00Z").await.len(), 1);
+}
+
+#[test]
+async fn scheduled_actions_for_distinct_agents_are_processed_concurrently() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let fingerprint = AgentFingerprint::new();
+    let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(DelayedActiveWorkerAccessMock {
+            fingerprint,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            max_in_flight: max_in_flight.clone(),
+        });
+    let svc = SchedulerServiceDefault::new(
+        storage,
+        create_shard_service_mock(),
+        create_promise_service_mock(),
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        2,
+        CancellationToken::new(),
+    );
+
+    let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+    for name in ["agent-1", "agent-2"] {
+        svc.schedule(
+            due_at,
+            ScheduledAction::Invoke {
+                account_id: AccountId::new(),
+                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent(name)),
+                invocation: Box::new(agent_method_invocation()),
+                target_worker_fingerprint: fingerprint,
+            },
+        )
+        .await;
+    }
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(max_in_flight.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+async fn scheduled_actions_for_the_same_agent_are_processed_serially() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let fingerprint = AgentFingerprint::new();
+    let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(DelayedActiveWorkerAccessMock {
+            fingerprint,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            max_in_flight: max_in_flight.clone(),
+        });
+    let svc = SchedulerServiceDefault::new(
+        storage,
+        create_shard_service_mock(),
+        create_promise_service_mock(),
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        2,
+        CancellationToken::new(),
+    );
+
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("agent-1"));
+    let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+    for _ in 0..2 {
+        svc.schedule(
+            due_at,
+            ScheduledAction::Invoke {
+                account_id: AccountId::new(),
+                owned_agent_id: owned_agent_id.clone(),
+                invocation: Box::new(agent_method_invocation()),
+                target_worker_fingerprint: fingerprint,
+            },
+        )
+        .await;
+    }
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn scheduler_preserves_claim_order_and_aborts_after_ack_failures(
+        actions_per_agent in prop::collection::vec(1usize..5, 1..5),
+        claim_batch_size in 1u32..8,
+        max_batches_per_tick in 1u32..5,
+        max_concurrent_action_processing in 1u32..8,
+        ack_failure_choices in prop::collection::vec(any::<bool>(), 0..20),
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            let failed_ack_ids = Arc::new(Mutex::new(HashSet::new()));
+            let failed_acknowledgements = Arc::new(Mutex::new(HashSet::new()));
+            let claimed_batches = Arc::new(Mutex::new(Vec::new()));
+            let storage = Arc::new(RecordingSchedulerStorage {
+                inner: Arc::new(InMemorySchedulerStorage::new()),
+                failed_ack_ids: failed_ack_ids.clone(),
+                failed_acknowledgements: failed_acknowledgements.clone(),
+                claimed_batches: claimed_batches.clone(),
+                ack_failures: AtomicUsize::new(0),
+                claims_after_ack_failure: AtomicUsize::new(0),
+            });
+            let executions = Arc::new(Mutex::new(Vec::new()));
+            let fingerprint = AgentFingerprint::new();
+            let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+                Arc::new(RecordingActiveWorkerAccess {
+                    fingerprint,
+                    executions: executions.clone(),
+                });
+            let svc = SchedulerServiceDefault::new(
+                storage.clone(),
+                create_shard_service_mock(),
+                create_promise_service_mock(),
+                worker_access,
+                create_oplog_service_mock().await,
+                create_worker_service_mock(),
+                Duration::from_secs(1000),
+                claim_batch_size,
+                Duration::from_secs(30),
+                max_batches_per_tick,
+                RetryConfig::max_attempts_3(),
+                max_concurrent_action_processing,
+                CancellationToken::new(),
+            );
+
+            let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+            let mut scheduled = HashMap::new();
+            let mut schedule_ids = Vec::new();
+            for (agent_index, action_count) in actions_per_agent.iter().enumerate() {
+                let owned_agent_id = OwnedAgentId::new(
+                    EnvironmentId::new(),
+                    &agent(&format!("agent-{agent_index}")),
+                );
+                for action_index in 0..*action_count {
+                    let execution_id = format!("{agent_index}-{action_index}");
+                    let schedule_id = svc
+                        .schedule(
+                            due_at,
+                            ScheduledAction::Invoke {
+                                account_id: AccountId::new(),
+                                owned_agent_id: owned_agent_id.clone(),
+                                invocation: Box::new(
+                                    agent_method_invocation_with_idempotency_key(
+                                        execution_id.clone(),
+                                    ),
+                                ),
+                                target_worker_fingerprint: fingerprint,
+                            },
+                        )
+                        .await;
+                    scheduled.insert(schedule_id.id, (owned_agent_id.clone(), execution_id));
+                    schedule_ids.push(schedule_id.id);
+                }
+            }
+
+            for (index, schedule_id) in schedule_ids.iter().enumerate() {
+                if ack_failure_choices
+                    .get(index % ack_failure_choices.len().max(1))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    failed_ack_ids.lock().unwrap().insert(*schedule_id);
+                }
+            }
+
+            let result = svc
+                .process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+                .await;
+            let ack_failures = storage.ack_failures.load(Ordering::SeqCst);
+            prop_assert_eq!(result.is_err(), ack_failures > 0);
+            prop_assert_eq!(
+                storage.claims_after_ack_failure.load(Ordering::SeqCst),
+                0,
+                "scheduler claimed another batch after an acknowledgement failure"
+            );
+
+            let claimed_batches = claimed_batches.lock().unwrap().clone();
+            let failed_acknowledgements = failed_acknowledgements.lock().unwrap().clone();
+            let executions = executions.lock().unwrap().clone();
+            let execution_set: HashSet<_> = executions.iter().cloned().collect();
+            prop_assert_eq!(
+                execution_set.len(),
+                executions.len(),
+                "an action executed twice before its lease expired"
+            );
+
+            let mut claimed_by_agent: HashMap<OwnedAgentId, Vec<String>> = HashMap::new();
+            let mut executed_by_agent: HashMap<OwnedAgentId, Vec<String>> = HashMap::new();
+            let failed_execution_ids: HashSet<_> = failed_acknowledgements
+                .iter()
+                .map(|schedule_id| scheduled[schedule_id].1.clone())
+                .collect();
+            for batch in &claimed_batches {
+                for claimed in batch {
+                    let (owned_agent_id, execution_id) = &scheduled[&claimed.schedule_id.id];
+                    claimed_by_agent
+                        .entry(owned_agent_id.clone())
+                        .or_default()
+                        .push(execution_id.clone());
+                }
+            }
+            for execution_id in executions {
+                let (owned_agent_id, _) = scheduled
+                    .values()
+                    .find(|(_, id)| id == &execution_id)
+                    .unwrap();
+                executed_by_agent
+                    .entry(owned_agent_id.clone())
+                    .or_default()
+                    .push(execution_id);
+            }
+            for (owned_agent_id, claimed) in &claimed_by_agent {
+                let expected_len = claimed
+                    .iter()
+                    .position(|execution_id| failed_execution_ids.contains(execution_id))
+                    .map(|index| index + 1)
+                    .unwrap_or(claimed.len());
+                let executions = executed_by_agent
+                    .get(owned_agent_id)
+                    .cloned()
+                    .unwrap_or_default();
+                prop_assert_eq!(
+                    executions,
+                    &claimed[..expected_len],
+                    "agent {} actions executed out of claim order",
+                    owned_agent_id
+                );
+            }
+
+            for batch in claimed_batches {
+                for failed in batch.iter().filter(|action| {
+                    failed_acknowledgements.contains(&action.schedule_id.id)
+                }) {
+                    let (failed_agent_id, _) = &scheduled[&failed.schedule_id.id];
+                    let sibling_agents: HashSet<_> = batch
+                        .iter()
+                        .map(|action| scheduled[&action.schedule_id.id].0.clone())
+                        .filter(|agent_id| agent_id != failed_agent_id)
+                        .collect();
+                    for sibling_agent_id in sibling_agents {
+                        let sibling = batch
+                            .iter()
+                            .find(|action| {
+                                scheduled[&action.schedule_id.id].0 == sibling_agent_id
+                            })
+                            .unwrap();
+                        let (_, execution_id) = &scheduled[&sibling.schedule_id.id];
+                        prop_assert!(
+                            execution_set.contains(execution_id),
+                            "acknowledgement failure cancelled sibling agent lane"
+                        );
+                    }
+                }
+            }
+
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[test]
+async fn scheduled_ephemeral_invoke_skips_fingerprint_lookup_and_preserves_creation_data() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let recorded = Arc::new(Mutex::new(None));
+    let enqueue_count = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(EphemeralWorkerAccessMock {
+            recorded: recorded.clone(),
+            terminal: false,
+            fail_first_transiently: false,
+            enqueue_count,
+        });
+    let svc = SchedulerServiceDefault::new(
+        storage,
+        create_shard_service_mock(),
+        create_promise_service_mock(),
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    );
+
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral"));
+    let parent = agent("caller");
+    let config = vec![AgentConfigEntryDto {
+        path: vec!["database".to_string()],
+        value: serde_json::Value::String("test".to_string()).into(),
+    }];
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        ScheduledAction::InvokeEphemeral {
+            account_id: AccountId::new(),
+            owned_agent_id: owned_agent_id.clone(),
+            invocation: Box::new(agent_method_invocation()),
+            component_revision: ComponentRevision::INITIAL,
+            env: vec![("KEY".to_string(), "value".to_string())],
+            config: config.clone(),
+            parent: Some(parent.clone()),
+            creation_principal: Box::new(Principal::anonymous()),
+        },
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *recorded.lock().unwrap(),
+        Some((
+            owned_agent_id,
+            Some(vec![("KEY".to_string(), "value".to_string())]),
+            config,
+            Some(ComponentRevision::INITIAL),
+            Some(parent),
+            Principal::anonymous(),
+        ))
+    );
+}
+
+#[test]
+fn scheduled_action_constructor_indices_preserve_persisted_compatibility() {
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("target"));
+    let resume = ScheduledAction::Resume {
+        agent_created_by: AccountId::new(),
+        owned_agent_id: owned_agent_id.clone(),
+    };
+    let ephemeral = ScheduledAction::InvokeEphemeral {
+        account_id: AccountId::new(),
+        owned_agent_id,
+        invocation: Box::new(agent_method_invocation()),
+        component_revision: ComponentRevision::INITIAL,
+        env: vec![],
+        config: vec![],
+        parent: None,
+        creation_principal: Box::new(Principal::anonymous()),
+    };
+
+    assert_eq!(serialize(&resume).unwrap()[2], 3);
+    assert_eq!(serialize(&ephemeral).unwrap()[2], 4);
+}
+
+#[test]
+async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let enqueue_count = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(EphemeralWorkerAccessMock {
+            recorded: Arc::new(Mutex::new(None)),
+            terminal: true,
+            fail_first_transiently: false,
+            enqueue_count: enqueue_count.clone(),
+        });
+    let svc = SchedulerServiceDefault::new(
+        storage,
+        create_shard_service_mock(),
+        create_promise_service_mock(),
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    );
+
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        ScheduledAction::InvokeEphemeral {
+            account_id: AccountId::new(),
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
+            invocation: Box::new(agent_method_invocation()),
+            component_revision: ComponentRevision::INITIAL,
+            env: vec![],
+            config: vec![],
+            parent: None,
+            creation_principal: Box::new(Principal::anonymous()),
+        },
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+    svc.process(DateTime::from_str("2023-07-17T10:16:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let enqueue_count = Arc::new(AtomicUsize::new(0));
+    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+        Arc::new(EphemeralWorkerAccessMock {
+            recorded: Arc::new(Mutex::new(None)),
+            terminal: false,
+            fail_first_transiently: true,
+            enqueue_count: enqueue_count.clone(),
+        });
+    let svc = SchedulerServiceDefault::new(
+        storage,
+        create_shard_service_mock(),
+        create_promise_service_mock(),
+        worker_access,
+        create_oplog_service_mock().await,
+        create_worker_service_mock(),
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    );
+
+    svc.schedule(
+        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        ScheduledAction::InvokeEphemeral {
+            account_id: AccountId::new(),
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
+            invocation: Box::new(agent_method_invocation()),
+            component_revision: ComponentRevision::INITIAL,
+            env: vec![],
+            config: vec![],
+            parent: None,
+            creation_principal: Box::new(Principal::anonymous()),
+        },
+    )
+    .await;
+
+    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+        .await
+        .unwrap();
+    svc.process(DateTime::from_str("2023-07-17T10:16:00Z").unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(enqueue_count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+async fn leases_prevent_duplicate_claims_until_expiry() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    storage
+        .insert(
+            ScheduleId::fresh(),
+            due_at,
+            ShardId::new(0),
+            &serialize(&action).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
+
+    let first = storage
+        .claim_due(now, &assignment, 10, Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1);
+
+    let second = storage
+        .claim_due(now, &assignment, 10, Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert!(second.is_empty());
+
+    let after_expiry = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:31Z").unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_expiry.len(), 1);
+}
+
+#[test]
+async fn stale_ack_does_not_delete_reclaimed_entry() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    storage
+        .insert(
+            ScheduleId::fresh(),
+            due_at,
+            ShardId::new(0),
+            &serialize(&action).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let first = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    let second = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:31Z").unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+
+    assert!(
+        !storage
+            .ack(&first.schedule_id, first.lease_owner)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .ack(&second.schedule_id, second.lease_owner)
+            .await
+            .unwrap()
+    );
+}
+
+#[test]
+async fn lease_extension_prevents_reclaim_until_extended_deadline() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    storage
+        .insert(
+            ScheduleId::fresh(),
+            due_at,
+            ShardId::new(0),
+            &serialize(&action).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let claimed = storage
+        .claim_due(
+            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+
+    assert!(
+        storage
+            .extend_lease(
+                &claimed.schedule_id,
+                claimed.lease_owner,
+                DateTime::from_str("2023-07-17T10:07:00Z").unwrap(),
+            )
+            .await
+            .unwrap()
+    );
+
+    assert!(
+        storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:31Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:07:01Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+async fn shard_filtering_uses_current_assignment() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
+    let shard = ShardId::from_routing_hash(routing_hash, 2);
+    let other_shard = ShardId::new((shard.value() + 1) % 2);
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    storage
+        .insert(
+            ScheduleId::fresh(),
+            due_at,
+            shard,
+            &serialize(&action).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let unassigned = ShardAssignment::unexpiring(2, [other_shard]);
+    let assigned = ShardAssignment::unexpiring(2, [shard]);
+    let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
+
+    assert!(
+        storage
+            .claim_due(now, &unassigned, 10, Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        storage
+            .claim_due(now, &assigned, 10, Duration::from_secs(30))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+async fn due_backlog_includes_leased_actions_until_acknowledged() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let action = complete_promise_action(promise(agent("inst1"), 101));
+    let shard = ShardId::new(0);
+    let assignment = ShardAssignment::unexpiring(1, [shard]);
+    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
+    let schedule_id = ScheduleId::fresh();
+    storage
+        .insert(schedule_id, due_at, shard, &serialize(&action).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 1);
+
+    let claimed = storage
+        .claim_due(now, &assignment, 1, Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 1);
+
+    assert!(
+        storage
+            .ack(&schedule_id, claimed[0].lease_owner)
+            .await
+            .unwrap()
+    );
+    assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 0);
+}
+
+#[test]
+fn shard_id_from_routing_hash_handles_negative_hashes() {
+    assert_eq!(ShardId::from_routing_hash(-i64::MAX, 10), ShardId::new(7));
+}

@@ -18,6 +18,7 @@ use golem_client::api::{
 };
 use golem_common::model::Empty;
 use golem_common::model::account::AccountEmail;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
     AgentMode, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
     Snapshotting,
@@ -35,7 +36,6 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreatio
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::schema::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema,
     MetadataEnvelope, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
