@@ -8,7 +8,7 @@ Rules for code under `durable_host/`. Mechanisms, timelines and crash matrices a
 Vocabulary: a durable call is a `Start` entry plus its *terminal* (`End` or `Cancelled`), both
 identified by the `Start` index. A *claim* is the replay step that matches the host call the
 guest is making now against the next recorded `Start` (`ReplayState::claim_start`,
-`replay_state/cursor.rs`; the identity is a `StartClaim` from `replay_state/claims.rs`: function
+`replay_state/cursor/`; the identity is a `StartClaim` from `replay_state/claims.rs`: function
 name, owner, optional request payload). *Observe* is the guest reading the result.
 
 - **Execute** a live effect only when the durable context reports live
@@ -18,8 +18,8 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   the shared flag; an entity Store is live only after its own `PendingReplayToLive::finish_at` set
   `local_live_tail` (a `ReplayingCompleted` entity Store is never live).
 - **Append** `Start` eagerly when a durable call begins and `End`/`Cancelled` when it terminates,
-  through `begin_durable_function` / `end_durable_function` (`durability.rs`) and a
-  `DurableCallSession` (`concurrent/call.rs`). A trap leaves `Start` incomplete
+  through `begin_durable_function` / `end_durable_function` (`durability/`) and a
+  `DurableCallSession` (`concurrent/call/`). A trap leaves `Start` incomplete
   (`abandon_for_trap`); never write `Cancelled` for a trap.
 - **Claim** during replay by identity (`StartClaim`, optional request-payload match). Scan-ahead
   claiming exists only to route concurrent completions to the right awaiter; a `Start` that does

@@ -1,14 +1,22 @@
 use super::*;
+#[cfg(target_os = "linux")]
 use anyhow::Context as _;
+#[cfg(target_os = "linux")]
 use golem_common::model::agent::AgentMode;
+#[cfg(target_os = "linux")]
 use golem_common::model::oplog::{AgentError, OplogEntry};
+#[cfg(target_os = "linux")]
 use golem_service_base::error::worker_executor::InterruptKind;
+#[cfg(target_os = "linux")]
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
+#[cfg(target_os = "linux")]
 use golem_worker_executor::worker::Worker;
 use pretty_assertions::assert_eq;
 use test_r::test;
+#[cfg(target_os = "linux")]
 use tokio::io::AsyncReadExt;
 
+#[cfg(target_os = "linux")]
 mod nonmatching;
 
 #[cfg(target_os = "linux")]
@@ -37,6 +45,7 @@ async fn ephemeral_pending_managed_xfs_storage_fails_with_matching_resource_erro
     pending_managed_xfs_storage(last_unique_id, deps, host_api_tests, AgentMode::Ephemeral).await
 }
 
+#[cfg(target_os = "linux")]
 async fn pending_managed_xfs_storage(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

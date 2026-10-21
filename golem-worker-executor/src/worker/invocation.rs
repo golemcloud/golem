@@ -1101,7 +1101,7 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
 ///
 /// A `none` result (the declared `unit` output) is represented by the
 /// canonical empty tuple, matching the `unit` projection used on the caller
-/// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
+/// side ([`schema_value_to_wire_output`](crate::durable_host::rpc)).
 fn decode_invoke_output<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     output: Option<core_wire::SchemaValueTree>,

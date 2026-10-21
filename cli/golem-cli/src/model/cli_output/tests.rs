@@ -1051,11 +1051,11 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
         environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
         env: BTreeMap::new().into_iter().collect(),
         default_env: BTreeMap::new().into_iter().collect(),
-        config: vec![golem_common::model::worker::AgentConfigEntryDto {
+        config: vec![golem_common::model::agent::AgentConfigEntryDto {
             path: vec!["db".to_string(), "password".to_string()],
             value: golem_common::base_model::json::NormalizedJsonValue(json!("runtime-secret")),
         }],
-        default_config: vec![golem_common::model::worker::AgentConfigEntryDto {
+        default_config: vec![golem_common::model::agent::AgentConfigEntryDto {
             path: vec!["db".to_string(), "password".to_string()],
             value: golem_common::base_model::json::NormalizedJsonValue(json!("default-secret")),
         }],
@@ -1095,7 +1095,7 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     "API_TOKEN".to_string(),
                     "component-env-secret".to_string(),
                 )]),
-                config: vec![golem_common::model::worker::TypedAgentConfigEntry {
+                config: vec![golem_common::model::agent::TypedAgentConfigEntry {
                     path: vec!["db".to_string(), "password".to_string()],
                     value: typed_schema_string("component-config-secret"),
                 }],
@@ -4058,13 +4058,13 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
         .boxed()
 }
 
-fn arb_agent_config_entry_dto() -> BoxedStrategy<golem_common::model::worker::AgentConfigEntryDto> {
+fn arb_agent_config_entry_dto() -> BoxedStrategy<golem_common::model::agent::AgentConfigEntryDto> {
     (
         proptest::collection::vec(arb_small_string(), 1..4),
         arb_json_value(2),
     )
         .prop_map(
-            |(path, value)| golem_common::model::worker::AgentConfigEntryDto {
+            |(path, value)| golem_common::model::agent::AgentConfigEntryDto {
                 path,
                 value: golem_common::base_model::json::NormalizedJsonValue(value),
             },
@@ -4073,7 +4073,7 @@ fn arb_agent_config_entry_dto() -> BoxedStrategy<golem_common::model::worker::Ag
 }
 
 fn arb_snapshot_assisted_update_metadata()
--> BoxedStrategy<golem_common::model::worker::SnapshotAssistedUpdateMetadata> {
+-> BoxedStrategy<golem_common::model::agent::SnapshotAssistedUpdateMetadata> {
     (
         arb_small_u64(),
         arb_small_u64(),
@@ -4084,7 +4084,7 @@ fn arb_snapshot_assisted_update_metadata()
             |(revision, start_index, snapshot_index, filesystem_snapshot)| {
                 let revision = golem_common::model::component::ComponentRevision::new(revision)
                     .expect("generated revision should be valid");
-                golem_common::model::worker::SnapshotAssistedUpdateMetadata {
+                golem_common::model::agent::SnapshotAssistedUpdateMetadata {
                     source_component_revision: revision,
                     source_revision_start_index: golem_common::model::OplogIndex::from_u64(
                         start_index,
@@ -4098,7 +4098,7 @@ fn arb_snapshot_assisted_update_metadata()
         .boxed()
 }
 
-fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecord> {
+fn arb_update_record() -> BoxedStrategy<golem_common::model::agent::UpdateRecord> {
     prop_oneof![
         (
             arb_timestamp(),
@@ -4106,29 +4106,29 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
             proptest::option::of(arb_snapshot_assisted_update_metadata()),
         )
             .prop_map(|(timestamp, target_revision, assisted)| {
-                golem_common::model::worker::UpdateRecord::PendingUpdate(
-                    golem_common::model::worker::PendingUpdate {
+                golem_common::model::agent::UpdateRecord::PendingUpdate(
+                    golem_common::model::agent::PendingUpdate {
                         timestamp,
                         target_revision: golem_common::model::component::ComponentRevision::new(
                             target_revision,
                         )
                         .expect("generated revision should be valid"),
                         pending_update_index: None,
-                        mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                        mode: golem_common::model::agent::AgentUpdateMode::Automatic,
                         snapshot_assisted_details: assisted,
                     },
                 )
             }),
         (arb_timestamp(), arb_small_u64()).prop_map(|(timestamp, target_revision)| {
-            golem_common::model::worker::UpdateRecord::SuccessfulUpdate(
-                golem_common::model::worker::SuccessfulUpdate {
+            golem_common::model::agent::UpdateRecord::SuccessfulUpdate(
+                golem_common::model::agent::SuccessfulUpdate {
                     timestamp,
                     target_revision: golem_common::model::component::ComponentRevision::new(
                         target_revision,
                     )
                     .expect("generated revision should be valid"),
                     pending_update_index: None,
-                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                    mode: golem_common::model::agent::AgentUpdateMode::Automatic,
                     snapshot_assisted_details: None,
                 },
             )
@@ -4139,8 +4139,8 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
             proptest::option::of(arb_small_string()),
         )
             .prop_map(|(timestamp, target_revision, details)| {
-                golem_common::model::worker::UpdateRecord::FailedUpdate(
-                    golem_common::model::worker::FailedUpdate {
+                golem_common::model::agent::UpdateRecord::FailedUpdate(
+                    golem_common::model::agent::FailedUpdate {
                         timestamp,
                         target_revision: golem_common::model::component::ComponentRevision::new(
                             target_revision,
@@ -4148,7 +4148,7 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         .expect("generated revision should be valid"),
                         details,
                         pending_update_index: None,
-                        mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                        mode: golem_common::model::agent::AgentUpdateMode::Automatic,
                         snapshot_assisted_details: None,
                     },
                 )
@@ -5775,14 +5775,14 @@ fn arb_agent_type_provision_config()
         .boxed()
 }
 
-fn arb_typed_agent_config_entry()
--> BoxedStrategy<golem_common::model::worker::TypedAgentConfigEntry> {
+fn arb_typed_agent_config_entry() -> BoxedStrategy<golem_common::model::agent::TypedAgentConfigEntry>
+{
     (
         proptest::collection::vec(arb_small_string(), 1..3),
         arb_small_string(),
     )
         .prop_map(
-            |(path, value)| golem_common::model::worker::TypedAgentConfigEntry {
+            |(path, value)| golem_common::model::agent::TypedAgentConfigEntry {
                 path,
                 value: golem_common::schema::TypedSchemaValue::new(
                     golem_common::schema::SchemaGraph::anonymous(

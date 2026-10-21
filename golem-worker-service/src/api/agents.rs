@@ -7,6 +7,7 @@ use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::AgentFingerprint;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentId;
@@ -17,7 +18,6 @@ use golem_common::model::invocation_session_public::{
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::tool::SerializableToolRpcError;
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_http_api_request;
 use golem_common::schema::tool::Tool;

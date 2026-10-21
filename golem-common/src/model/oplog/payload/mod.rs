@@ -24,6 +24,7 @@ use crate::base_model::oplog::attachment::{
     ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentId,
 };
 use crate::model::agent::AgentTypeName;
+use crate::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use crate::model::card::PermissionTarget;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
@@ -54,7 +55,6 @@ use crate::model::oplog::types::{
 };
 use crate::model::oplog::{CardInstallFailure, PayloadId};
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
-use crate::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
     ScanCursor,

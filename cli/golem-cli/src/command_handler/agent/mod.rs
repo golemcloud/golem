@@ -78,6 +78,9 @@ use golem_client::model::{
     UpdateWorkerRequest, WorkersMetadataRequest,
 };
 use golem_common::model::agent::typed_constructor_parameters;
+use golem_common::model::agent::{
+    AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
+};
 use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -85,9 +88,6 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::worker::{
-    AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
-};
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
@@ -111,10 +111,10 @@ use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
 
-fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::worker::AgentUpdateMode {
+fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::agent::AgentUpdateMode {
     match mode {
-        AgentUpdateMode::Automatic => golem_common::model::worker::AgentUpdateMode::Automatic,
-        AgentUpdateMode::Manual => golem_common::model::worker::AgentUpdateMode::Manual,
+        AgentUpdateMode::Automatic => golem_common::model::agent::AgentUpdateMode::Automatic,
+        AgentUpdateMode::Manual => golem_common::model::agent::AgentUpdateMode::Manual,
     }
 }
 
@@ -2269,7 +2269,7 @@ impl AgentCommandHandler {
         component_id: &ComponentId,
         agent_id: &str,
         target_revision: ComponentRevision,
-        update_mode: golem_common::model::worker::AgentUpdateMode,
+        update_mode: golem_common::model::agent::AgentUpdateMode,
         selected_update_attempt_index: OplogIndex,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;

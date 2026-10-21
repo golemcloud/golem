@@ -1,5 +1,5 @@
 use super::*;
-use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
 use golem_worker_executor_test_utils::ReplayAdmissionStage as Stage;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::{AtomicUsize, Ordering};

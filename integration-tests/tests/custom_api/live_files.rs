@@ -296,8 +296,8 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
         .user
         .revert(
             &agent(&context, "first"),
-            golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(
-                golem_common::model::worker::RevertLastInvocations {
+            golem_common::model::agent::RevertWorkerTarget::RevertLastInvocations(
+                golem_common::model::agent::RevertLastInvocations {
                     number_of_invocations: 1,
                 },
             ),

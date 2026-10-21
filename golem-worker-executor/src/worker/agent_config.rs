@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
-use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::schema::agent::typed_schema_value_with_projected_defs;
 use golem_common::schema::schema_type::SecretSpec;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};

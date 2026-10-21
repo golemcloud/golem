@@ -26,6 +26,9 @@ use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
+};
 use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::StoredCard;
@@ -37,9 +40,6 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::FileByteSelection;
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
-use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
-};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -507,7 +507,7 @@ impl WorkerClient for RecordingWorkerClient {
     async fn update(
         &self,
         _: &AgentId,
-        _: golem_common::model::worker::AgentUpdateMode,
+        _: golem_common::model::agent::AgentUpdateMode,
         _: ComponentRevision,
         _: bool,
         _: EnvironmentId,
@@ -676,7 +676,7 @@ impl WorkerClient for RecordingWorkerClient {
         idempotency_key: IdempotencyKey,
         context: Option<InvocationContext>,
         freshness: golem_common::model::agent::InvocationFreshnessDisposition,
-        _: Vec<golem_common::model::worker::AgentConfigEntryDto>,
+        _: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         _: EnvironmentId,
         _: AccountId,
         auth: AuthCtx,

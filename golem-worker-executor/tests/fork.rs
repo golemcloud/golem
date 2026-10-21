@@ -17,6 +17,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     resume_worker_response, worker_executor_client::WorkerExecutorClient,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
@@ -26,7 +27,6 @@ use golem_common::model::durable_stream::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PromiseId,

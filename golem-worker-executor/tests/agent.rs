@@ -15,10 +15,10 @@
 use crate::Tracing;
 
 use golem_api_grpc::proto::golem::worker::InvocationStart;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};

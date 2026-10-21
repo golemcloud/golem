@@ -1,3 +1,4 @@
+use super::input::discards_input_after_terminal;
 use super::*;
 use crate::durable_host::durable_stream::AttachedStreamSegmentSource;
 use crate::durable_host::durable_stream::SessionError;
@@ -20,9 +21,9 @@ use golem_common::base_model::durable_stream::{
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::TraceId;
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
 use golem_schema::proto::golem::schema::{ListValue, SchemaValueStreamReference, schema_value};
 use golem_schema::schema::schema_value::UnionValuePayload;

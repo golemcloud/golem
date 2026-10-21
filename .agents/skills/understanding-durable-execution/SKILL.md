@@ -52,7 +52,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 3. **Durable agent RPC is exactly-once at the logical callee-invocation level.** Dispatch attempts
    (replay, transport retry, incomplete-call repair) share a durable key. An executing target persists one
    invocation and result; read-only cache hits/followers persist neither. Attempts are not executions. Owner:
-   `durable_host/wasm_rpc/mod.rs`
+   `durable_host/rpc/mod.rs`
    (`derive_idempotency_key(begin_index)`), `worker/mod.rs::enqueue_worker_invocation_with_effect`
    (`lookup_invocation_result` dedupe before appending `PendingAgentInvocation`).
 
@@ -184,7 +184,7 @@ replay tolerance.
 | Durability guard | `durable_host/durability.rs` | `begin_durable_function`/`end_durable_function`, `DurableFunctionType`, in-function retry |
 | Host context | `durable_host/mod.rs` | `prepare_instance`, `resume_replay`, `switch_to_live`, `PendingReplayToLive`, idempotency-key derivation, snapshot boundary checks |
 | Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before `AgentInvocationFinished` |
-| RPC | `durable_host/wasm_rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
+| RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Owner wallet | `worker/owner_wallet.rs`, `worker/instance/mod.rs` | Generation-bound live wallet, recorded replay baseline and shared cursor installation |
 | Cut points | `worker/cut_point.rs` | Validates operator cuts; calls recover from the exact retained prefix |
