@@ -1663,23 +1663,48 @@ async fn resumed_and_get_streams_share_the_limit() {
 
 #[test]
 async fn a_notification_does_not_reach_a_resumed_stream() {
-    let fx = Fixture::new().await;
+    let harness =
+        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
+    let (first, next) = harness_deployments(&harness);
+    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
     let session = fx.initialize().await;
-    let session_id: McpSessionId = session.parse().unwrap();
-    let priming = cut_call(&fx, &session, 4, "g").await;
+    // A response stream of the session that can still get events.
+    let stream = "running-call";
+    fx.replica
+        .events()
+        .bind_call(stream, session.parse().unwrap());
+    let events = fx.replica.event_store();
+    let priming = events
+        .store_event(stream, &ServerSseMessage::retry(Duration::from_secs(3)))
+        .await
+        .unwrap();
     let resumed = resume_times(&fx, &session, &priming, 1).await;
     let mut get_stream = open_get_stream(&fx, &session).await;
 
-    fx.replica.notify_tool_list_changed(session_id);
+    let refused = answer(
+        fx.send(fx.post_with(&session, call_tool(2, AGENT_TOOL), &next))
+            .await,
+    )
+    .await;
+    assert!(is_tool_set_changed(&refused), "{refused:?}");
     let notified = messages(&next_frames(&mut get_stream).await);
     assert_eq!(notified.len(), 1);
     assert_eq!(notified[0]["method"], "notifications/tools/list_changed");
 
-    fx.probe.gate("g").open();
+    events
+        .store_event(
+            stream,
+            &ServerSseMessage::from_message(ServerJsonRpcMessage::Error(JsonRpcError::new(
+                Some(RequestId::Number(4)),
+                ErrorData::internal_error("done", None),
+            ))),
+        )
+        .await
+        .unwrap();
     let replayed = messages(
         &rest(resumed.into_iter().next().unwrap())
             .await
-            .expect("the resumed stream ends after the result"),
+            .expect("the resumed stream ends after the response"),
     );
     assert_eq!(replayed.len(), 1, "{replayed:?}");
     assert_eq!(replayed[0]["id"], 4);

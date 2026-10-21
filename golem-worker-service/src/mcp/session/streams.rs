@@ -37,6 +37,14 @@ enum OpenStream {
 }
 
 impl OpenStream {
+    /// The sender of a GET stream; `None` for a resumed stream.
+    fn get_sender(&self) -> Option<&StreamSender> {
+        match self {
+            OpenStream::Get(sender) => Some(sender),
+            OpenStream::Resumed(_) => None,
+        }
+    }
+
     /// True when the stream's response has ended.
     fn is_closed(&self) -> bool {
         match self {
@@ -114,10 +122,8 @@ impl OpenStreams {
                 .get(&session)
                 .map(|open| {
                     open.iter()
-                        .filter_map(|stream| match stream {
-                            OpenStream::Get(sender) => Some(sender.clone()),
-                            OpenStream::Resumed(_) => None,
-                        })
+                        .filter_map(OpenStream::get_sender)
+                        .cloned()
                         .collect()
                 })
                 .unwrap_or_default()

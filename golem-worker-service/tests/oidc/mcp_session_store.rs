@@ -28,8 +28,7 @@ use golem_worker_service::custom_api::oidc::session_store::{
     migrated_postgres_pool, migrated_sqlite_pool,
 };
 use golem_worker_service::mcp::session::store::{
-    DbMcpSessionStore, McpSessionId, McpSessionRecord, McpSessionStore, PostgresMcpSessionStore,
-    SqliteMcpSessionStore,
+    McpSessionId, McpSessionRecord, McpSessionStore, PostgresMcpSessionStore, SqliteMcpSessionStore,
 };
 use sqlx::Row;
 use std::sync::Arc;
@@ -37,7 +36,6 @@ use std::time::Duration;
 use tempfile::NamedTempFile;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 use tokio::time::{Instant, sleep, sleep_until};
-use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(DockerPostgresRdb);
@@ -235,18 +233,10 @@ async fn create_expiring_and_live_sessions(
     Ok(live)
 }
 
-/// Direct access to the `mcp_session` table.
+/// The number of rows of `mcp_session`.
 #[async_trait]
 trait SessionRows: Send + Sync {
-    /// The number of rows.
     async fn session_rows(&self) -> anyhow::Result<i64>;
-
-    /// Inserts a row that has already expired.
-    async fn insert_expired_row(&self) -> anyhow::Result<()>;
-
-    /// Moves the expiry of every row two minutes back, as if two minutes had passed, and
-    /// returns the new expiry of the one row.
-    async fn age_by_two_minutes(&self) -> anyhow::Result<i64>;
 }
 
 #[trait_gen(SqlitePool -> SqlitePool, PostgresPool)]
@@ -259,121 +249,6 @@ impl SessionRows for SqlitePool {
             .await?;
         Ok(row.try_get::<i64, _>(0)?)
     }
-
-    async fn insert_expired_row(&self) -> anyhow::Result<()> {
-        self.with_rw("mcp_session_store_test", "insert_expired")
-            .execute(
-                sqlx::query(
-                    "INSERT INTO mcp_session (session_id, value, expires_at) VALUES ($1, $2, 0)",
-                )
-                .bind(Uuid::new_v4())
-                .bind(Vec::<u8>::new()),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn age_by_two_minutes(&self) -> anyhow::Result<i64> {
-        let row = self
-            .with_rw("mcp_session_store_test", "age")
-            .fetch_one(sqlx::query(
-                "UPDATE mcp_session SET expires_at = expires_at - 120000 RETURNING expires_at",
-            ))
-            .await?;
-        Ok(row.try_get::<i64, _>(0)?)
-    }
-}
-
-/// [`DbMcpSessionStore::refresh`] of either database.
-#[async_trait]
-trait Refresh: McpSessionStore {
-    async fn refresh_after_read(
-        &self,
-        id: McpSessionId,
-        expires_at: i64,
-        read_at: i64,
-        idle: Duration,
-    ) -> anyhow::Result<bool>;
-}
-
-#[trait_gen(SqlitePool -> SqlitePool, PostgresPool)]
-#[async_trait]
-impl Refresh for DbMcpSessionStore<SqlitePool> {
-    async fn refresh_after_read(
-        &self,
-        id: McpSessionId,
-        expires_at: i64,
-        read_at: i64,
-        idle: Duration,
-    ) -> anyhow::Result<bool> {
-        Ok(self.refresh(id, expires_at, read_at, idle).await?)
-    }
-}
-
-// A request reads a live session one second before its expiry and stalls. The expiry passes,
-// another request finds no session, and then the stalled request refreshes the session with what
-// it read. The refresh must not make the session live again. The store's first cleanup, which runs
-// at once, deletes an expired row before the session exists, so that no later cleanup runs during
-// the test.
-async fn a_refresh_after_the_expiry_does_not_revive_the_session<
-    P: SessionRows + Clone,
-    S: Refresh,
->(
-    pool: P,
-    store: impl Fn(P) -> S,
-) -> anyhow::Result<()> {
-    pool.insert_expired_row().await?;
-    let store = store(pool.clone());
-    wait_for_row_count(0, || pool.session_rows()).await?;
-
-    let id = new_id();
-    assert!(
-        store
-            .create(id, &record(EnvironmentId::new(), 1), LONG)
-            .await?
-    );
-    let expires_at = pool.age_by_two_minutes().await?;
-    assert_eq!(store.get(id, None).await?, None);
-
-    let read_at = expires_at - 1000;
-    assert!(
-        !store
-            .refresh_after_read(id, expires_at, read_at, Duration::from_secs(300))
-            .await?
-    );
-    assert_eq!(store.get(id, None).await?, None);
-    Ok(())
-}
-
-#[test]
-#[timeout("30s")]
-async fn sqlite_mcp_session_refresh_after_the_expiry_does_not_revive_it(
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let db_file = NamedTempFile::new()?;
-    let pool = migrated_sqlite_pool(&DbSqliteConfig {
-        database: db_file.path().to_string_lossy().to_string(),
-        max_connections: 10,
-        foreign_keys: false,
-    })
-    .await?;
-    a_refresh_after_the_expiry_does_not_revive_the_session(pool, |pool| {
-        SqliteMcpSessionStore::new(pool, Duration::from_secs(3600))
-    })
-    .await
-}
-
-#[test]
-#[timeout("60s")]
-async fn postgres_mcp_session_refresh_after_the_expiry_does_not_revive_it(
-    _tracing: &Tracing,
-    postgres: &DockerPostgresRdb,
-) -> anyhow::Result<()> {
-    let pool = migrated_postgres_pool(&unique_postgres_config(postgres)).await?;
-    a_refresh_after_the_expiry_does_not_revive_the_session(pool, |pool| {
-        PostgresMcpSessionStore::new(pool, Duration::from_secs(3600))
-    })
-    .await
 }
 
 // The writer store runs its cleanup only once, at construction, before the sessions exist. After

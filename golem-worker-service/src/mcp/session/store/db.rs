@@ -116,15 +116,22 @@ impl<P> Drop for DbMcpSessionStore<P> {
     }
 }
 
-/// The lifetime that a write after a read at `now_ms` which keeps the session live for `idle`
-/// gives the session, or `None` while the stored expiry is already at least `now_ms + idle`.
-/// The lifetime is `idle + slack`, with `slack = min(30 s, idle / 4)`: a session never ends
-/// earlier than `idle` after its last read, and a busy session is written at most once per
-/// slack.
-fn expiry_write(stored_ms: i64, now_ms: i64, idle: Duration) -> Option<i64> {
+/// What a read of a live row saw: the stored expiry and the database clock at the read, both in
+/// Unix milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExpiryRead {
+    expires_at: i64,
+    read_at: i64,
+}
+
+/// The lifetime that a write after `read` which keeps the session live for `idle` gives the
+/// session, or `None` while the stored expiry is already at least `read_at + idle`. The lifetime
+/// is `idle + slack`, with `slack = min(30 s, idle / 4)`: a session never ends earlier than
+/// `idle` after its last read, and a busy session is written at most once per slack.
+fn expiry_write(read: ExpiryRead, idle: Duration) -> Option<i64> {
     let idle_ms = millis(idle);
     let slack = millis(MAX_SLACK.min(idle / 4));
-    (stored_ms < now_ms.saturating_add(idle_ms))
+    (read.expires_at < read.read_at.saturating_add(idle_ms))
         .then(|| idle_ms.saturating_add(slack).min(MAX_LIFETIME_MS))
 }
 
@@ -163,18 +170,16 @@ impl DbMcpSessionStore<SqlitePool> {
         }
     }
 
-    /// Keeps the session live for at least `idle`, after a read that saw the stored expiry
-    /// `expires_at` when the database clock was `read_at`. Writes only when [`expiry_write`]
-    /// asks for it, and only while the row is live when the write executes. `true` when the
-    /// expiry moved.
-    pub async fn refresh(
+    /// Keeps the session live for at least `idle`, after `read`. Writes only when
+    /// [`expiry_write`] asks for it, and only while the row is live when the write executes.
+    /// `true` when the expiry moved.
+    async fn refresh(
         &self,
         id: McpSessionId,
-        expires_at: i64,
-        read_at: i64,
+        read: ExpiryRead,
         idle: Duration,
     ) -> Result<bool, McpSessionStoreError> {
-        let Some(lifetime) = expiry_write(expires_at, read_at, idle) else {
+        let Some(lifetime) = expiry_write(read, idle) else {
             return Ok(false);
         };
         let result = self
@@ -227,7 +232,11 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
         };
         let value: Vec<u8> = row.get(0);
         if let Some(idle) = extend {
-            self.refresh(id, row.get(1), row.get(2), idle).await?;
+            let read = ExpiryRead {
+                expires_at: row.get(1),
+                read_at: row.get(2),
+            };
+            self.refresh(id, read, idle).await?;
         }
         McpSessionRecord::decode(&value).map(Some)
     }
@@ -260,9 +269,20 @@ impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_LIFETIME_MS, expiry_write};
+    use super::{
+        DbMcpSessionStore, ExpiryRead, MAX_LIFETIME_MS, SqliteMcpSessionStore, expiry_write,
+    };
+    use crate::custom_api::oidc::session_store::migrated_sqlite_pool;
+    use crate::mcp::session::store::{McpSessionId, McpSessionRecord, McpSessionStore};
+    use golem_common::config::DbSqliteConfig;
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::db::PoolApi;
+    use sqlx::Row;
     use std::time::Duration;
     use test_r::test;
+    use tokio_util::sync::CancellationToken;
 
     const SECOND: i64 = 1000;
 
@@ -295,12 +315,71 @@ mod tests {
             (0, i64::MAX - 1, Duration::MAX, Some(MAX_LIFETIME_MS)),
         ]
         .into_iter()
-        .for_each(|(stored, now, idle, expected)| {
+        .for_each(|(expires_at, read_at, idle, expected)| {
             assert_eq!(
-                expiry_write(stored, now, idle),
+                expiry_write(
+                    ExpiryRead {
+                        expires_at,
+                        read_at
+                    },
+                    idle
+                ),
                 expected,
-                "stored {stored}, now {now}, idle {idle:?}"
+                "stored {expires_at}, read at {read_at}, idle {idle:?}"
             )
         });
+    }
+
+    // A request reads a live session one second before its expiry and stalls. The expiry passes,
+    // another request finds no session, and then the stalled request refreshes the session with
+    // what it read. The refresh must not make the session live again. The store runs no cleanup
+    // task, so the expired row stays until the refresh executes.
+    #[test]
+    async fn a_refresh_after_the_expiry_does_not_revive_the_session() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let pool = migrated_sqlite_pool(&DbSqliteConfig {
+            database: db_file.path().to_string_lossy().to_string(),
+            max_connections: 2,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap();
+        let store: SqliteMcpSessionStore = DbMcpSessionStore {
+            pool: pool.clone(),
+            cleanup_cancel: CancellationToken::new(),
+        };
+        let id = McpSessionId::generate().unwrap();
+        let record = McpSessionRecord {
+            domain: Domain("mcp.example.com".to_string()),
+            environment_id: EnvironmentId::new(),
+            deployment_revision: DeploymentRevision::INITIAL,
+        };
+        assert!(
+            store
+                .create(id, &record, Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        let expires_at: i64 = pool
+            .with_rw("mcp_session_store_test", "age")
+            .fetch_one(sqlx::query(
+                "UPDATE mcp_session SET expires_at = expires_at - 120000 RETURNING expires_at",
+            ))
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(store.get(id, None).await.unwrap(), None);
+
+        let stale = ExpiryRead {
+            expires_at,
+            read_at: expires_at - SECOND,
+        };
+        assert!(
+            !store
+                .refresh(id, stale, Duration::from_secs(300))
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.get(id, None).await.unwrap(), None);
     }
 }

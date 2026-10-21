@@ -231,7 +231,7 @@ impl McpReplica {
     }
 
     /// Tells this replica's GET streams of the session that its tool list changed.
-    pub(super) fn notify_tool_list_changed(&self, session: McpSessionId) {
+    fn notify_tool_list_changed(&self, session: McpSessionId) {
         self.streams.notify(
             session,
             ServerJsonRpcMessage::notification(ServerNotification::ToolListChangedNotification(
