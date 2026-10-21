@@ -15,9 +15,6 @@ It adds no tool WIT methods or worker-executor implementation.
 - `build.mjs` bundles the probe, registers the native module in a generated
   wrapper, and builds and Wizer-preinitializes the component.
 
-`guest-process-bridge.rs` is the earlier standalone transport proof. The build
-script does not use it.
-
 The cases cover independent stdout/stderr, binary stdin and overflow cancellation
 through both synchronous and asynchronous calls. A child also waits for stdin
 while another synchronous call runs. The output cases run in a fresh JavaScript
