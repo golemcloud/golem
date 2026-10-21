@@ -225,7 +225,12 @@ Constructor-only replay covers restarts before the accepted invocation ran. An e
 never reconstructs in process once its Store has run: `on_invocation_failure` turns traps that
 would restart it into terminal failures and notifies the caller. Any other `Immediate`, `Delayed`,
 or `ReacquirePermits` decision reaching the outer loop becomes a terminal interruption plus archive,
-without replacing an already published outcome. Ordinary ephemeral agents keep `TryStop` unchanged;
+without replacing an already published outcome. An active `Suspend` also becomes a terminal
+`EphemeralCannotSuspend` failure after interrupt acknowledgement and monthly-exhaustion conversion,
+so a lowered memory limit or failed monthly monitor cannot leave a method suffix for constructor-only
+replay. Monthly capacity exhaustion retains its specific monthly error, and a monthly-policy outage
+keeps its `Monthly enforcement unavailable` reason. Idle and pre-method suspension remain safe:
+ordinary ephemeral agents keep their outer-loop `TryStop` unchanged;
 ephemeral external-tool owners also treat it as terminal. Startup retries before a Store exists
 remain unchanged. A started method never runs again live.
 Replay starts from the chosen snapshot baseline
@@ -2494,6 +2499,23 @@ that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` 
 failure table in the executor walkthrough.
 
 ## Concurrency and guest completion delivery
+
+Recorded async events reach the guest only at a blocked wait, at most one event per block,
+live and replay alike. Native stream items and terminals (including producer cancellation),
+timers and accessor completions share `RuntimeStore::await_guest_blocked` in the consuming
+Store; an entity body uses its own Store, not the owner's. The gate consumes one unconsumed
+`DriverBlocked` edge, promoted only after the outer driver returns Pending. A delivery that
+becomes ready after the guest blocked consumes that already-published edge immediately.
+Waking the waiting host future invalidates the blocked generation, so checking the current
+blocked level would deadlock. Non-blocking waitable polls and yields admit no recorded events.
+A busy guest must ask through recorded synchronous host calls. Host-side takes and direct
+non-accessor host returns do not use this gate. Native guest write completions are not
+instrumented by this rule. Every bash script has a time limit and blocks with recorded
+`wait-for(0)` every 1024 yields so a computing script can observe its stop request or time limit.
+
+Before the blocked-wait gate, a replayed native read waits for every earlier retained Start of
+its invocation, including host-internal descendants, to be claimed or adopted as replay-inert;
+reserving an import's ordinal alone does not release the read.
 
 `Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
 the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock reads and monotonic `now` remain

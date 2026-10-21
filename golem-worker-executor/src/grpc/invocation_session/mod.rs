@@ -1420,6 +1420,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
                 if persisted_result.is_none() {
                     let _ = durable_streams.pump_input_cancellations(&responses, &high_waters).await;
+                    while output_pump.join_next().await.is_some() {}
                     send_worker_failure(&responses, error).await;
                     return;
                 }

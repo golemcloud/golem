@@ -919,7 +919,6 @@ pub(crate) fn reserve_import_invocation_id<Ctx: WorkerCtx>(
         return Ok(InvocationIdSource::Reserved(None));
     };
     let invocation_id = reserve_invocation_id(ctx, None, anchor)?;
-    ctx.record_deferred_import(invocation_id);
     Ok(InvocationIdSource::Reserved(Some(invocation_id)))
 }
 
@@ -4481,7 +4480,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let (oplog, recorder, worker) = access.with_ctx(|ctx| {
             (
                 ctx.state.oplog.clone(),
-                ctx.state.completion_marker_recorder(),
+                ctx.state
+                    .completion_marker_recorder()
+                    .for_store(ctx.runtime_suspension.clone()),
                 ctx.public_state.worker(),
             )
         });
@@ -4664,8 +4665,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let (oplog, completion_marker_recorder) = access.with_ctx(|ctx| {
                 (
                     ctx.state.oplog.clone(),
-                    (destination == AccessResultDestination::Guest)
-                        .then(|| ctx.state.completion_marker_recorder()),
+                    (destination == AccessResultDestination::Guest).then(|| {
+                        ctx.state
+                            .completion_marker_recorder()
+                            .for_store(ctx.runtime_suspension.clone())
+                    }),
                 )
             });
             let mut guard = AccessTerminalGuard::<P>::new(
@@ -4928,7 +4932,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             (
                 ctx.state.replay_state.clone(),
                 ctx.state.oplog.clone(),
-                ctx.state.completion_marker_recorder(),
+                ctx.state
+                    .completion_marker_recorder()
+                    .for_store(ctx.runtime_suspension.clone()),
             )
         });
         let replay = self
@@ -5093,7 +5099,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             (
                 ctx.state.replay_state.clone(),
                 ctx.state.oplog.clone(),
-                ctx.state.completion_marker_recorder(),
+                ctx.state
+                    .completion_marker_recorder()
+                    .for_store(ctx.runtime_suspension.clone()),
             )
         });
         let replay = self
@@ -5268,7 +5276,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             (
                 ctx.state.replay_state.clone(),
                 ctx.state.oplog.clone(),
-                ctx.state.completion_marker_recorder(),
+                ctx.state
+                    .completion_marker_recorder()
+                    .for_store(ctx.runtime_suspension.clone()),
             )
         });
         let replay = self

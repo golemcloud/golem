@@ -35,6 +35,8 @@
 //!   recorder);
 //! * awaiting guest-produced stream data (stdio capture, filesystem write
 //!   chunks, TCP send bytes, replayed request-body frames);
+//! * awaiting a fresh guest block after async input preparation is complete;
+//!   only guest progress can admit this delivery, and no durable effect remains;
 //! * passive replay-progress notification for a markerless completion whose
 //!   durable finalization is finished. No recorded entry depends on that
 //!   unobserved delivery, and invocation settlement may own the remaining tail.

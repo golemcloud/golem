@@ -225,8 +225,9 @@ use golem_common::model::oplog::payload::types::{
     SerializableWebsocketReconstructionPolicy,
 };
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, DurableFunctionType, DurableInvocationId, LogLevel, OplogEntry,
-    OplogErrorKind, OplogIndex, RawSnapshotData, SnapshotAssistedUpdateDetails, UpdateDescription,
+    AgentError, AgentResourceId, DurableFunctionType, DurableInvocationId,
+    EphemeralCannotSuspendError, LogLevel, OplogEntry, OplogErrorKind, OplogIndex, RawSnapshotData,
+    SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -1587,20 +1588,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     fn guest_read_order(&self) -> Option<replay_state::GuestReadOrder> {
         self.invocation_anchor()
-            .map(|anchor| replay_state::GuestReadOrder {
-                anchor,
-                issued: self.state.issued_deferred_imports.clone(),
-            })
-    }
-
-    fn record_deferred_import(&self, id: golem_common::model::oplog::DurableInvocationId) {
-        if let Some(order) = self.guest_read_order()
-            && order.anchor == id.anchor
-        {
-            self.state
-                .replay_state
-                .record_deferred_import(&order, id.ordinal);
-        }
+            .map(|anchor| replay_state::GuestReadOrder { anchor })
     }
 
     /// Reserves the next ordinal in guest call order for a direct Store-holding durable call.
@@ -4983,8 +4971,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .acknowledge_invocation_interrupt(*kind)
                 .await;
         }
-        let monthly_trap = self.public_state.worker().monthly_failure(trap_type);
+        let retry_from = self
+            .invocation_anchor()
+            .unwrap_or(self.state.effective_retry_point());
+        let monthly_trap = self
+            .public_state
+            .worker()
+            .monthly_failure(trap_type, retry_from);
         let trap_type = monthly_trap.as_ref().unwrap_or(trap_type);
+        let suspend_trap = ephemeral_suspend_trap(self.agent_mode(), trap_type, retry_from);
+        let trap_type = suspend_trap.as_ref().unwrap_or(trap_type);
 
         if let TrapType::Error { error, .. } = trap_type {
             match error {
@@ -6825,6 +6821,25 @@ fn ephemeral_terminal_trap(
     }
 }
 
+pub(crate) fn ephemeral_suspend_trap(
+    mode: AgentMode,
+    trap_type: &TrapType,
+    retry_from: OplogIndex,
+) -> Option<TrapType> {
+    match (mode, trap_type) {
+        (AgentMode::Ephemeral, TrapType::Interrupt(InterruptKind::Suspend(_))) => {
+            Some(TrapType::Error {
+                error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                    reason: "suspended while an invocation was active".to_string(),
+                }),
+                retry_from,
+                semantic_trap_retry_override: None,
+            })
+        }
+        _ => None,
+    }
+}
+
 fn ephemeral_terminal_decision(mode: AgentMode, decision: RetryDecision) -> RetryDecision {
     match (mode, decision) {
         (
@@ -7706,6 +7721,36 @@ mod tests {
             },
         ] {
             assert!(ephemeral_terminal_trap(AgentMode::Ephemeral, &trap, start_index).is_none());
+        }
+    }
+
+    #[test]
+    fn ephemeral_active_suspend_becomes_an_invocation_failure() {
+        let start_index = OplogIndex::from_u64(37);
+        let trap = TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()));
+        assert!(ephemeral_suspend_trap(AgentMode::Durable, &trap, start_index).is_none());
+        let converted = ephemeral_suspend_trap(AgentMode::Ephemeral, &trap, start_index)
+            .expect("ephemeral active suspension is terminal");
+        assert!(matches!(&converted,
+            TrapType::Error {
+                error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }),
+                retry_from,
+                semantic_trap_retry_override: None,
+            } if reason == "suspended while an invocation was active" && *retry_from == start_index));
+        assert_eq!(
+            DurableWorkerCtx::<crate::workerctx::default::Context>::fixed_decision_for_trap_type(
+                &converted
+            ),
+            Some(RetryDecision::None)
+        );
+        for trap in [
+            TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())),
+            TrapType::Interrupt(InterruptKind::ShardLost),
+            TrapType::Interrupt(InterruptKind::Jump),
+            TrapType::Interrupt(InterruptKind::Restart),
+            TrapType::Exit,
+        ] {
+            assert!(ephemeral_suspend_trap(AgentMode::Ephemeral, &trap, start_index).is_none());
         }
     }
 
@@ -10210,9 +10255,6 @@ struct PrivateDurableWorkerState {
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
     invocation_ordinals: HashMap<OplogIndex, u64>,
-    /// One-past the highest deferred import ordinal in this Store invocation. Pending reads
-    /// retain this allocation, not the mutable slot used by the next invocation.
-    issued_deferred_imports: Arc<AtomicU64>,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
@@ -10643,7 +10685,6 @@ impl PrivateDurableWorkerState {
             local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             active_custom_invocations: HashMap::new(),
             invocation_ordinals: HashMap::new(),
-            issued_deferred_imports: Arc::new(AtomicU64::new(0)),
             tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
@@ -11075,7 +11116,6 @@ impl PrivateDurableWorkerState {
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
         self.invocation_ordinals.clear();
-        self.issued_deferred_imports = Arc::new(AtomicU64::new(0));
     }
 
     pub async fn get_workers(

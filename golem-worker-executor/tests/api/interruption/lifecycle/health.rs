@@ -114,9 +114,25 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
             }
         })
         .await?;
-        worker.join_accepted_stops_for_test().await?;
-        worker.retained_cleanup_for_test().await?;
-        worker.await_ready_to_process_commands().await?;
+        if ephemeral {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while executor.worker_is_cached(&owned).await
+                    || crate::oplog_sweep::ephemeral_layer_rows(deps, &context, &id).await? != 0
+                {
+                    tokio::task::yield_now().await;
+                }
+                anyhow::Ok(())
+            })
+            .await??;
+            assert_eq!(
+                executor.get_worker_metadata(&id).await?.status,
+                AgentStatus::Failed
+            );
+        } else {
+            worker.join_accepted_stops_for_test().await?;
+            worker.retained_cleanup_for_test().await?;
+            worker.await_ready_to_process_commands().await?;
+        }
         let error = invocation.await?.unwrap_err();
         assert!(
             error

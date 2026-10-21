@@ -29,6 +29,7 @@ pub(super) type EnqueueInputObservation = Box<
 pub(super) struct InputObservationDelivery {
     pub replay: ReplayState,
     pub guest_order: Option<GuestReadOrder>,
+    pub runtime: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     pub activity: TailActivity,
     pub runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     pub cleanup_sink: mpsc::UnboundedSender<DropEvent>,
@@ -80,7 +81,7 @@ impl InputObservationDelivery {
     ) -> wasmtime::Result<oneshot::Receiver<()>> {
         let (settled, observation_settled) = oneshot::channel();
         let prepare = async {
-            if let Some(index) = recorded_index {
+            let prepared = if let Some(index) = recorded_index {
                 let barrier = if completed.is_some() {
                     self.replay.await_stream_observation(index).await?
                 } else {
@@ -88,13 +89,19 @@ impl InputObservationDelivery {
                         .await_guest_stream_observation(index, self.guest_order.clone())
                         .await?
                 };
-                Ok((Some(barrier), None))
+                (Some(barrier), None)
             } else {
                 self.replay
                     .await_natural_tail_end(Some(&self.activity))
                     .await?;
-                Ok::<_, WorkerExecutorError>((None, Some(prepare_live.await?)))
+                (None, Some(prepare_live.await?))
+            };
+            if completed.is_none()
+                && let Some(runtime) = &self.runtime
+            {
+                self.activity.park(runtime.await_guest_blocked()).await;
             }
+            Ok::<_, WorkerExecutorError>(prepared)
         };
         let (barrier, prepared) = tokio::select! {
             biased;
