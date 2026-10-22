@@ -334,13 +334,17 @@ Use the same empty-default pattern under a template's or agent's `presets` to ke
 
 ### Cascade with presets
 
-Presets are the most specific layer in the cascade:
+Presets apply within their owning layer in the cascade:
 
 ```
-componentTemplates → components → agents → presets
+componentTemplates (including their selected presets)
+  → components (including their selected presets)
+  → agents (including their selected presets)
 ```
 
-Preset properties merge with or override the base properties using the same merge modes (`envMergeMode`, `pluginsMergeMode`, etc.).
+Golem resolves the base component, including its template and component presets, before it applies
+agent overrides and agent presets. Preset properties merge with or override the base properties of
+their layer using the same merge modes (`envMergeMode`, `pluginsMergeMode`, etc.).
 
 ## Per-Agent Configuration
 

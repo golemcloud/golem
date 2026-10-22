@@ -10,7 +10,7 @@ description: "Creating ephemeral (stateless) agents in a Rust Golem project. Use
 An **ephemeral agent** is a Golem agent that gets a **fresh instance for every invocation**. Unlike the default durable agents, ephemeral agents:
 
 - **No shared state**: Each invocation starts from a clean `new()` — field values set in one call are gone by the next
-- **No replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`), but it is never used for replay — no automatic recovery on failure
+- **No method recovery replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`). If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - **No persistence**: The agent's memory is discarded after each invocation completes
 - **Logical identity**: Constructor parameters address a logical agent proxy. Each invocation uses an idempotency-key-derived phantom execution identity. A completed phantom execution is terminal and cannot be reused for another invocation.
 
@@ -135,4 +135,4 @@ uses the method parameter name; do not send a bare JSON string.
 - Ephemeral mode is set at the **agent type level** — all instances of the type are ephemeral
 - Constructor parameters still define identity — you can have multiple ephemeral agents with different parameters
 - Ephemeral agents can call other agents via RPC and make HTTP requests, but do not durably suspend. Long waits can fail at the executor's `ephemeral_max_sleep` limit.
-- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog` — but it is never replayed
+- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog`. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.

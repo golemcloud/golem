@@ -63,7 +63,7 @@ See [`golem-custom-snapshot-scala`](../golem-custom-snapshot-scala/SKILL.md) for
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
 
 - State is discarded after each invocation completes
-- An oplog is written for inspection; initialization can replay, but failed methods have no replay recovery
+- An oplog is written for inspection. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - Useful for pure functions, request handlers, or adapters
 
 ```scala

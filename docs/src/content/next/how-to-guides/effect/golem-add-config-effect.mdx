@@ -148,8 +148,9 @@ const program = Effect.gen(function* () {
 - Use `Schema.Option(inner)` for an optional config leaf. Evaluating it yields an Effect
   `Option.Option<T>` rather than trapping when the key is absent.
 - Config keys retain TypeScript camelCase in `golem.yaml` and CLI paths.
-- Config source precedence is `componentTemplates` → `components` → `agents` → `presets`, with
-  agent-creation or RPC overrides taking precedence over manifest defaults.
+- Config source precedence is `componentTemplates` → `components` → `agents`, with presets
+  resolved within each template, component, and agent layer. Agent-creation or RPC overrides take
+  precedence over manifest defaults.
 - Do not use `Config<T>` from `@golemcloud/golem-ts-sdk`, manually provide a config Layer, or
   implement handlers as plain `async` functions.
 - Run `golem build` after changing the schemas or agent definition.
