@@ -2873,6 +2873,7 @@ struct ServerShared {
     notify: Arc<tokio::sync::Notify>,
     errors: Arc<Mutex<Vec<String>>>,
     completed_handshakes: Arc<AtomicUsize>,
+    reconnect_messages: &'static [&'static str],
 }
 
 fn emit(shared: &ServerShared, event: ReconnectServerEvent) {
@@ -2903,6 +2904,10 @@ struct ReconnectTestServer {
 
 impl ReconnectTestServer {
     async fn start() -> Self {
+        Self::start_with_reconnect_messages(&RECONNECT_MESSAGES).await
+    }
+
+    async fn start_with_reconnect_messages(reconnect_messages: &'static [&'static str]) -> Self {
         let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (directive_tx, directive_rx) = watch::channel(HoldDirective::Released);
@@ -2913,6 +2918,7 @@ impl ReconnectTestServer {
             notify: Arc::new(tokio::sync::Notify::new()),
             errors: Arc::new(Mutex::new(Vec::new())),
             completed_handshakes: Arc::new(AtomicUsize::new(0)),
+            reconnect_messages,
         };
         let connection_tasks = Arc::new(Mutex::new(Vec::new()));
 
@@ -2935,6 +2941,7 @@ impl ReconnectTestServer {
                                     .lock()
                                     .unwrap()
                                     .push(format!("connection task failed: {error}"));
+                                error_shared.notify.notify_waiters();
                             }
                         }
                         .in_current_span(),
@@ -3049,6 +3056,13 @@ impl ReconnectTestServer {
             // The notified future is created before the condition check so no
             // wake-up between the check and the await is missed.
             let notified = self.shared.notify.notified();
+            {
+                let errors = self.shared.errors.lock().unwrap();
+                anyhow::ensure!(
+                    errors.is_empty(),
+                    "the reconnect test server recorded task errors while waiting to {description}: {errors:?}"
+                );
+            }
             let count = self.count(&predicate);
             if count >= expected {
                 return Ok(());
@@ -3183,7 +3197,7 @@ async fn serve_connection(
     if handshake == 0 {
         send_frame(&mut write, &shared, RECONNECT_FIRST_MESSAGE).await?;
     } else {
-        for payload in RECONNECT_MESSAGES {
+        for payload in shared.reconnect_messages {
             send_frame(&mut write, &shared, payload).await?;
         }
     }
@@ -5226,7 +5240,8 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
 
-    let mut ws_server = ReconnectTestServer::start().await;
+    // Close does not read unsolicited greetings on the reconnected transport.
+    let mut ws_server = ReconnectTestServer::start_with_reconnect_messages(&[]).await;
     let url = ws_server.url();
 
     let component = executor
@@ -5287,7 +5302,10 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
     assert_eq!(ws_server.accepted(), 2);
     assert_eq!(ws_server.completed_handshakes(), 2);
     assert_eq!(ws_server.close_frames_received(), 1);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
+    assert_eq!(
+        ws_server.frames_sent(),
+        vec![RECONNECT_FIRST_MESSAGE.to_string()]
+    );
 
     // A receive on the terminalized handle fails with the closed-connection
     // error and must not reconnect: no new connection is opened.
@@ -5310,7 +5328,10 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
         "the terminal handle must not reconnect"
     );
     assert_eq!(ws_server.close_frames_received(), 1);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
+    assert_eq!(
+        ws_server.frames_sent(),
+        vec![RECONNECT_FIRST_MESSAGE.to_string()]
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

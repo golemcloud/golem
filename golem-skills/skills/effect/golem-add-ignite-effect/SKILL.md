@@ -12,7 +12,7 @@ WebAssembly runtime.
 
 ```typescript
 import { Effect, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import { method } from "@golemcloud/effect-golem";
 import { Ignite, IgniteClient } from "@golemcloud/effect-golem/ignite2";
 ```
@@ -43,7 +43,7 @@ const findNote = (noteId: number) =>
 const runnable = findNote(1).pipe(Effect.provide(IgniteLive));
 ```
 
-`SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` use this same service for
+`SqlSchema`, `SqlResolver`, and `Migrator` from `effect/sql` use this same service for
 schema decoding, batching, and migrations. Keep `Ignite` imports only for Ignite-specific rich
 parameter values or dialect behavior. Ignite still rejects nested `withTransaction` calls because
 it has no savepoints; generic repository code must not assume nested transaction support.
@@ -58,16 +58,30 @@ Ignite uses thin-client URLs such as `ignite://host:10800`. Construct the client
 agent's `init` Effect and return it as state before `methods` constructs the handlers:
 
 ```typescript
-Effect.gen(function* () {
+// In the existing .implement({ ... }) object:
+init: ({ name }) => Effect.gen(function* () {
+  const state = yield* Ref.make({ count: 0 });
+  yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ name }));
   const sql = yield* IgniteClient.make({
     connectionAddress: "ignite://127.0.0.1:10800",
   });
-
-  return {
-    // Agent method implementations close over `sql`.
-  };
-});
+  return { state, sql };
+}),
+methods: ({ state, sql }) => ({
+  // Keep the existing handlers here, using state as before.
+  checkIgnite: () => sql`SELECT 'ignite-ok'`.values.pipe(
+    Effect.flatMap((rows) => typeof rows[0]?.[0] === "string"
+      ? Effect.succeed(rows[0][0])
+      : Effect.die("Expected an Ignite string")),
+    Effect.orDie,
+  ),
+}),
 ```
+
+Import `Ref` from `effect`. Preserve all existing init work and state fields; return the client
+alongside them, not an empty object or handlers. For the default counter template, remove
+`.implement<Ref.Ref<{ count: number }>>` so the new `{ state, sql }` type is inferred (or update
+the explicit type). The handlers belong in `methods: ({ state, sql }) => ({ ... })`.
 
 Do not call `IgniteClient.make` in every method. It opens a host connection when the agent
 implementation is initialized; reusing the client also serializes access correctly. The Ignite
@@ -85,7 +99,7 @@ checkIgnite: method({
 }),
 ```
 
-Then add a handler with the same property name to the object returned by `implement`. Keep all
+Then add a handler with the same property name to the object returned by `methods`. Keep all
 existing method contracts and handlers unchanged unless the task explicitly asks otherwise.
 
 The agent type used by the CLI comes from the definition's `name`, not the exported TypeScript
@@ -116,35 +130,44 @@ checkIgnite: () =>
     const value = rows[0]?.[0];
 
     if (typeof value !== "string") {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         "Expected Ignite row 0, column 0 to contain a string",
       );
     }
 
     return value;
-  }),
+  }).pipe(Effect.orDie),
 ```
 
 This handler succeeds with a plain `string`; it does not expose a result wrapper in the agent
 method contract. Do not return `rows[0]?.[0]` without checking it: an absent cell is `undefined`,
 which does not satisfy `Schema.String`.
 
+The success-only handler converts unexpected `SqlError` failures to defects with `Effect.orDie`.
+For recoverable failures, declare an `error` schema and map SQL errors to that domain type.
+Converting an error to a defect fails the invocation; it does not guarantee retry.
+
 Normal statements return row records instead. Ignite commonly uppercases unquoted result column
 names. When record keys matter, either quote aliases or configure the client once:
 
 ```typescript
-Effect.gen(function* () {
+// In .implement({ ... }), retaining any other state and handlers:
+init: () => Effect.gen(function* () {
   const sql = yield* IgniteClient.make({
-    connectionAddress: igniteUrl,
+    connectionAddress: "ignite://127.0.0.1:10800",
     transformResultNames: (name) => name.toLowerCase(),
   });
-
-  return {
-    findNote: ({ noteId }: { noteId: number }) =>
-      sql`SELECT body FROM notes WHERE id = ${noteId}`,
-  };
-});
+  return { sql };
+}),
+methods: ({ sql }) => ({
+  findNote: ({ noteId }: { noteId: number }) =>
+    sql<{ body: string }>`SELECT body FROM notes WHERE id = ${noteId}`.pipe(Effect.orDie),
+}),
 ```
+
+Declare `findNote` with `input: { noteId: Schema.Number }` and
+`success: Schema.Array(Schema.Struct({ body: Schema.String }))`. This success-only boundary
+converts SQL failures to defects; use a declared domain error instead when callers should recover.
 
 ## Parameters and Statements
 
@@ -224,12 +247,13 @@ verify rollback semantics for the deployed Ignite configuration.
 - Import the adapter from `@golemcloud/effect-golem/ignite2`, not a native Node Ignite driver.
 - Prefer repository code that consumes `SqlClient.SqlClient`; provide it with
   `IgniteClient.layer`.
-- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` with the same adapter
+- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/sql` with the same adapter
   layer, while avoiding nested transactions on Ignite.
 - Return Effects from agent handlers; do not replace them with `async` functions.
 - Reuse one `IgniteClient` per implemented agent instance.
 - Declare every added handler in the agent's `methods` map with an Effect Schema.
 - Keep the `defineAgent` name and `golem.yaml` agent key equal to the type used for invocation.
-- Let Golem handle durable retries; do not add manual retry loops around SQL operations.
+- Let host retry policy handle retryable SQL host failures. A returned `SqlError` still needs
+  handling or mapping at the method boundary; `Effect.orDie` does not guarantee retry.
 - Use `.values` for positional results or account for Ignite's default uppercase column names.
 - Ignite writes do not support SQL `RETURNING` through this adapter.

@@ -58,4 +58,5 @@ the runtime grants the required network capability, so test the actual operation
 
 ## AI / LLM features
 
-To add AI capabilities, load the `golem-add-llm-rust` skill. The published `golem-ai` release and the current WASIp2-compatible source do not currently use the same API, so do not guess a crate version or copy an older example.
+For AI provider dependencies, load `golem-add-llm-rust`. Use its matching core, provider, and SDK
+dependencies together.

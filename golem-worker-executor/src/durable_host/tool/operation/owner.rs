@@ -115,6 +115,7 @@ impl OwnerToolOperations {
                     stdin: None,
                     stdout: None,
                     stderr: None,
+                    execution: std::sync::Weak::new(),
                 },
             );
             winner_tx
@@ -226,6 +227,11 @@ impl OwnerToolOperations {
                 let mut state = self.state.lock().unwrap();
                 if state.owner_winner.is_some() || (winner.is_none() && state.admission_closed) {
                     return false;
+                }
+                if let Some(OwnerFailureCleanupOwner::Tool(id)) = cleanup_owner
+                    && let Some(operation) = state.operations.get_mut(&id)
+                {
+                    operation.withdraw_uncommitted_cancellation(&self.changed);
                 }
                 if state
                     .operations
@@ -558,6 +564,33 @@ impl OwnerToolOperations {
                 .as_ref()
                 .map(OwnerFailureWinner::metadata),
             operations,
+        }
+    }
+
+    /// Cancels unfinished descendants, traversing bodies whose terminal is already selected.
+    /// A selected body can still own pending children; its outcome must not prevent their cleanup.
+    pub(crate) fn cancel_children(&self, parent: &OwnerInvocationId) {
+        let children = {
+            let state = self.state.lock().unwrap();
+            let mut parents = vec![parent.clone()];
+            let mut children = Vec::new();
+            while let Some(parent) = parents.pop() {
+                for operation in state.operations.values() {
+                    if operation.context.parent != parent {
+                        continue;
+                    }
+                    if let Some(invocation) = &operation.invocation_id {
+                        parents.push(OwnerInvocationId::Entity(invocation.clone()));
+                    }
+                    if let Some(execution) = operation.execution.upgrade() {
+                        children.push(execution);
+                    }
+                }
+            }
+            children
+        };
+        for child in children {
+            child.cancel_body();
         }
     }
 

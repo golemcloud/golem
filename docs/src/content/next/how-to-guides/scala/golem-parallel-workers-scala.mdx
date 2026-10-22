@@ -2,7 +2,7 @@
 
 ## Overview
 
-Golem agents process invocations **sequentially** — a single agent cannot run work in parallel. To execute work concurrently, distribute it across **multiple agent instances**. This skill covers two approaches:
+Golem agents admit invocations **sequentially**. Futures and asynchronous I/O can overlap within one invocation; this is not CPU-thread parallelism. Distribute work across **multiple agent instances** for independently scheduled execution. This skill covers two approaches:
 
 1. **Child agents via codegen-generated `XClient.get(id)`** — spawn separate agent instances, dispatch work, and collect results
 2. **`HostApi.fork()`** — clone the current agent at the current execution point for lightweight parallel execution
@@ -64,6 +64,29 @@ import golem.HostApi.PromiseId
 import zio.blocks.schema.Schema
 
 case class WorkResult(value: String) derives Schema
+case class PromiseRef(componentHigh: String, componentLow: String,
+                      agent: String, oplogIndex: String) derives Schema {
+  def toHost: PromiseId = HostApi.PromiseIdLiteral(
+    HostApi.AgentIdLiteral(
+      HostApi.ComponentIdLiteral(HostApi.UuidLiteral(
+        scala.scalajs.js.BigInt(componentHigh), scala.scalajs.js.BigInt(componentLow))),
+      agent),
+    scala.scalajs.js.BigInt(oplogIndex))
+}
+
+object PromiseRef {
+  def fromHost(pid: PromiseId): PromiseRef = PromiseRef(
+    pid.agentId.componentId.uuid.highBits.toString,
+    pid.agentId.componentId.uuid.lowBits.toString,
+    pid.agentId.agentId,
+    pid.oplogIdx.toString)
+}
+
+@agentDefinition()
+trait RegionWorker extends BaseAgent {
+  class Id(val region: String)
+  def runReport(promise: PromiseRef): Future[Unit]
+}
 
 @agentImplementation()
 class CoordinatorImpl() extends Coordinator {
@@ -72,28 +95,35 @@ class CoordinatorImpl() extends Coordinator {
     val promiseIds = regions.map(_ => HostApi.createPromise())
 
     // Fire-and-forget: trigger each child with its promise ID
-    regions.zip(promiseIds).foreach { case (region, pid) =>
+    val accepted = regions.zip(promiseIds).map { case (region, pid) =>
       val child = RegionWorkerClient.get(region)
-      child.runReport.trigger(pid)
+      child.runReport.trigger(PromiseRef.fromHost(pid))
     }
 
-    // Collect all results (agent suspends on each until completed)
-    val futures = promiseIds.map { pid =>
-      HostApi.awaitPromiseJson[WorkResult](pid).map(_.value)
+    // Observe dispatch failures before waiting on promises that may never complete.
+    Future.sequence(accepted).flatMap { _ =>
+      Future.traverse(promiseIds) { pid =>
+        HostApi.awaitPromiseJson[WorkResult](pid).map(_.value)
+      }
     }
-    Future.sequence(futures)
   }
 }
 
 @agentImplementation()
 class RegionWorkerImpl(private val region: String) extends RegionWorker {
-  override def runReport(promiseId: PromiseId): Future[Unit] = {
+  override def runReport(promise: PromiseRef): Future[Unit] = {
     val result = WorkResult(s"Report for $region: OK")
-    HostApi.completePromiseJson(promiseId, result)
+    HostApi.completePromiseJson(promise.toHost, result)
     Future.successful(())
   }
 }
 ```
+
+For this variant, declare `dispatchAndCollect(regions: List[String]): Future[List[String]]`
+on `Coordinator` instead of `fanOut`. `HostApi.PromiseId` is a JavaScript facade,
+not a schema DTO: pass `PromiseRef` across RPC and reconstruct the host value.
+Acceptance does not guarantee worker success; production workflows also need an
+explicit worker failure or timeout protocol to avoid waiting forever.
 
 ### Chunked Fan-Out
 

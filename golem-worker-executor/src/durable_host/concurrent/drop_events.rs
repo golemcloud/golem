@@ -303,6 +303,7 @@ pub struct DroppedCall {
     pub(super) begin_index: OplogIndex,
     pub(super) function_type: DurableFunctionType,
     pub(super) request_upload: PendingUpload,
+    pub(super) entity_admission: bool,
     pub(super) span_finished: Option<golem_common::model::oplog::SpanFinished>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
     /// The dropped call's own trap classification, captured from its execution scope at drop time.
@@ -372,11 +373,41 @@ impl DroppedCall {
         oplog: std::sync::Arc<dyn crate::services::oplog::Oplog>,
         partial: Option<OplogPayload<HostResponse>>,
     ) -> Result<(), WorkerExecutorError> {
+        let partial = if self.entity_admission && partial.is_none() {
+            Some(OplogPayload::Inline(Box::new(
+                crate::durable_host::entity::cancelled_tool_terminal(
+                    golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Skipped,
+                )
+                .await?
+                .into(),
+            )))
+        } else {
+            partial
+        };
+        let span_finished = if self.entity_admission && self.span_finished.is_none() {
+            let entry = oplog.read(self.start_idx).await?;
+            let OplogEntry::Start {
+                span_started: Some(span),
+                ..
+            } = entry
+            else {
+                return Err(WorkerExecutorError::runtime(
+                    "accepted entity admission has no opening span",
+                ));
+            };
+            Some(golem_common::model::oplog::SpanFinished {
+                span_id: span.span_id,
+                finished_at: Timestamp::now_utc(),
+                outcome: golem_common::model::oplog::SpanOutcome::Cancelled,
+            })
+        } else {
+            self.span_finished.clone()
+        };
         let cancelled = OplogEntry::Cancelled {
             timestamp: Timestamp::now_utc(),
             start_index: self.start_idx,
             partial,
-            span_finished: self.span_finished.clone(),
+            span_finished,
         };
         self.notify_span_closed();
         oplog.add(cancelled).await?;
@@ -418,6 +449,8 @@ pub enum DropEvent {
     /// its call's terminal `End` is already recorded and the durable scope already closed, so the
     /// only remaining work is joining the owned marker (or trailing ordered-append) task while
     /// keeping the call counted as in flight — no scope close.
+    /// Also joins accessor initiation abandoned by a disposed Store. The accepted metadata task
+    /// retains ownership of its Start through the result handoff and queues cancellation separately.
     AwaitCompletionMarker {
         receipt: Option<MarkerReceipt>,
         trap_context: DurableCallTrapContext,
@@ -455,7 +488,7 @@ pub enum DropEvent {
     },
 }
 
-struct AccessDropEventDrainGuard {
+pub(super) struct AccessDropEventDrainGuard {
     sink: UnboundedSender<DropEvent>,
     pending: VecDeque<DropEvent>,
     current: Option<DropEvent>,
@@ -463,7 +496,7 @@ struct AccessDropEventDrainGuard {
 }
 
 impl AccessDropEventDrainGuard {
-    fn new(sink: UnboundedSender<DropEvent>, events: Vec<DropEvent>) -> Self {
+    pub(super) fn new(sink: UnboundedSender<DropEvent>, events: Vec<DropEvent>) -> Self {
         Self {
             sink,
             pending: events.into(),
@@ -492,7 +525,7 @@ impl AccessDropEventDrainGuard {
         self.current = None;
     }
 
-    fn disarm(&mut self) {
+    pub(super) fn disarm(&mut self) {
         self.disarmed = true;
     }
 }

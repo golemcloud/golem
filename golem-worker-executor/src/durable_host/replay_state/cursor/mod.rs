@@ -20,7 +20,7 @@ pub(super) use settling::historical_reconstruction_owner_failure;
 use super::claims::{AdmissionRefusal, StartClaim, matching_admission_refusal};
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
-    AtomicOplogIndex, AtomicU8, BlockedOn, CHUNK_SIZE, CardId, CompletionMarker, CompletionMarkers,
+    AtomicOplogIndex, AtomicU8, BlockedOn, CHUNK_SIZE, CompletionMarker, CompletionMarkers,
     ConcurrentReplayResolver, CursorState, DeletedRegions, DurableInvocationId, EntityAttribution,
     ForkResult, Future, GuestReadOrder, HashMap, HashSet, Hasher, HostFunctionName, HostResponse,
     HostResponseGolemApiFork, InvocationContextStack, LivePublicationOutcome, LogLevel,
@@ -28,9 +28,11 @@ use super::{
     OplogEntryLookupResult, OplogIndex, OplogOps, OplogRegion, OplogScopeProjection, Ordering,
     OwnedAgentId, PublishedPosition, QuotaClass, ReplayCallHandle, ReplayCursor, ReplayEvent,
     ReplayState, ReplayToLiveOutcome, ReplayToLiveRole, ReplayTransitionPhase, Resolution,
-    RetainedStart, RetainedStartCounts, StartClaimAttempt, StoredCard, StreamObservationPositions,
+    RetainedStart, RetainedStartCounts, StartClaimAttempt, StreamObservationPositions,
     ToolAttachmentReconstruction, TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use super::{CardId, StoredCard};
 use crate::durable_host::PositionalRead;
 use crate::durable_host::tool::operation::OwnerToolOperation;
 use crate::services::oplog::UnreadableOplog;

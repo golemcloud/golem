@@ -51,6 +51,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         // restart. There is no store to run `on_invocation_failure` on, but no
         // invocation was running either — the status marker is all that is needed.
         match kind {
+            InterruptKind::EntityCancellation => {
+                unreachable!("entity cancellation cannot interrupt the owner")
+            }
             InterruptKind::Restart | InterruptKind::Jump => {
                 self.parent.acknowledge_startup_interruption(kind).await;
                 debug!("Instantiation interrupted for restart, retrying");

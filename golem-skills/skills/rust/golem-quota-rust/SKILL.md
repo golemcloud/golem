@@ -76,7 +76,8 @@ let result = with_reservation(&token, 1, |_reservation| {
 });
 ```
 
-The closure returns `(actual_used, value)`. If `actual_used` < reserved, unused capacity returns to the pool.
+The closure returns `(actual_used, value)`. Underuse can refund capacity only when the reservation
+epoch still matches the lease epoch and the resource is not unlimited or lost. Do not assume a refund across an epoch change.
 
 ## 4. Variable-Cost Reservations (e.g., LLM Tokens)
 
@@ -84,7 +85,7 @@ Reserve the maximum expected cost, then commit actual usage:
 
 ```rust
 let result = with_reservation(&token, 4000, |_reservation| {
-    let response = call_llm(prompt, max_tokens: 4000);
+    let response = call_llm(prompt, 4000);
     (response.tokens_used as u64, response)
 });
 ```
@@ -112,8 +113,10 @@ Dropping a `Reservation` without calling `commit` commits the full reserved amou
 Split a portion of your quota to pass to a child agent:
 
 ```rust
+let mut token = QuotaToken::new("api-calls", 1000);
 let child_token: QuotaToken = token.split(200);
-let child_agent = SummarizerAgent::new_phantom().await;
+// For a SummarizerAgent whose constructor identity is name: String:
+let child_agent = SummarizerAgentClient::new_phantom("summary".to_string());
 let summary = child_agent.summarize(text, child_token).await;
 ```
 
@@ -123,7 +126,7 @@ The child agent receives the `QuotaToken` as a method parameter and uses it for 
 token.merge(returned_token);
 ```
 
-`QuotaToken` implements `IntoValue` and `FromValueAndType`, so it can be passed as an agent method parameter.
+`QuotaToken` implements the schema and wire traits, so it can be passed as an agent method parameter.
 
 ## 7. Dynamic Resource Updates via CLI
 

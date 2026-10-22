@@ -4,9 +4,9 @@ import { ThemedImage } from "@/components/themed-image"
 
 # Artifacts
 
-Agents produce things that people use: an API, a web front-end, a report to download, live progress to watch. Golem calls these **artifacts** and serves them from the same deployment as the agents, so an application needs no separate web server, file host, or streaming service. A single `golem deploy` ships the agents, their tools, and the front-end whose buttons call them.
+Agents produce things that people use: an API, a web front-end, a report to download, live progress to watch. Golem calls these **artifacts** and serves them from the agents that produce them, so an application needs no separate web server, file host, or streaming service.
 
-For example, a reporting application deploys its single-page front-end as static files. The front-end's buttons call HTTP endpoints on `ReportAgent` agents, progress streams back to the page while the agent works, and the finished report, a file the agent wrote, is served from the agent's filesystem. The front-end, the API, the stream, and the file all come from one deployment, and the agents behind them are durable.
+For example, a `ReportAgent` writes its front-end into its own filesystem and serves it as live files. The front-end's buttons call the agent's HTTP endpoints, progress streams back to the page while the agent works, and the finished report, a file the agent wrote, is served from the agent's filesystem. The front-end, the API, the stream, and the file all come from the agent, and the agent is durable.
 
 ## HTTP endpoints for agent methods
 
@@ -208,17 +208,13 @@ A router calls agents through their clients, so one router can serve a single-pa
 
 ## Interactive apps
 
-A web app on Golem is interactive, not static output: its JavaScript runs in the browser and calls the agents' HTTP endpoints, and each call runs durable agent code with the agent's state and permissions. An agent can also generate an app at runtime: it writes HTML and JavaScript into its own filesystem, serves them as live files, and the page calls the agent's endpoints. What Golem does not run is a long-lived server process, such as a development server, inside a tool.
+A web app on Golem is interactive, not static output: its JavaScript runs in the browser and calls the agents' HTTP endpoints, which expose durable agent code with the agent's state and permissions. An agent can generate an app at runtime: it writes HTML and JavaScript into its own filesystem, serves them as live files, and the page calls the agent's endpoints. What Golem does not run is a long-lived server process, such as a development server, inside a tool.
 
-## Static and live files
+## Live files
 
-| | Static files | Live files |
-|---|---|---|
-| What | Files deployed with a router, such as a front-end's HTML, CSS, and JavaScript | Files in a durable agent's filesystem, such as a report the agent just wrote |
-| Served | Directly from storage, without running any agent | From the agent's current filesystem, without running a method |
-| Caching | Cached and revalidated with an `ETag` | Never cached |
+A durable agent serves files from its own current filesystem, such as a page it generated or a report it just wrote. Serving a live file does not run a method, and live files are never cached. A live file is never served half-written: the read waits until the agent's current method call finishes.
 
-A live file is never served half-written: the read waits until the agent's current method call finishes.
+Content that no agent produces, such as a fixed front-end bundle shipped with the application, can instead be deployed as a router's static files, served without running any agent and revalidated with an `ETag`; see [HTTP routers and files](/v1.6/invoke/making-custom-apis/http-routers).
 
 ## Cached read-only responses
 

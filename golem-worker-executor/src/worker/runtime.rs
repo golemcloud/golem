@@ -25,6 +25,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
         authority_wallet: Vec<StoredCard>,
         entity_start_index: Option<OplogIndex>,
+        filesystem_generation: crate::services::agent_filesystem::FilesystemGenerationHandle,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
             return Err(WorkerExecutorError::runtime(
@@ -102,9 +103,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .collect()
             }
         };
-        let filesystem_generation = self
-            .owner_runtime_resources
-            .filesystem_generation_handle()?;
         if let Some(files) =
             Some(&activation.policy().provision().files).filter(|files| !files.is_empty())
         {

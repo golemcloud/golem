@@ -653,7 +653,6 @@ async fn check_moonbit_lifecycle_case(
     bytes: &[u8],
     stream: &str,
     result: &str,
-    expected_invocation_failure: Option<&str>,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -697,28 +696,17 @@ async fn check_moonbit_lifecycle_case(
     let response = executor
         .invoke_and_await_agent(&stored_component, &agent_id, method, data_value!())
         .await;
-    if let Some(expected) = expected_invocation_failure {
-        match response {
-            Err(error) => {
-                let message = format!("{error:#}");
-                assert!(
-                    message.contains(expected),
-                    "{method} failure did not contain {expected:?}: {message}"
-                );
-            }
-            Ok(_) => anyhow::bail!("{method} unexpectedly returned a lifecycle observation"),
-        }
-        assert_moonbit_owner_resources_clean(
-            &executor,
-            &owned_agent_id,
-            &format!("MoonBit lifecycle {method}"),
-        )
-        .await?;
-        return Ok(());
-    }
     let observation: MoonBitLifecycleObservation = response?.into_typed()?;
     assert_eq!(observation.bytes, bytes, "{method} bytes");
-    assert_eq!(observation.stream_terminal, stream, "{method} terminal");
+    if method == "exception" {
+        let details = observation
+            .stream_terminal
+            .strip_prefix(stream)
+            .expect("guest trap must fail the stream");
+        assert!(details.contains("wasm `unreachable` instruction executed"));
+    } else {
+        assert_eq!(observation.stream_terminal, stream, "{method} terminal");
+    }
     assert_eq!(observation.result_terminal, result, "{method} result");
     assert_moonbit_owner_clean(
         &executor,
@@ -727,6 +715,23 @@ async fn check_moonbit_lifecycle_case(
         &format!("MoonBit lifecycle {method}"),
     )
     .await?;
+
+    if method == "exception" {
+        let subsequent: MoonBitLifecycleObservation = executor
+            .invoke_and_await_agent(&stored_component, &agent_id, "complete", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(subsequent.bytes, b"complete:\x00\xff");
+        assert_eq!(subsequent.stream_terminal, "finished");
+        assert_eq!(subsequent.result_terminal, "ok:41");
+        assert_moonbit_owner_clean(
+            &executor,
+            &owned_agent_id,
+            &worker_id,
+            "MoonBit lifecycle invocation after exception",
+        )
+        .await?;
+    }
 
     Ok(())
 }
@@ -750,7 +755,6 @@ macro_rules! moonbit_lifecycle_test {
                 $bytes,
                 $stream,
                 $result,
-                None,
             )
             .await
         }
@@ -793,10 +797,9 @@ async fn moonbit_lifecycle_exception_runtime(
         deps,
         component,
         "exception",
-        b"",
-        "",
-        "",
-        Some("Component trapped"),
+        b"exception:",
+        "failed:",
+        "remote-internal",
     )
     .await
 }

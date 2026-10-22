@@ -107,6 +107,7 @@ enum AccessTerminalGuardState {
 pub(super) struct AccessTerminalGuard<P: DropPolicy> {
     state: AccessTerminalGuardState,
     teardown: TeardownProbe,
+    tool_trap_disposal: Arc<std::sync::atomic::AtomicBool>,
     /// Policy-controlled sink for unfinished drops (`BeforeTerminal`): `None` for policies (e.g.
     /// `NotCancellable`) that treat an unfinished drop as a programming error instead of queueing
     /// a cancellation.
@@ -128,6 +129,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         Self {
             state: AccessTerminalGuardState::BeforeTerminal { call },
             teardown,
+            tool_trap_disposal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sink,
             cleanup_sink,
             _phantom: PhantomData,
@@ -139,6 +141,14 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
             AccessTerminalGuardState::BeforeTerminal { call } => Some(call),
             _ => None,
         }
+    }
+
+    pub(super) fn with_tool_trap_disposal(
+        mut self,
+        marker: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.tool_trap_disposal = marker;
+        self
     }
 
     /// Hands the terminal append to an owned task. `discard_marker` must be `Some` only on the
@@ -231,7 +241,9 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { mut call } => {
-                if self.teardown.is_executor_shutting_down() {
+                if P::CANCEL_ON_TOOL_TRAP && self.tool_trap_disposal.load(Ordering::Acquire) {
+                    Cancellable::unfinished_drop(call, self.cleanup_sink.as_ref());
+                } else if self.teardown.is_executor_shutting_down() {
                     tracing::debug!(
                         start_idx = %call.start_idx(),
                         "durable call terminal abandoned during executor shutdown"

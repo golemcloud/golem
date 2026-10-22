@@ -13,10 +13,10 @@ For CLI fire-and-forget, see the `golem-trigger-agent-moonbit` skill.
 
 ## Usage
 
-Every method on the auto-generated `AgentClient` has a corresponding `trigger_` variant. Use `AgentClient::scoped` to obtain a client instance, then call the `trigger_` method:
+Methods with recursively stream-free inputs and outputs have an auto-generated `trigger_` variant. Run these fragments inside an async function: `AgentClient::scoped` and its callback are async, while the `trigger_` enqueue itself is synchronous. Propagate async to helpers and callers:
 
 ```moonbit
-AgentClient::scoped("my-counter", fn(client) raise @common.AgentError {
+AgentClient::scoped("my-counter", async fn(client) {
   client.trigger_increment()
 })
 ```
@@ -24,7 +24,7 @@ AgentClient::scoped("my-counter", fn(client) raise @common.AgentError {
 With arguments:
 
 ```moonbit
-DataProcessorClient::scoped("pipeline-1", fn(client) raise @common.AgentError {
+DataProcessorClient::scoped("pipeline-1", async fn(client) {
   client.trigger_process_batch(batch_data)
 })
 ```
@@ -40,13 +40,13 @@ DataProcessorClient::scoped("pipeline-1", fn(client) raise @common.AgentError {
 
 ```moonbit
 // In AgentA — calls AgentB and waits
-AgentBClient::scoped("b1", fn(client) raise @common.AgentError {
+AgentBClient::scoped("b1", async fn(client) {
   let result = client.do_work(data) // OK: awaited call
   // ...
 })
 
 // In AgentB — notifies AgentA without waiting (would deadlock if awaited)
-AgentAClient::scoped("a1", fn(client) raise @common.AgentError {
+AgentAClient::scoped("a1", async fn(client) {
   client.trigger_on_work_done(result) // OK: fire-and-forget
 })
 ```
@@ -56,7 +56,7 @@ AgentAClient::scoped("a1", fn(client) raise @common.AgentError {
 ```moonbit
 let regions : Array[String] = ["us-east", "us-west", "eu-central"]
 for region in regions {
-  RegionProcessorClient::scoped(region, fn(client) raise @common.AgentError {
+  RegionProcessorClient::scoped(region, async fn(client) {
     client.trigger_run_report(report_id)
   })
 }

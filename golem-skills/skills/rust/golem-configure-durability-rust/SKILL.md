@@ -14,7 +14,7 @@ By default, all Golem agents are **durable**:
 - On failure, the agent is transparently recovered by replaying the oplog
 - No special code needed — durability is automatic
 
-> **You cannot opt out of oplog writes for a durable agent.** The oplog is how durability works — every side effect must be recorded. If you are worried about oplog volume or replay cost (long-running agents, heartbeats, polling, recurring tasks), do *not* try to skip persistence. Use **durable with periodic snapshots** instead (see below).
+> **You cannot opt out of oplog writes for a durable agent.** The oplog is how durability works — every side effect must be recorded. Do not try to skip persistence. Use **durable with periodic snapshots** to reduce replay cost (see below); snapshots do not reduce stored oplog volume.
 
 A standard durable agent:
 
@@ -54,6 +54,11 @@ impl CounterAgent for CounterAgentImpl {
 
 Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Use this whenever the oplog grows unboundedly — long-running agents, high-frequency state changes, **heartbeats, polling loops, recurring tasks**.
 
+Snapshots reduce replay work, not stored oplog volume. Automatic snapshots run between successful
+invocations, not inside an endless handler. Split recurring work into bounded invocations.
+The implementation must derive serde `Serialize` and `Deserialize` for default snapshots, or
+provide custom `save_snapshot` / `load_snapshot` hooks; the annotation alone is not enough.
+
 ```rust
 #[agent_definition(snapshotting = "every(10)")]   // snapshot every 10 successful calls
 pub trait CounterAgent { ... }
@@ -69,7 +74,7 @@ See [`golem-custom-snapshot-rust`](../golem-custom-snapshot-rust/SKILL.md) for s
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
 
 - State is discarded after each invocation completes
-- No oplog is maintained — lower overhead
+- An ephemeral oplog is recorded for inspection. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - Useful for pure functions, request handlers, or adapters
 
 ```rust

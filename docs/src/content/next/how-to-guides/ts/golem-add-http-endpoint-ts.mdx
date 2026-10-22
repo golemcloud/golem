@@ -44,10 +44,10 @@ export const TaskAgent = defineAgent({
 Rules:
 - Path must start with `/`
 - Every `id` field must appear as a `{variable}` in the mount path (enforced at compile time)
-- Every `{variable}` must match an `id` field name
+- Every ordinary `{variable}` must match an `id` field name; system variables and an explicit `phantomId` path selector are excluded
 - Catch-all `{*rest}` variables are **not** allowed in mount paths
 
-The mount path template is template-literal typed: a `{var}` that does not match an id field (or an id field with no matching `{var}`) is a `tsc` error, not just a runtime failure. Passing a dynamically built (non-literal) `string` widens to `string` and defers to the runtime checks.
+The mount path template is template-literal typed: an ordinary `{var}` that does not match an id field (or an id field with no matching `{var}`) is a `tsc` error, not just a runtime failure. System variables and the explicit phantom path selector do not count as id fields. Passing a dynamically built (non-literal) `string` widens to `string` and defers to the runtime checks.
 
 ## Endpoint Declaration
 
@@ -112,14 +112,14 @@ http: http.post('/events', {
 
 - `source` and `slot` select canonical top-level stream slots. `$result` is the only implicit result selector.
 - `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
-- `contentType` is allowed only for a direct byte stream (`stream<u8>`) and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. JSON-shaped streams stay `application/json`; do not use `text/plain` for `stream<string>`. SSE still uses `text/event-stream` and base64 data.
+- JSON-shaped slots may explicitly set `contentType: 'application/json'` only. A direct byte stream (`stream<u8>`) may use a concrete non-text, non-JSON MIME type (also excluding `+json`) without parameters or wildcards. Do not use `text/plain` for `stream<string>`. SSE still uses `text/event-stream` and base64 data.
 - The three `allow*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
 - The live-reader limit is 1 through 16 and applies to long-poll and SSE. The append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
 - Limits are maintained per route and worker-service node, not as a cluster-wide quota.
 
 ## Phantom Agents
 
-Set `phantomAgent: true` on the mount to create a fresh ephemeral agent instance for each HTTP request. This enables fully parallel request processing:
+With no explicit `phantomId` selector, set `phantomAgent: true` on the mount to select a fresh phantom identity for each HTTP request. An explicit path or query selector takes precedence over this policy. Requests can run on separate instances. Identity and lifecycle mode are independent: the default mode is durable; add `mode: 'ephemeral'` to `defineAgent` for ephemeral execution (which also defaults to fresh phantom selection when no selector is present).
 
 ```typescript
 export const GatewayAgent = defineAgent({
@@ -224,7 +224,7 @@ httpApi:
 ## Key Constraints
 
 - An `http.mount(...)` is required on `defineAgent(...)` before any method can declare an `http` endpoint
-- Every `id` field must be provided via a mount path variable (or a header variable — see [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts))
+- Every `id` field must be provided via a mount path variable; mount-level header binding is not supported
 - Path/query/header variable names must exactly match `id` fields (mount) or method input keys (endpoint)
 - Catch-all path variables `{*name}` can only appear as the last endpoint path segment and are not allowed in mount paths
 - The endpoint path must start with `/`

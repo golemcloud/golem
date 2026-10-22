@@ -11,7 +11,7 @@ The `<AGENT_ID>` format depends on the agent's language — refer to the languag
 
 ## `agent interrupt` — Pause an Agent
 
-Interrupts a running agent, stopping its execution immediately. The agent's state is preserved — it transitions to the `Interrupted` status and will not process any new invocations until resumed.
+Interrupts a running agent, stopping its execution. A durable agent preserves its state and transitions to `Interrupted`. This is not a maintenance lock: a new invocation can start an interrupted durable agent without an explicit resume. Stop incoming invocations separately if the agent must remain interrupted.
 
 ```shell
 golem agent interrupt <AGENT_ID>
@@ -19,11 +19,11 @@ golem agent interrupt <AGENT_ID>
 
 ### When to Use
 
-- Temporarily pause an agent to prevent it from processing further invocations
+- Stop the current execution of an agent
 - Stop a long-running or misbehaving agent without deleting it
-- Perform maintenance — interrupt first, inspect state, then resume
+- Inspect a durable agent's state after stopping incoming invocations and interrupting it
 
-**Note:** Interrupt only works on agents that are actively `Running`. Agents that are `Idle` or `Suspended` (e.g., waiting on a long sleep) cannot be interrupted — they are already paused. Sleeps longer than the configurable suspension threshold (10 seconds by default) cause Golem to suspend the agent automatically; only agents doing active work or shorter sleeps remain in `Running` state.
+**Note:** Agents in `Running`, `Suspended`, or `Retrying` can be interrupted. Requests for `Idle`, `Failed`, `Exited`, or already `Interrupted` agents are ignored. Suspension (for example during a long sleep) is automatic and does not prevent interruption.
 
 ### Examples
 
@@ -39,7 +39,7 @@ golem agent interrupt 'my-env/CounterAgent("my-counter")'
 
 ## `agent resume` — Resume an Interrupted Agent
 
-Resumes an agent that was previously interrupted. The agent transitions back to its normal state and will continue processing invocations, including any that were queued while it was interrupted.
+Resumes a durable agent that was previously interrupted, continuing its persisted execution. Explicit resume fails for ephemeral agents. After resume, the status depends on the work: it can be `Running`, `Idle`, or `Suspended`.
 
 ```shell
 golem agent resume <AGENT_ID>
@@ -57,7 +57,9 @@ Resume an agent in a specific environment:
 golem agent resume 'my-env/CounterAgent("my-counter")'
 ```
 
-## Typical Workflow
+## Typical Workflow (Durable Agents)
+
+First stop incoming invocations if the agent must stay interrupted during inspection.
 
 1. **Interrupt** the agent to pause execution:
    ```shell
@@ -74,7 +76,7 @@ golem agent resume 'my-env/CounterAgent("my-counter")'
    golem agent resume 'CounterAgent("my-counter")'
    ```
 
-4. **Verify** the agent is running again:
+4. **Verify** the agent has resumed; expect `Running`, `Idle`, or `Suspended` depending on its work:
    ```shell
    golem agent get 'CounterAgent("my-counter")'
    ```

@@ -399,15 +399,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
-    pub(in crate::durable_host) async fn resolve_completed_reconstruction(
+    async fn resolve_completed_reconstruction_to(
         mut self,
         replay_state: ReplayState,
         oplog: Arc<dyn Oplog>,
-        completion_marker_recorder: CompletionMarkerRecorder,
-    ) -> Result<(Pair::Resp, ResolvedReconstructionTerminal), WorkerExecutorError> {
+    ) -> Result<(Pair::Resp, bool), WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("resolve_completed_reconstruction")?;
-        let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let replay = self
             .replay
             .take()
@@ -423,23 +420,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                let delivery = CompletionDelivery::replay_delivered(
-                    disposition,
-                    self.start_idx,
-                    completion_marker_recorder,
-                    self.trap_context(),
-                    self.cleanup_sink.clone(),
-                    self.teardown_probe(),
-                );
-                Ok((
-                    response,
-                    ResolvedReconstructionTerminal {
-                        function_type,
-                        begin_index,
-                        delivery,
-                        cancelled,
-                    },
-                ))
+                if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "internal entity terminal without delivery marker",
+                        "CompletionDelivered for internal entity invocation",
+                    ));
+                }
+                Ok((response, cancelled))
             }
             ReplayedResolution::Undelivered(terminal) => {
                 self.finished = true;
@@ -842,6 +829,151 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 }
 
+impl
+    DurableCallSession<
+        golem_common::model::oplog::host_functions::GolemEntityInvoke,
+        LeaveIncompleteOnDrop,
+    >
+{
+    pub(crate) fn accept_entity_execution_ownership(&mut self) {
+        self.entity_admission = false;
+    }
+
+    fn ensure_owned_entity_scope(&self) -> Result<(), WorkerExecutorError> {
+        // Entity sessions are WriteLocal. Non-forced scope finish is therefore a no-op, just
+        // as in end_durable_function_access; owned settlement must never commit a remote scope.
+        if self.retry.function_type() != &DurableFunctionType::WriteLocal {
+            return Err(WorkerExecutorError::runtime(
+                "owned entity settlement requires WriteLocal",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn complete_entity_owned<Ctx: WorkerCtx>(
+        mut self,
+        context: &EntitySettlementContext<Ctx>,
+        response: golem_common::model::oplog::HostResponseEntityInvocation,
+        span: golem_common::model::oplog::SpanFinished,
+    ) -> Result<golem_common::model::oplog::HostResponseEntityInvocation, WorkerExecutorError> {
+        self.ensure_owned_entity_scope()?;
+        if !self.is_live {
+            return Err(WorkerExecutorError::runtime(
+                "owned completion requires a live entity session",
+            ));
+        }
+        let (response, mut guard) = self
+            .persist_guarded_terminal(context.oplog.clone(), None, response, Some(span))
+            .await?;
+        guard.disarm();
+        Ok(response)
+    }
+
+    pub(crate) async fn cancel_entity_owned<Ctx: WorkerCtx>(
+        mut self,
+        context: &EntitySettlementContext<Ctx>,
+        response: golem_common::model::oplog::HostResponseEntityInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        self.ensure_owned_entity_scope()?;
+        if !self.is_live {
+            return Err(WorkerExecutorError::runtime(
+                "owned cancellation requires a live entity session",
+            ));
+        }
+        let mut guard = self.terminal_guard();
+        let result = if self.persisted {
+            Self::persist_cancellation(context.oplog.clone(), &mut guard, Some(response)).await
+        } else {
+            Ok(())
+        };
+        guard.disarm();
+        result
+    }
+
+    pub(crate) async fn replay_entity_owned<Ctx: WorkerCtx>(
+        mut self,
+        context: &EntitySettlementContext<Ctx>,
+        completed: bool,
+    ) -> Result<
+        ReconstructionReplayOutcome<
+            golem_common::model::oplog::host_functions::GolemEntityInvoke,
+            LeaveIncompleteOnDrop,
+        >,
+        WorkerExecutorError,
+    > {
+        self.ensure_owned_entity_scope()?;
+        if completed {
+            let (response, cancelled) = self
+                .resolve_completed_reconstruction_to(context.replay.clone(), context.oplog.clone())
+                .await?;
+            return Ok(if cancelled {
+                ReconstructionReplayOutcome::Cancelled(response)
+            } else {
+                ReconstructionReplayOutcome::Replayed(response)
+            });
+        }
+        let replay = self
+            .replay
+            .take()
+            .expect("owned replay requires replay session");
+        let outcome = context.replay.await_resolution_outcome(replay).await?;
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload, disposition) => {
+                self.finished = true;
+                if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "internal entity terminal without delivery marker",
+                        "CompletionDelivered for internal entity invocation",
+                    ));
+                }
+                let cancelled = matches!(payload, ReplayedPayload::CancelledPartial(_));
+                let response = decode_replayed_payload::<
+                    golem_common::model::oplog::host_functions::GolemEntityInvoke,
+                >(
+                    &context.oplog,
+                    payload,
+                    self.execution_scope.trap_retry_point(),
+                )
+                .await?;
+                Ok(if cancelled {
+                    ReconstructionReplayOutcome::Cancelled(response)
+                } else {
+                    ReconstructionReplayOutcome::Replayed(response)
+                })
+            }
+            ReplayedResolution::Undelivered(terminal) => {
+                self.finished = true;
+                Err(terminal.direct_divergence_error())
+            }
+            ReplayedResolution::Incomplete => {
+                if let Err(error) = self
+                    .prepare_incomplete_live_repair(|| context.counter.clone())
+                    .await
+                {
+                    context.replay.abandon_replay_for_failure().await?;
+                    context.authoritative_failure.store(true, Ordering::Release);
+                    return Err(error);
+                }
+                let transition = match context.publish_live(self.start_idx).await {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        self.abandon_for_trap();
+                        return Err(error);
+                    }
+                };
+                Ok(match transition {
+                    FinishReplayToLive::Cancelled => {
+                        ReconstructionReplayOutcome::LiveAdmissionCancelled(self)
+                    }
+                    FinishReplayToLive::Live | FinishReplayToLive::AttachmentAdmissionRejected => {
+                        ReconstructionReplayOutcome::Incomplete(self)
+                    }
+                })
+            }
+        }
+    }
+}
+
 /// Parks a replaying call forever, after the caller marked its replay as undelivered: the
 /// recorded run never delivered this terminal to the guest, which will therefore drop this
 /// future at the same point it did live. This future never completes; the return type exists
@@ -1037,24 +1169,5 @@ pub(super) fn expect_cancelled_resolution(
             WorkerExecutorError::unexpected_oplog_entry("Cancelled", format!("End at {end_idx}")),
         ),
         Resolution::Cancelled { .. } => Ok(()),
-    }
-}
-
-impl ResolvedReconstructionTerminal {
-    pub(in crate::durable_host) async fn finish_access<T, D, Ctx>(
-        self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<bool, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
-        let cancelled = self.cancelled();
-        end_durable_function_access(store, get_ctx, self.function_type, self.begin_index, false)
-            .await?;
-        self.delivery.deliver_at_accessor_terminal(store).await?;
-        Ok(cancelled)
     }
 }

@@ -226,10 +226,21 @@ struct RegisteredOperation {
     stdin: Option<AttachmentController>,
     stdout: Option<AttachmentController>,
     stderr: Option<AttachmentController>,
+    execution: std::sync::Weak<super::ToolExecution>,
 }
 
 struct OperationLease {
     handles: AtomicUsize,
+}
+
+impl RegisteredOperation {
+    fn withdraw_uncommitted_cancellation(&mut self, changed: &Notify) {
+        if matches!(self.winner, ToolOperationWinner::SelectingCancelled) {
+            self.winner = ToolOperationWinner::Open;
+            self.winner_tx.send_replace(ToolOperationWinner::Open);
+            changed.notify_waiters();
+        }
+    }
 }
 
 enum LaneOwnership {
@@ -334,6 +345,24 @@ pub(crate) struct OwnerToolOperation {
 impl OwnerToolOperation {
     pub(crate) fn context(&self) -> &OwnerToolOperationContext {
         &self.context
+    }
+
+    pub(super) fn cancel_children(&self) {
+        if let Some(invocation) = self.invocation_id() {
+            self.owner
+                .cancel_children(&OwnerInvocationId::Entity(invocation));
+        }
+    }
+
+    pub(super) fn register_execution(&self, execution: std::sync::Weak<super::ToolExecution>) {
+        self.owner
+            .state
+            .lock()
+            .unwrap()
+            .operations
+            .get_mut(&self.id)
+            .expect("accepted tool operation must remain registered")
+            .execution = execution;
     }
 
     #[cfg(test)]

@@ -163,10 +163,13 @@ pub(crate) fn edit_namespace<Adapter: SandboxFilesystemAdapter>(
     let generation = admit(generation_handle)?;
     validate_namespace_generation(&generation, &edit)?;
     authorize_namespace_edit(&edit)?;
-    let lease = generation.registry.lease_call(match edit {
-        NamespaceEdit::Insert { .. } | NamespaceEdit::Remove { .. } => CallEffect::Changes,
-        NamespaceEdit::Link { .. } | NamespaceEdit::Move { .. } => CallEffect::ChoosesTimes,
-    })?;
+    let lease = generation_handle.lease_call(
+        &generation.registry,
+        match edit {
+            NamespaceEdit::Insert { .. } | NamespaceEdit::Remove { .. } => CallEffect::Changes,
+            NamespaceEdit::Link { .. } | NamespaceEdit::Move { .. } => CallEffect::ChoosesTimes,
+        },
+    )?;
     Ok(FilesystemCall::new(lease, async move {
         execute_namespace_edit(generation, edit).await
     }))

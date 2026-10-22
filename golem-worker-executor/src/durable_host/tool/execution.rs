@@ -13,42 +13,17 @@
 // limitations under the License.
 
 use super::{
-    AcceptedToolCall, Accessor, Arc, AsContextMut, AtomicBool, DurableWorkerCtx,
-    FutureInvokeResultEntry, FutureToolInvokeGet, FutureToolInvokeState, HasData, HasSelf,
-    HasWorker, InterruptKind, InvocationResult, Mutex, Notify, Ordering, Resource,
-    SerializableToolRpcError, ToolExecution, ToolExecutionGetGuard, ToolExecutionState,
-    ToolExecutionTask, ToolInvokeResponse, ToolOutputEntry, ToolRpcError, WorkerCtx,
-    WorkerExecutorError, admit_tool_response_secret_holds, anyhow, oneshot, operation,
-    project_tool_response, register_tool_admission,
+    AcceptedToolCall, Accessor, Arc, AsContextMut, AtomicBool, AttachmentMemory, DurableWorkerCtx,
+    EntityCallMode, EntityInvocationDescriptor, FutureInvokeResultEntry, FutureToolInvokeGet,
+    FutureToolInvokeState, HasActiveAgents, HasData, HasSelf, HasWorker, InterruptKind,
+    InvocationExecutionMode, InvocationResult, Mutex, Notify, Ordering, OwnedToolEndpoints,
+    Resource, SerializableToolRpcError, ToolBodyStdin, ToolCallStdin, ToolCaller, ToolExecution,
+    ToolExecutionGetGuard, ToolExecutionState, ToolInvokeResponse, ToolOutputEntry,
+    ToolOutputWriterEntry, ToolRpcError, WorkerCtx, WorkerExecutorError,
+    admit_tool_response_secret_holds, anyhow, durability, materialize_output_writer, oneshot,
+    operation, project_tool_response, register_tool_admission,
 };
-use super::{AccessorTask, Future, Pin, execute_accepted_tool_call};
-
-impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
-    for ToolExecutionTask<Ctx>
-{
-    fn run(
-        self,
-        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    ) -> impl Future<Output = wasmtime::Result<()>> + Send {
-        self.execution.state.lock().unwrap().producer = accessor.runtime_activity();
-        self.execution.changed.notify_waiters();
-        let execution: Pin<Box<dyn Future<Output = wasmtime::Result<()>> + Send + '_>> =
-            Box::pin(async move {
-                let result = execute_accepted_tool_call(
-                    accessor,
-                    self.accepted,
-                    self.stdout,
-                    self.stderr,
-                    Some(&self.execution),
-                    self.completed_supervisor_started,
-                )
-                .await;
-                self.execution.complete(result);
-                Ok(())
-            });
-        execution
-    }
-}
+use super::{Future, execute_accepted_tool_call};
 
 pub(super) fn capable_result_await_cohort(
     plans: &[FutureToolInvokeGet],
@@ -73,27 +48,28 @@ pub(super) fn capable_result_await_cohort(
 
 impl ToolExecution {
     pub(super) fn new(
-        accepted: &AcceptedToolCall,
-        inherited_cancellation: Option<tokio_util::sync::CancellationToken>,
+        operation: operation::OwnerToolOperation,
+        cancellable: bool,
+        producer: Option<std::sync::Weak<crate::worker::suspension::ExternalActivity>>,
     ) -> Arc<Self> {
+        let invocation = operation
+            .invocation_id()
+            .expect("tool execution must have a durable invocation");
         Arc::new(Self {
-            parent: accepted.durability.parent().clone(),
-            invocation: accepted.durability.scope().invocation_id().clone(),
-            start: accepted.durability.scope().invocation_id().start_index(),
-            filesystem: accepted.operation.context().activation.filesystem(),
-            operation: accepted.operation.clone(),
-            cancellable: accepted.durability.scope().mode()
-                != golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted,
+            parent: operation.context().parent.clone(),
+            start: invocation.start_index(),
+            invocation,
+            filesystem: operation.context().activation.filesystem(),
+            operation,
+            cancellable,
             state: Mutex::new(ToolExecutionState {
                 result: None,
                 failure: None,
-                producer: None,
             }),
             changed: Notify::new(),
             get_active: AtomicBool::new(false),
-            cancel: inherited_cancellation
-                .map(|cancellation| cancellation.child_token())
-                .unwrap_or_default(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            producer,
         })
     }
 
@@ -139,8 +115,17 @@ impl ToolExecution {
     }
 
     pub(super) fn cancel(&self) {
+        if self.cancel_body() {
+            self.operation.cancel_children();
+        }
+    }
+
+    pub(super) fn cancel_body(&self) -> bool {
         if self.cancellable && self.operation.begin_cancel() {
             self.cancel.cancel();
+            true
+        } else {
+            false
         }
     }
 
@@ -236,9 +221,9 @@ pub(crate) async fn settle_tool_children_owned(
     let deferred = execution.deferred_tool_admission();
     operations.wait_parent_settled(&parent).await;
     if !deferred.clear_closed_parent(&parent) {
-        return Err(WorkerExecutorError::runtime(
-            "tool parent settled with deferred admissions remaining",
-        ));
+        return Err(WorkerExecutorError::runtime(format!(
+            "tool parent {parent:?} settled without draining its closed deferred admissions",
+        )));
     }
     Ok(())
 }
@@ -390,12 +375,16 @@ where
         neutral = runtime.as_ref().and_then(|runtime| {
             let dependencies = executions
                 .iter()
-                .filter_map(|execution| {
+                .filter(|execution| {
                     let state = execution.state.lock().unwrap();
-                    (state.result.is_none() && state.failure.is_none()).then_some(state.producer)
+                    state.result.is_none() && state.failure.is_none()
                 })
+                .map(|execution| execution.producer.as_ref()?.upgrade())
                 .collect::<Option<Vec<_>>>()?;
-            runtime.neutral_runtime(accessor.runtime_activity()?, &dependencies)
+            runtime.neutral_externals(
+                accessor.runtime_activity()?,
+                dependencies.iter().map(Arc::as_ref),
+            )
         });
         responses.as_mut().poll(cx)
     })
@@ -467,7 +456,6 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
 
     let execution = store.data().durable_ctx().owner_execution.clone();
     let operations = execution.tool_operations();
-    let entity_cancellation = store.data().durable_ctx().entity_cancellation();
     let primary = store
         .data()
         .durable_ctx()
@@ -498,11 +486,16 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
             Err(_) if operations.has_owner_failure() => {}
             // Cancelling an entity interrupts its guest; its accepted children still have to
             // resolve their own cancellation inside this Store before the parent settles.
-            Err(_)
-                if entity_cancellation
-                    .as_ref()
-                    .is_some_and(|cancellation| cancellation.is_cancelled()) => {}
-            Err(error) => return Err(WorkerExecutorError::runtime(error.to_string())),
+            Err(error)
+                if crate::worker::invocation::interrupt_kind_in(&error)
+                    == Some(InterruptKind::EntityCancellation) => {}
+            Err(error) => {
+                return Err(durability::native_host_failure(
+                    store.data().durable_ctx(),
+                    error.into(),
+                )
+                .await);
+            }
         }
     }
 }
@@ -518,41 +511,109 @@ where
     Ctx: WorkerCtx,
 {
     register_tool_admission(accessor, &mut accepted)?;
-    let inherited_cancellation = accessor.with(|mut access| access.get().entity_cancellation());
-    let execution = ToolExecution::new(&accepted, inherited_cancellation);
+    let caller = ToolCaller::capture(accessor);
+    let execution = ToolExecution::new(
+        accepted.operation.clone(),
+        accepted.durability.scope().mode() != InvocationExecutionMode::ReplayingCompleted,
+        caller
+            .settlement
+            .settlement_activity
+            .as_ref()
+            .map(Arc::downgrade),
+    );
+    accepted
+        .operation
+        .register_execution(Arc::downgrade(&execution));
+    if accessor.with(|mut access| {
+        access
+            .get()
+            .entity_cancellation()
+            .is_some_and(|cancellation| cancellation.is_cancelled())
+    }) {
+        execution.cancel();
+    }
     let replaying_incomplete = accepted.durability.scope().mode()
         == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
-    let incomplete_body_started = if replaying_incomplete {
-        let (replay, start) = accessor.with(|mut access| {
-            (
-                access.get().state.replay_state.clone(),
-                accepted.durability.scope().invocation_id().start_index(),
-            )
-        });
-        replay.has_visible_scope_descendant(start).await?
-    } else {
-        false
-    };
     let reconstruction_supervisor = (accepted.operation.context().activation.filesystem()
         == golem_common::model::entity::FilesystemCapability::Incapable
         && (accepted.durability.scope().mode()
             == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
-            || incomplete_body_started))
+            || replaying_incomplete))
         .then(oneshot::channel);
     let (completed_supervisor_started, completed_supervisor_ready) = match reconstruction_supervisor
     {
         Some((started, ready)) => (Some(started), Some(ready)),
         None => (None, None),
     };
-    accessor.with(|mut access| {
-        access.spawn(ToolExecutionTask::<Ctx> {
+    let endpoints = accessor.with(|mut access| -> anyhow::Result<_> {
+        let ctx = access.get();
+        let stdin = accepted
+            .stdin
+            .take()
+            .map(|stdin| -> anyhow::Result<_> {
+                Ok(match stdin {
+                    ToolCallStdin::Attachment(stdin) => {
+                        ToolBodyStdin::Attachment(ctx.table().delete(stdin)?)
+                    }
+                    ToolCallStdin::Durable(endpoint) => ToolBodyStdin::Durable(endpoint),
+                })
+            })
+            .transpose()?;
+        let discard = accepted.durability.call_mode() == EntityCallMode::FireAndForget;
+        let EntityInvocationDescriptor::Tool(descriptor) = accepted.durability.operation();
+        let stdout = stdout
+            .map(|output| ctx.table().delete(output))
+            .transpose()?;
+        let stderr = stderr
+            .map(|output| ctx.table().delete(output))
+            .transpose()?;
+        let memory = || {
+            AttachmentMemory::for_store(
+                ctx.public_state.worker().active_agents(),
+                accepted.durability.scope().mode() == InvocationExecutionMode::Live,
+            )
+        };
+        let endpoints = OwnedToolEndpoints {
+            stdin,
+            stdout: materialize_output_writer(
+                stdout,
+                discard && descriptor.declares_stdout,
+                memory,
+            ),
+            stderr: materialize_output_writer(
+                stderr,
+                discard && descriptor.declares_stderr,
+                memory,
+            ),
+        };
+        if !accepted.operation.attach(
+            endpoints.stdin.as_ref().and_then(ToolBodyStdin::controller),
+            endpoints
+                .stdout
+                .as_ref()
+                .map(ToolOutputWriterEntry::controller),
+            endpoints
+                .stderr
+                .as_ref()
+                .map(ToolOutputWriterEntry::controller),
+        ) {
+            return Err(anyhow!("owner generation fenced tool invocation"));
+        }
+        Ok(endpoints)
+    })?;
+    let tasks = caller.primary.active_agents().invocation_loops();
+    let owned_execution = execution.clone();
+    accepted.durability.accept_execution_ownership();
+    tasks.spawn_entity(async move {
+        let result = execute_accepted_tool_call(
+            &caller,
             accepted,
-            stdout,
-            stderr,
-            execution: execution.clone(),
+            endpoints,
+            Some(&owned_execution),
             completed_supervisor_started,
-            _ctx: std::marker::PhantomData,
-        });
+        )
+        .await;
+        owned_execution.complete(result);
     });
     if let Some(ready) = completed_supervisor_ready
         && ready.await.is_err()

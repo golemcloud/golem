@@ -85,7 +85,8 @@ golem agent new 'MyAgent("agent-1")' \
 
 Config values are resolved in order of increasing precedence:
 
-`componentTemplates` → `components` → `agents` → `presets`
+`componentTemplates` → `components` → `agents`, with presets resolved within each template,
+component, and agent layer, not as one final global layer.
 
 Values set closer to the agent override those set at broader scopes.
 

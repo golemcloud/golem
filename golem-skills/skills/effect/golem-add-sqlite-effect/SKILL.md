@@ -51,10 +51,12 @@ export const NotesAgentImpl = NotesAgent.implement<NotesState>({
       sql`INSERT INTO notes (text) VALUES (${text})`.pipe(
         Effect.flatMap(() => sql`SELECT count(*) AS count FROM notes`),
         Effect.map((rows) => Number((rows[0] as { count: number }).count)),
+        Effect.orDie,
       ),
     list: () =>
       sql`SELECT text FROM notes ORDER BY id`.pipe(
         Effect.map((rows) => rows.map((row) => String((row as { text: string }).text))),
+        Effect.orDie,
       ),
   }),
   snapshot: {
@@ -67,6 +69,10 @@ export const NotesAgentImpl = NotesAgent.implement<NotesState>({
 
 Import the implementation module from `src/main.ts`. Snapshots fail while a database transaction
 is open, so commit or roll back before a handler completes.
+
+These success-only methods convert unexpected `SqlError` failures to defects with `Effect.orDie`.
+For recoverable failures, declare an `error` schema and map SQL errors to that domain type.
+Neither approach promises automatic retries of failed invocations.
 
 ## File-backed database
 
@@ -87,6 +93,8 @@ the same file are not supported.
   Inspect the effective values with `golem account limits show`; do not assume a fixed cloud limit.
 - Keep temporary storage in memory. Temporary files are not supported.
 - Do not use `journal_mode=TRUNCATE`. Avoid `journal_mode=PERSIST` with attached databases.
+- Automatic SQLite snapshots reject additional databases opened with `ATTACH`, regardless of
+  journal mode. Use separately declared snapshot databases instead.
 - Native loadable extensions are unavailable, and database paths are limited to 512 bytes.
 
 Use an external relational database when data must be queried across agents, exceed one agent's

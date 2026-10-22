@@ -49,7 +49,7 @@ does not compensate itself.
 ## Fallible Transactions
 
 Wrap the complete sequence in `Saga.fallibleTransaction`. Signal expected failures that should
-trigger rollback with `Effect.fail`, not `throw`, `Effect.die`, or `Effect.dieMessage`:
+trigger rollback with `Effect.fail`, not `throw` or `Effect.die`:
 
 ```typescript
 const transaction = Saga.fallibleTransaction(
@@ -175,9 +175,13 @@ const processOrder = ({
       return { success: false, error } satisfies ProcessOrderResult;
     }
 
-    return yield* Effect.die(exit.cause);
+    return yield* Effect.failCause(exit.cause).pipe(Effect.orDie);
   }).pipe(Effect.provide(FetchHttpClient.layer));
 ```
+
+For non-domain failures, `Effect.failCause(exit.cause).pipe(Effect.orDie)` preserves interruption
+and existing defects while converting typed infrastructure failures to defects. Do not put the
+whole Cause inside `Effect.die`: that turns interruption into a new defect.
 
 Put `processOrder: processOrderMethod` in the agent definition's `methods` record. The one
 top-level parameter named `input` is intentional: it lets callers provide the three fields as one

@@ -3015,11 +3015,11 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
         &agent_id,
-        "middleware_probe_once",
+        "nested_trap_probe",
         data_value!("cascade(smoke-73)"),
     );
     tokio::pin!(invocation);
-    let _blocked = tokio::select! {
+    let blocked = tokio::select! {
         result = invocation.as_mut() => panic!("mixed cascade settled before its child blocked: {result:?}"),
         checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
     };
@@ -3033,12 +3033,54 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
             vec![],
         )
         .await?;
-    let error = invocation
-        .await
-        .expect_err("the mixed leaf trap must fail its owner invocation");
+    let worker = executor.active_agent(&owner).await.unwrap().primary();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let trapped = oplog.iter().filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) if oplog.iter().any(|start|
+                    start.oplog_index == end.start_index
+                        && matches!(&start.entry, PublicOplogEntry::Start(p)
+                            if p.function_name == "golem::entity::invoke")) => end.response.as_ref(),
+                _ => None,
+            }).any(|response| SerializableToolOperationTerminal::from_value(response.value())
+                .is_ok_and(|terminal| terminal.body_execution == SerializableEntityBodyExecution::Trapped));
+            if trapped
+                && worker.owner_execution().tool_operation_metadata().operations.len() == 3
+            {
+                break Ok::<_, anyhow::Error>(());
+            }
+            tokio::select! {
+                result = invocation.as_mut() => anyhow::bail!("mixed cascade settled before the detached leaf was released: {result:?}"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {},
+            }
+        }
+    }).await.map_err(|_| anyhow::anyhow!("trapping leaf did not settle: {:?}", worker.owner_execution().tool_operation_metadata()))??;
+    assert_eq!(
+        worker
+            .owner_execution()
+            .tool_operation_metadata()
+            .owner_failure,
+        None
+    );
+    assert_eq!(
+        worker
+            .owner_execution()
+            .tool_operation_metadata()
+            .operations
+            .len(),
+        3,
+        "healthy ancestors retain their unfinished detached descendant"
+    );
+    blocked
+        .release
+        .send(())
+        .expect("release unrelated detached leaf");
+    let error: String = invocation.await?.into_typed()?;
     assert!(
-        error.to_string().contains("mixed lifecycle cascade trap"),
-        "the selected leaf trap must reach the owner boundary: {error:?}"
+        error.contains("wasm `unreachable` instruction executed"),
+        "the isolated leaf error must propagate through both middleware ancestors: {error:?}"
     );
 
     let mut destroyed = Vec::new();
@@ -3083,18 +3125,82 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
     let mut sorted_starts = starts.clone();
     sorted_starts.sort();
     assert_eq!(destroyed, sorted_starts);
-    assert!(oplog.iter().all(|entry| {
-        !matches!(&entry.entry, PublicOplogEntry::End(end) if starts.contains(&end.start_index))
-            && !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if starts.contains(&cancelled.start_index))
-    }), "owner fencing must not fabricate a normal entity terminal");
+    let terminals = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if starts.contains(&end.start_index) => Some(
+                SerializableToolOperationTerminal::from_value(
+                    end.response
+                        .as_ref()
+                        .expect("entity terminal response")
+                        .value(),
+                )
+                .expect("decode entity terminal"),
+            ),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        terminals
+            .iter()
+            .filter(|terminal| terminal.body_execution == SerializableEntityBodyExecution::Trapped)
+            .count(),
+        1
+    );
+    assert_eq!(
+        terminals
+            .iter()
+            .filter(
+                |terminal| terminal.body_execution == SerializableEntityBodyExecution::Executed
+                    && terminal.result.is_err()
+            )
+            .count(),
+        2
+    );
+    assert_eq!(
+        terminals
+            .iter()
+            .filter(|terminal| terminal.result.is_ok())
+            .count(),
+        1
+    );
+    for start in starts {
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::End(end) if end.start_index == start))
+                .count(),
+            1
+        );
+        assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == start)));
+    }
+    assert_eq!(
+        worker
+            .owner_execution()
+            .tool_operation_metadata()
+            .owner_failure,
+        None
+    );
     assert_eq!(
         oplog
             .iter()
             .filter(|entry| entry.oplog_index > invocation_start
                 && matches!(entry.entry, PublicOplogEntry::Error(_)))
             .count(),
-        1
+        0
     );
+    let fresh: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_once",
+            data_value!("control"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(fresh, "leaf(control)");
     checkpoint_server.abort();
     promise_server.abort();
     Ok(())

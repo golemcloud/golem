@@ -10,10 +10,14 @@ Environment variables in Golem can be set at multiple levels in the application 
 ## Cascade Hierarchy (Most General → Most Specific)
 
 ```
-componentTemplates → components → agents → presets
+componentTemplates (including their selected presets)
+  → components (including their selected presets)
+  → agents (including their selected presets)
 ```
 
 Each level can define `env` (a map of key-value pairs) and `envMergeMode` (how to combine with the parent level). More specific levels are applied on top of less specific ones.
+
+Presets apply within their owning layer, not after all other layers. Golem resolves the base component, including its template and component presets, before applying agent overrides and agent presets.
 
 ## 1. Component Template Level
 
@@ -67,7 +71,7 @@ components:
       LOG_LEVEL: info
     presets:
       debug:
-        default: {}
+        default: true
         env:
           LOG_LEVEL: debug
           DEBUG_MODE: "true"
@@ -85,7 +89,7 @@ agents:
       CACHE_TTL: "300"
     presets:
       debug:
-        default: {}
+        default: true
         env:
           CACHE_TTL: "60"
 ```
@@ -106,7 +110,7 @@ components:
       DATABASE_URL: postgresql://db:5432/app
     presets:
       debug:
-        default: {}
+        default: true
         env:
           LOG_LEVEL: debug
 
@@ -117,7 +121,7 @@ agents:
       API_KEY: "{{ MY_API_KEY }}"
     presets:
       debug:
-        default: {}
+        default: true
         env:
           CACHE_TTL: "60"
 ```
