@@ -83,7 +83,16 @@ pub enum TlsReload {
 /// is reported once and not at every poll.
 struct Rejection {
     files: Vec<ReadFile>,
-    kind: RejectionKind,
+    /// The ways of turning down these files that were logged already.
+    reported: Vec<RejectionKind>,
+    /// Whether these files were counted as a failure already.
+    counted: bool,
+}
+
+/// What to do about a rejection: log it, count it, or neither because it was reported already.
+struct Report {
+    log: bool,
+    count: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -148,12 +157,15 @@ impl EtcdClients {
             Ok(settings) => settings,
             Err(err) => {
                 let reason = err.to_string();
-                if self.first_report(files, RejectionKind::Unusable) {
+                let report = self.first_report(files, RejectionKind::Unusable);
+                if report.log {
                     error!(
                         error = reason,
                         "The changed etcd TLS files cannot be used; the etcd clients keep the \
                          files they have"
                     );
+                }
+                if report.count {
                     golem_service_base::metrics::tls::record_reload_failure("etcd client");
                 }
                 return TlsReload::Rejected(reason);
@@ -163,18 +175,21 @@ impl EtcdClients {
         let (requests, election) = match self.connect(&settings).await {
             Ok(clients) => clients,
             Err(ProbeRefusal::Refused(reason)) => {
-                if self.first_report(files, RejectionKind::Refused) {
+                let report = self.first_report(files, RejectionKind::Refused);
+                if report.log {
                     warn!(
                         error = reason,
                         "etcd refuses the changed TLS files; the etcd clients keep the files they \
                          have"
                     );
+                }
+                if report.count {
                     golem_service_base::metrics::tls::record_reload_failure("etcd client");
                 }
                 return TlsReload::Rejected(format!("etcd refuses the new files: {reason}"));
             }
             Err(ProbeRefusal::NoAnswer(reason)) => {
-                if self.first_report(files, RejectionKind::NoAnswer) {
+                if self.first_report(files, RejectionKind::NoAnswer).log {
                     warn!(
                         error = reason,
                         "etcd did not answer on the changed TLS files; the etcd clients keep the \
@@ -223,16 +238,26 @@ impl EtcdClients {
         Ok((requests, election))
     }
 
-    /// Whether this way of turning down `files` is not reported yet; remembers it.
-    fn first_report(&self, files: Vec<ReadFile>, kind: RejectionKind) -> bool {
+    /// What is new about turning down `files` this way. The memory is keyed on the file bytes
+    /// alone: a way that was logged for them is not logged again, they are counted at most once,
+    /// and a poll that finds etcd silent never replaces what is remembered. New bytes start over.
+    fn first_report(&self, files: Vec<ReadFile>, kind: RejectionKind) -> Report {
         let mut rejected = self.rejected.lock().unwrap();
-        let known = rejected
-            .as_ref()
-            .is_some_and(|known| known.files == files && known.kind == kind);
-        if !known {
-            *rejected = Some(Rejection { files, kind });
+        if rejected.as_ref().is_none_or(|known| known.files != files) {
+            *rejected = Some(Rejection {
+                files,
+                reported: Vec::new(),
+                counted: false,
+            });
         }
-        !known
+        let known = rejected.as_mut().expect("set above");
+        let log = !known.reported.contains(&kind);
+        if log {
+            known.reported.push(kind);
+        }
+        let count = kind != RejectionKind::NoAnswer && !known.counted;
+        known.counted |= count;
+        Report { log, count }
     }
 
     /// Runs for the life of the process: every `retry_max_delay` it looks at the files, so that
@@ -382,5 +407,28 @@ mod tests {
             }
         }
         assert_eq!(failures() - before, 2);
+    }
+
+    #[test]
+    async fn a_flapping_etcd_does_not_make_the_same_files_reported_again() {
+        let files = PemFiles::new();
+        let clients = clients_over(&files).await;
+        let same = EtcdConnectSettings::snapshot_of_files(&clients.config);
+        let report = |kind| clients.first_report(same.clone(), kind);
+
+        let first = report(RejectionKind::Refused);
+        assert!(first.log && first.count);
+        let silent = report(RejectionKind::NoAnswer);
+        assert!(silent.log && !silent.count);
+        let again = report(RejectionKind::Refused);
+        assert!(!again.log && !again.count);
+        let still = report(RejectionKind::NoAnswer);
+        assert!(!still.log && !still.count);
+
+        // Other bytes start over.
+        std::fs::write(files.path("key.pem"), "other bytes").unwrap();
+        let other = EtcdConnectSettings::snapshot_of_files(&clients.config);
+        let fresh = clients.first_report(other, RejectionKind::Refused);
+        assert!(fresh.log && fresh.count);
     }
 }
