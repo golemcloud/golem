@@ -14,7 +14,7 @@ By default, all Golem agents are **durable**:
 - On failure, the agent is transparently recovered by replaying the oplog
 - No special code needed — durability is automatic
 
-> **You cannot opt out of oplog writes for a durable agent.** The oplog is how durability works — every side effect must be recorded. If you are worried about oplog volume or replay cost (long-running agents, heartbeats, polling, recurring tasks), do *not* try to skip persistence. Use **durable with periodic snapshots** instead (see below).
+> **You cannot opt out of oplog writes for a durable agent.** Do not skip persistence to reduce replay cost. Use **durable with periodic snapshots** instead (see below); snapshots do not reduce stored oplog volume.
 
 A standard durable agent:
 
@@ -46,7 +46,7 @@ final class CounterAgentImpl(private val name: String) extends CounterAgent {
 
 ## Durable with Periodic Snapshots
 
-Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Use this whenever the oplog grows unboundedly — long-running agents, high-frequency state changes, **heartbeats, polling loops, recurring tasks**.
+Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Snapshots reduce replay work, not stored oplog volume. Periodic snapshots run at invocation boundaries; they do not interrupt an endless handler. Split heartbeats and polling into bounded, self-scheduled invocations.
 
 ```scala
 @agentDefinition(snapshotting = "every(10)")     // snapshot every 10 successful calls
@@ -63,7 +63,7 @@ See [`golem-custom-snapshot-scala`](../golem-custom-snapshot-scala/SKILL.md) for
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
 
 - State is discarded after each invocation completes
-- No oplog is maintained — lower overhead
+- An oplog is written for inspection; initialization can replay, but failed methods have no replay recovery
 - Useful for pure functions, request handlers, or adapters
 
 ```scala
@@ -71,6 +71,7 @@ import golem.runtime.annotations.{agentDefinition, DurabilityMode}
 
 @agentDefinition(mode = DurabilityMode.Ephemeral)
 trait StatelessHandler extends BaseAgent {
+  class Id()
   def handle(input: String): Future[String]
 }
 ```

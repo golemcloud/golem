@@ -54,7 +54,7 @@ pub struct MyAgentConfig {
 #[agent_definition]
 pub trait MyAgent {
     fn new(name: String, #[agent_config] config: Config<MyAgentConfig>) -> Self;
-    fn connect(&self) -> String;
+    async fn connect(&self) -> Result<String, String>;
 }
 
 struct MyAgentImpl {
@@ -67,9 +67,20 @@ impl MyAgent for MyAgentImpl {
         Self { config }
     }
 
-    fn connect(&self) -> String {
-        let config = self.config.get();
-        format!("using {}", config.api_key.get())
+    async fn connect(&self) -> Result<String, String> {
+        use golem_rust::http::{self, Request};
+
+        let config = self.config.get().map_err(|_| "Configuration unavailable".to_string())?;
+        let api_key = config.api_key.get().map_err(|_| "Credential unavailable".to_string())?;
+        let request = Request::get("https://api.example.com/status")
+            .header("Authorization", format!("Bearer {api_key}"))
+            .body(Vec::new())
+            .map_err(|_| "Invalid request".to_string())?;
+        let response = http::send(request).await.map_err(|_| "Request failed".to_string())?;
+        let status = response.status();
+        // Consume the body, but do not return provider data that might contain secrets.
+        let _ = http::response_bytes(response).await.map_err(|_| "Body read failed".to_string())?;
+        Ok(format!("Service returned HTTP {status}"))
     }
 }
 ```
@@ -80,16 +91,20 @@ impl MyAgent for MyAgentImpl {
 
 ## Reading Secrets at Runtime
 
-Call `.get()` on a `Secret<T>` to explicitly reveal the value. Secrets are lazily loaded, so a fresh `.get()` call can observe updated values after the update is visible:
+Call `.get()` on a `Secret<T>` to explicitly reveal the value. Both config loading and secret
+reveal return `Result`; map failures to safe domain errors as above. Secrets are lazily loaded, so
+a fresh `.get()` call can observe updated values after the update is visible. For the nested
+schema from the first section, acquire a database password for a client without returning it:
 
 ```rust
-fn connect(&self) -> String {
-    let config = self.config.get();
-    let api_key = config.api_key.get();
-    let db_password = config.db.password.get();
-    format!("Connecting to {}:{} with key {}", config.db.host, config.db.port, api_key)
+fn database_password(&self) -> Result<String, String> {
+    let config = self.config.get().map_err(|_| "Configuration unavailable".to_string())?;
+    config.db.password.get().map_err(|_| "Database credential unavailable".to_string())
 }
 ```
+
+Keep this an internal helper, not an agent trait method. Pass its result to the database client;
+never expose it in an RPC result, HTTP response, or log.
 
 ## Managing Secrets via CLI
 
@@ -123,7 +138,7 @@ golem secret delete apiKey
 
 ## Secret Defaults in golem.yaml
 
-For local development convenience, set defaults under `secretDefaults`. These are **not** used in production environments:
+For local development convenience, set defaults under `secretDefaults`. Use these only for non-sensitive development values. The CLI applies defaults by environment name; it does not prohibit defaults in production. Never put production credentials in this checked-in manifest:
 
 ```yaml
 secretDefaults:
@@ -140,7 +155,7 @@ secretDefaults:
 - Secret paths use **camelCase** — Rust `snake_case` fields are converted automatically (e.g., `api_key` → `apiKey`)
 - The `--type` argument accepts Rust type names: `String`, `i32`, `bool`, `Vec<String>`, `Option<i32>` (if parsing as Rust fails, the other supported languages' type syntax is tried)
 - Secrets are stored **per-environment**, not per-agent-instance
-- Missing required secrets cause agent creation/deployment to fail — use `Option<Secret<T>>` for optional secrets
+- A declaration with a missing required secret can deploy, but agent creation or start fails — use `Option<Secret<T>>` for optional secrets
 - Secrets are revealed on `.get()`, and each reveal pins the resolved secret revision for deterministic retries and replay
 - Fresh `.get()` calls can observe runtime updates without restarting the agent
 - If you also need non-secret config fields, follow the same `#[agent_config]` constructor pattern

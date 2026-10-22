@@ -61,8 +61,8 @@ argument) is `CacheUntilWrite`.
 
 | Policy | Call | Behavior |
 |---|---|---|
-| Until write (default) | `golem.ReadOnly()` or `golem.ReadOnly(golem.CacheUntilWrite())` | Cached until any mutating (non-read-only) method of the agent completes |
-| TTL | `golem.ReadOnly(golem.CacheFor(30 * time.Second))` | Expires after the given duration even without a write |
+| Until write (default) | `golem.ReadOnly()` or `golem.ReadOnly(golem.CacheUntilWrite())` | Cached until a mutating (non-read-only) invocation of the agent successfully completes |
+| TTL | `golem.ReadOnly(golem.CacheFor(30 * time.Second))` | Cached at most for the given duration; a successful mutating invocation invalidates it sooner |
 | No cache | `golem.ReadOnly(golem.NoCache())` | Runs every time; still side-effect-free, never cached |
 
 ```go
@@ -72,7 +72,7 @@ var (
 	// Cached until the next write.
 	GetCatalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly())
 
-	// Cached for a minute regardless of writes.
+	// Cached for at most a minute; a successful mutating invocation invalidates it.
 	GetRates = Agent.Method[golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
 
 	// Never cached, but still trapped against remote side effects.

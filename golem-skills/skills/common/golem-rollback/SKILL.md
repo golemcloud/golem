@@ -9,7 +9,7 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 
 ## Overview
 
-Every `golem deploy` creates a new **deployment revision** — an immutable snapshot of the environment's components and HTTP API deployments. Rollback lets you revert the environment to a previous revision, restoring the exact component versions and API configuration that were active at that point.
+A `golem deploy` that applies deployment changes creates a new **deployment revision** — an immutable snapshot of the environment's components and HTTP API deployments. An unchanged deploy creates no revision. Rollback lets you revert the environment to a previous revision, restoring the exact component versions and API configuration that were active at that point.
 
 Rollback does **not** rebuild or re-upload components — it re-activates a previously deployed revision on the server side.
 
@@ -35,10 +35,10 @@ Looks up the deployment whose version label matches `<VERSION_STRING>` and rolls
 
 1. **Prepare** — the CLI fetches the target revision's deployment summary from the server and diffs it against the current deployment.
 2. **Diff** — a unified diff is displayed showing exactly which components, component versions, environment variables, and HTTP API deployments will change.
-3. **Confirm** — unless `--yes` is passed, the CLI prompts for confirmation before proceeding.
+3. **Confirm** — the CLI prompts before proceeding unless `--yes` is passed or the selected manifest environment sets `cli.autoConfirm: true`.
 4. **Apply** — the CLI sends a `DeploymentRollback` request to the server containing the current revision and the target revision. The server atomically switches the environment to the target state.
 
-If the target revision is identical to the current deployment (same deployment hash), the CLI reports "up to date" and takes no action.
+If the target revision is identical to the current deployment (same deployment hash), the CLI reports "up to date" and sends no rollback request. Unless `--plan` is set, post-deploy actions still run, including actions selected by environment defaults. In particular, `--reset` can delete agents and `--redeploy-agents` can delete and recreate them even when there is no deployment diff.
 
 ## Combining Rollback with Post-Deploy Actions
 
@@ -50,7 +50,7 @@ Rollback supports the same post-deploy flags as a normal deploy:
 | `--redeploy-agents` | Delete and recreate existing agents using the rolled-back version |
 | `--reset` | Roll back, then delete existing agents of the components in the target deployment; their state is lost, and the environment is retained |
 
-`--reset` does not clear domains, HTTP and MCP deployments, secrets, retry policies, plugins, or component revision history. The rollback still restores the target deployment's component versions and API configuration. Agents are created again on invocation rather than recreated by the command.
+`--reset` does not clear guest KV buckets, domains, HTTP and MCP deployments, secrets, retry policies, plugins, or component revision history. Application KV cleanup is separate. The rollback still restores the target deployment's component versions and API configuration. Agents are created again on invocation rather than recreated by the command.
 
 ### Examples
 

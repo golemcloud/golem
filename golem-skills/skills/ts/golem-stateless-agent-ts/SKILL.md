@@ -10,9 +10,9 @@ description: "Creating ephemeral (stateless) agents in a TypeScript Golem projec
 An **ephemeral agent** is a Golem agent that gets a **fresh instance for every invocation**. Unlike the default durable agents, ephemeral agents:
 
 - **No shared state**: Each invocation starts from a fresh `init()` call — state set in one call is gone by the next
-- **No replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`), but it is never used for replay — no automatic recovery on failure
+- **No method recovery replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`), but failed methods are not recovered by replay. Initialization can replay.
 - **No persistence**: The agent's memory is discarded after each invocation completes
-- **Same identity model**: The agent is still addressed by its `id` record, but every call behaves as if the agent was just created
+- **Logical target versus concrete identity**: The `id` record selects the logical target; each call uses a fresh, one-shot concrete agent identity
 
 This makes ephemeral agents ideal for **pure request handlers**, **stateless transformers**, **adapters**, and **serverless-style functions** where each call is independent.
 
@@ -141,6 +141,6 @@ export const ConverterAgentImpl = ConverterAgent.implement({
 ## Key Points
 
 - Ephemeral mode is set at the **agent type level** via `mode: 'ephemeral'` — all instances of the type are ephemeral
-- The `id` record still defines identity — you can have multiple ephemeral agents with different id values
-- Ephemeral agents can still call other agents via RPC, make HTTP requests, and use all Golem APIs
-- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog` — but it is never replayed
+- The `id` record defines the logical target, not a reusable concrete instance across calls
+- Ephemeral agents can call other agents via RPC and make HTTP requests, but do not support durable suspension or unlimited waits
+- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog` — failed methods are not recovered by replay, but initialization can replay

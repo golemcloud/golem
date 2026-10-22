@@ -86,8 +86,12 @@ val result: Future[AgentStream[Long]] = target.doubled(input)
 ```
 
 Declare cross-component dependencies in `golem.yaml` and follow the
-`golem-call-another-agent-scala` guide. Streaming methods are awaited only; generated clients omit
-fire-and-forget and scheduling methods. A constructor containing a stream is rejected.
+`golem-call-another-agent-scala` guide. Streaming methods are awaited only. CLI-generated internal
+and external bridge clients omit fire-and-forget and scheduling helpers for recursively stream-bearing
+methods. Definition-derived clients still expose those helpers; live stream inputs fail runtime
+encoding at those boundaries. Their presence is not a supported way to trigger or schedule streaming
+methods, including methods with stream-free inputs but streaming outputs. A constructor containing
+a stream is rejected.
 
 For an external JVM application, declare `bridge.scala.external` as described by
 `golem-call-from-external-scala`. Generated methods return the external bridge runtime's
@@ -108,7 +112,7 @@ agent stream. Add a bounded, stream-free adapter if the same capability must be 
 ## Start and Verify
 
 ```shell
-golem new --yes --language scala streaming-agent
+golem new --yes --template scala streaming-agent
 golem build
 golem deploy --yes
 ```

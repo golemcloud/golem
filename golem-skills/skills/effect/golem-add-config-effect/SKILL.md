@@ -73,10 +73,14 @@ export const MyAgent = defineAgent({
         const serverPort = yield* config.server.port;
 
         return { appName, maxRetries, serverHost, serverPort };
-      }).pipe(Effect.annotateLogs({ agentName: name })),
+      }).pipe(Effect.annotateLogs({ agentName: name }), Effect.orDie),
   }),
 });
 ```
+
+Config reads can fail with `ConfigError`. This success-only method converts unexpected config
+failures to defects with `Effect.orDie`; this fails the invocation, not a guaranteed retry.
+For recoverable failures, declare a method `error` schema and map the failure to that domain type.
 
 Import the implementation module from the component entry point so the top-level
 `.implement({ init, methods })` call registers it:
@@ -115,9 +119,9 @@ Override values when creating an individual agent. Dot-separated keys address ne
 
 ```shell
 golem agent new 'MyAgent("agent-1")' \
-  --config appName="CLI Application" \
+  --config 'appName="CLI Application"' \
   --config maxRetries=5 \
-  --config server.host=example.com \
+  --config 'server.host="example.com"' \
   --config server.port=8443
 ```
 

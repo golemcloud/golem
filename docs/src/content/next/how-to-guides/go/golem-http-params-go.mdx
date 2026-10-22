@@ -6,6 +6,8 @@ When a Go agent is exposed over HTTP (see [`golem-add-http-endpoint-go`](/next/h
 
 Binding is **metadata only** and declared on the definition: the mount `Path` on `Spec.HTTP` and the `golem.HTTP(...)` option on each method. There is no incoming-request handler in the guest.
 
+All binding and body rules below apply only to user-supplied fields. The host injects `golem.Principal` fields in `ID` and method inputs; exclude them from request bodies and path/query/header bindings. Explicit principal bindings are rejected.
+
 ## Steps
 
 1. **Name fields to match wire names.** A path/query/header variable refers to an input field by its schema name: the Go field name in lowerCamelCase with each initialism as one word, so `MaxResults` is `maxResults`, `SKU` is `sku`, `UserID` is `userId` and `APIKey` is `apiKey`.
@@ -17,7 +19,7 @@ Binding is **metadata only** and declared on the definition: the mount `Path` on
 
 `{var}` segments bind by schema name.
 
-- **Mount path** `{var}`s bind the agent's constructor (`ID`) fields. **Every `ID` field must appear as a `{var}`** so a request selects one instance.
+- **Mount path** `{var}`s bind the agent's user-supplied constructor (`ID`) fields. **Every user-supplied `ID` field must appear as a `{var}`**, excluding auto-injected `golem.Principal`, so a request selects one instance.
 - **Endpoint path** `{var}`s bind the method's input fields.
 
 ```go
@@ -103,17 +105,17 @@ type UpdateIn struct {
 	Count uint64 // from the body
 }
 
-// POST /catalog/{name}/items/{sku}   Body: {"name":"Widget","count":5}
+// POST /catalog/{name}/items/{sku}   Body: {"name":"Widget","count":"5"}
 var Update = Agent.Method[UpdateIn, Item]("update", golem.HTTP(golem.POST("/items/{sku}")))
 ```
 
 Each ordinary structured body field becomes a top-level key in the JSON body object (keyed by schema name, as elsewhere in the SDK).
 
-> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body field names only** as keys, even for one field. A `DecideIn struct{ Decision string }` expects `{"decision": "approved"}`, not a bare string. A single struct field named `Payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header fields. Unstructured text and binary fields instead consume the raw body; see below.
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body field names only** as keys, even for one field. A `DecideIn struct{ Decision string }` expects `{"decision": "approved"}`, not a bare string. A single struct field named `Payload` also needs wrapping: `{"payload": {"name": "Widget", "count": "5"}}`, not `{"name": "Widget", "count": "5"}` (when `count` is `uint64`). Do not include path/query/header fields. Unstructured text and binary fields instead consume the raw body; see below.
 
 CLI positional invocation is different: pass one argument per user-supplied input field in declaration order, including fields bound to path/query/header values over HTTP. Skip `golem.Principal` fields without a principal value or placeholder. Use a Go literal for each value, not one JSON object wrapping the full input. A single struct field is one composite literal without the HTTP `payload` wrapper. Load [`golem-invoke-agent-go`](/next/how-to-guides/go/golem-invoke-agent-go) for CLI examples and caller-only input rules.
 
-`GET` and `HEAD` are **bodyless**: they carry no request body, so they must bind **every** input field from path/query/header. An unbound field on a bodyless verb is a definition error.
+`GET` and `HEAD` are **bodyless**: they carry no request body, so they must bind **every user-supplied** input field from path/query/header, excluding auto-injected `golem.Principal`. An unbound user-supplied field on a bodyless verb is a definition error.
 
 ## Return type to HTTP response mapping
 
@@ -142,22 +144,27 @@ var Download = Agent.Method[DownloadIn, golem.Result[*golem.UnstructuredBinary[g
 
 ## Data type to JSON mapping
 
+Agent HTTP routes use the platform's schema JSON renderer, not Go's `encoding/json`. Do not assume that SDK canonical JSON or the native public invocation-session JSON envelope is interchangeable with an HTTP body.
+
 | Go type | JSON |
 |---|---|
 | `string` | string |
-| sized ints / uints | number (integer) |
+| `int8`, `int16`, `int32`, `uint8`, `uint16`, `uint32` | number (integer) |
+| `int64`, `uint64` | decimal string, for example `"5"` |
 | `float32`, `float64` | number |
 | `bool` | boolean |
 | `[]T` | array |
 | struct | object keyed by schema names (`MaxResults` → `maxResults`, `UserID` → `userId`) |
 | `*T` | value or `null` |
-| `map[K]V` | object / WIT map |
+| `map[K]V` | array of key/value pairs, for example `[["key","5"]]` for `map[string]uint64` |
+
+The native public invocation-session JSON contract instead encodes that map as `{"kind":"map","value":{"entries":[[{"kind":"string","value":"key"},{"kind":"u64","value":"5"}]]}}`: every key and value is a tagged node too. That wrapper is not the ordinary agent HTTP route representation. Use the contract for the boundary being called; a Go JSON object such as `{"key":5}` is not either map representation.
 
 ## Key Constraints
 
 - A variable can bind an input field from **exactly one** of path/query/header — binding it more than once is a definition error.
 - Bindable path/query/header fields must be scalar; non-scalars go in the body.
-- Bodyless verbs (`GET`, `HEAD`) must bind every input field.
+- Bodyless verbs (`GET`, `HEAD`) must bind every user-supplied input field, excluding auto-injected `golem.Principal`.
 - Field references on the wire use the schema name, the field name in lowerCamelCase with each initialism as one word (`SKU` → `sku`, `RequestID` → `requestId`).
 - A raw (non-JSON) body is a single body field of type `golem.UnstructuredBinary[M]` or `golem.UnstructuredText[L]`; `M`/`L` is `golem.AnyMimeType`/`golem.AnyLanguage` or a marker type whose `MimeTypes()`/`Languages()` lists what is accepted. Any other body is a JSON object keyed by the schema names.
 

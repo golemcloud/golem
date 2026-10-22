@@ -85,7 +85,7 @@ do not guess them from the component source.
 
 Create the external application outside the Golem component source. Add the generated package as
 a file dependency and install Effect v4. Keep the `effect` version exactly aligned with the root
-Effect component's `package.json` (the current SDK uses `4.0.0-rc.117`):
+Effect component's `package.json` (the current SDK uses `4.0.0`):
 
 ```json
 {
@@ -98,7 +98,7 @@ Effect component's `package.json` (the current SDK uses `4.0.0-rc.117`):
   },
   "dependencies": {
     "counter-agent-client": "file:../bridge-sdk/ts/counter-agent-client",
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   },
   "devDependencies": {
     "@types/node": "^25",
@@ -283,7 +283,7 @@ checks, but the external application should use the generated bridge for typed c
 
 ## Authoritative Effect SDK References
 
-- [Pinned client API](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Client.ts)
-- [Pinned host RPC implementation](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/host/RpcClient.ts)
-- [Pinned host runtime layer](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/host/HostLive.ts)
-- [Pinned Effect v4 package version](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/package.json)
+- [Current guest client API](https://github.com/golemcloud/golem/blob/main/sdks/effect/src/Client.ts)
+- [Current host RPC implementation](https://github.com/golemcloud/golem/blob/main/sdks/effect/src/host/RpcClient.ts)
+- [Current host runtime layer](https://github.com/golemcloud/golem/blob/main/sdks/effect/src/host/HostLive.ts)
+- [Current Effect SDK dependencies](https://github.com/golemcloud/golem/blob/main/sdks/effect/package.json)

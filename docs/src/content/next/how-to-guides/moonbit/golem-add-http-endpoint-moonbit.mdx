@@ -42,8 +42,8 @@ fn TaskAgent::new(task_name : String) -> TaskAgent {
 
 Rules:
 - Path must start with `/`
-- Every constructor parameter must appear as a `{variable}` in the mount path (using the parameter name)
-- Every `{variable}` must match a constructor parameter name
+- Every user-supplied identity parameter must appear as a `{variable}` in the mount path (using the parameter name)
+- Every `{variable}` must match a user-supplied identity parameter. Host-injected `Principal` and `@config.Config[T]` parameters are excluded; do not bind them in the mount path.
 - Catch-all `{*rest}` variables are **not** allowed in mount paths
 
 ## Endpoint Annotation
@@ -337,7 +337,7 @@ httpApi:
 ## Key Constraints
 
 - `#derive.mount("/path")` is required on the agent struct before any `#derive.endpoint(...)` annotations can be used
-- All constructor parameters must be provided via mount path variables
+- All user-supplied identity parameters must be provided via mount path variables; host-injected Principal and Config parameters must not be bound
 - Path/query/header variable names must exactly match method parameter names
 - The endpoint path must start with `/`
 - Exactly one HTTP method must be specified per `#derive.endpoint(...)` annotation

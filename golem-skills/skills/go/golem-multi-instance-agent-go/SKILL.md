@@ -7,7 +7,7 @@ description: "Addressing multiple instances of a Go agent by identity. Use when 
 
 ## Overview
 
-An agent *type* has many *instances*, each identified by its **`ID`** (the constructor parameters). `Agent.Get(id)` returns a client for the durable instance with that id — **two `Get`s with the same id address the same agent**, created implicitly on first invocation. For one-off/ephemeral work use `Agent.NewPhantom(id)`, which allocates a fresh, non-persistent instance.
+An agent *type* has many *instances*, each identified by its **`ID`** (the constructor parameters) and an optional phantom UUID. `Agent.Get(id)` returns a client for the durable instance with that id — **two `Get`s with the same id address the same agent**, created implicitly on first invocation. `Agent.NewPhantom(id)` adds a fresh UUID to the identity; it does not change `Spec.Mode`, which defaults to durable.
 
 ## Identity: single or composite
 
@@ -46,9 +46,9 @@ for _, u := range users {
 }
 ```
 
-## Ephemeral (phantom) instances
+## Phantom identities and ephemeral mode
 
-`NewPhantom(id)` allocates a **fresh** instance with no durable identity — the right choice for throwaway/per-request work, and the only way to get a client for an ephemeral agent:
+`NewPhantom(id)` returns a client with a **fresh phantom UUID fixed for that client**. The session definition above is durable, so its phantom instance retains state and can be addressed again. Ephemeral types instead set `Mode: golem.Ephemeral`; they require phantom addressing. Create a **new client with `NewPhantom` for each independent ephemeral invocation**. Reusing a client reuses its UUID; a terminal ephemeral identity cannot be invoked again or bound as a reusable durable identity.
 
 ```go
 c := session.Agent.NewPhantom(session.ID{User: "alice", Device: "kiosk"})
@@ -64,8 +64,9 @@ if pid, ok := c.PhantomID().Get(); ok {      // PhantomID() is Option[UUID]
 
 ## Key Constraints
 
-- The `ID` fields *are* the identity: same values → same agent; different values → different agent. There is no separate "create" step.
-- Instances are **durable by default**; use `NewPhantom` for ephemeral ones. A phantom's id lives only on its client — capture `Client.PhantomID()` if you need to re-address it.
+- The `ID` fields plus the optional phantom UUID define identity: the same full identity addresses the same durable agent. There is no separate "create" step.
+- Instances are **durable by default**, including phantoms. Set `Spec.Mode` separately for ephemeral execution. Capture `Client.PhantomID()` to re-address a durable phantom with `WithPhantomID`; do not treat an ephemeral invocation's ID as a reusable durable identity.
+- For an ephemeral type, call `NewPhantom(id)` again before each independent invocation, not once outside a loop of calls.
 - Over HTTP, each `ID` field must appear as a `{var}` in the mount path so a URL selects the instance (see `golem-add-http-endpoint-go`).
 
 ### Related Skills

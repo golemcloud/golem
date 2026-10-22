@@ -22,7 +22,7 @@ Golem ships with the following built-in plugins, automatically registered and av
 | `endpoint` | Yes | OTLP collector endpoint URL (must start with `http://` or `https://`) |
 | `headers` | No | Comma-separated `key=value` pairs sent as HTTP headers (e.g., `x-api-key=secret,auth=token`) |
 | `signals` | No | Comma-separated telemetry types to export: `traces`, `logs`, `metrics`. Default: `traces` |
-| `service-name-mode` | No | How to set the `service.name` attribute: `agent-id` (default) uses the worker ID, `agent-type` uses the component ID |
+| `service-name-mode` | No | How to set the `service.name` attribute: `agent-id` (default) uses `<component UUID>/<agent identity>`, `agent-type` extracts the agent type name from the identity |
 
 ## Installing Plugins via golem.yaml
 
@@ -33,7 +33,7 @@ components:
   my-app:service:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.1.5"
+        version: "1.5.8"
         parameters:
           endpoint: "http://localhost:4318"
           signals: "traces,logs,metrics"
@@ -42,7 +42,7 @@ agents:
   MyAgent:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.1.5"
+        version: "1.5.8"
         parameters:
           endpoint: "https://otel-collector.example.com:4318"
           headers: "x-api-key=my-secret-key"
@@ -66,7 +66,7 @@ Plugin parameter values support **Jinja-style template substitution** using `{{ 
 ```yaml
 plugins:
   - name: golem-otlp-exporter
-    version: "1.1.5"
+    version: "1.5.8"
     parameters:
       endpoint: "{{ OTLP_ENDPOINT }}"
       headers: "x-api-key={{ OTLP_API_KEY }}"
@@ -83,7 +83,7 @@ componentTemplates:
   observability:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.1.5"
+        version: "1.5.8"
         parameters:
           endpoint: "http://localhost:4318"
           signals: "traces,logs,metrics"
@@ -115,22 +115,25 @@ components:
 
 Use presets and environments to vary plugin parameters across deployment targets:
 
-CLI outputs mask plugin parameter values by sensitive-looking parameter names. If a plugin parameter contains a secret, use a name containing words such as `secret`, `token`, `password`, or `key` so commands like `component get`, `component manifest-trace`, and `deploy` mask it by default.
+Use the environment selector `app-env:production`. A plain `production` custom preset can become
+the default custom preset when it is the only one, applying the production endpoint in every environment.
+
+CLI output masking depends on the **parameter name**, not its value or the environment variable used to populate it. The OTLP plugin's `headers` parameter is not a sensitive-looking name, so credentials inside it are **not masked** in output such as `component get`, `component manifest-trace`, and deployment diffs. Environment substitution does not change this. Keep the plugin-defined name `headers`; renaming it to trigger masking breaks plugin configuration. Treat these outputs as sensitive and do not copy credential-bearing output into logs or shared transcripts.
 
 ```yaml
 components:
   my-app:service:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.1.5"
+        version: "1.5.8"
         parameters:
           endpoint: "http://localhost:4318"
     presets:
-      production:
+      app-env:production:
         pluginsMergeMode: replace
         plugins:
           - name: golem-otlp-exporter
-            version: "1.1.5"
+            version: "1.5.8"
             parameters:
               endpoint: "https://otel.prod.example.com:4318"
               headers: "x-api-key={{ OTLP_API_KEY }}"
@@ -142,7 +145,7 @@ environments:
     componentPresets: debug
   production:
     server: cloud
-    componentPresets: production
+    componentPresets: app-env:production
 ```
 
 ## Managing Plugins via CLI

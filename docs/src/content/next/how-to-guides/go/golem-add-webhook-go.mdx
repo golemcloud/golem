@@ -2,7 +2,7 @@
 
 ## Overview
 
-A Golem webhook lets an agent mint a temporary public URL that an external system POSTs to; the POST body is delivered back to the agent. Under the hood a webhook **is a Golem promise**: the agent durably suspends while awaiting the callback, consuming no resources, and survives restarts (exactly-once via oplog replay).
+A Golem webhook lets an agent mint a temporary public URL that an external system POSTs to; the POST body is delivered back to the agent. Under the hood a webhook **is a Golem promise**. Creation does not suspend the agent. A durable agent awaiting the callback can suspend after the suspension policy delay, freeing guest execution resources while persisted state and other resources remain. The wait survives restarts via oplog replay.
 
 A webhook is a promise completed by an HTTP POST:
 
@@ -124,9 +124,9 @@ HTTP: &golem.Mount{Path: "/api/orders/{id}", WebhookSuffix: "/workflow-hooks"},
 
 - The agent **must** set `Spec.HTTP` and be deployed via `httpApi`, or `WebhookURL()` panics, which traps the component, as in Rust.
 - Only the agent that created the promise may `Await` it; awaiting from another agent traps in the host.
-- Only a `POST` to the URL completes the promise; the URL is one-shot — once completed it is invalid, and a later `Await` returns the recorded body from the oplog.
-- The agent is durably suspended while awaiting — it survives failures, restarts, and updates.
-- **Go difference from Rust:** `Mount.WebhookSuffix` must be **literal segments only** — path variables like `{agent-type}` or `{name}` in the suffix are rejected in the Go SDK (the Rust `webhook_suffix` allows them).
+- Only a `POST` to the URL completes the promise. Completion is first-write-wins: duplicate POSTs return HTTP 204 without replacing the first payload. Completion does not immediately invalidate the URL, and a later `Await` returns the recorded body from the oplog.
+- A durable agent can suspend after the suspension policy delay while awaiting — it survives failures, restarts, and updates.
+- **Go difference from Rust:** `Mount.WebhookSuffix` must be **literal segments only** — path variables like `{agent-type}` or `{name}` in the suffix are rejected in the Go SDK. Rust supports system variables such as `{agent-type}` and `{agent-version}`, not constructor parameters such as `{name}`.
 
 ### Related Guides
 | Guide | Description |

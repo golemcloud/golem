@@ -12,7 +12,7 @@ Import PostgreSQL support from its package subpath:
 
 ```typescript
 import { Effect, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import { method } from "@golemcloud/effect-golem";
 import { Pg, PgClient } from "@golemcloud/effect-golem/postgres";
 ```
@@ -39,7 +39,7 @@ const findNote = (noteId: number) =>
 const runnable = findNote(1).pipe(Effect.provide(PostgresLive));
 ```
 
-Import `SqlSchema`, `SqlResolver`, or `Migrator` from `effect/unstable/sql` when a repository needs
+Import `SqlSchema`, `SqlResolver`, or `Migrator` from `effect/sql` when a repository needs
 schema decoding, request batching, or migrations. They consume the same canonical `SqlClient`
 service; do not replace them with PostgreSQL-driver-specific wrappers. Keep `Pg` imports only for
 PostgreSQL-specific rich parameter values or dialect-specific behavior.
@@ -54,16 +54,30 @@ Create the client once in the agent's `init` Effect and return it as state befor
 constructs the handlers, so the implemented agent instance reuses one host connection:
 
 ```typescript
-Effect.gen(function* () {
+// In the existing .implement({ ... }) object:
+init: ({ name }) => Effect.gen(function* () {
+  const state = yield* Ref.make({ count: 0 });
+  yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ name }));
   const sql = yield* PgClient.make({
     connectionAddress: "postgres://user:password@localhost:5432/app",
   });
-
-  return {
-    // Agent method implementations close over `sql`.
-  };
-});
+  return { state, sql };
+}),
+methods: ({ state, sql }) => ({
+  // Keep the existing handlers here, using state as before.
+  checkPostgres: () => sql`SELECT 'postgres-ok'::text`.values.pipe(
+    Effect.flatMap((rows) => typeof rows[0]?.[0] === "string"
+      ? Effect.succeed(rows[0][0])
+      : Effect.die("Expected a PostgreSQL string")),
+    Effect.orDie,
+  ),
+}),
 ```
+
+Import `Ref` from `effect`. Preserve all existing init work and state fields; return the client
+alongside them. For the default counter template, remove `.implement<Ref.Ref<{ count: number }>>`
+so the new `{ state, sql }` type is inferred (or update the explicit type). Keep every existing
+handler in `methods: ({ state, sql }) => ({ ... })`; do not return handlers from `init`.
 
 `PgClient.make` opens the host-backed connection and can fail with Effect's `SqlError`. The Golem
 agent runtime supplies its host and scope requirements. Do not look for `connect`, `close`,
@@ -80,7 +94,7 @@ checkPostgres: method({
 }),
 ```
 
-Add a handler with the same TypeScript-cased property name to the object returned by `implement`.
+Add a handler with the same TypeScript-cased property name to the object returned by `methods`.
 Keep existing contracts and handlers unchanged unless the task requests otherwise.
 
 The CLI agent type comes from the definition's `name`, not the exported TypeScript constant.
@@ -109,19 +123,20 @@ checkPostgres: () =>
     const value = rows[0]?.[0];
 
     if (typeof value !== "string") {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         "Expected PostgreSQL row 0, column 0 to contain a string",
       );
     }
 
     return value;
-  }),
+  }).pipe(Effect.orDie),
 ```
 
 The handler succeeds with a plain `string`; it does not expose a result wrapper in the agent
 method contract. Make sure the handler explicitly returns `value`: `.values` yields all positional
-rows, not the first cell. SQL failures can remain in the Effect error channel and fail the
-invocation. Do not add `catchAll` merely to make the public success type a plain string.
+rows, not the first cell. The success-only handler converts unexpected SQL failures to defects
+with `Effect.orDie`. For recoverable failures, declare an `error` schema and map SQL errors to
+that domain type. Defects fail the invocation; they do not guarantee retry.
 
 ## Query Data
 
@@ -151,13 +166,14 @@ const rows = yield* sql`SELECT 'postgres-ok'::text`.values;
 const value = rows[0]?.[0];
 
 if (typeof value !== "string") {
-  return yield* Effect.dieMessage("Expected a PostgreSQL text value");
+  return yield* Effect.die("Expected a PostgreSQL text value");
 }
 ```
 
 For an agent method whose contract says `success: Schema.String`, keep that public contract. The
 handler still returns an `Effect`; do not change the success schema to a source-language-style
-`Result` merely because database operations can fail.
+`Result` merely because database operations can fail. Apply `Effect.orDie` to the composed handler
+for unexpected SQL failures, or declare an `error` schema and map failures to its domain type.
 
 ## Create Tables and Write Data
 
@@ -257,13 +273,14 @@ adapter does not read `DATABASE_URL` or another environment variable automatical
 
 - Keep SQL work inside Effects; do not replace handlers with `async` functions.
 - Prefer repository code that consumes `SqlClient.SqlClient`; provide it with `PgClient.layer`.
-- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` with the same adapter
+- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/sql` with the same adapter
   layer when their schema, batching, or migration behavior is needed.
 - Create and reuse a client in the implementation closure rather than opening one per method call.
 - Declare every added handler in the agent's `methods` map with an Effect Schema.
 - Keep the `defineAgent` name and `golem.yaml` agent key equal to the type used for invocation.
 - Use `.values` when the result must be read by row and column position.
-- Let Golem handle durable retries; do not add retry loops around database operations.
+- Let host retry policy handle retryable SQL host failures. A returned `SqlError` still needs
+  handling or mapping at the method boundary; `Effect.orDie` does not guarantee retry.
 - PostgreSQL is external state and is not included in agent snapshots. Make initialization
   idempotent with patterns such as `CREATE TABLE IF NOT EXISTS` and `ON CONFLICT`.
 - Import the agent implementation from `src/main.ts` with its emitted `.js` suffix as usual.

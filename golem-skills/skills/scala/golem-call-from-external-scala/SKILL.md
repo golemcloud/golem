@@ -81,11 +81,13 @@ sbt run
 
 Generated Scala bridge clients follow the same conventions as agent-to-agent RPC:
 
-- `Client.get(...)` attaches to an existing agent instance.
-- `Client.getPhantom(...)` attaches to an existing phantom instance.
-- `Client.newPhantom(...)` creates a new phantom instance.
-- Methods returning a result are exposed as `Future[T]`.
-- Fire-and-forget and scheduled methods return `Future[Unit]`.
+- `Client.get(...)` addresses a durable agent; ephemeral clients have only the phantom factories.
+- Durable bridges expose `Client.getPhantom(...)` to address a specific phantom UUID. Ephemeral CLI bridges (guest and JVM) do not expose it.
+- `Client.newPhantom(...)` returns a logical proxy; the first invocation creates the instance, not the factory call.
+- For durable targets, awaited methods return `Future[T]`; stream-free trigger and schedule methods return `Future[Unit]`.
+- For ephemeral targets, awaited methods return `Future[golem.bridge.runtime.InvocationResult[T]]`; stream-free trigger and schedule methods return `Future[golem.bridge.runtime.InvocationReceipt]`.
+- External JVM factories return futures (as in the example), unlike synchronous guest factories. External phantom UUIDs use the bridge UUID type; native SDK recipes use `golem.Uuid` and native `publicUuid`, not bridge identity accessors. External REST bridge types live under `golem.bridge.runtime`, not `golem.runtime.rpc`. CLI-generated internal guest clients use `golem.runtime.rpc.InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` for ephemeral operations.
+- Bridge clients omit trigger and schedule helpers for recursively stream-bearing methods; use awaited streaming calls.
 
 ## Generate Scala Internal Clients for Component-to-Component Calls
 

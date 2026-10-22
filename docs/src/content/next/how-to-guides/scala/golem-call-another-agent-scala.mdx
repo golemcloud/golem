@@ -2,7 +2,7 @@
 
 ## Overview
 
-The SDK generates companion objects for agent-to-agent calls. Define a companion extending `AgentCompanion` on the agent trait to enable ergonomic `.get()` syntax.
+Native definition-derived SDK clients extend `AgentCompanionBase`. CLI-generated internal bridge clients do not. The examples below use native SDK clients; no manually defined companion is required.
 
 ## Setup
 
@@ -44,6 +44,8 @@ val count: Future[Int] = counter.getCount()
 The call uses `async-invoke-and-await` under the hood — the calling agent **suspends** (yields the WASM event loop) until the target agent returns. The returned `Future` is genuinely async, enabling concurrent RPC calls to multiple agents.
 
 ## Cancelable Call
+
+The signatures here describe native SDK durable targets with stream-free methods. Native ephemeral clients expose `newPhantom` / `getPhantom`; CLI-generated ephemeral guest bridges expose only `newPhantom`. Their awaited calls return `Future[InvocationResult[T]]`, cancelable calls return `Future[CancelableAsyncInvocation[T]]`, trigger/schedule return `Future[InvocationReceipt]`, and cancelable scheduling returns `Future[CancelableInvocationReceipt]` (types in `golem.runtime.rpc`).
 
 Get a `(Future[Out], CancellationToken)` pair to cancel a pending call:
 

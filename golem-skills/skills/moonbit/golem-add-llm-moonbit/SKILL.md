@@ -5,165 +5,169 @@ description: "Adding LLM and AI capabilities to a MoonBit Golem agent. Use when 
 
 # Adding LLM and AI Capabilities (MoonBit)
 
-## Overview
+Call the provider's REST API with the SDK's Preview 3 HTTP wrapper. Load
+`golem-make-http-request-moonbit` for HTTP retry and recovery behavior. Do not use
+Preview 2 `OutgoingRequest`, `handle`, pollables, or blocking body reads.
 
-There are no AI-specific libraries for MoonBit. To integrate with LLM providers, call the provider's REST API directly using **WASI HTTP** — the same HTTP mechanism available for all outgoing requests in MoonBit Golem agents.
+## Setup
 
-Load the `golem-make-http-request-moonbit` skill for full details on making HTTP requests from MoonBit agents.
-
-## Calling an LLM API
-
-Here is how to call the OpenAI Chat Completions API using WASI HTTP:
+Add these imports to the component's `moon.pkg` (keep its existing imports):
 
 ```moonbit
-fn chat_completion(prompt : String, api_key : String) -> String {
-  let body = "{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \""
-    + prompt
-    + "\"}]}"
-
-  // Create headers
-  let headers = @http.Fields::from_list(
-    [
-      ("Content-Type", b"application/json"),
-      ("Authorization", ("Bearer " + api_key).to_utf8_bytes()),
-    ],
-  ).unwrap()
-
-  // Create POST request
-  let request = @http.OutgoingRequest::new(headers)
-  let _ = request.set_method(@http.Post)
-  let _ = request.set_scheme(Some(@http.Https))
-  let _ = request.set_authority(Some("api.openai.com"))
-  let _ = request.set_path_with_query(Some("/v1/chat/completions"))
-
-  // Write request body
-  let out_body = request.body().unwrap()
-  let output_stream = out_body.write().unwrap()
-  output_stream.blocking_write_and_flush(body.to_utf8_bytes()).unwrap()
-  output_stream.drop()
-  @http.OutgoingBody::finish(out_body, None).unwrap()
-
-  // Send and wait for response
-  let future_response = @http.handle(request, None).unwrap()
-  let pollable = future_response.subscribe()
-  pollable.block()
-  let response = future_response.get().unwrap().unwrap().unwrap()
-
-  // Read response body
-  let incoming_body = response.consume().unwrap()
-  let stream = incoming_body.stream().unwrap()
-  let bytes = stream.blocking_read(1048576UL).unwrap()
-  stream.drop()
-  @http.IncomingBody::finish(incoming_body)
-
-  // Parse the response JSON to extract the message content
-  let response_text = String::from_utf8_lossy(bytes)
-  // Use your JSON parsing approach to extract choices[0].message.content
-  response_text
+import {
+  "golemcloud/golem_sdk/http" @http,
+  "golemcloud/golem_sdk/config" @config,
+  "moonbitlang/core/encoding/utf8" @utf8,
 }
 ```
 
-## Setting API Keys
-
-Store provider API keys as **secrets** using Golem's typed config system. Load the `golem-add-secret-moonbit` skill for full details. In brief, declare the key in a config struct:
+Declare the provider model and credential as typed configuration. Select a model
+available to your provider account; this example does not pin a model's lifetime.
 
 ```moonbit
 #derive.config
-pub(all) struct MyAgentConfig {
+pub(all) struct ChatConfig {
+  model : String
   api_key : @config.Secret[String]
 }
 ```
 
-Then manage it via the CLI:
+Set `agents.ChatAgent.config.model` in `golem.yaml`, and create the secret at
+the normalized `apiKey` path with `golem secret create apiKey --type String`.
+Enter the key at the hidden prompt. Load `golem-add-secret-moonbit` for secret provisioning.
+Never return or log the credential.
 
-```shell
-golem secret create apiKey --type String --value "sk-..."
-```
+## Request and Response Lifecycle
 
-Access in code with `self.config.value.api_key.get!()`.
-
-## Calling Other Providers
-
-The same WASI HTTP approach works for any LLM provider — change the authority, path, headers, and request body to match the provider's API:
-
-| Provider | Authority | Path | Auth Header |
-|----------|-----------|------|-------------|
-| OpenAI | `api.openai.com` | `/v1/chat/completions` | `Bearer $OPENAI_API_KEY` |
-| Anthropic | `api.anthropic.com` | `/v1/messages` | `x-api-key: $ANTHROPIC_API_KEY` |
-| Google Gemini | `generativelanguage.googleapis.com` | `/v1beta/models/{model}:generateContent?key=$API_KEY` | API key in URL |
-| Groq | `api.groq.com` | `/openai/v1/chat/completions` | `Bearer $GROQ_API_KEY` |
-| Mistral | `api.mistral.ai` | `/v1/chat/completions` | `Bearer $MISTRAL_API_KEY` |
-
-## Complete Agent Example
+Use the installed SDK's `@http.Request` constructor and body accessors. They are
+generated from the current WIT; inspect them rather than translating Preview 2
+resource methods. The relevant contract is:
 
 ```moonbit
-#derive.agent
-pub(all) struct ChatAgent {
-  chat_name : String
-  mut messages : String
-}
-
-///|
-fn ChatAgent::new(chat_name : String) -> ChatAgent {
-  let system_msg = "{\"role\": \"system\", \"content\": \"You are a helpful assistant for chat '"
-    + chat_name
-    + "'\"}"
-  { chat_name, messages: system_msg }
-}
-
-///|
-#derive.endpoint(post = "/ask")
-pub fn ChatAgent::ask(self : Self, question : String) -> String {
-  // Build messages array
-  let user_msg = "{\"role\": \"user\", \"content\": \"" + question + "\"}"
-  let all_messages = "[" + self.messages + ", " + user_msg + "]"
-
-  let body = "{\"model\": \"gpt-4o\", \"messages\": " + all_messages + "}"
-
-  let api_key = @env.var("OPENAI_API_KEY").unwrap()
-
-  let headers = @http.Fields::from_list(
-    [
-      ("Content-Type", b"application/json"),
-      ("Authorization", ("Bearer " + api_key).to_utf8_bytes()),
-    ],
-  ).unwrap()
-
-  let request = @http.OutgoingRequest::new(headers)
-  let _ = request.set_method(@http.Post)
-  let _ = request.set_scheme(Some(@http.Https))
-  let _ = request.set_authority(Some("api.openai.com"))
-  let _ = request.set_path_with_query(Some("/v1/chat/completions"))
-
-  let out_body = request.body().unwrap()
-  let output_stream = out_body.write().unwrap()
-  output_stream.blocking_write_and_flush(body.to_utf8_bytes()).unwrap()
-  output_stream.drop()
-  @http.OutgoingBody::finish(out_body, None).unwrap()
-
-  let future_response = @http.handle(request, None).unwrap()
-  let pollable = future_response.subscribe()
-  pollable.block()
-  let response = future_response.get().unwrap().unwrap().unwrap()
-
-  let incoming_body = response.consume().unwrap()
-  let stream = incoming_body.stream().unwrap()
-  let bytes = stream.blocking_read(1048576UL).unwrap()
-  stream.drop()
-  @http.IncomingBody::finish(incoming_body)
-
-  let reply = String::from_utf8_lossy(bytes)
-  // Update messages for next turn
-  let assistant_msg = "{\"role\": \"assistant\", \"content\": \"...\"}"
-  self.messages = self.messages + ", " + user_msg + ", " + assistant_msg
-  reply
+async fn send_request(request : @http.Request) -> Result[@http.Response, @http.ErrorCode] {
+  @http.send(request)
 }
 ```
 
-## Key Constraints
+To implement a provider adapter:
 
-- There are no AI-specific libraries for MoonBit — call provider REST APIs directly using WASI HTTP
-- Load the `golem-make-http-request-moonbit` skill for full HTTP request patterns, error handling, and resource lifecycle rules
-- API keys should be stored as secrets using Golem's typed config system (load the `golem-add-secret-moonbit` skill)
-- All HTTP requests are automatically durably persisted by Golem — responses are replayed from the oplog on recovery
-- Field values in WASI HTTP headers are `FixedArray[Byte]` — use byte literals (`b"..."`) or `.to_utf8_bytes()`
+1. Serialize a structured JSON object, not interpolated JSON text. For OpenAI
+   Chat Completions use `{"model": model.to_json(), "messages": [{"role": "user",
+   "content": prompt.to_json()}]}` as a MoonBit `Json` value and call `.stringify()`.
+   String literals have a JSON literal overload; String variables require `.to_json()`.
+2. Encode the JSON with `@utf8.encode(body[:])`. Do not use `String::to_bytes()`;
+   it produces UTF-16LE, not HTTP UTF-8.
+3. Build a Preview 3 `Request` with method POST, scheme HTTPS, authority
+   `api.openai.com`, path `/v1/chat/completions`, `Content-Type: application/json`
+   and the provider's authorization header. Supply the bytes through its async
+   body stream and complete the body/trailers according to the generated API.
+4. Call `@http.send` from an async function and handle its `Result`.
+5. Inspect the response status. A 4xx/5xx response is not a transport error.
+6. Consume **all** response body chunks until the stream ends, then await and
+   inspect its completion future/trailers. Release the stream, completion future
+   and other owned resources. A single read is not a full-response guarantee.
+7. Decode the collected bytes as UTF-8 and parse the JSON. Check the provider's
+   error shape before extracting `choices[0].message.content`.
+
+The adapter below returns the full provider JSON response as UTF-8 text. Decode
+its provider-specific schema separately to extract an assistant message. Keep
+the helper and every caller async:
+
+```moonbit
+async fn provider_chat(model : String, credential : String, prompt : String) -> Result[String, String] {
+  let body : Json = {
+    "model": model.to_json(),
+    "messages": [{ "role": "user", "content": prompt.to_json() }],
+  }
+  let encoded = Bytes::to_fixedarray(@utf8.encode(body.stringify()[:]))
+  let headers = @http.Fields::from_list([
+    ("Content-Type", Bytes::to_fixedarray(@utf8.encode("application/json"))),
+    ("Authorization", Bytes::to_fixedarray(@utf8.encode("Bearer " + credential))),
+  ]).unwrap()
+  let contents = @http.Stream::produce(async fn(sink) {
+    if sink.write_all(encoded[:]) {
+      sink.close()
+    }
+  })
+  let (request, sent) = @http.Request::new(
+    headers, Some(contents), @http.Future::ready(Ok(None)), None,
+  )
+  defer sent.drop()
+  request.set_method(@http.Method::Post).unwrap()
+  request.set_scheme(Some(@http.Scheme::Https)).unwrap()
+  request.set_authority(Some("api.openai.com")).unwrap()
+  request.set_path_with_query(Some("/v1/chat/completions")).unwrap()
+  let response = match @http.send(request) {
+    Ok(response) => response
+    Err(_) => return Err("HTTP transport failed")
+  }
+  let status = response.get_status_code()
+  let (incoming, completed) = @http.Response::consume_body(
+    response, @http.Future::ready(Ok(())),
+  )
+  defer incoming.drop()
+  defer completed.drop()
+  let bytes : Array[Byte] = []
+  for ;; {
+    match incoming.read(65536) {
+      Some(chunk) => for byte in chunk { bytes.push(byte) }
+      None => break
+    }
+  }
+  match completed.get() {
+    Err(_) => return Err("HTTP response body failed")
+    Ok(Some(trailers)) => trailers.drop()
+    Ok(None) => ()
+  }
+  match sent.get() {
+    Err(_) => return Err("HTTP request body failed")
+    Ok(_) => ()
+  }
+  if status < 200 || status >= 300 {
+    return Err("Provider returned HTTP status \{status}")
+  }
+  Ok(@utf8.decode_lossy(Bytes::from_array(bytes)[:]))
+}
+
+#derive.agent
+struct ChatAgent {
+  chat_name : String
+  config : @config.Config[ChatConfig]
+}
+
+fn ChatAgent::new(chat_name : String, config : @config.Config[ChatConfig]) -> ChatAgent {
+  { chat_name, config }
+}
+
+pub async fn ChatAgent::ask(self : Self, question : String) -> Result[String, String] {
+  let cfg = self.config.value
+  let credential = try cfg.api_key.get() catch {
+    _ => return Err("Provider credential unavailable")
+  }
+  provider_chat(cfg.model, credential, question)
+}
+
+fn main {}
+```
+
+This example exposes RPC only. If HTTP access is required, first add
+`#derive.mount("/chats/{chat_name}")` to `ChatAgent`, then
+`#derive.endpoint(post="/ask")` to `ask`, and deploy the agent through `httpApi`
+in `golem.yaml`. Config is injected and has no mount variable. Load
+`golem-add-http-endpoint-moonbit` for deployment and authentication setup.
+
+## Other Providers
+
+Adapt authority, path, headers and JSON schema to the provider documentation:
+
+| Provider | Authority | Path |
+|---|---|---|
+| OpenAI | `api.openai.com` | `/v1/chat/completions` |
+| Anthropic | `api.anthropic.com` | `/v1/messages` |
+| Google Gemini | `generativelanguage.googleapis.com` | `/v1beta/models/{model}:generateContent` |
+| Groq | `api.groq.com` | `/openai/v1/chat/completions` |
+| Mistral | `api.mistral.ai` | `/v1/chat/completions` |
+
+Completed HTTP outcomes replay from the oplog. A lost response does not prove a
+provider did not process or bill the request. Host retries can repeat remote
+writes; use provider-supported idempotency when available.

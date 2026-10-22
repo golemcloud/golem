@@ -7,14 +7,14 @@ description: "Making outgoing HTTP requests from a Go agent. Use when the user w
 
 ## Overview
 
-Use the **standard library `net/http`** package directly. The SDK routes `net/http` through Golem's durable `wasi:http` transport, so each request is recorded in the oplog and **served from it on replay** after a restart rather than re-issued — outbound calls are effectively exactly-once across crashes/restarts. No manual wiring or custom transport is needed.
+Use the **standard library `net/http`** package directly. The SDK routes `net/http` through Golem's `wasi:http` transport. For durable agents, completed request/response-body recordings replay from the oplog. Recovery can reissue a request whose response-body scope was incomplete, with the same Golem-managed idempotency key. Exactly-once external effects require the peer to deduplicate that key; recording alone does not guarantee them. No manual wiring or custom transport is needed.
 
 ## Steps
 
 1. **Import `net/http`** (and `io` to read the body).
 2. **Make the request** — `http.Get(url)`, or build an `*http.Request` and use `http.DefaultClient.Do`.
 3. **Read the response body**, then `Close` it.
-4. Do **not** add manual retry loops — Golem retries transient HTTP failures per the agent's retry policy. A panic fails the agent (see `golem-add-agent-go` → Returning Failures).
+4. Do **not** add blanket manual retry loops — Golem retries eligible transient HTTP failures per the host retry policy. A panic fails the agent (see `golem-add-agent-go` → Returning Failures).
 
 ## Example
 
@@ -24,7 +24,7 @@ package impl
 import (
 	"io"
 	"net/http"
-	"os"
+	"net/url"
 
 	"myapp/agents/fetcher"
 
@@ -37,17 +37,41 @@ var agent = fetcher.Agent.Implement(func(fetcher.ID) *state { return &state{} })
 
 func init() {
 	agent.Handle(fetcher.Fetch, func(_ *golem.Context[state], in fetcher.FetchIn) string {
-		url := "https://api.example.com/thing?q=" + in.Query
+		requestURL := "https://api.example.com/thing?q=" + url.QueryEscape(in.Query)
 		// golem.Must panics on error, which fails the agent. Use it for calls that
 		// should not fail normally.
-		resp := golem.Must(http.Get(url))
+		resp := golem.Must(http.Get(requestURL))
 		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			panic("unexpected upstream HTTP status: " + resp.Status)
+		}
 		return string(golem.Must(io.ReadAll(resp.Body)))
 	})
 }
 ```
 
 `golem.Must(v, err)` returns `v` or panics on `err` — the fail-loud idiom for errors the agent cannot handle. To surface an HTTP failure to the caller as a *value* instead, return a `golem.Result` and inspect the error yourself (see `golem-add-agent-go` → Returning Failures).
+
+`http.Get` does **not** return an error for non-2xx status codes. Always check `StatusCode` according to the API contract. The example above treats unexpected statuses as agent failures. For intentional failures that callers should handle, declare `fetcher.Fetch` with output type `golem.Result[string, string]` and register a matching handler:
+
+```go
+agent.Handle(fetcher.Fetch, func(_ *golem.Context[state], in fetcher.FetchIn) golem.Result[string, string] {
+    requestURL := "https://api.example.com/thing?q=" + url.QueryEscape(in.Query)
+    resp, err := http.Get(requestURL)
+    if err != nil {
+        return golem.Err[string, string]("upstream request failed")
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+        return golem.Err[string, string]("upstream HTTP status: " + resp.Status)
+    }
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return golem.Err[string, string]("upstream response read failed")
+    }
+    return golem.Ok[string, string](string(body))
+})
+```
 
 ## POST / custom requests
 
@@ -88,8 +112,8 @@ req.Header.Set("Content-Type", "text/plain")
 
 ## Durability & retries
 
-- The HTTP call is a durable operation: on replay the recorded response is returned, so the external service is **not** hit again.
-- **Do not** write manual retry/backoff loops — Golem retries failed operations automatically (a default policy applies; customize with the retry-policy helpers only when the *strategy* must change).
+- In durable mode, completed recordings replay without contacting the external service. An interrupted response-body scope can reissue the recorded request with the same idempotency key. For mutating requests, require peer-side deduplication before relying on exactly-once effects. Ephemeral invocations do not recover by replay.
+- **Do not** layer blanket retry/backoff loops over host retries. Only eligible failures and statuses are retried, within the configured policy; permanent failures can still reach your code. Customize with the retry-policy helpers when the strategy must change, and handle final failures explicitly.
 
 ## Key Constraints
 

@@ -11,7 +11,7 @@ HTTP mounting is **metadata only**: you declare, on the agent's definition, a UR
 
 Two pieces, both on the **definition**:
 
-1. `Spec.HTTP = &golem.Mount{Path: "…"}` — the agent-level prefix. Its `{var}` segments bind the agent's constructor (`ID`) fields, so a request URL selects the instance. **Every `ID` field must appear as a `{var}`.**
+1. `Spec.HTTP = &golem.Mount{Path: "…"}` — the agent-level prefix. Its `{var}` segments bind the agent's user-supplied constructor (`ID`) fields, so a request URL selects the instance. **Every user-supplied `ID` field must appear as a `{var}`; exclude auto-injected `golem.Principal` fields.**
 2. `golem.HTTP(golem.GET("/suffix"), …)` as a method option — one or more routes per method, with request data bound to the method's input fields.
 
 ## Steps
@@ -58,7 +58,8 @@ The handlers are ordinary handlers (see `golem-add-agent-go`) — nothing HTTP-s
   Lookup = Agent.Method[LookupIn, ItemInfo]("lookup", golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
   ```
 - **Headers** — `golem.Header("X-Tenant", "tenant")` binds the header to the `Tenant` field.
-- **Body** — for body-carrying verbs (`POST`/`PUT`), input fields not bound to path/query/header come from the JSON request body.
+- **Body** — for body-carrying verbs (`POST`/`PUT`), user-supplied input fields not bound to path/query/header come from the JSON request body.
+- **Principal** — the host injects `golem.Principal` fields in `ID` and method inputs. Do not send them in the body or bind them to path/query/header; explicit principal bindings are rejected.
 
 ## Auth & CORS
 
@@ -70,7 +71,7 @@ The handlers are ordinary handlers (see `golem-add-agent-go`) — nothing HTTP-s
 
 ## Verbs
 
-`golem.GET`, `golem.POST`, `golem.PUT`, `golem.DELETE`, and `golem.Custom("VERB", "/path")`. `GET`/`HEAD` are bodyless — bind their inputs from path/query/header.
+`golem.GET`, `golem.POST`, `golem.PUT`, `golem.DELETE`, and `golem.Custom("VERB", "/path")`. `GET`/`HEAD` are bodyless — bind all user-supplied inputs from path/query/header, excluding auto-injected `golem.Principal`.
 
 ## Durable Stream Route Customization
 
@@ -118,7 +119,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 ```
 
-- The agent must be durable and not a phantom, and every `ID` field must be a scalar captured exactly once by `Mount.Path` (no `{*rest}`), so a request names exactly one agent.
+- The agent must be durable and not a phantom, and every user-supplied `ID` field must be a scalar captured exactly once by `Mount.Path` (no `{*rest}`), so a request names exactly one agent. Exclude auto-injected `golem.Principal` fields.
 - Mappings are tried in order; repeating a route with another path gives a fallback. A subtree route ends in `/*` and its path in `/$1`.
 - Only `GET` and `HEAD` are served, with ranges and conditional requests. There is no directory listing, implicit index file or symlink following — expose only directories meant for HTTP.
 - Files the constructor or a method writes (with `os.WriteFile`) are served as they change.
@@ -126,7 +127,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 ## Key Constraints
 
-- Every `ID` field must appear as a `{var}` in `Mount.Path` (else the platform can't identify the instance); path vars may also be literals or the trailing catch-all `{*rest}`.
+- Every user-supplied `ID` field must appear as a `{var}` in `Mount.Path` (else the platform can't identify the instance), excluding auto-injected `golem.Principal`. Mount segments may be literals or named variables, but never a catch-all. A trailing `{*rest}` is allowed only in an endpoint suffix.
 - A method with an HTTP endpoint but no agent-level `Spec.HTTP` mount is a definition error — set the mount.
 - Serving the routes requires an HTTP API deployment (see the manifest `httpApi` configuration); mounting alone only advertises the routes.
 
