@@ -114,6 +114,7 @@ mod path_policy_acceptance;
 mod python_sidecar;
 mod rust_sdk_gol40_conformance;
 mod snapshot_attachments;
+mod tool_result_delivery;
 mod trapped_leaf_observers;
 
 static SINGLE_STORE_PROBE_PERMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);

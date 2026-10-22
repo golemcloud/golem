@@ -648,6 +648,7 @@ pub trait ToolStreamingCaller {
     async fn probe_bounded_wasi_stream(&self) -> Vec<u64>;
     async fn filesystem_limit_roundtrip(&self) -> Vec<u64>;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
+    async fn yielding_tool_result_observation(&self, yields: u32) -> bool;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
     async fn benchmark_producer(
@@ -1537,6 +1538,39 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             assert!(pages < 10, "bounded grep pagination did not converge");
         }
         vec![first_next_byte, first_next_line, pages, diagnostics]
+    }
+
+    /// Starts a short tool call and then only yields, without any host call. Returns whether the
+    /// tool result reached the guest before it blocked again.
+    async fn yielding_tool_result_observation(&self, yields: u32) -> bool {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let invocation = rpc.async_invoke_and_await(
+            &["no-stream".to_string()],
+            raw_no_stream_input("ok"),
+            None,
+            None,
+            None,
+        );
+        // A delivery consumes every guest block before it. This wait blocks the guest before its
+        // timer completes, so no earlier block is left for the tool result.
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(10_000_000).await;
+        let mut result = Box::pin(raw_result(&invocation));
+        let mut observed_while_yielding = false;
+        for _ in 0..yields {
+            let ready = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(result.as_mut().poll(cx).is_ready())
+            })
+            .await;
+            if ready {
+                observed_while_yielding = true;
+                break;
+            }
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        if !observed_while_yielding {
+            result.await.expect("no-stream command");
+        }
+        observed_while_yielding
     }
 
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
@@ -5221,7 +5255,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let tool = async {
             raw_result(&result)
                 .await
-                .expect("completed reconstruction result before custom effect");
+                .expect("completed reconstruction result after custom effect");
         };
         let incomplete_custom = async {
             wait_at_unscoped_crash_checkpoint("before-reconstruction-custom-effect").await;
@@ -5242,7 +5276,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             })
             .await;
         };
-        (tool, incomplete_custom).join().await;
+        // The guest receives the tool result only after the custom effect, so history records the
+        // completed entity terminal before an incomplete custom call the guest has not passed.
+        incomplete_custom.await;
+        tool.await;
     }
 
     async fn hold_completed_reconstruction_overlapping_custom(&self) {
@@ -5265,7 +5302,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let tool = async {
             raw_result(&result)
                 .await
-                .expect("completed reconstruction result before custom effect");
+                .expect("completed reconstruction result after custom effect");
         };
         let incomplete_custom = async {
             wait_at_crash_checkpoint("before-reconstruction-custom-effect").await;
@@ -5286,7 +5323,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             })
             .await;
         };
-        (tool, incomplete_custom).join().await;
+        // The guest receives the tool result only after the custom effect, so history records the
+        // completed entity terminal before an incomplete custom call the guest has not passed.
+        incomplete_custom.await;
+        tool.await;
     }
 
     async fn single_store_http_atomic_probe(&self) {

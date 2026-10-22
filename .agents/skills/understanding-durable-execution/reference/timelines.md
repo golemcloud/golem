@@ -427,23 +427,31 @@ Owner O oplog
 #62 Start { fn: http/send, parent_start_index: 61 }                 body's own host call
 #63 End   { start_index: 62, response }
 #64 CompletionDelivered { start_index: 62 } (h)
-#65 End   { start_index: 61, response: tool result }                body finished → terminal
+#65 Start { fn: tool::host::await-invoke-results, invocations: [61] } O awaits the result
+#66 End   { start_index: 61, response: tool result }                body finished → terminal
+#67 End   { start_index: 65 }
+#68 CompletionDelivered { start_index: 65 } (h)                     O received the result
 ```
+
+#66 records how the body ended; host tasks select it, so its position says nothing about when
+O saw the result. O's result await (`invoke-and-await`, `future-invoke-result.get`,
+`get-invoke-results`, `underlying-invoke-result.get`) is its own guest-facing call #65, and #68
+is the guest boundary. Replay releases the result at #68, at a blocked wait.
 
 Completed replay (`InvocationExecutionMode::ReplayingCompleted`): `StartClaim::owned_tool_invocation`
 claims #61; a fresh body `Store` is created, sharing O's cursor; `invoke_tool_sidecar` calls the
 sidecar's guest export again (the body **is** re-executed) and its `http/send` at #62 is resolved
 as `Delivered` from #63/#64 — no live HTTP; once the body has reconstructed, `drive_access`
-validates and releases the recorded #65. The observable contract is "no repeated external
+validates and releases the recorded #66. The observable contract is "no repeated external
 effect", not "the sidecar export is skipped". Memory for attachments is charged from the
 historical record, not current pressure.
 
-Incomplete replay (crash between #61 and #65): `ReplayingIncomplete` switches the body to live,
+Incomplete replay (crash between #61 and #66): `ReplayingIncomplete` switches the body to live,
 `activate_live_attachment_memory_accounting` must return `Admitted` (or a rejection is persisted),
 `PendingReplayToLive::finish` with `ReplayToLiveRole::NonPrimary` sets the entity Store's
 `local_live_tail`, and the terminal is appended under the original index 61.
 
-Allowlisted permanent guest instruction trap inside the body: #65 records an `End` with
+Allowlisted permanent guest instruction trap inside the body: #66 records an `End` with
 `body_execution: Trapped` and `RemoteInternalError`. Physical Store destruction retains the
 original `Ctx` for cleanup. Supervisors independent of the caller Store cancel descendants of
 the failed parent, preserving selected outcomes and unrelated siblings. Replay re-executes the

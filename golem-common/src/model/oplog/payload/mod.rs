@@ -413,6 +413,10 @@ oplog_payload! {
             #[schema(skip)]
             targets: Vec<PermissionTarget>,
         },
+        GolemToolAwaitInvokeResults {
+            /// The entity invocation `Start` of each accepted call whose result the guest awaits.
+            invocations: Vec<OplogIndex>,
+        },
         EntityInvocation {
             metadata: Vec<u8>,
             input: TypedSchemaValue,
@@ -784,6 +788,7 @@ oplog_payload! {
         GolemToolResponseSecretHoldAdmission {
             admitted: bool,
         },
+        GolemToolAwaitInvokeResults {},
         EntityInvocation {
             result: Result<TypedSchemaValue, String>
         },
@@ -1066,6 +1071,7 @@ pub mod host_functions {
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
+        (GolemToolAwaitInvokeResults => "golem::tool::host", "await-invoke-results", GolemToolAwaitInvokeResults, GolemToolAwaitInvokeResults),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
         (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),
