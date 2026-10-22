@@ -134,11 +134,11 @@ use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService
 use golem_service_base::clients::shard_manager::ExecutorEndpoint;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::tls::server::GrpcServerTls;
 use humansize::{BINARY, ISizeFormatter};
 use log::debug;
 use nonempty_collections::NEVec;
@@ -1416,11 +1416,8 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
         .max_encoding_message_size(golem_config.grpc.max_message_size);
 
     join_set.spawn({
-        let mut server = Server::builder();
-
-        if let GrpcServerTlsConfig::Enabled(tls) = &golem_config.grpc.tls {
-            server = server.tls_config(tls.to_tonic()?)?;
-        };
+        let tls = GrpcServerTls::from_config(&golem_config.grpc.tls, "grpc server")?;
+        let server = Server::builder();
 
         server
             .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
@@ -1430,7 +1427,10 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
             .add_service(health_service)
             // Custom incoming streams bypass Server's TCP_NODELAY default. Streaming replies
             // must not wait for a delayed ACK between the acceptance and the invocation result.
-            .serve_with_incoming(TcpIncoming::from(listener).with_nodelay(Some(true)))
+            .serve_with_incoming(GrpcServerTls::incoming(
+                tls.as_ref(),
+                TcpIncoming::from(listener).with_nodelay(Some(true)),
+            ))
             .map_err(anyhow::Error::from)
             .in_current_span()
     });

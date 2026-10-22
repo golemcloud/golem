@@ -44,6 +44,7 @@ use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::clients::shard_manager_leader::{LeaderAddress, valid_leader_address};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use golem_service_base::tls::server::GrpcServerTls;
 use include_dir::include_dir;
 use prometheus::Registry;
 pub use sharding::election_watch::{
@@ -1607,10 +1608,8 @@ pub async fn run(
     let server_shutdown = CancellationToken::new();
     let server_gate = gate.clone();
     let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
-    let mut server = Server::builder();
-    if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
-        server = server.tls_config(tls.to_tonic()?)?;
-    }
+    let tls = GrpcServerTls::from_config(&shard_manager_config.grpc.tls, "grpc server")?;
+    let server = Server::builder();
     // Its own task, outside the task set: the set is stopped before the leadership is released,
     // and the server must still be answering for the gate then. It closes when the stop says so,
     // or when the task that watches it below is dropped.
@@ -1625,7 +1624,7 @@ pub async fn run(
                 .add_service(reflection_service)
                 .add_service(GatedService::new(server_gate))
                 .add_service(health_service)
-                .serve_with_incoming_shutdown(accept_until(listener, task_shutdown.clone()), {
+                .serve_with_incoming_shutdown(GrpcServerTls::incoming(tls.as_ref(), accept_until(listener, task_shutdown.clone())), {
                     let shutdown = task_shutdown.clone();
                     async move { shutdown.cancelled().await }
                 });

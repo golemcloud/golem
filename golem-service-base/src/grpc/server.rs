@@ -20,7 +20,6 @@ use golem_common::model::base64::Base64;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
-use tonic::transport::ServerTlsConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -146,18 +145,6 @@ impl EnabledGrpcServerTlsConfig {
                 self.client_ca_cert_file.as_deref(),
             )?,
         })
-    }
-
-    pub fn to_tonic(&self) -> Result<ServerTlsConfig, TlsError> {
-        use tonic::transport::{Certificate, Identity};
-
-        let sources = self.sources()?;
-        let identity = Identity::from_pem(sources.cert.read()?, sources.key.read()?);
-        let client_ca = Certificate::from_pem(sources.ca.read()?);
-
-        Ok(ServerTlsConfig::new()
-            .identity(identity)
-            .client_ca_root(client_ca))
     }
 }
 

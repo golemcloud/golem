@@ -28,8 +28,8 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_common::base_model::api;
 use golem_common::model::AgentId;
 use golem_common::model::component::CanonicalFilePath;
-use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::net::bind_tcp_listener;
+use golem_service_base::tls::server::GrpcServerTls;
 use std::net::SocketAddr;
 use tokio::task::JoinSet;
 use tonic::Status;
@@ -62,11 +62,8 @@ pub async fn start_grpc_server(
         .unwrap();
 
     join_set.spawn({
-        let mut server = Server::builder();
-
-        if let GrpcServerTlsConfig::Enabled(tls) = &config.tls {
-            server = server.tls_config(tls.to_tonic()?)?;
-        };
+        let tls = GrpcServerTls::from_config(&config.tls, "grpc server")?;
+        let server = Server::builder();
 
         server
             .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
@@ -80,7 +77,10 @@ pub async fn start_grpc_server(
                     .max_encoding_message_size(config.max_message_size),
             )
             // Custom incoming streams bypass Server's TCP_NODELAY default.
-            .serve_with_incoming(TcpIncoming::from(listener).with_nodelay(Some(true)))
+            .serve_with_incoming(GrpcServerTls::incoming(
+                tls.as_ref(),
+                TcpIncoming::from(listener).with_nodelay(Some(true)),
+            ))
             .map_err(anyhow::Error::from)
             .in_current_span()
     });
