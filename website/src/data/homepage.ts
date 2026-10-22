@@ -429,11 +429,6 @@ export const faq = {
       aHtml:
         "Yes. Golem uses the BUSL-1.1 license, which converts to Apache-2.0 after four years. Self-hosting for production workloads is permitted.",
     },
-    {
-      q: "Can I keep my existing web app?",
-      aHtml:
-        "Yes. Its server can call agents through a generated client or the REST API, and it keeps its own front-end and hosting. Serving artifacts from Golem is an option, not a requirement.",
-    },
   ],
 };
 
