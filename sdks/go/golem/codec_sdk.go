@@ -24,8 +24,8 @@ import (
 )
 
 // sdkComposites recognise the SDK's own struct types that are not plain
-// records: secrets, agent streams, quota tokens, permission cards and the
-// process exit status.
+// records: secrets, agent streams, quota tokens, permission cards, futures and
+// the process exit status.
 var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 	func(e *engine.Engine, c *engine.Codec, zero any) bool {
 		switch z := zero.(type) {
@@ -56,6 +56,8 @@ var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 			markNotSendable(c, errHolderNotSendable)
 		case Lifespan:
 			markNotSendable(c, errLifespanNotSendable)
+		case futureish:
+			markNotSendable(c, "golem.Future cannot be sent: it is a handle on a call in flight; send the result of Get")
 		case ProcessExitStatus:
 			compileProcessExitStatus(c, e.Compile(reflect.TypeFor[uint8]()))
 		default:

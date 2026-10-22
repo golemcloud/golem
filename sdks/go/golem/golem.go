@@ -70,6 +70,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 
 	// Links the generated wasmexport glue into the component.
@@ -78,7 +79,8 @@ import (
 
 // Unit is the empty input/output marker. Go has no arity overloading, so a
 // method with no parameters takes Unit, and one with no result returns Unit.
-type Unit struct{}
+// Elsewhere it is the empty tuple, and the arm of a Result without a value.
+type Unit = values.Unit
 
 // Mode selects an agent's durability model.
 type Mode uint8

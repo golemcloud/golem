@@ -355,6 +355,20 @@ func isPrimitiveKind(k reflect.Kind) bool {
 	return false
 }
 
+// isMapKeyBody reports whether the host accepts a map keyed by a value of this
+// schema type: bool, an integer, a float, char or string.
+func isMapKeyBody(b types.SchemaTypeBody) bool {
+	switch b.Tag() {
+	case types.SchemaTypeBodyBoolType,
+		types.SchemaTypeBodyS8Type, types.SchemaTypeBodyS16Type, types.SchemaTypeBodyS32Type, types.SchemaTypeBodyS64Type,
+		types.SchemaTypeBodyU8Type, types.SchemaTypeBodyU16Type, types.SchemaTypeBodyU32Type, types.SchemaTypeBodyU64Type,
+		types.SchemaTypeBodyF32Type, types.SchemaTypeBodyF64Type,
+		types.SchemaTypeBodyCharType, types.SchemaTypeBodyStringType:
+		return true
+	}
+	return false
+}
+
 // sortValues orders primitive map keys so encoding is deterministic.
 func sortValues(vs []reflect.Value) {
 	sort.Slice(vs, func(i, j int) bool {
