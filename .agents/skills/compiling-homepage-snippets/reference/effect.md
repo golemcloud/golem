@@ -346,8 +346,11 @@ with the Golem refund tool spliced after it.
   `invokeToolMiddleware` build `HostLive` into the middleware context (as the agent dispatcher
   does, `src/internal/agent.ts:107`) and widen the handler `R` of `typed`/`universal` to
   `HostServices`, or export a public promise-host layer.
-- `artifacts/peruser`: `++this.made` is `++self.made` on the state object returned by `init`
-  (`methods: (self) => ...`); `await dashboardFor(...)` is `yield* dashboardFor(...)`.
+- `artifacts/peruser`: `this.user` is `self.user` on the state object returned by `init`
+  (`methods: (self) => ...`); `await dashboardFor(...)` is `yield* dashboardFor(...)`. The mount
+  has `auth: true`. Each file is named `crypto.randomUUID()`, the same global as TS (Golem's
+  QuickJS runtime: `docs/src/content/v1.6/js-apis.mdx:109`,
+  `how-to-guides/common/golem-js-runtime.mdx:22`; typed by `lib.dom` / `@types/node`).
 - `artifacts/routers`: `defineHttpRouter(...).mount(...).implementRaw(handler)` is
   `HttpRouter.define(name, { mount: Http.mount("/exports") })` then `Exports.implement(Effect.succeed(app))`
   (two statements, because `implement` returns `void`). The canonical request comes from

@@ -316,7 +316,19 @@ New in the 7 + 7 + 7 round:
   `Future[AgentStream[Array[Byte]]]`, passed through as the response body.
 - **Per-user agent from the URL** (artifacts/peruser): `mount =
   "/dashboards/{user}"` bound to `class Id(val user: String)` with
-  `exposeFiles = Array(("/*", "/out/$1"))`, as in artifacts/overview.
+  `auth = true` and `exposeFiles = Array(("/*", "/out/$1"))`, as in
+  artifacts/overview. Each dashboard's file name is a UUID from the
+  host's durable generator `HostApi.generateIdempotencyKey(): Uuid`
+  (`sdks/scala/core/js/src/main/scala/golem/HostApi.scala:176`; docs
+  `docs/src/content/v1.6/develop/additional.mdx:40-44`), rendered with
+  `Uuid.toStandardString`
+  (`sdks/scala/model/src/main/scala/golem/Uuid.scala:41`), as the SDK's
+  own `DurableStreams.newProducer` does
+  (`sdks/scala/core/js/src/main/scala/golem/streams/DurableStreams.scala:66`).
+  It is the counterpart of the TS `crypto.randomUUID()`; being a host
+  call, it is recorded in the oplog and replays to the same name.
+  `java.util.UUID.randomUUID()` is not used: on Scala.js it needs a
+  `java.security.SecureRandom` the harness does not provide.
 - **Sign-in** (artifacts/signin): `auth = true` and `Principal` injection,
   matched on `Principal.Oidc` (`issuer`, `sub`;
   `sdks/scala/model/src/main/scala/golem/Principal.scala:24-35`).
@@ -424,10 +436,13 @@ New in the 7 + 7 + 7 round:
 - artifacts/peruser: Scala agents have no `init`; the marked init
   counterpart is the constructor line `final class
   DashboardAgentImpl(user: String) extends DashboardAgent:` (the id is
-  the constructor parameter; `made` is a `private var` initialised to
-  0 on the next line). The TS init comment sits above
-  `@agentImplementation()`. `++this.made` is `made += 1; val n = made`, and
-  the write happens in `.map` on `dashboardFor(...)` after `mkdirSync`.
+  the constructor parameter; the agent keeps no other state). The TS
+  init comment sits above `@agentImplementation()`. TS's one-line
+  `const name = crypto.randomUUID()` is two lines (`val key =
+  HostApi.generateIdempotencyKey()`, `val name =
+  Uuid.toStandardString(key)`) to fit 68 columns; `auth = true` is its
+  own unmarked line, as in TS. The write happens in `.map` on
+  `dashboardFor(...)` after `mkdirSync`.
 - artifacts/routers: TS matches the regex, then returns 404 first; Scala
   pattern-matches `(request.method, request.path)` (marked, the
   counterpart of `request.path.match(path)`) with `case ("GET",

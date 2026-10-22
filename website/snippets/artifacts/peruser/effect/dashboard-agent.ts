@@ -3,6 +3,7 @@ export const Dashboards = defineAgent({
   id: { user: Schema.String },
   // the path names the agent: /dashboards/ana is Ana's own agent:
   http: Http.mount("/dashboards/{user}", { //@
+    auth: true,
     exposeFiles: [{ route: "/*", path: "/out/$1" }],
   }),
   methods: {
@@ -11,16 +12,16 @@ export const Dashboards = defineAgent({
   },
 }).implement({
   // the first request to /dashboards/ana creates her agent:
-  init: ({ user }) => Effect.succeed({ user, made: 0 }), //@
+  init: ({ user }) => Effect.succeed({ user }), //@
   methods: (self) => ({
     ask: ({ request }) => Effect.gen(function* () {
-      const n = ++self.made
+      const name = crypto.randomUUID()
       fs.mkdirSync("/out", { recursive: true })
       // the model builds this dashboard for her one request:
-      fs.writeFileSync(`/out/${n}.html`,
+      fs.writeFileSync(`/out/${name}.html`,
         yield* dashboardFor(self.user, request))
       // what it made for her is served under her path:
-      return `/dashboards/${self.user}/${n}.html` //@
+      return `/dashboards/${self.user}/${name}.html` //@
     }),
   }),
 })
