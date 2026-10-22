@@ -146,6 +146,6 @@ pub mod moonbit_dep {
 }
 
 pub mod ai {
-    pub const VERSION: &str = "v0.5.2";
+    pub const VERSION: &str = "v0.5.5";
     pub const SUFFIX: &str = ".wasm";
 }
