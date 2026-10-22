@@ -260,28 +260,28 @@ export const toolsChapter = {
 
 export const artifactsChapter = {
   eyebrow: "Artifacts",
-  heading: "Pages, apps and files your agents build for people",
+  heading: "Charts, pages and apps your agents make on request",
   snippets: snippets("artifacts"),
   items: [
     {
       id: "overview",
       title: "Overview",
-      body: "An agent writes a page, report or app into its own files, and Golem serves it from that agent at a URL declared in its code. A file is never served half-written.",
+      body: "When a user asks for last quarter's sales as a graph, the model calls a tool that writes a PNG and an HTML page into the agent's files. Golem serves them; no deploy.",
     },
     {
       id: "routes",
-      title: "Interactive apps",
-      body: "A page's buttons call HTTP endpoints declared on agent methods. The URL names the agent, so each user or team gets its own durable agent behind the same app.",
+      title: "Apps made for one request",
+      body: "For one user's request, the agent's model writes a small app and calls a Golem tool that saves it in the agent's files. The app's buttons call the agent's own endpoints.",
     },
     {
-      id: "routers",
-      title: "Reports and downloads",
-      body: "Serve agent output in any format. A router sets content types and download headers, and streams a CSV, PDF or other file from the agent that builds it.",
+      id: "files",
+      title: "Images and PDFs as the reply",
+      body: "An agent can answer a user's request with a PNG or PDF it just made. Golem sends the bytes over HTTP with their MIME type, and as binary content over MCP.",
     },
     {
       id: "login",
-      title: "Private to the right people",
-      body: "Users sign in with Google, GitLab or any OpenID Connect provider. Golem checks the token before agent code runs, and the agent decides what each caller may open.",
+      title: "Only for the person who asked",
+      body: "Golem checks each viewer's sign-in before agent code runs. The agent records who asked for each chart and returns it only to that person; others get a 404.",
     },
   ] as ChapterItem[],
 };
@@ -423,6 +423,11 @@ export const faq = {
       q: "How does it compare with a workflow engine?",
       aHtml:
         "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM, with a durable file system, and runtime-checked permissions.",
+    },
+    {
+      q: "Does showing an artifact need a build or deploy step?",
+      aHtml:
+        "No. The agent makes a new chart, page, file or small app for one user's request and shows it to that user. Golem serves it directly from the agent. The agent does not change an existing app and needs no access to your build or deploy infrastructure.",
     },
     {
       q: "Is Golem open source?",

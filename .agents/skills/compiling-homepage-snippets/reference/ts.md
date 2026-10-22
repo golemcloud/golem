@@ -39,10 +39,10 @@ the rules on a scratch copy.
 | `tools/permissions/ts/orders-access.ts` | `prelude/tools-permissions.ts` |
 | `tools/secrets/ts/support-agent.ts` | `prelude/tools-secrets.ts` |
 | `tools/publish/ts/account-agent.ts` | `prelude/tools-publish.ts` |
-| `artifacts/overview/ts/brief-agent.ts` | `prelude/artifacts-overview.ts` |
-| `artifacts/routes/ts/board-agent.ts` | `prelude/artifacts-routes.ts` |
-| `artifacts/routers/ts/exports-router.ts` | `prelude/artifacts-routers.ts` |
-| `artifacts/login/ts/payslip-agent.ts` | `prelude/artifacts-login.ts` |
+| `artifacts/overview/ts/analyst-agent.ts` | `prelude/artifacts-overview.ts` |
+| `artifacts/routes/ts/app-tool.ts` | `prelude/artifacts-routes.ts` |
+| `artifacts/files/ts/chart-agent.ts` | `prelude/artifacts-files.ts` |
+| `artifacts/login/ts/private-chart-agent.ts` | `prelude/artifacts-login.ts` |
 
 The prelude for `<chapter>/<feature>` is always `prelude/<chapter>-<feature>.ts`;
 the display filename is free (one `.ts` file per `ts/` directory).
@@ -95,9 +95,8 @@ the display filename is free (one `.ts` file per `ts/` directory).
 
 The preludes, stubs, tsconfig and node_modules come from the
 `synth-harness` type-check harness (`.amp/in/feature-snippets/synth-harness/`)
-that was used while designing these snippets; the only local change is that
-`prelude/artifacts-routers.ts` drops the `header()`/`empty()` helpers the
-redesigned snippet no longer uses.
+that was used while designing these snippets; the four `artifacts-*` preludes
+are copied unchanged from it.
 
 ## What check.sh does
 
@@ -166,12 +165,14 @@ redesigned snippet no longer uses.
 - `tools-permissions`: `permissions`; `AgentId` (parameter type of
   `permissions.Holder.agent`); `Card` union of permission card types.
 - `artifacts-overview`: zod, `defineAgent`, `http`, `method`, `node:fs`;
-  OpenAI client.
-- `artifacts-routes`: zod, `defineAgent`, `http`, `method`, `node:fs`.
-- `artifacts-routers`: `defineHttpRouter`, `AgentStream`, `s`; the
-  `ExportAgent` the router calls (`csv` returns a byte stream). The snippet
-  builds headers and the empty 404 body itself.
-- `artifacts-login`: zod, `defineAgent`, `http`, `method`, `s`, `node:fs`.
+  Vercel AI SDK `generateText`, `stepCountIs`, `tool` and an OpenAI model;
+  the `Quarter` input schema (regex-validated), `chartPng` and `pageFor`.
+- `artifacts-routes`: zod, `defineAgent`, `http`, `method`, `ok`,
+  `toolDefinition`, `node:fs`; the `Name` slug schema, `Row`, `querySales`.
+- `artifacts-files`: zod, `defineAgent`, `http`, `method`, `s`;
+  `querySales(team, quarter)` and `drawChart`.
+- `artifacts-login`: zod, `defineAgent`, `http`, `method`, `s`, `Principal`;
+  the `Chart` type, `answerWithChart`, and `userKey` (OIDC issuer + sub).
 - `agents-stream`: `AgentStream`, `s`; OpenAI client.
 - `agents-readonly`: zod and SDK imports only.
 
@@ -228,9 +229,9 @@ file, replaces it in memory, writes prelude + mutant to `gen/neg-<f>.ts`
 | tools-secrets | `this.config.stripeKey` → `.stripeKey.get()` | TS2322 |
 | tools-publish | `result.status === 'rejected'` → `=== 'error'` | TS2367 |
 | artifacts-overview | exposeFiles `path:` → `file:` | TS2769 |
-| artifacts-routes | exposeFiles `path:` → `file:` | TS2769 |
-| artifacts-routers | header `value: bytes('text/csv')` → `'text/csv'` | TS2345 |
-| artifacts-login | `caller.sub` → `caller.subject` | TS2339 |
+| artifacts-routes | tool `html` positional `z.string()` → `z.number()` | TS2345 |
+| artifacts-files | inline return `tag: 'inline'` → `'raw'` | TS2322 |
+| artifacts-login | `made?.askedBy` → `made?.asked` | TS2551 |
 
 `tools/requests` contains no Golem API call (Golem adds the idempotency key
 itself), so its control plants the tempting wrong usage of passing the key

@@ -7,7 +7,9 @@ sbt codegen (RPC and tool clients, auto-registration). Verified at repository
 commit `d35a841e6` (with uncommitted snippet edits; re-verified Oct 22 2026
 after the chapter reorganization: durable streaming and read-only methods
 moved to Agents, "Your language" dropped, new TypeScript designs ported,
-and `tools/publish` became a code snippet) on macOS arm64.
+and `tools/publish` became a code snippet; re-verified again Oct 22 2026
+after the Artifacts chapter redesign: artifacts are made on request,
+`artifacts/routers` was replaced by `artifacts/files`) on macOS arm64.
 
 ## Display files (the only inputs; read in place, never copied by hand)
 
@@ -27,17 +29,17 @@ and `tools/publish` became a code snippet) on macOS arm64.
 | tools | permissions | `website/snippets/tools/permissions/scala/OrdersAccess.scala` |
 | tools | secrets | `website/snippets/tools/secrets/scala/SupportAgent.scala` |
 | tools | publish | `website/snippets/tools/publish/scala/AccountAgent.scala` |
-| artifacts | overview | `website/snippets/artifacts/overview/scala/BriefAgent.scala` |
-| artifacts | routes | `website/snippets/artifacts/routes/scala/BoardAgent.scala` |
-| artifacts | routers | `website/snippets/artifacts/routers/scala/ExportsRouter.scala` |
-| artifacts | login | `website/snippets/artifacts/login/scala/PayslipAgent.scala` |
+| artifacts | overview | `website/snippets/artifacts/overview/scala/AnalystAgent.scala` |
+| artifacts | routes | `website/snippets/artifacts/routes/scala/AppAgent.scala` |
+| artifacts | files | `website/snippets/artifacts/files/scala/ChartAgent.scala` |
+| artifacts | login | `website/snippets/artifacts/login/scala/PrivateChartsAgent.scala` |
 
 There is deliberately no `agents/sqlite/scala` (Scala agents have no embedded
 SQLite; the page shows the chapter's `missing.sqlite` note), so the Scala set
 is the 17 TypeScript features minus sqlite: 16 files. The Scala names match
 the TypeScript agent/tool names (`TriageAgent`, `StockAgent`, tool
-`summarize` + `DigestAgent`, `AccountAgent`, `BriefAgent`, `BoardAgent`,
-`ExportsRouter`, `PayslipAgent`, ...).
+`summarize` + `DigestAgent`, `AccountAgent`, `AnalystAgent`, tool
+`present` + `AppAgent`, `ChartAgent`, `PrivateChartsAgent`, ...).
 
 ### Highlight markers
 
@@ -108,10 +110,11 @@ was clean.
     extra/<chapter>-<feature>.scala  other agents a snippet calls (own file, same package;
                                      no top-level definitions: the hyphenated file name
                                      makes Scala warn, which -Werror turns into an error)
-    lib/openai.scala        facade over the npm `openai` client (see below)
+    lib/openai.scala        facade over the npm `openai` client, including its runTools
+                            tool loop (see below)
     lib/ai.scala            invented `ai` library (Vercel AI SDK port), fails at runtime
     lib/aisdk.scala         invented `aisdk.openai` / `aisdk.anthropic` providers
-    lib/node.scala          `node.fs` (node:fs, text and Uint8Array reads) and `node.sleep`
+    lib/node.scala          `node.fs` (node:fs, text and Uint8Array reads and writes) and `node.sleep`
                             (node:timers/promises) facades
     lib/bash.scala          stub of the generated bash tool client (golem.bridge.client.bash)
     lib/crm.scala           stub of the generated client for the MCP-imported tool
@@ -170,8 +173,8 @@ diagnostics, so `-Werror` is unaffected.
 |---|---|---|---|
 | `ai.{generateText, Output}` (`LanguageModel`, `GenerateTextResult`) | `harness/lib/ai.scala` | invented; type-correct, throws `NotImplementedError` | agents/models uses the Vercel AI SDK (`ai`). No Scala/Scala.js port exists, so the API mirrors the TS one: `generateText(model, prompt)` and `generateText(model, output = Output.`object`[A], prompt)` return `Future[GenerateTextResult[A]]` with `text` and typed `output` (schema from zio-blocks `Schema[A]`). The TS snippet shows its imports, so the Scala one shows `import ai.{generateText, Output}`. |
 | `aisdk.openai.openai`, `aisdk.anthropic.anthropic` | `harness/lib/aisdk.scala` | invented | the `@ai-sdk/openai` and `@ai-sdk/anthropic` providers; they only name a model. |
-| `openai.{OpenAI, ChatParams, ChatMessage, responseFormat, ResponseParams}` | `harness/lib/openai.scala` | hand-written Scala.js facade over the real npm `openai` client (reused from the previous harness, extended) | agents/overview uses `openai.chat.completions.parse(...)` and `message.parsed`; agents/stream uses `openai.responses.create(...)` and `output_text`, as the TS snippets do. `responseFormat[A](name)` is the analogue of `zodResponseFormat`, really implemented from `Schema[A].toJsonSchema`. Imported as `_root_.openai.{...}` because the snippets' client value is also called `openai`. |
-| `node.fs` | `harness/lib/node.scala` | facade over `node:fs` (provided by the Golem QuickJS runtime; the approach documented in `golem-skills/skills/scala/golem-file-io-scala`) | `readFileSync` (text, and the documented `Uint8Array` overload used by artifacts/login), `writeFileSync`, `mkdirSync`. Snippets pass `literal(recursive = true)` (`scala.scalajs.js.Dynamic.literal`, imported by the prelude). |
+| `openai.{OpenAI, ChatParams, ChatMessage, responseFormat, ResponseParams, FunctionTool, ToolRunParams, RunnerOptions}` | `harness/lib/openai.scala` | hand-written Scala.js facade over the real npm `openai` client (reused from the previous harness, extended) | agents/overview uses `openai.chat.completions.parse(...)` and `message.parsed`; agents/stream uses `openai.responses.create(...)` and `output_text`, as the TS snippets do. `responseFormat[A](name)` is the analogue of `zodResponseFormat`, really implemented from `Schema[A].toJsonSchema`. artifacts/overview uses the client's real automated tool loop `openai.chat.completions.runTools(params, { maxChatCompletions })` and `runner.finalContent()` (openai-node `docs/helpers.md`, "Automated function calls"; `src/resources/chat/completions/completions.ts`, `runTools`); `FunctionTool(...)` only builds the client's `{ type: 'function', function: { name, description, parameters, parse, function, strict } }` object, `ToolRunParams`/`RunnerOptions` the two argument objects. Imported as `_root_.openai.{...}` because the snippets' client value is also called `openai`. |
+| `node.fs` | `harness/lib/node.scala` | facade over `node:fs` (provided by the Golem QuickJS runtime; the approach documented in `golem-skills/skills/scala/golem-file-io-scala`) | `readFileSync` (text and `Uint8Array`), `writeFileSync` (text, and the `Uint8Array` overload artifacts/overview uses for the PNG), `mkdirSync`. Snippets pass `literal(recursive = true)` (`scala.scalajs.js.Dynamic.literal`, imported by the prelude). |
 | `node.sleep` | `harness/lib/node.scala` | facade over `setTimeout` from `node:timers/promises`, returned as a `Future` | the same durable sleep the TS waits snippet imports; the Scala SDK has no sleep API of its own. |
 | `golem.bridge.client.bash.{BashClient, BashResult, BashError}` | `harness/lib/bash.scala` | stub of a generated client; throws at runtime | stands in for the client `golem build` generates for the built-in bash tool (`golem-temp/bridge-sdk/scala/internal/bash-tool-guest-client`). Shape from `cli/golem-cli/src/bridge_gen/scala/tool.rs` (`BashClient()` / `newClient()`, `Future[Either[ToolError[E], A]]`, u8 → `golem.UByte`, u32 → `golem.UInt`), the call in `golem-call-tool-scala` (`run(script, cwd, UInt(600))`) and the result/error types in `builtin-tools/bash/component/src/lib.rs`. |
 | `golem.bridge.client.crm_find_customer.CrmFindCustomerClient` | `harness/lib/crm.scala` | **stub, clearly labelled stand-in for the generated client**; throws at runtime | tools/publish calls the tool `crm_find_customer` imported from an MCP server (`mcp.imports`); `golem build` would generate this client, which is not available offline. Shape from `cli/golem-cli/src/bridge_gen/scala/tool.rs` (`object …Client` with `apply()`/`newClient()`; package `golem.bridge.client.<snake name>`; leaf method = lower-camel tool name with one parameter per input property and no additional-properties map, since the schema has `additionalProperties: false`; the projected command has stdout, so the method returns `Either[ToolError[E], golem.tool.ToolInvocation[E, R]]` synchronously, consumed with the real SDK `ToolInvocation.collect()` → `CollectedToolInvocation.result: Either[ToolError[E], R]`), from `golem-mcp-import/src/tool.rs` (`R` = record `{ structured, content }`, `structured` typed from the outputSchema; error case `mcp-tool-error` with a string payload), and from the docs' Scala tab (`docs/src/content/v1.6/invoke/mcp.mdx`, "Call the imported tool"). The Scala *names* of the anonymous result/structured/content records and the content type are placeholders (the snippet never names them). The display shows the client's import, as the TypeScript does. |
@@ -183,9 +186,7 @@ the Golem codegen generates their clients exactly as for any agent:
 a Rust agent whose guest bridge client, generated by
 `cli/golem-cli/src/bridge_gen/scala/mod.rs`, has the same `get`, awaited
 `apply` and `trigger` surface),
-`MailerAgent` (agents/waits), and `ExportAgent` (artifacts/routers; id
-`class Id(val id: String)`, `def csv(): AgentStream[Array[Byte]]`, the
-TypeScript `s.stream(s.bytes())`), and the refund tool `RefundTool` that
+and `MailerAgent` (agents/waits), and the refund tool `RefundTool` that
 tools/secrets calls (`harness/extra/tools-secrets.scala`; `Refund` and
 `stripeRefund` are in that snippet's prelude, since the refund tool is no
 longer a display snippet). Both tools/overview and tools/secrets are
@@ -195,32 +196,38 @@ Prelude helpers shown without definition, as in the TS preludes: `classify`
 (returns the label name, parsed with `Label.valueOf` as TS uses
 `Label.parse`) and `applyLabel` (agents/overview); `Facts`, `Plan` (team);
 `PaymentEvent`, `inDays`, `createPaymentLink`, `sendSurvey`, `sleep`
-(waits); `openai` (artifacts overview, stream); `Headings` (custom);
+(waits); `openai` (agents stream, artifacts overview); `Quarter`
+(the chart tool's JSON schema with the `^Q[1-4]-\d{4}$` pattern, and the
+`parse` function runTools applies to the model's arguments, which rejects
+any other quarter before it reaches a path), `chartPng`, `pageFor`
+(artifacts overview); `Name` (the slug regex `^[a-z0-9-]{1,40}$`),
+`BadName` (the tool's usage error enum), `Row`, `querySales` (artifacts
+routes); `SaleRow`, `querySales`, `drawChart` (artifacts files); `Chart`,
+`answerWithChart`, `userKey` (OIDC issuer + subject as a JSON array, as in
+TS; throws for non-OIDC callers) (artifacts login); `Headings` (custom);
 `summarizeText` and `Urls` (tools overview); `AgentId` =
 `HostApi.AgentIdLiteral` (permissions); `orThrow` (secrets, custom, team,
-permissions, tools overview, publish). The routers prelude only aliases
-`AgentStream`; the display builds headers with the native
-`HttpHeader(name, Array[Byte])` and its own `bytes` helper, and the empty
-404 body with `AgentStream.fromStream(Stream.empty)`, as the TypeScript now
-does with plain records.
+permissions, tools overview, publish).
 
 ## Real Golem Scala SDK APIs used
 
-`@agentDefinition(mount, auth, exposeFiles)` (overview: `/` →
-`/out/index.html`; routes: `/app` → `/index.html`, written by the agent's
-constructor via `node:fs`), `@agentImplementation`,
-`@endpoint(method, path)`, `@readOnly` (on a method without an HTTP
-endpoint), `@description` on an agent method (tools/publish),
-`golem.schema.UnstructuredBinary["application/pdf"]` returned as
-`Option[...]` from a GET endpoint (raw body, `None` → 404; see
-`sdks/scala/docs/unstructured.md`),
+`@agentDefinition(mount, auth, exposeFiles)` (artifacts overview and
+routes: the live-file mapping `("/*", "/out/$1")`, as in
+`sdks/scala/macros/src/test/scala-3/golem/runtime/macros/HttpRouterMacroSpec.scala:36`
+and `docs/src/content/v1.6/invoke/making-custom-apis/http-routers.mdx:391`;
+login: `auth = true`), `@agentImplementation`,
+`@endpoint(method, path)` including a query variable
+(`/chart.png?quarter={quarter}`, `/sales?region={region}`), `@readOnly`
+(on a method without an HTTP endpoint), `@description` on an agent method
+(tools/publish, artifacts/files; the MCP tool description per
+`docs/src/content/v1.6/invoke/mcp.mdx:125,197`),
+`golem.schema.UnstructuredBinary["image/png"]` returned as `Future[...]`
+(files) or `Option[...]` (login) from a GET endpoint (raw body, `None` →
+404; see `sdks/scala/docs/unstructured.md`; MCP binary content per
+`docs/src/content/v1.6/invoke/mcp.mdx:254`),
 `golem.tool.ToolInvocation.collect()`,
-Scala 3 `enum ... derives Schema` and `Map[String, Label]` results, `@httpRouter(typeName, mount)` with `@httpHandler def serve(request: HttpRequest):
-Future[HttpResponse]` (the raw handler; `golem.runtime.http.{HttpRequest,
-HttpResponse, HttpHeader}` (`HttpHeader(name, bytes)`), `UShort` status), the generated
-`ExportAgentClient.get(id).csv()` returning
-`Future[AgentStream[Array[Byte]]]` relayed as the response body,
-`golem.Principal` / `Principal.Oidc` method injection,
+Scala 3 `enum ... derives Schema` and `Map[String, Label]` results,
+`golem.Principal` / `Principal.Oidc` (`sub`, `issuer`) method injection,
 `golem.schema.AgentStream.fromPull` (synchronous `AgentStream[String]`
 returns), `HostApi.createWebhook()` with `.url` and
 `.await().map(_.json[A]())`, generated clients `XClient.get(...)`, awaited
@@ -228,8 +235,10 @@ calls, `.trigger(...)`, `.scheduleCancelableAt(when)`
 (→ `CancellationToken.cancel()`), `golem.Datetime.afterSeconds`,
 `golem.reflection.Reflection.getAllAgentTypes()` (`name`, `methods.map(_.name)`)
 and `getAllToolTypes()` (`name`), `@toolDefinition(name, version,
-requiresFilesystem)`, `@toolImplementation`, `@error(kind, exitCode)` on a
-tool error enum, generated tool clients `OutlineClient()` /
+requiresFilesystem)` (`sdks/scala/model/src/main/scala/golem/runtime/annotations/ToolAnnotations.scala:25-29`;
+artifacts/routes declares tool `present` with it and returns
+`Either[BadName, String]`), `@toolImplementation`, `@error(kind, exitCode)`
+on a tool error enum, generated tool clients `OutlineClient()` /
 `SummarizeClient()` / `RefundToolClient()` (typed `apiKey: GuestSecretHandle`),
 `golem.schema.GuestSecretHandle` +
 `golem.host.SecretApi.reveal[String]`, `golem.config.{AgentConfig, Config,
@@ -243,7 +252,7 @@ Holder.Agent}`.
 
 - Generated RPC clients copy agent-method signatures but not the source
   file's imports, so `AgentStream` is aliased at package level in the
-  artifacts overview/stream/routers preludes (`type AgentStream[+A] =
+  agents/stream prelude (`type AgentStream[+A] =
   golem.schema.AgentStream[A]` plus the companion `val`). `Headings` (tools
   custom) is a package-level alias for the same reason.
 - Agents without constructor parameters declare `class Id()` (`Refunder`).
@@ -283,22 +292,45 @@ Holder.Agent}`.
   `collected.result.orThrow`; starting the call returns an `Either`
   (`.orThrow`) in Scala, while TS starts it infallibly. The display shows
   the client import, like the TS snippet (and agents/models).
-- artifacts/stream: TS async generators become
+- agents/stream: TS async generators become
   `AgentStream.fromPull(() => Future[Option[A]])`.
-- artifacts/routes: the TS `init` becomes the `BoardAgentImpl` constructor
-  body (Scala agents have no separate init hook). The page string is a
-  triple-quoted literal byte-identical to the TS template literal.
-- artifacts/routers: the TS regex match plus `if (method !== 'GET' ||
-  !id) return 404` becomes a pattern match on `(request.method,
-  request.path)` with a regex extractor `Csv`, so the 404 case comes last
-  (`case _`). The generated client returns
-  `Future[AgentStream[Array[Byte]]]`, so the response is built in `.map`.
-  No shim: the SDK relays another agent's stream
-  (`sdks/scala/model/src/main/scala/golem/schema/AgentStream.scala:446-455`).
-- artifacts/login: the TS tag/subject check becomes a `Principal` pattern
-  match with a guard; `fs.readFileSync` returns a `Uint8Array`, converted
-  with `pdf.toArray.map(_.toByte)` because `UnstructuredBinary.Inline`
-  holds an `Array[Byte]`.
+- artifacts/overview: Scala has no Vercel AI SDK, so the model loop is the
+  npm `openai` client's own tool loop (`runTools`), the TS `tool({...})`
+  becomes `FunctionTool(...)` (marked) with an explicit `name = "chart"`
+  (the TS tool's key in `tools: { chart }`), `inputSchema: Quarter` becomes
+  `parameters = Quarter.schema, parse = Quarter.parse`, and
+  `stopWhen: stepCountIs(5)` becomes `RunnerOptions(maxChatCompletions =
+  5)`. The tool function receives the validated quarter string itself (TS
+  destructures `{ quarter: q }`); the PNG is written in `.map` on
+  `chartPng(q)` after `mkdirSync`, keeping the TS order. `.text` is
+  `finalContent()`. `ask` has an explicit `@endpoint("POST", "/ask")`.
+- artifacts/routes: TS validates `name` with the `Name` zod schema before
+  the body runs; Scala tool parameters have no pattern constraint, so the
+  body checks `Name.matches(name)` first and returns the declared usage
+  error `Left(BadName.Invalid)` (TS `ok(...)` becomes `Right(...)`). The
+  tool is the trait `Present` with `name = "present"`. Scala agents have no
+  `init`, and `AppAgentImpl(chat)` takes the id as its constructor
+  parameter.
+- artifacts/files: TS's single `drawChart(await querySales(...))` line is
+  `querySales(...).map: rows =>` plus the marked `val png =
+  drawChart(rows)`; the return type marker sits on `def chart(...):
+  Future[Png]` (after the two annotations), as the TS marks `returns: Png`.
+  `Png` is a type alias like the TS `const Png`.
+- artifacts/login: the TS auth marker covers `http.mount(..., { auth: true
+  })`; Scala puts `mount = ..., auth = true` on one marked line. The
+  charts are a `private val ArrayBuffer[Chart]`, and the TS
+  `if (made?.askedBy !== userKey(caller)) return undefined` is the marked
+  `.filter(_.askedBy == userKey(caller))` on `charts.lift(n - 1)` (no
+  chart, or another user's chart, gives `None` → 404).
+
+## Artifacts: no SDK gap, no shim
+
+All four artifacts snippets compile against the published SDK as written:
+the live-file mapping, query-variable endpoints, `@description` with an
+endpoint, `UnstructuredBinary["image/png"]` (plain, and in `Option`),
+`auth = true` with `Principal` injection, and a `requiresFilesystem` tool
+with a usage error enum. The only non-Golem pieces are the `openai`
+facade (real npm client) and the `node:fs` facade.
 
 ## Secrets: no SDK bug of the TypeScript kind (read source and compiled)
 
@@ -337,10 +369,10 @@ generated auto-registration or RPC client for that snippet's package), which
 | agents/waits | `.remind.scheduleCancelableAt(...)` → `.remind.scheduleAt(...)` | `scheduleAt` returns no cancellation token, so `reminder.cancel()` fails (spliced file) |
 | agents/readonly | `@readOnly` → `@readOnly(true)` | E007: `cache` is a `String` policy (spliced file) |
 | agents/stream | `AgentStream.fromPull:` → `AgentStream.of:` | E008 not a member of `golem.schema.AgentStream` (spliced file) |
-| artifacts/login | `fromInline(data, "application/pdf")` → `"text/html"` | E007: the MIME allow-list `"application/pdf"` is part of the type (spliced file) |
-| artifacts/overview | `mount = "/briefs/{client}"` → `"/briefs/{brief}"` | Golem macro: mount path variable not defined in the constructor (generated code) |
-| artifacts/routers | `HttpHeader("content-type", bytes("text/csv"))` → `HttpHeader("content-type", "text/csv")` | E007: header values are `Array[Byte]` (spliced file) |
-| artifacts/routes | `@endpoint("POST", "/cards")` → `"/cards/{id}"` | Golem macro: path variable `id` is not a method parameter (generated code) |
+| artifacts/files | `fromInline(png, "image/png")` → `"image/jpeg"` | E007: the MIME allow-list `"image/png"` is part of the type (spliced file) |
+| artifacts/login | `@endpoint("GET", "/charts/{n}")` → `"/charts/{id}"` | Golem macro: path variable `id` is not a method parameter (generated auto-registration) |
+| artifacts/overview | `mount = "/chats/{chat}"` → `"/chats/{room}"` | Golem macro: mount path variable not defined in the constructor (generated auto-registration) |
+| artifacts/routes | `@endpoint("GET", "/sales?region={region}")` → `"/sales?area={area}"` | Golem macro: query variable `area` is not a method parameter (generated auto-registration) |
 | tools/custom | `OutlineClient().outline(file)` → `outline(path = file)` | generated `OutlineClient.outline(file: String)` has no `path` parameter (spliced file) |
 | tools/overview | `SummarizeClient().summarize(url)` → `summarize(uri = url)` | generated `SummarizeClient.summarize(url: String)` has no `uri` parameter (spliced file) |
 | tools/permissions | `Some(PermissionsApi.Lifespan.iso8601("PT1H"))` → `"PT1H"` | E007: required `Option[PermissionsApi.Lifespan]` (spliced file) |
@@ -357,6 +389,9 @@ from `Draft` (the Golem macro derives the schema itself) and removing
 - Nothing was deployed or executed: the check proves type-correctness
   against the SDK macros, codegen and Scala.js linker only. Some metadata
   rules may only be enforced when the component registers with the host.
+- The chart tool loop (`runTools`) is type-checked against the hand-written
+  facade only; the facade's shape follows the openai-node docs, not a
+  compiled `.d.ts` (no npm install in this harness).
 - `ai`/`aisdk`, the bash client and the crm_find_customer client are type-only and throw at runtime; the
   generated bash client's exact shape for the current bash release (0.3.0,
   which adds an optional `stdin` stream) is not checked, only the documented
