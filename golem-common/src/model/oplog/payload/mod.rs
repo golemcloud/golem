@@ -1071,7 +1071,7 @@ pub mod host_functions {
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
-        (GolemToolAwaitInvokeResults => "golem::tool::host", "await-invoke-results", GolemToolAwaitInvokeResults, GolemToolAwaitInvokeResults),
+        (GolemToolAwaitInvokeResults => "golem::tool::internal", "await-invoke-results", GolemToolAwaitInvokeResults, GolemToolAwaitInvokeResults),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
         (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),

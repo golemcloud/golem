@@ -2504,8 +2504,8 @@ Recorded async events reach the guest only at a blocked wait, at most one event 
 live and replay alike. Native stream items and terminals (including producer cancellation),
 timers, accessor completions and tool results share `RuntimeStore::await_guest_blocked` in the
 consuming Store; an entity body uses its own Store, not the owner's. A tool result reaches the
-guest through `golem::tool::host::await-invoke-results` (`tool/execution.rs::observe_tool_invoke_plans`),
-a guest-facing durable call around the result await. Its `CompletionDelivered` marker records
+guest through `golem::tool::internal::await-invoke-results` (`tool/execution.rs::observe_tool_invoke_plans`),
+a guest-facing durable call that the host records around the result await; it is not a WIT import. Its `CompletionDelivered` marker records
 the guest's receipt; the entity terminal records only how the body ended. The gate consumes one unconsumed
 `DriverBlocked` edge, promoted only after the outer driver returns Pending. A delivery that
 becomes ready after the guest blocked consumes that already-published edge immediately.

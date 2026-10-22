@@ -427,7 +427,7 @@ Owner O oplog
 #62 Start { fn: http/send, parent_start_index: 61 }                 body's own host call
 #63 End   { start_index: 62, response }
 #64 CompletionDelivered { start_index: 62 } (h)
-#65 Start { fn: tool::host::await-invoke-results, invocations: [61] } O awaits the result
+#65 Start { fn: tool::internal::await-invoke-results, invocations: [61] } O awaits the result
 #66 End   { start_index: 61, response: tool result }                body finished → terminal
 #67 End   { start_index: 65 }
 #68 CompletionDelivered { start_index: 65 } (h)                     O received the result

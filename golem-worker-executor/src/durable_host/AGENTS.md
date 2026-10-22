@@ -193,7 +193,7 @@ rather than replaced by a recorded result.
 - Entity bodies (`entity.rs`, `tool/`) record into the **owner's** oplog with
   `parent_start_index`; they have no oplog or cursor of their own. Entity Stores clone the owner's
   `ReplayState` and share its cursor.
-- The guest receives an accepted tool result only through a `golem::tool::host::await-invoke-results`
+- The guest receives an accepted tool result only through a `golem::tool::internal::await-invoke-results`
   call (`tool/execution.rs::observe_tool_invoke_plans`). Its `CompletionDelivered` marker is the
   guest boundary. Do not return an entity result to the guest outside this call: host tasks
   select the entity terminal, so its position in the oplog is not the guest's receipt.
