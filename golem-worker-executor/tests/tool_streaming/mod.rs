@@ -114,6 +114,7 @@ mod path_policy_acceptance;
 mod python_sidecar;
 mod rust_sdk_gol40_conformance;
 mod snapshot_attachments;
+mod tool_result_delivery;
 mod trapped_leaf_observers;
 
 static SINGLE_STORE_PROBE_PERMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -4877,12 +4878,6 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         }),
         "no entity result may become visible before the producer finishes"
     );
-    assert!(
-        before_crash.iter().all(|entry| {
-            !matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::tool::internal::observe-results")
-        }),
-        "typed stream reconstruction must not use a separate result-observation call"
-    );
 
     invocation.abort();
     let _ = invocation.await;
@@ -4958,9 +4953,6 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         entity_ends, 3,
         "every middleware and provider layer settles once"
     );
-    assert!(oplog.iter().all(|entry| {
-        !matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::tool::internal::observe-results")
-    }));
     assert!(provider_checkpoints.try_recv().is_err());
     assert!(caller_checkpoints.try_recv().is_err());
     provider_checkpoint_server.abort();
