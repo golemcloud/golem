@@ -74,14 +74,18 @@ object UnstructuredText {
     new ConcreteCodec[UnstructuredText[L]] {
       def write(value: UnstructuredText[L], out: WireValues): Int = value match {
         case Url(url) =>
-          Unstructured.writeCase(out, Unstructured.UrlCase, WitSchemaValueNode.UrlValue(url))
+          Unstructured.writeCase(
+            out,
+            Unstructured.UrlCase,
+            WitSchemaValueNode.UrlValue(UnicodeText.encodeText("url", url))
+          )
         case Inline(text, languageCode) =>
           val language = languageCode.map(_.toString)
           Unstructured.checkEncode(language, allowed.values, "language code")
           Unstructured.writeCase(
             out,
             Unstructured.InlineCase,
-            WitSchemaValueNode.TextValue(WitTextValuePayload(text, language))
+            WitSchemaValueNode.TextValue(WitTextValuePayload(UnicodeText.encodeText("text", text), language))
           )
       }
 
@@ -171,7 +175,11 @@ object UnstructuredBinary {
     new ConcreteCodec[UnstructuredBinary[M]] {
       def write(value: UnstructuredBinary[M], out: WireValues): Int = value match {
         case Url(url) =>
-          Unstructured.writeCase(out, Unstructured.UrlCase, WitSchemaValueNode.UrlValue(url))
+          Unstructured.writeCase(
+            out,
+            Unstructured.UrlCase,
+            WitSchemaValueNode.UrlValue(UnicodeText.encodeText("url", url))
+          )
         case Inline(data, mimeType) =>
           val mime = mimeType.map(_.toString)
           Unstructured.checkEncode(mime, allowed.values, "MIME type")
@@ -291,8 +299,10 @@ private[golem] object Unstructured {
   def restrictionFromModifiers(modifiers: Seq[Modifier.Reflect]): Option[List[String]] =
     modifiers.collectFirst { case Modifier.config(RestrictionKey, value) => value.split(Separator, -1).toList }
 
-  def checkEncode(value: Option[String], allowed: Option[List[String]], what: String): Unit =
+  def checkEncode(value: Option[String], allowed: Option[List[String]], what: String): Unit = {
+    value.foreach(UnicodeText.encodeText(what, _))
     disallowed(value, allowed, what).foreach(message => throw SchemaEncodeError(message))
+  }
 
   def disallowed(value: Option[String], allowed: Option[List[String]], what: String): Option[String] =
     (value, allowed) match {
@@ -332,11 +342,14 @@ private[golem] object Unstructured {
   def textToSchemaValue(value: UnstructuredText[?], allowed: Option[List[String]]): SchemaValue =
     value match {
       case UnstructuredText.Url(url) =>
-        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url)))
+        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(UnicodeText.encodeText("url", url))))
       case UnstructuredText.Inline(text, languageCode) =>
         val language = languageCode.map(_.toString)
         checkEncode(language, allowed, "language code")
-        SchemaValue.VariantValue(InlineCase, Some(SchemaValue.TextValue(text, language)))
+        SchemaValue.VariantValue(
+          InlineCase,
+          Some(SchemaValue.TextValue(UnicodeText.encodeText("text", text), language))
+        )
     }
 
   /** Accepts the `variant { inline, url }` value or a bare `text` value. */
@@ -363,7 +376,7 @@ private[golem] object Unstructured {
   def binaryToSchemaValue(value: UnstructuredBinary[?], allowed: Option[List[String]]): SchemaValue =
     value match {
       case UnstructuredBinary.Url(url) =>
-        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url)))
+        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(UnicodeText.encodeText("url", url))))
       case UnstructuredBinary.Inline(data, mimeType) =>
         val mime = mimeType.map(_.toString)
         checkEncode(mime, allowed, "MIME type")

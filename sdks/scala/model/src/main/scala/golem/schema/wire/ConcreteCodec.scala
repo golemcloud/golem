@@ -239,12 +239,17 @@ object ConcreteCodec {
     case WitSchemaValueNode.F64Value(value) => value
   }
   val char: ConcreteCodec[Char] =
-    scalar[Char](WitSchemaTypeBody.CharType)(value => WitSchemaValueNode.CharValue(value.toInt)) {
-      case WitSchemaValueNode.CharValue(value) if value >= 0 && value <= Char.MaxValue.toInt => value.toChar
+    scalar[Char](WitSchemaTypeBody.CharType)(value => WitSchemaValueNode.CharValue(UnicodeText.encodeChar(value))) {
+      case WitSchemaValueNode.CharValue(value) =>
+        if (!UnicodeText.isScalarValue(value) || value > Char.MaxValue.toInt)
+          throw SchemaDecodeError(f"char U+$value%04X cannot be represented as a scala.Char")
+        value.toChar
     }
   val string: ConcreteCodec[String] =
-    scalar[String](WitSchemaTypeBody.StringType)(WitSchemaValueNode.StringValue.apply) {
-      case WitSchemaValueNode.StringValue(value) => value
+    scalar[String](WitSchemaTypeBody.StringType)(value =>
+      WitSchemaValueNode.StringValue(UnicodeText.encodeString(value))
+    ) { case WitSchemaValueNode.StringValue(value) =>
+      value
     }
   val bytes: ConcreteCodec[Array[Byte]] = new ConcreteCodec[Array[Byte]] {
     def write(value: Array[Byte], out: WireValues): Int =
@@ -266,25 +271,48 @@ object ConcreteCodec {
 
   val path: ConcreteCodec[GolemPath] = scalar[GolemPath](
     WitSchemaTypeBody.PathType(PathSpec(PathDirection.InOut, PathKind.Any))
-  )(value => WitSchemaValueNode.PathValue(value.value)) { case WitSchemaValueNode.PathValue(value) =>
-    new GolemPath(value)
+  )(value => WitSchemaValueNode.PathValue(UnicodeText.encodeText("path", value.value))) {
+    case WitSchemaValueNode.PathValue(value) =>
+      new GolemPath(value)
   }
   val url: ConcreteCodec[Url] =
-    scalar[Url](WitSchemaTypeBody.UrlType(UrlRestrictions.empty))(value => WitSchemaValueNode.UrlValue(value.value)) {
-      case WitSchemaValueNode.UrlValue(value) => new Url(value)
+    scalar[Url](WitSchemaTypeBody.UrlType(UrlRestrictions.empty))(value =>
+      WitSchemaValueNode.UrlValue(UnicodeText.encodeText("url", value.value))
+    ) { case WitSchemaValueNode.UrlValue(value) =>
+      new Url(value)
     }
+  private val MaxU64: BigInt = (BigInt(1) << 64) - 1
+
+  private def outOfRange(name: String, value: Any, max: Any): SchemaEncodeError =
+    SchemaEncodeError(s"$name value out of range: $value (expected 0..$max)")
+  private def checkUnsigned(name: String, value: Long, max: Long): Unit =
+    if (value < 0 || value > max) throw outOfRange(name, value, max)
+
   val ubyte: ConcreteCodec[golem.UByte] = scalar[golem.UByte](WitSchemaTypeBody.U8Type()) { value =>
-    require(value.value >= 0 && value.value <= 255); WitSchemaValueNode.U8Value(value.value.toInt)
+    checkUnsigned("UByte", value.value.toLong, 255L); WitSchemaValueNode.U8Value(value.value.toInt)
   } { case WitSchemaValueNode.U8Value(value) if value >= 0 && value <= 255 => new golem.UByte(value.toShort) }
   val ushort: ConcreteCodec[golem.UShort] = scalar[golem.UShort](WitSchemaTypeBody.U16Type()) { value =>
-    require(value.value >= 0 && value.value <= 65535); WitSchemaValueNode.U16Value(value.value)
+    checkUnsigned("UShort", value.value.toLong, 65535L); WitSchemaValueNode.U16Value(value.value)
   } { case WitSchemaValueNode.U16Value(value) if value >= 0 && value <= 65535 => new golem.UShort(value) }
   val uint: ConcreteCodec[golem.UInt] = scalar[golem.UInt](WitSchemaTypeBody.U32Type()) { value =>
-    require(value.value >= 0 && value.value <= 0xffffffffL); WitSchemaValueNode.U32Value(value.value)
+    checkUnsigned("UInt", value.value, 0xffffffffL); WitSchemaValueNode.U32Value(value.value)
   } { case WitSchemaValueNode.U32Value(value) if value >= 0 && value <= 0xffffffffL => new golem.UInt(value) }
   val ulong: ConcreteCodec[golem.ULong] =
-    scalar[golem.ULong](WitSchemaTypeBody.U64Type())(value => WitSchemaValueNode.U64Value(U64.toRawBits(value.value))) {
-      case WitSchemaValueNode.U64Value(value) => new golem.ULong(U64.fromRawBits(value))
+    scalar[golem.ULong](WitSchemaTypeBody.U64Type()) { value =>
+      if (value.value < 0 || value.value > MaxU64) throw outOfRange("ULong", value.value, MaxU64)
+      WitSchemaValueNode.U64Value(U64.toRawBits(value.value))
+    } { case WitSchemaValueNode.U64Value(value) => new golem.ULong(U64.fromRawBits(value)) }
+
+  private def parsed[A](name: String, value: String)(parse: String => A): A =
+    try parse(value)
+    catch { case _: NumberFormatException => throw SchemaDecodeError(s"invalid $name string: $value") }
+  val bigInt: ConcreteCodec[BigInt] =
+    scalar[BigInt](WitSchemaTypeBody.StringType)(value => WitSchemaValueNode.StringValue(value.toString)) {
+      case WitSchemaValueNode.StringValue(value) => parsed("BigInt", value)(BigInt(_))
+    }
+  val bigDecimal: ConcreteCodec[BigDecimal] =
+    scalar[BigDecimal](WitSchemaTypeBody.StringType)(value => WitSchemaValueNode.StringValue(value.toString)) {
+      case WitSchemaValueNode.StringValue(value) => parsed("BigDecimal", value)(BigDecimal(_))
     }
   val uuid: ConcreteCodec[java.util.UUID] =
     scalar[java.util.UUID](WitSchemaTypeBody.UuidType)(WitSchemaValueNode.UuidValue.apply) {
@@ -294,11 +322,20 @@ object ConcreteCodec {
     WitSchemaValueNode.DatetimeValue(Datetime(value.getEpochSecond, value.getNano))
   ) {
     case WitSchemaValueNode.DatetimeValue(value) if value.nanoseconds >= 0 && value.nanoseconds < 1000000000 =>
-      java.time.Instant.ofEpochSecond(value.seconds, value.nanoseconds.toLong)
+      try java.time.Instant.ofEpochSecond(value.seconds, value.nanoseconds.toLong)
+      catch {
+        case _: java.time.DateTimeException => throw SchemaDecodeError(s"datetime out of Instant range: $value")
+      }
   }
-  val duration: ConcreteCodec[java.time.Duration] = scalar[java.time.Duration](WitSchemaTypeBody.DurationType)(value =>
-    WitSchemaValueNode.DurationValue(WitDurationValuePayload(value.toNanos))
-  ) { case WitSchemaValueNode.DurationValue(value) => java.time.Duration.ofNanos(value.nanoseconds) }
+  val duration: ConcreteCodec[java.time.Duration] = scalar[java.time.Duration](WitSchemaTypeBody.DurationType) {
+    value =>
+      val nanoseconds =
+        try value.toNanos
+        catch {
+          case _: ArithmeticException => throw SchemaEncodeError(s"Duration is out of i64 nanoseconds range: $value")
+        }
+      WitSchemaValueNode.DurationValue(WitDurationValuePayload(nanoseconds))
+  } { case WitSchemaValueNode.DurationValue(value) => java.time.Duration.ofNanos(value.nanoseconds) }
 
   def record(fields: Vector[(String, ConcreteCodec[Any])]): ConcreteCodec[Vector[Any]] =
     new ConcreteCodec[Vector[Any]] {

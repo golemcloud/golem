@@ -82,7 +82,7 @@ object SchemaValueCodec {
       case F32Value(v)                  => node("f32") { output.append(floatJson(v).render); () }
       case F64Value(v)                  => node("f64") { output.append(floatJson(v).render); () }
       case CharValue(v)                 => node("char")(string(charString(v)))
-      case StringValue(v)               => node("string")(string(v))
+      case StringValue(v)               => node("string")(string(validString(v)))
       case RecordValue(values)          => children("record", "fields", values)
       case TupleValue(values)           => children("tuple", "elements", values)
       case ListValue(values)            => children("list", "elements", values)
@@ -120,17 +120,21 @@ object SchemaValueCodec {
       case TextValue(text, language) =>
         node("text") {
           output.append('{')
-          language.foreach { language => output.append("\"language\":"); string(language); output.append(',') }
-          output.append("\"text\":"); string(text); output.append('}'); ()
+          language.foreach { language =>
+            output.append("\"language\":"); string(validText("text language", language)); output.append(',')
+          }
+          output.append("\"text\":"); string(validText("text", text)); output.append('}'); ()
         }
       case BinaryValue(bytes, mime) =>
         node("binary") {
           output.append("{\"bytes\":"); array(bytes) { byte => output.append(byte & 0xff); () }
-          mime.foreach { mime => output.append(",\"mimeType\":"); string(mime) }
+          mime.foreach { mime => output.append(",\"mimeType\":"); string(validText("binary MIME type", mime)) }
           output.append('}'); ()
         }
-      case PathValue(v)     => node("path") { output.append("{\"path\":"); string(v); output.append('}'); () }
-      case UrlValue(v)      => node("url") { output.append("{\"url\":"); string(v); output.append('}'); () }
+      case PathValue(v) =>
+        node("path") { output.append("{\"path\":"); string(validText("path", v)); output.append('}'); () }
+      case UrlValue(v) =>
+        node("url") { output.append("{\"url\":"); string(validText("url", v)); output.append('}'); () }
       case UuidValue(v)     => node("uuid")(string(v.toString))
       case DatetimeValue(v) => node("datetime") { output.append("{\"value\":"); string(v); output.append('}'); () }
       case DurationValue(v) =>
@@ -138,7 +142,7 @@ object SchemaValueCodec {
       case QuantityValue(mantissa, scale, unit) =>
         node("quantity") {
           output.append("{\"mantissa\":"); string(mantissa.toString);
-          output.append(",\"scale\":").append(scale).append(",\"unit\":"); string(unit); output.append('}'); ()
+          output.append(",\"scale\":").append(scale).append(",\"unit\":"); string(validText("quantity unit", unit)); output.append('}'); ()
         }
       case StreamReferenceValue(provisional, token, _) =>
         node("stream") {
@@ -151,7 +155,7 @@ object SchemaValueCodec {
         }
       case UnionValue(tag, body) =>
         node("union") {
-          output.append("{\"body\":"); writeJson(body, output); output.append(",\"tag\":"); string(tag);
+          output.append("{\"body\":"); writeJson(body, output); output.append(",\"tag\":"); string(validText("union tag", tag));
           output.append('}'); ()
         }
     }
@@ -172,7 +176,7 @@ object SchemaValueCodec {
     case F32Value(v)    => node("f32", floatJson(v))
     case F64Value(v)    => node("f64", floatJson(v))
     case CharValue(v)   => node("char", Json.string(charString(v)))
-    case StringValue(v) => node("string", Json.string(v))
+    case StringValue(v) => node("string", Json.string(validString(v)))
 
     case RecordValue(fields) =>
       node("record", Json.obj("fields" -> Json.arr(fields.map(toJson).toVector)))
@@ -212,19 +216,22 @@ object SchemaValueCodec {
     case TextValue(text, language) =>
       node(
         "text",
-        Json.obj(Vector.empty ++ language.map(l => "language" -> Json.string(l)) :+ ("text" -> Json.string(text)))
+        Json.obj(
+          Vector.empty ++ language.map(l => "language" -> Json.string(validText("text language", l))) :+
+            ("text" -> Json.string(validText("text", text)))
+        )
       )
     case BinaryValue(bytes, mimeType) =>
       val base = Vector[(String, Json)](
         "bytes" -> Json.arr(bytes.map(b => Json.fromInt(b & 0xff)))
       )
       val withMime = mimeType match {
-        case Some(m) => base :+ ("mimeType" -> Json.string(m))
+        case Some(m) => base :+ ("mimeType" -> Json.string(validText("binary MIME type", m)))
         case None    => base
       }
       node("binary", Json.obj(withMime))
-    case PathValue(v)                         => node("path", Json.obj("path" -> Json.string(v)))
-    case UrlValue(v)                          => node("url", Json.obj("url" -> Json.string(v)))
+    case PathValue(v)                         => node("path", Json.obj("path" -> Json.string(validText("path", v))))
+    case UrlValue(v)                          => node("url", Json.obj("url" -> Json.string(validText("url", v))))
     case UuidValue(v)                         => node("uuid", Json.string(v.toString))
     case DatetimeValue(v)                     => node("datetime", Json.obj("value" -> Json.string(v)))
     case DurationValue(v)                     => node("duration", Json.obj("nanoseconds" -> Json.string(v.toString)))
@@ -234,7 +241,7 @@ object SchemaValueCodec {
         Json.obj(
           "mantissa" -> Json.string(mantissa.toString),
           "scale"    -> Json.fromInt(scale),
-          "unit"     -> Json.string(unit)
+          "unit"     -> Json.string(validText("quantity unit", unit))
         )
       )
 
@@ -247,11 +254,39 @@ object SchemaValueCodec {
       node("stream", reference)
 
     case UnionValue(unionTag, body) =>
-      node("union", Json.obj("body" -> toJson(body), "tag" -> Json.string(unionTag)))
+      node("union", Json.obj("body" -> toJson(body), "tag" -> Json.string(validText("union tag", unionTag))))
   }
 
   private def node(kind: String, value: Json): Json =
     Json.obj("kind" -> Json.string(kind), "value" -> value)
+
+  private[runtime] def loneSurrogateIndex(value: String): Int = {
+    var index = 0
+    while (index < value.length) {
+      val current = value.charAt(index)
+      if (Character.isHighSurrogate(current)) {
+        if (index + 1 < value.length && Character.isLowSurrogate(value.charAt(index + 1))) index += 2
+        else return index
+      } else if (Character.isLowSurrogate(current)) return index
+      else index += 1
+    }
+    -1
+  }
+
+  private[runtime] def validString(value: String): String = validText("string", value)
+
+  /** Rejects a textual leaf with a lone surrogate; `what` names the leaf in the error. */
+  private[runtime] def validText(what: String, value: String): String = {
+    val index = loneSurrogateIndex(value)
+    if (index >= 0)
+      throw BridgeException(f"Schema $what contains a lone surrogate U+${value.charAt(index).toInt}%04X at index $index")
+    value
+  }
+
+  private def decodedText(what: String)(json: Json): Either[String, String] =
+    Json.asString(json).flatMap { text =>
+      if (loneSurrogateIndex(text) >= 0) Left(s"$what value must not contain a lone surrogate") else Right(text)
+    }
 
   private def charString(value: Int): String = {
     if (value < 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff))
@@ -501,7 +536,7 @@ object SchemaValueCodec {
       }
     case "f64"    => floatValue(value).map(F64Value(_))
     case "char"   => Json.asString(value).flatMap(charValue)
-    case "string" => Json.asString(value).map(StringValue(_))
+    case "string" => decodedText("string")(value).map(StringValue(_))
 
     case "record" =>
       exactObject(value, Set("fields"), "record").flatMap(member(_, "fields")).flatMap(Json.asArray).flatMap { items =>
@@ -552,19 +587,19 @@ object SchemaValueCodec {
     case "text" =>
       for {
         fields   <- exactOptionalObject(value, Set("text"), Set("language"), "text")
-        text     <- member(fields, "text").flatMap(Json.asString)
-        language <- optionalStringMember(fields, "language")
+        text     <- member(fields, "text").flatMap(decodedText("text"))
+        language <- optionalTextMember(fields, "language", "text language")
       } yield TextValue(text, language)
     case "binary" =>
       for {
         fields   <- exactOptionalObject(value, Set("bytes"), Set("mimeType"), "binary")
         bytes    <- member(fields, "bytes").flatMap(Json.asArray).flatMap(decodeBytes)
-        mimeType <- optionalStringMember(fields, "mimeType")
+        mimeType <- optionalTextMember(fields, "mimeType", "binary MIME type")
       } yield BinaryValue(bytes, mimeType)
     case "path" =>
-      exactObject(value, Set("path"), "path").flatMap(member(_, "path")).flatMap(Json.asString).map(PathValue(_))
+      exactObject(value, Set("path"), "path").flatMap(member(_, "path")).flatMap(decodedText("path")).map(PathValue(_))
     case "url" =>
-      exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(Json.asString).map(UrlValue(_))
+      exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(decodedText("url")).map(UrlValue(_))
     case "uuid" =>
       Json.asString(value).flatMap(parseUuid).map(UuidValue(_))
     case "datetime" =>
@@ -583,13 +618,13 @@ object SchemaValueCodec {
         mantissa <-
           member(fields, "mantissa").flatMap(n => decimalString(n, signed = true, MinI64, MaxI64, "quantity mantissa"))
         scale <- member(fields, "scale").flatMap(n => ranged(n, MinI32, MaxI32, "quantity scale"))
-        unit  <- member(fields, "unit").flatMap(Json.asString)
+        unit  <- member(fields, "unit").flatMap(decodedText("quantity unit"))
       } yield QuantityValue(mantissa.toLong, scale.toInt, unit)
 
     case "union" =>
       for {
         fields <- exactObject(value, Set("tag", "body"), "union")
-        tag    <- member(fields, "tag").flatMap(Json.asString)
+        tag    <- member(fields, "tag").flatMap(decodedText("union tag"))
         body   <- member(fields, "body").flatMap(fromJson)
       } yield UnionValue(tag, body)
 
@@ -686,9 +721,9 @@ object SchemaValueCodec {
   private def member(fields: Vector[(String, Json)], name: String): Either[String, Json] =
     fields.find(_._1 == name).map(_._2).toRight(s"Missing required field '$name'")
 
-  private def optionalStringMember(fields: Vector[(String, Json)], name: String): Either[String, Option[String]] =
+  private def optionalTextMember(fields: Vector[(String, Json)], name: String, what: String): Either[String, Option[String]] =
     fields.find(_._1 == name).map(_._2) match {
-      case Some(value) => Json.asString(value).map(Some(_))
+      case Some(value) => decodedText(what)(value).map(Some(_))
       case None        => Right(None)
     }
 
