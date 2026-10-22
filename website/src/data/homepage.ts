@@ -123,6 +123,8 @@ export const metricBar = {
 // =============================================================================
 
 export interface ChapterItem {
+  // Feature id: names the folder of this bullet's snippets.
+  id: string;
   title: string;
   body: string;
 }
@@ -138,257 +140,77 @@ export const codeLanguages = [
 
 export type CodeLanguage = (typeof codeLanguages)[number]["id"];
 
-export interface ChapterCode {
+export interface CodePane {
   filename: string;
-  code: string;
-  highlight: number[];
+  source: string;
 }
 
-export type ChapterFigure = Record<CodeLanguage, ChapterCode>;
+// Snippets live in website/snippets/<chapter>/<feature>/<language>/<file>,
+// or <chapter>/<feature>/<file> for a file every language shares. Each
+// chapter's first point, "overview", is selected until the reader picks
+// another. A line ending in " //@" (" #@" in YAML) is highlighted while its
+// snippet shows; the renderer strips the marker.
+export type ChapterSnippets = Record<string, Partial<Record<CodeLanguage, CodePane>>>;
+
+const snippetFiles = import.meta.glob<string>("../../snippets/**/*", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+function snippets(chapter: string): ChapterSnippets {
+  const out: ChapterSnippets = {};
+  for (const [key, source] of Object.entries(snippetFiles)) {
+    const [name, feature, ...rest] = key.slice("../../snippets/".length).split("/");
+    if (name !== chapter) continue;
+    const filename = rest.pop()!;
+    const pane = { filename, source: source.replace(/\n+$/, "") };
+    const byLang = (out[feature] ??= {});
+    if (rest.length) byLang[rest[0] as CodeLanguage] = pane;
+    else for (const l of codeLanguages) byLang[l.id] ??= pane;
+  }
+  return out;
+}
 
 export const agentsChapter = {
   eyebrow: "Agents",
   heading: "Agents are your own arbitrary code, not prompts",
-  lead: "Each agent's VM keeps its whole execution durable, files included.",
-  figure: {
-    ts: {
-      filename: "support-agent.ts",
-      highlight: [23, 24],
-      code: `export const Support = defineAgent({
-  name: 'SupportAgent',
-  id: { customer: z.string() },
-  http: http.mount('/support/{customer}'),
-  methods: {
-    handle: method({
-      input: { message: z.string(), orderId: z.string() },
-      returns: z.string(),
-    }),
-  },
-})
-
-export const SupportImpl = Support.implement({
-  init: () => ({ history: [] as Message[] }),
-  methods: {
-    async handle({ message, orderId }) {
-      this.history.push({ role: 'user', content: message })
-      // Golem lets lookupOrder reach only the orders API:
-      const reply = await llm.run(this.history, [lookupOrder])
-      if (reply.refundRequested) {
-        const approval = createWebhook()
-        await notifyReviewer(approval.getUrl(), reply)
-        // waits here for days if needed, using no CPU or memory:
-        const { approved } = (await approval).json<Approval>()
-        // refunded once if the payment API honors idempotency keys:
-        if (approved) await refundOrder(orderId, reply.amount)
-      }
-      return reply.text
-    },
-  },
-})`,
-    },
-    effect: {
-      filename: "support-agent.ts",
-      highlight: [23, 24, 25],
-      code: `export const Support = defineAgent({
-  name: "SupportAgent",
-  id: { customer: Schema.String },
-  http: Http.mount("/support/{customer}"),
-  methods: {
-    handle: method({
-      input: { message: Schema.String, orderId: Schema.String },
-      success: Schema.String,
-    }),
-  },
-})
-
-export const SupportImpl = Support.implement({
-  init: () => Effect.succeed({ history: [] as Message[] }),
-  methods: (state) => ({
-    handle: ({ message, orderId }) => Effect.gen(function* () {
-      state.history.push({ role: "user", content: message })
-      // Golem lets lookupOrder reach only the orders API:
-      const reply = yield* llm.run(state.history, [lookupOrder])
-      if (reply.refundRequested) {
-        const approval = yield* Webhook.create
-        yield* notifyReviewer(approval.url, reply)
-        // waits here for days if needed, using no CPU or memory:
-        const payload = yield* approval.await
-        const { approved } = yield* payload.decode(Approval)
-        // refunded once if the payment API honors idempotency keys:
-        if (approved) yield* refundOrder(orderId, reply.amount)
-      }
-      return reply.text
-    }).pipe(Effect.orDie),
-  }),
-})`,
-    },
-    rust: {
-      filename: "support_agent.rs",
-      highlight: [26, 27],
-      code: `#[agent_definition(mount = "/support")]
-pub trait Support {
-  fn new() -> Self;
-  async fn handle(&mut self, message: String, order_id: String)
-    -> String;
-}
-
-struct SupportImpl {
-  history: Vec<Message>,
-}
-
-#[agent_implementation]
-impl Support for SupportImpl {
-  fn new() -> Self {
-    Self { history: vec![] }
-  }
-
-  async fn handle(&mut self, message: String, order_id: String)
-    -> String {
-    self.history.push(Message::user(message));
-    // Golem lets lookup_order reach only the orders API:
-    let reply = llm::run(&self.history, &[lookup_order]).await;
-    if reply.refund_requested {
-      let approval = create_webhook().unwrap();
-      notify_reviewer(approval.url(), &reply).await;
-      // waits here for days if needed, using no CPU or memory:
-      let Approval { approved } = approval.await.json().unwrap();
-      // refunded once if the payment API honors idempotency keys:
-      if approved {
-        refund_order(order_id, reply.amount).await;
-      }
-    }
-    reply.text
-  }
-}`,
-    },
-    scala: {
-      filename: "SupportAgent.scala",
-      highlight: [21, 22],
-      code: `@agentDefinition(mount = "/support/{id}")
-trait SupportAgent extends BaseAgent:
-  class Id(val id: String)
-  def handle(message: String, orderId: String): Future[String]
-
-@agentImplementation()
-final class SupportAgentImpl(id: String) extends SupportAgent:
-  private val history = ArrayBuffer.empty[Message]
-
-  def handle(message: String, orderId: String): Future[String] =
-    history += Message("user", message)
-    // Golem lets lookupOrder reach only the orders API:
-    llm.run(history.toList, List(lookupOrder)).flatMap: reply =>
-      if reply.refundRequested then refund(orderId, reply)
-      else Future.successful(reply.text)
-
-  private def refund(orderId: String, reply: Reply) =
-    val approval = HostApi.createWebhook()
-    for
-      _ <- notifyReviewer(approval.url, reply)
-      // waits here for days if needed, using no CPU or memory:
-      payload <- approval.await()
-      approved = payload.json[Approval]().approved
-      // refunded once if the payment API honors idempotency keys:
-      _ <- if approved then refundOrder(orderId, reply.amount)
-           else Future.unit
-    yield reply.text`,
-    },
-    moonbit: {
-      filename: "support_agent.mbt",
-      highlight: [22, 23, 24],
-      code: `#derive.agent
-#derive.mount("/support")
-struct SupportAgent {
-  history : Array[Message]
-}
-
-fn SupportAgent::new() -> SupportAgent {
-  { history: [] }
-}
-
-pub async fn SupportAgent::handle(
-  self : Self,
-  message : String,
-  order_id : String,
-) -> String {
-  self.history.push({ role: "user", content: message })
-  // Golem lets lookup_order reach only the orders API:
-  let reply = llm.run(self.history, [lookup_order])
-  if reply.refund_requested {
-    let approval = @webhook.create()
-    notify_reviewer(approval.url(), reply)
-    // waits here for days if needed, using no CPU or memory:
-    let body = @json.parse(approval.wait().text())
-    let { approved } : Approval = @json.from_json(body)
-    // refunded once if the payment API honors idempotency keys:
-    if approved { refund_order(order_id, reply.amount) }
-  }
-  reply.text
-}`,
-    },
-    go: {
-      filename: "support_agent.go",
-      highlight: [31, 32],
-      code: `type SupportID struct{ Customer string }
-
-type HandleIn struct {
-    Message string
-    OrderID string
-}
-
-var Support = golem.DefineAgent[SupportID](golem.Spec{
-    Name: "SupportAgent",
-    HTTP: &golem.Mount{Path: "/support/{customer}"},
-})
-
-var Handle = Support.Method[HandleIn, string]("handle")
-
-type state struct{ history []Message }
-
-var impl = Support.Implement(func(SupportID) *state {
-    return &state{}
-})
-
-var _ = impl.Handle(Handle, func(
-    ctx *golem.Context[state], in HandleIn,
-) string {
-    s := ctx.State
-    s.history = append(s.history, Message{"user", in.Message})
-    // Golem lets lookupOrder reach only the orders API:
-    reply := llm.Run(s.history, lookupOrder)
-    if reply.RefundRequested {
-        approval := golem.NewWebhook[Approval]()
-        notifyReviewer(approval.URL(), reply)
-        // waits here for days if needed, using no CPU or memory:
-        decision := approval.MustAwait()
-        // refunded once if the payment API honors idempotency keys:
-        if decision.Approved {
-            refundOrder(in.OrderID, reply.Amount)
-        }
-    }
-    return reply.Text
-})`,
-    },
-  } as ChapterFigure,
+  snippets: snippets("agents"),
+  // Shown instead of a snippet in languages that lack the feature.
+  missing: {
+    sqlite:
+      "Scala, MoonBit and Go agents each have their own durable file system too, but no supported SQLite library.",
+  } as Record<string, string>,
   items: [
     {
+      id: "overview",
+      title: "Overview",
+      body: "Golem runs each agent in its own VM and keeps its whole execution durable. After a crash, restart or long wait, the agent resumes mid-function with its memory and files.",
+    },
+    {
+      id: "language",
       title: "Your language",
       body: "Write agents as ordinary, typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, with the same guarantees and primitives in each.",
     },
     {
-      title: "Awaitable webhooks, timers and schedules",
-      body: "Approvals and payment callbacks become promises your code awaits. Sleeps, timers and scheduled calls fire on time across restarts, with no idle cost.",
+      id: "sqlite",
+      title: "Per-agent databases",
+      body: "Each agent has its own durable file system, so an embedded database keeps its file there: no server to run or connect to. SQLite works in TypeScript, Effect and Rust.",
     },
     {
-      title: "Agents working together",
-      body: "Typed calls between agents, across languages, right away or scheduled for later. Agents can discover what other agents and tools offer.",
-    },
-    {
+      id: "models",
       title: "Any model, with your libraries",
       body: "Call any model through common LLM SDKs. Keep using the OpenAI and Anthropic SDKs, Vercel AI SDK, TanStack AI, Effect AI, Zod and more.",
     },
     {
-      title: "Embedded SQLite",
-      body: "TypeScript, Effect and Rust agents can each have their own SQLite database, embedded in the agent, with no database server to run or connect to.",
+      id: "team",
+      title: "Agents working together",
+      body: "Typed calls between agents, across languages, right away or scheduled for later. Agents can discover what other agents and tools offer.",
+    },
+    {
+      id: "waits",
+      title: "Awaitable webhooks, timers and schedules",
+      body: "Approvals and payment callbacks become promises your code awaits. Sleeps, timers and scheduled calls fire on time across restarts, with no idle cost.",
     },
   ] as ChapterItem[],
 };
@@ -396,199 +218,35 @@ var _ = impl.Handle(Handle, func(
 export const toolsChapter = {
   eyebrow: "Tools",
   heading: "Every tool call in its own VM, executed exactly once",
-  lead: "After a node restart or crash, restoring a tool call's state replays its code using recorded results, without repeating completed effects.",
-  figure: {
-    ts: {
-      filename: "refund-tool.ts",
-      highlight: [13, 14, 15],
-      code: `export const refund = toolDefinition('refund')
-  .version('1.0.0')
-  .body((body) =>
-    body
-      .positional('charge', z.string())
-      .positional('amount', z.number().int())
-      .returns(z.object({ id: z.string(), status: z.string() })),
-  )
-
-refund.implement({
-  // each call runs in a fresh WebAssembly VM:
-  refund: async ({ charge, amount }) => {
-    // Golem checks this request against the caller's permissions
-    // and adds an idempotency key, so a retry refunds once:
-    const res = await fetch('https://api.stripe.com/v1/refunds', {
-      method: 'POST',
-      body: new URLSearchParams({ charge, amount: String(amount) }),
-    })
-    return ok(await res.json())
-  },
-})`,
-    },
-    effect: {
-      filename: "refund-tool.ts",
-      highlight: [18, 19, 20, 21],
-      code: `const Refund = Schema.Struct({
-  id: Schema.String,
-  status: Schema.String,
-})
-
-export const refund = Tool.toolDefinition("refund", {
-  version: "1.0.0",
-}).body((body) =>
-  body
-    .positional("charge", Schema.String)
-    .positional("amount", Schema.Int)
-    .returns(Refund),
-)
-
-refund.implement({
-  // each call runs in a fresh WebAssembly VM:
-  refund: ({ charge, amount }) =>
-    // Golem checks this request against the caller's permissions
-    // and adds an idempotency key, so a retry refunds once:
-    pipe(
-      HttpClientRequest.post("https://api.stripe.com/v1/refunds"),
-      HttpClientRequest.bodyUrlParams({ charge, amount }),
-      HttpClient.execute,
-      Effect.flatMap(HttpClientResponse.schemaBodyJson(Refund)),
-      Effect.provide(FetchHttpClient.layer),
-      Effect.orDie,
-    ),
-})`,
-    },
-    rust: {
-      filename: "refund_tool.rs",
-      highlight: [18, 19, 20],
-      code: `#[derive(Schema, Deserialize)]
-struct Receipt {
-  id: String,
-  status: String,
-}
-
-#[tool_definition(version = "1.0.0")]
-trait Refund {
-  async fn refund(&self, charge: String, amount: u64) -> Receipt;
-}
-
-struct RefundImpl;
-
-#[tool_implementation]
-impl Refund for RefundImpl {
-  // each call runs in a fresh WebAssembly VM:
-  async fn refund(&self, charge: String, amount: u64) -> Receipt {
-    // Golem checks this request against the caller's permissions
-    // and adds an idempotency key, so a retry refunds once:
-    let req = Request::post("https://api.stripe.com/v1/refunds")
-      .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-      .body(format!("charge={charge}&amount={amount}").into())
-      .unwrap();
-    let res = http::send(req).await.unwrap();
-    http::response_json(res).await.unwrap()
-  }
-}`,
-    },
-    scala: {
-      filename: "RefundTool.scala",
-      highlight: [15, 16, 17],
-      code: `final case class Refund(id: String, status: String) derives Schema
-
-@toolDefinition(name = "refund", version = "1.0.0")
-trait RefundTool:
-  def refund(charge: String, amount: Int): Future[Refund]
-
-@toolImplementation()
-final class RefundToolImpl extends RefundTool:
-  // each call runs in a fresh WebAssembly VM:
-  def refund(charge: String, amount: Int): Future[Refund] =
-    val init = new RequestInit:
-      method = HttpMethod.POST
-      body = new URLSearchParams(js.Dictionary(
-        "charge" -> charge, "amount" -> amount.toString))
-    // Golem checks this request against the caller's permissions
-    // and adds an idempotency key, so a retry refunds once:
-    fetch("https://api.stripe.com/v1/refunds", init).toFuture
-      .flatMap(_.text().toFuture)
-      .map(Schema[Refund].jsonCodec.decode(_).toTry.get)`,
-    },
-    moonbit: {
-      filename: "refund_tool.mbt",
-      highlight: [19, 20, 21],
-      code: `#derive.tool("refund", version="1.0.0")
-struct Refund {}
-
-#derive.golem_schema
-pub(all) struct RefundResult {
-  id : String
-  status : String
-} derive(FromJson)
-
-// each call runs in a fresh WebAssembly VM:
-#derive.arg("charge", scope="positional")
-#derive.arg("amount", scope="positional")
-pub async fn Refund::refund(
-  charge : String,
-  amount : Int,
-) -> RefundResult {
-  let url = "https://api.stripe.com/v1/refunds"
-  let form = [("charge", charge), ("amount", amount.to_string())]
-  // Golem checks this request against the caller's permissions
-  // and adds an idempotency key, so a retry refunds once:
-  let res = @http.send(form_post(url, form)).unwrap()
-  @json.from_json(@json.parse(read_text(res)))
-}`,
-    },
-    go: {
-      filename: "refund_tool.go",
-      highlight: [22, 23, 24],
-      code: `type Refund struct{}
-
-var Tool = tool.DefineTool[Refund]("refund",
-    tool.Spec{Version: "1.0.0"})
-
-type Args struct {
-    Charge string
-    Amount int64
-}
-
-type Result struct{ ID, Status string }
-
-var Body = Tool.Body[Args, Result](
-    func(a *Args, s *tool.CommandSpec) {
-        s.Positional(&a.Charge)
-        s.Positional(&a.Amount)
-    })
-
-// each call runs in a fresh WebAssembly VM:
-var _ = Body.Handle(func(_ *tool.Context, a Args) (Result, error) {
-    amount := strconv.FormatInt(a.Amount, 10)
-    // Golem checks this request against the caller's permissions
-    // and adds an idempotency key, so a retry refunds once:
-    res := golem.Must(http.PostForm(
-        "https://api.stripe.com/v1/refunds",
-        url.Values{"charge": {a.Charge}, "amount": {amount}}))
-    defer res.Body.Close()
-    var out Result
-    return out, json.NewDecoder(res.Body).Decode(&out)
-})`,
-    },
-  } as ChapterFigure,
+  snippets: snippets("tools"),
   items: [
     {
+      id: "overview",
+      title: "Overview",
+      body: "Golem runs each tool call in a fresh VM that can't read the agent's memory. An interrupted call replays with recorded results, without repeating completed effects.",
+    },
+    {
+      id: "custom",
       title: "Bundled and custom tools",
       body: "Shell, Git, Node.js, npm and TypeScript come bundled, and can work on the agent's own files. Build your own tools with any Golem SDK; no separate sandbox service needed.",
     },
     {
+      id: "requests",
       title: "External requests",
       body: "Interrupted external requests retry with idempotency keys Golem adds, taking effect once if the service honors them, as Stripe does.",
     },
     {
+      id: "permissions",
       title: "Permissions you can scope and share",
       body: "Give agents or tools narrower permissions, such as the orders API only, for one hour. Revoking a permission revokes every permission delegated from it.",
     },
     {
+      id: "secrets",
       title: "Secrets",
       body: "Agents pass API keys to tools as opaque handles. Revealing a value takes a grant and is recorded, and a binding can stop a tool from revealing any.",
     },
     {
+      id: "publish",
       title: "Tool publishing, plus MCP",
       body: "Publish tools as immutable, versioned releases for other accounts. Expose agents and tools over MCP, and call MCP servers with the same guarantees.",
     },
@@ -598,168 +256,35 @@ var _ = Body.Handle(func(_ *tool.Context, a Args) (Result, error) {
 export const artifactsChapter = {
   eyebrow: "Artifacts",
   heading: "Securely expose artifacts your agents build and deploy",
-  lead: "Pages, files and live output, with each artifact in its own WebAssembly VM.",
-  figure: {
-    ts: {
-      filename: "site-agent.ts",
-      highlight: [4, 5, 6, 7],
-      code: `export const SiteAgent = defineAgent({
-  name: 'SiteAgent',
-  id: { project: z.string() },
-  // serve this agent's /public directory at /sites/{project}/:
-  http: http.mount('/sites/{project}', {
-    exposeFiles: [{ route: '/*', path: '/public/$1' }],
-  }),
-  methods: { publish: method({ input: {}, returns: z.void() }) },
-})
-
-export const SiteAgentImpl = SiteAgent.implement({
-  init: () => ({}),
-  methods: {
-    publish() {
-      // copy in the site the agent built; its URLs serve it at once:
-      fs.cpSync('/workspace/dist', '/public', { recursive: true })
-    },
-  },
-})`,
-    },
-    effect: {
-      filename: "site-agent.ts",
-      highlight: [4, 5, 6, 7],
-      code: `export const SiteAgent = defineAgent({
-  name: "SiteAgent",
-  id: { project: Schema.String },
-  // serve this agent's /public directory at /sites/{project}/:
-  http: Http.mount("/sites/{project}", {
-    exposeFiles: [{ route: "/*", path: "/public/$1" }],
-  }),
-  methods: { publish: method({ input: {}, success: Schema.Void }) },
-})
-
-const publish = () =>
-  Effect.sync(() => {
-    // copy in the site the agent built; its URLs serve it at once:
-    fs.cpSync("/workspace/dist", "/public", { recursive: true })
-  })
-
-export const SiteAgentImpl = SiteAgent.implement({
-  init: () => Effect.void,
-  methods: () => ({ publish }),
-})`,
-    },
-    rust: {
-      filename: "site_agent.rs",
-      highlight: [1, 2, 3, 4, 5],
-      code: `// serve this agent's /public directory at /sites/{project}/:
-#[agent_definition(
-  mount = "/sites/{project}",
-  filesystem_bindings = [("/*", "/public/$1")]
-)]
-pub trait SiteAgent {
-  fn new(project: String) -> Self;
-  fn publish(&self);
-}
-
-struct SiteAgentImpl;
-
-#[agent_implementation]
-impl SiteAgent for SiteAgentImpl {
-  fn new(_project: String) -> Self {
-    Self
-  }
-
-  fn publish(&self) {
-    // copy in the site the agent built; its URLs serve it at once:
-    copy_dir_all("/workspace/dist", "/public").unwrap();
-  }
-}`,
-    },
-    scala: {
-      filename: "SiteAgent.scala",
-      highlight: [1, 2, 3, 4, 5],
-      code: `@agentDefinition(
-  // serve this agent's /public directory at /sites/{project}/:
-  mount = "/sites/{project}",
-  exposeFiles = Array(("/*", "/public/$1"))
-)
-trait SiteAgent extends BaseAgent:
-  class Id(val project: String)
-  def publish(): Unit
-
-@agentImplementation()
-final class SiteAgentImpl(project: String) extends SiteAgent:
-  def publish(): Unit =
-    // copy in the site the agent built; its URLs serve it at once:
-    Fs.cpSync("/workspace/dist", "/public",
-      js.Dynamic.literal(recursive = true))`,
-    },
-    moonbit: {
-      filename: "site_agent.mbt",
-      highlight: [2, 3, 4],
-      code: `#derive.agent
-// serve this agent's /public directory at /sites/{project}/:
-#derive.mount("/sites/{project}")
-#derive.expose_files("/*", "/public/$1")
-struct SiteAgent {
-  project : String
-}
-
-fn SiteAgent::new(project : String) -> SiteAgent {
-  SiteAgent::{ project }
-}
-
-pub async fn SiteAgent::publish(_self : Self) -> Unit {
-  // copy in the site the agent built; its URLs serve it at once:
-  copy_dir("/workspace/dist", "/public")
-}`,
-    },
-    go: {
-      filename: "site_agent.go",
-      highlight: [5, 6, 7, 8, 9, 10, 11],
-      code: `type SiteID struct{ Project string }
-
-var SiteAgent = golem.DefineAgent[SiteID](golem.Spec{
-    Name: "SiteAgent",
-    // serve this agent's /public directory at /sites/{project}/:
-    HTTP: &golem.Mount{
-        Path: "/sites/{project}",
-        ExposeFiles: []golem.FileMapping{
-            {Route: "/*", Path: "/public/$1"},
-        },
-    },
-})
-
-var Publish = SiteAgent.Method[golem.Unit, golem.Unit]("publish")
-
-type state struct{}
-
-var impl = SiteAgent.Implement(func(SiteID) *state {
-    return &state{}
-})
-
-var _ = impl.Handle(Publish, func(
-    _ *golem.Context[state], _ golem.Unit,
-) golem.Unit {
-    // copy in the site the agent built; its URLs serve it at once:
-    golem.Must0(os.CopyFS("/public", os.DirFS("/workspace/dist")))
-    return golem.Unit{}
-})`,
-    },
-  } as ChapterFigure,
+  snippets: snippets("artifacts"),
   items: [
     {
-      title: "Routes and files",
-      body: "Agents deploy front-ends and back ends under the permissions you grant. Routes are declared in agent code; files are served from storage or live from an agent's files.",
+      id: "overview",
+      title: "Overview",
+      body: "Golem serves the pages, files and live output your agents produce from the agents themselves. Endpoint methods run as durable code in the agent's own VM.",
     },
     {
+      id: "routes",
+      title: "Routes and files",
+      body: "Agents deploy front-ends and back ends under the permissions you grant. Routes are declared in agent code; files are served live from the agent's own file system.",
+    },
+    {
+      id: "routers",
+      title: "Custom HTTP routers",
+      body: "A router is an agent that handles requests under its path. Your code matches paths and methods, sets statuses and headers, and relays other agents' output.",
+    },
+    {
+      id: "stream",
       title: "Durable streaming",
       body: "Streaming methods become resumable streams: clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
     },
     {
+      id: "login",
       title: "Front-end login",
       body: "Single-page front-ends sign users in with OAuth2 and PKCE, using short-lived tokens Golem issues. A mount can turn away callers without a valid login.",
     },
     {
+      id: "readonly",
       title: "Read-only methods",
       body: "Golem blocks writes to anything outside the agent in methods marked read-only. Responses are cached until the agent next writes, served without waking it.",
     },

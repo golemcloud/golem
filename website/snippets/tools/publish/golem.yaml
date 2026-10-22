@@ -1,0 +1,25 @@
+tools: { refund: {}, order-status: {} }
+# publish refund 1.0.0 as a release other accounts can be granted:
+toolReleases: { prod: { refund: {} } } #@
+environments:
+  # with versionCheck on, published releases are immutable:
+  prod: { server: cloud, deployment: { versionCheck: true } } #@
+components:
+  payments:app:
+    componentWasm: build/payments.wasm
+    # tools-only MCP calls run as this component, which binds them:
+    tools: { order-status: {} }
+mcp:
+  # serve SupportAgent and order-status behind mcp-oauth:
+  deployments:
+    prod:
+      - subdomain: refunds
+        agents: { SupportAgent: { securityScheme: mcp-oauth } } #@
+        tools:
+          order-status: #@
+            ownerComponent: payments:app
+            securityScheme: mcp-oauth
+  # completed MCP calls are not repeated on recovery:
+  # a retry takes effect once if the server honors Golem's key:
+  imports:
+    prod: [{ name: crm, url: https://mcp.example.com/mcp }] #@
