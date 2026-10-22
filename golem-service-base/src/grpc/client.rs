@@ -170,7 +170,10 @@ impl SharedClientTls {
         if let Ok(tls) = &**self.state.load() {
             return Ok(tls.clone());
         }
-        let mut last_attempt = self.last_attempt.lock().unwrap();
+        let mut last_attempt = self
+            .last_attempt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Another connect may have loaded it while this one waited for the lock.
         if let Ok(tls) = &**self.state.load() {
             return Ok(tls.clone());
@@ -208,7 +211,10 @@ impl SharedClientTls {
 
     /// Lets the next connect try the load again at once.
     fn retry_now(&self) {
-        *self.last_attempt.lock().unwrap() = None;
+        *self
+            .last_attempt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 

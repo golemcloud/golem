@@ -124,11 +124,18 @@ impl TlsMaterial {
         if !self.has_files() {
             return ReloadOutcome::Unchanged;
         }
-        let _serialized = self.reload_lock.lock().unwrap();
+        let _serialized = self
+            .reload_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (snapshot, read_error) = read_snapshot(&self.sources);
         #[cfg(test)]
         {
-            let hook = self.after_read.lock().unwrap().take();
+            let hook = self
+                .after_read
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
             if let Some(hook) = hook {
                 hook();
             }
@@ -141,7 +148,10 @@ impl TlsMaterial {
                     && snapshot[1] == current.key_pem
                     && snapshot[2] == current.ca_pem
                 {
-                    *self.rejected.lock().unwrap() = None;
+                    *self
+                        .rejected
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                     return ReloadOutcome::Unchanged;
                 }
                 check(&self.sources, snapshot.clone(), now)
@@ -152,12 +162,18 @@ impl TlsMaterial {
                 log_loaded(&self.name, &self.sources, &loaded, "reloaded");
                 record_certificate_not_after(&self.name, loaded.certificate.not_after);
                 self.current.store(Arc::new(loaded));
-                *self.rejected.lock().unwrap() = None;
+                *self
+                    .rejected
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 ReloadOutcome::Reloaded
             }
             Err(error) => {
                 let first_time = {
-                    let mut rejected = self.rejected.lock().unwrap();
+                    let mut rejected = self
+                        .rejected
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let same = rejected.as_ref() == Some(&snapshot);
                     if !same {
                         *rejected = Some(snapshot);
@@ -394,6 +410,22 @@ mod tests {
     fn changed_files_are_reloaded_for_the_next_reader() {
         let f = Fixture::new();
         let m = TlsMaterial::load("t-reload", f.sources()).unwrap();
+        let (cert, key) = signed_by(&f.ca, None);
+        f.write("tls.crt", &cert);
+        f.write("tls.key", &key);
+        assert!(matches!(m.reload_if_changed(), ReloadOutcome::Reloaded));
+        assert_eq!(m.current().certificate.sha256, sha(&cert));
+    }
+
+    #[test]
+    fn a_poisoned_reload_lock_does_not_stop_later_reloads() {
+        let f = Fixture::new();
+        let m = TlsMaterial::load("t-poisoned", f.sources()).unwrap();
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = m.reload_lock.lock().unwrap();
+            panic!("boom");
+        }));
+        assert!(poisoned.is_err());
         let (cert, key) = signed_by(&f.ca, None);
         f.write("tls.crt", &cert);
         f.write("tls.key", &key);

@@ -57,14 +57,15 @@ macro_rules! client_handle {
 }
 
 client_handle! {
-    /// The current client for ordinary requests, which have a request timeout. `current()` is one
-    /// atomic load. Clones share the handle.
+    /// The current client for ordinary requests, which have a request timeout. `current()` is an
+    /// atomic load and a cheap clone of the client. Clones share the handle.
     RequestClient
 }
 
 client_handle! {
     /// The current client for the campaign, the lease keepalive and the election watch, which have
-    /// no request timeout. `current()` is one atomic load. Clones share the handle.
+    /// no request timeout. `current()` is an atomic load and a
+    /// cheap clone of the client. Clones share the handle.
     ElectionClient
 }
 
@@ -135,7 +136,10 @@ impl EtcdClients {
     /// Whether any TLS setting names a file, which can be renewed. Inline values change only with
     /// a restart.
     pub fn has_tls_files(&self) -> bool {
-        self.settings.lock().unwrap().has_tls_files()
+        self.settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .has_tls_files()
     }
 
     /// Looks at the TLS files once. When they differ from what the clients in use were built from,
@@ -147,8 +151,16 @@ impl EtcdClients {
     /// valid yet becomes valid with time. Only the log and the failure counter are limited to one
     /// per distinct set of files.
     pub async fn reload_if_files_changed(&self) -> TlsReload {
-        if !self.settings.lock().unwrap().tls_files_changed() {
-            *self.rejected.lock().unwrap() = None;
+        if !self
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tls_files_changed()
+        {
+            *self
+                .rejected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             return TlsReload::Unchanged;
         }
         let files = EtcdConnectSettings::snapshot_of_files(&self.config);
@@ -203,8 +215,14 @@ impl EtcdClients {
         self.requests.swap(requests);
         self.election.swap(election);
         settings.log_certificates();
-        *self.settings.lock().unwrap() = settings;
-        *self.rejected.lock().unwrap() = None;
+        *self
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings;
+        *self
+            .rejected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         info!("etcd TLS files reloaded; new connections use them");
         TlsReload::Reloaded
     }
@@ -242,7 +260,10 @@ impl EtcdClients {
     /// alone: a way that was logged for them is not logged again, they are counted at most once,
     /// and a poll that finds etcd silent never replaces what is remembered. New bytes start over.
     fn first_report(&self, files: Vec<ReadFile>, kind: RejectionKind) -> Report {
-        let mut rejected = self.rejected.lock().unwrap();
+        let mut rejected = self
+            .rejected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if rejected.as_ref().is_none_or(|known| known.files != files) {
             *rejected = Some(Rejection {
                 files,

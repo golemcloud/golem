@@ -94,7 +94,10 @@ impl GrpcServerTls {
     /// material changed. If a rebuild fails, the previous configuration stays in use.
     pub fn current_config(&self) -> Arc<rustls::ServerConfig> {
         let loaded = self.material.current();
-        let mut guard = self.config.lock().unwrap();
+        let mut guard = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !Arc::ptr_eq(&guard.0, &loaded) {
             match build_server_config(&loaded) {
                 Ok(config) => *guard = (loaded, Arc::new(config)),
