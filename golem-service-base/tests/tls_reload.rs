@@ -131,6 +131,8 @@ struct TestServer {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
     remote_addrs: Arc<Mutex<Vec<Option<SocketAddr>>>>,
+    /// SHA-256 of the client certificate of each accepted TLS connection, in order.
+    client_certs: Arc<Mutex<Vec<String>>>,
 }
 
 impl TestServer {
@@ -149,9 +151,26 @@ impl TestServer {
             },
         );
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-        let incoming = GrpcServerTls::incoming(
-            tls,
-            tokio_stream::wrappers::TcpListenerStream::new(listener),
+        let client_certs = Arc::new(Mutex::new(Vec::new()));
+        let seen = client_certs.clone();
+        let incoming = tokio_stream::StreamExt::map(
+            GrpcServerTls::incoming(
+                tls,
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+            ),
+            move |stream| {
+                if let Ok(golem_service_base::tls::server::MaybeTlsStream::Tls(tls_stream)) =
+                    &stream
+                    && let Some(first) = tls_stream
+                        .get_ref()
+                        .1
+                        .peer_certificates()
+                        .and_then(|certs| certs.first())
+                {
+                    seen.lock().unwrap().push(sha256(first));
+                }
+                stream
+            },
         );
         let task = tokio::spawn(async move {
             let _ = tonic::transport::Server::builder()
@@ -166,6 +185,7 @@ impl TestServer {
             stop: Some(stop),
             task,
             remote_addrs,
+            client_certs,
         }
     }
 
@@ -467,4 +487,121 @@ async fn a_plain_server_still_works_through_the_same_incoming() {
     let mut client = HealthClient::new(channel);
     assert_eq!(check(&mut client).await.unwrap(), ServingStatus::Serving);
     server.stop().await;
+}
+
+fn client_config(
+    files: &Files,
+    max_connection_age: Duration,
+) -> golem_service_base::grpc::client::GrpcClientConfig {
+    use golem_service_base::grpc::client::{
+        EnabledGrpcClientTlsConfig, GrpcClientConfig, GrpcClientTlsConfig,
+    };
+    let file = |name: &str| Some(files.path(name));
+    GrpcClientConfig {
+        connection_pool_size: std::num::NonZeroUsize::new(1).unwrap(),
+        max_connection_age,
+        retries_on_unavailable: golem_common::model::RetryConfig {
+            max_attempts: 1,
+            ..Default::default()
+        },
+        tls: GrpcClientTlsConfig::Enabled(EnabledGrpcClientTlsConfig {
+            client_cert: None,
+            client_cert_file: file("client.crt"),
+            client_key: None,
+            client_key_file: file("client.key"),
+            server_ca_cert: None,
+            server_ca_cert_file: file("client-ca.crt"),
+            server_domain_name: Some("localhost".to_string()),
+        }),
+        ..Default::default()
+    }
+}
+
+async fn client_check(
+    client: &golem_service_base::grpc::client::GrpcClient<
+        HealthClient<
+            tonic_tracing_opentelemetry::middleware::client::OtelGrpcService<
+                tonic::transport::Channel,
+            >,
+        >,
+    >,
+) -> Result<ServingStatus, tonic::Status> {
+    client
+        .call("check", |c| {
+            Box::pin(async move {
+                Ok(c.check(HealthCheckRequest { service: "".into() })
+                    .await?
+                    .into_inner()
+                    .status())
+            })
+        })
+        .await
+}
+
+#[test]
+async fn a_client_presents_the_certificate_current_at_each_new_connection() {
+    use golem_service_base::grpc::client::GrpcClient;
+    let pki = Pki::new();
+    let files = Files::new(&pki);
+    let server_tls = tls_for(&files, NEVER);
+    let server = TestServer::start(Some(&server_tls)).await;
+
+    files.write("client.crt", &pki.client_pem);
+    files.write("client.key", &pki.client_key_pem);
+    files.write("client-ca.crt", &pki.ca_pem);
+    let client = GrpcClient::new(
+        "t",
+        |channel, _| HealthClient::new(channel),
+        format!("https://localhost:{}", server.addr.port())
+            .parse()
+            .unwrap(),
+        client_config(&files, Duration::from_millis(200)),
+    );
+
+    assert_eq!(client_check(&client).await.unwrap(), ServingStatus::Serving);
+    assert_eq!(
+        *server.client_certs.lock().unwrap(),
+        vec![pem_sha256(&pki.client_pem)]
+    );
+
+    // Renew: a new client certificate from the same CA.
+    let renewed = signed_by(&pki.ca, "client", ExtendedKeyUsagePurpose::ClientAuth);
+    files.write("client.crt", &renewed.0);
+    files.write("client.key", &renewed.1);
+    let material = client.tls_material().expect("TLS is enabled");
+    assert!(matches!(
+        material.reload_if_changed(),
+        ReloadOutcome::Reloaded
+    ));
+
+    // Wait for the connection to pass its maximum age, then call again: the next connection
+    // carries the renewed certificate.
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(client_check(&client).await.unwrap(), ServingStatus::Serving);
+    }
+    let seen = server.client_certs.lock().unwrap().clone();
+    assert!(seen.len() >= 2, "{seen:?}");
+    assert_eq!(seen.last().unwrap(), &pem_sha256(&renewed.0));
+    server.stop().await;
+}
+
+#[test]
+async fn a_client_with_a_bad_tls_file_fails_fast_with_the_setting_name() {
+    use golem_service_base::grpc::client::GrpcClient;
+    let pki = Pki::new();
+    let files = Files::new(&pki);
+    files.write("client.crt", &pki.client_pem);
+    files.write("client-ca.crt", &pki.ca_pem);
+    // client.key is never written
+    let client = GrpcClient::new(
+        "t",
+        |channel, _| HealthClient::new(channel),
+        "https://localhost:1".parse().unwrap(),
+        client_config(&files, Duration::from_secs(60)),
+    );
+    assert!(client.tls_material().is_none());
+    let error = client_check(&client).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert!(error.message().contains("client_key_file"), "{error:?}");
 }

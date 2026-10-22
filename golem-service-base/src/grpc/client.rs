@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::tls::material::TlsSources;
+use crate::tls::material::{TLS_RELOAD_INTERVAL, TlsMaterial, TlsSources};
 use crate::tls::pem::{PemSource, TlsError};
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
@@ -43,11 +43,20 @@ use crate::metrics::grpc::{
     record_internal_grpc_failure, record_internal_grpc_retry, record_internal_grpc_success,
 };
 
-fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, Status> {
+fn build_endpoint(
+    uri: Uri,
+    config: &GrpcClientConfig,
+    tls: Option<&ClientTls>,
+) -> Result<Endpoint, Status> {
     let ip_literal_host = ip_literal_tls_server_name(&uri);
-    let mut endpoint = Endpoint::new(uri)
-        .map_err(|err| Status::from_error(Box::new(err)))?
-        .connect_timeout(config.connect_timeout);
+    let endpoint = match tls {
+        // `Endpoint::new` gives an `https` URI a default TLS configuration built from its host,
+        // which fails for the bracketed host of an IPv6 literal before ours can be set. The
+        // configuration set below replaces that default.
+        Some(_) => Endpoint::from(uri),
+        None => Endpoint::new(uri).map_err(|err| Status::from_error(Box::new(err)))?,
+    };
+    let mut endpoint = endpoint.connect_timeout(config.connect_timeout);
 
     if let Some(request_timeout) = config.request_timeout {
         endpoint = endpoint.timeout(request_timeout);
@@ -65,21 +74,70 @@ fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, Statu
         endpoint = endpoint.keep_alive_while_idle(while_idle);
     }
 
-    if let GrpcClientTlsConfig::Enabled(tls) = &config.tls {
-        let mut tls_config = tls
-            .to_tonic()
-            .map_err(|err| Status::failed_precondition(format!("TLS configuration: {err}")))?;
-        if tls.server_domain_name.is_none()
-            && let Some(server_name) = ip_literal_host
-        {
-            tls_config = tls_config.domain_name(server_name);
-        }
+    if let Some(tls) = tls {
         endpoint = endpoint
-            .tls_config(tls_config)
+            .tls_config(tls.tonic_config(ip_literal_host))
             .map_err(|err| Status::from_error(Box::new(err)))?;
     }
 
     Ok(endpoint)
+}
+
+/// The TLS material of one client and the server name to check. The material is read again from
+/// its files while the client lives, and each new connection is built from what is current then;
+/// connections already open keep the certificate they were opened with.
+pub struct ClientTls {
+    material: Arc<TlsMaterial>,
+    server_domain_name: Option<String>,
+}
+
+impl ClientTls {
+    /// `None` when TLS is disabled. A bad setting does not fail here, because the constructors of
+    /// the clients are infallible: the error is returned and every connect then fails with it.
+    pub fn from_config(
+        config: &GrpcClientTlsConfig,
+        use_name: &str,
+    ) -> Option<Result<Arc<Self>, TlsError>> {
+        let GrpcClientTlsConfig::Enabled(tls) = config else {
+            return None;
+        };
+        Some(
+            tls.sources()
+                .and_then(|sources| TlsMaterial::load(use_name, sources))
+                .map(|material| {
+                    Arc::new(Self {
+                        material,
+                        server_domain_name: tls.server_domain_name.clone(),
+                    })
+                }),
+        )
+    }
+
+    pub fn material(&self) -> &Arc<TlsMaterial> {
+        &self.material
+    }
+
+    /// The tonic configuration for a new connection, from the material current now. Without a
+    /// configured domain name, `ip_literal_server_name` is the name to check.
+    pub fn tonic_config(&self, ip_literal_server_name: Option<String>) -> ClientTlsConfig {
+        use tonic::transport::{Certificate, Identity};
+
+        let loaded = self.material.current();
+        let mut config = ClientTlsConfig::new()
+            .ca_certificate(Certificate::from_pem(&loaded.ca_pem))
+            .identity(Identity::from_pem(&loaded.cert_pem, &loaded.key_pem));
+        if let Some(name) = self.server_domain_name.clone().or(ip_literal_server_name) {
+            config = config.domain_name(name);
+        }
+        config
+    }
+}
+
+/// The client TLS of a client: absent when TLS is off, the error when the settings are unusable.
+type ClientTlsState = Option<Arc<Result<Arc<ClientTls>, TlsError>>>;
+
+fn client_tls_state(config: &GrpcClientTlsConfig, use_name: &str) -> ClientTlsState {
+    ClientTls::from_config(config, use_name).map(Arc::new)
 }
 
 /// The TLS server name for a URI whose host is an IPv6 literal. Without a configured domain name,
@@ -358,6 +416,8 @@ struct Connections<T: Clone> {
     idle_ttl: Duration,
     prune_interval: Duration,
     max_connection_age: Duration,
+    /// See [`ClientTls`]. Shared by every clone.
+    tls: ClientTlsState,
     /// Test-only seam: awaited between a connection being established and the
     /// retirement check below it, so a test can retire one in that window
     /// rather than race to. Same pattern as `Cache::evict_interleave` in
@@ -380,6 +440,7 @@ where
             idle_ttl,
             prune_interval,
             max_connection_age: Duration::ZERO,
+            tls: None,
             #[cfg(test)]
             interleave: Arc::new(std::sync::Mutex::new(None)),
         }
@@ -473,7 +534,18 @@ where
         // Built outside the entry lock, so a rejected URI cannot leave an entry
         // behind and unrelated targets sharing a bucket do not serialise behind
         // this work.
-        let endpoint = build_endpoint(target.clone(), config)?;
+        let endpoint = match self.tls.as_deref() {
+            Some(Err(err)) => {
+                return Err(Status::failed_precondition(format!(
+                    "TLS configuration: {err}"
+                )));
+            }
+            Some(Ok(tls)) => {
+                tls.material.start_reloader(TLS_RELOAD_INTERVAL);
+                build_endpoint(target.clone(), config, Some(tls))?
+            }
+            None => build_endpoint(target.clone(), config, None)?,
+        };
 
         let attempt = match self.by_target.entry_async(target.clone()).await {
             Entry::Occupied(mut entry) => match entry.get().peek() {
@@ -621,15 +693,18 @@ where
         config: GrpcClientConfig,
     ) -> Self {
         let client_factory = Arc::new(client_factory);
+        // One for the whole pool, so there is one poller and one log line per renewal.
+        let tls = client_tls_state(&config.tls, &format!("{} client", target_name.as_ref()));
         let pool = (0..config.connection_pool_size.get())
             .map(|_| {
                 let factory = client_factory.clone();
-                let mut client = MultiTargetGrpcClient::with_sweep(
+                let mut client = MultiTargetGrpcClient::with_sweep_and_tls(
                     target_name.as_ref(),
                     move |channel, size| factory(channel, size),
                     config.clone(),
                     Duration::MAX,
                     PRUNE_INTERVAL,
+                    tls.clone(),
                 );
                 client.connections.max_connection_age = config.max_connection_age;
                 client
@@ -640,6 +715,12 @@ where
             pool,
             next: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// The TLS material shared by the pool, if TLS is enabled and its settings loaded.
+    #[doc(hidden)]
+    pub fn tls_material(&self) -> Option<Arc<TlsMaterial>> {
+        self.pool[0].tls_material()
     }
 
     fn select(&self) -> &MultiTargetGrpcClient<T> {
@@ -738,9 +819,30 @@ where
         idle_ttl: Duration,
         prune_interval: Duration,
     ) -> Self {
+        let tls = client_tls_state(&config.tls, &format!("{} client", target_name.as_ref()));
+        Self::with_sweep_and_tls(
+            target_name,
+            client_factory,
+            config,
+            idle_ttl,
+            prune_interval,
+            tls,
+        )
+    }
+
+    fn with_sweep_and_tls(
+        target_name: impl AsRef<str>,
+        client_factory: impl Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static,
+        config: GrpcClientConfig,
+        idle_ttl: Duration,
+        prune_interval: Duration,
+        tls: ClientTlsState,
+    ) -> Self {
+        let mut connections = Connections::new(idle_ttl, prune_interval);
+        connections.tls = tls;
         Self {
             config,
-            connections: Connections::new(idle_ttl, prune_interval),
+            connections,
             client_factory: Arc::new(client_factory),
             target_name: target_name.as_ref().to_string(),
             redirect: None,
@@ -866,6 +968,15 @@ where
 
     pub fn uses_tls(&self) -> bool {
         self.config.tls_enabled()
+    }
+
+    /// The TLS material of this client, if TLS is enabled and its settings loaded.
+    #[doc(hidden)]
+    pub fn tls_material(&self) -> Option<Arc<TlsMaterial>> {
+        match self.connections.tls.as_deref() {
+            Some(Ok(tls)) => Some(tls.material.clone()),
+            _ => None,
+        }
     }
 
     /// Retires the connection a failed call was riding: marks it so nothing
@@ -1137,22 +1248,6 @@ impl EnabledGrpcClientTlsConfig {
                 self.server_ca_cert_file.as_deref(),
             )?,
         })
-    }
-
-    pub fn to_tonic(&self) -> Result<ClientTlsConfig, TlsError> {
-        use tonic::transport::{Certificate, Identity};
-
-        let sources = self.sources()?;
-        let ca = Certificate::from_pem(sources.ca.read()?);
-        let identity = Identity::from_pem(sources.cert.read()?, sources.key.read()?);
-
-        let mut config = ClientTlsConfig::new().ca_certificate(ca).identity(identity);
-
-        if let Some(domain_name) = &self.server_domain_name {
-            config = config.domain_name(domain_name);
-        }
-
-        Ok(config)
     }
 }
 
@@ -1890,6 +1985,7 @@ mod test {
         let endpoint = build_endpoint(
             format!("http://{addr}").parse().unwrap(),
             &GrpcClientConfig::default(),
+            None,
         )
         .unwrap();
         Status::from_error(Box::new(endpoint.connect().await.unwrap_err()))
@@ -2203,7 +2299,7 @@ mod test {
         // Nothing listens here, and the connect is held open by a timeout far
         // longer than the test, so the attempt stays unsettled throughout.
         let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
-        let endpoint = build_endpoint(target.clone(), &config).unwrap();
+        let endpoint = build_endpoint(target.clone(), &config, None).unwrap();
         let attempt = attempt_bounded_by(endpoint, Duration::from_secs(600));
         connections
             .by_target
@@ -2624,7 +2720,7 @@ mod test {
         // Nothing listens here, and the connect is held open by a timeout far
         // longer than the test, so the attempt stays unsettled throughout.
         let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
-        let endpoint = build_endpoint(target.clone(), &config).unwrap();
+        let endpoint = build_endpoint(target.clone(), &config, None).unwrap();
         let attempt = attempt_bounded_by(endpoint, Duration::from_secs(600));
         connections
             .by_target
@@ -2654,7 +2750,7 @@ mod test {
         // made, because an attempt that failed on its own would have been
         // cleared by the very task this is about.
         let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
-        let endpoint = build_endpoint(target.clone(), &config).unwrap();
+        let endpoint = build_endpoint(target.clone(), &config, None).unwrap();
         let failed = attempt_bounded_by(endpoint, config.connect_timeout);
         assert!(
             failed.clone().await.is_err(),
@@ -2697,7 +2793,8 @@ mod test {
         let (connections, build) = cache();
 
         // Nothing listens here, and no time at all to reach it.
-        let endpoint = build_endpoint("http://127.0.0.1:1/".parse().unwrap(), &config).unwrap();
+        let endpoint =
+            build_endpoint("http://127.0.0.1:1/".parse().unwrap(), &config, None).unwrap();
         let failed = attempt_bounded_by(endpoint, Duration::ZERO);
         assert!(
             failed.clone().await.is_err(),
@@ -2764,6 +2861,36 @@ mod test {
 
         assert!(result.is_err());
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn build_endpoint_uses_the_ip_literal_server_name_when_none_is_configured() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = certified.cert.pem().into_bytes();
+        let inline = |setting: &str, bytes: Vec<u8>| PemSource::Inline {
+            setting: setting.to_string(),
+            bytes,
+        };
+        let material = TlsMaterial::load(
+            "test client",
+            TlsSources {
+                cert: inline("client_cert", cert.clone()),
+                key: inline(
+                    "client_key",
+                    certified.signing_key.serialize_pem().into_bytes(),
+                ),
+                ca: inline("server_ca_cert", cert),
+            },
+        )
+        .unwrap();
+        let tls = ClientTls {
+            material,
+            server_domain_name: None,
+        };
+        let uri: Uri = "https://[::1]:1".parse().unwrap();
+        assert_eq!(ip_literal_tls_server_name(&uri).as_deref(), Some("::1"));
+        build_endpoint(uri, &GrpcClientConfig::default(), Some(&tls)).unwrap();
     }
 
     #[test]
