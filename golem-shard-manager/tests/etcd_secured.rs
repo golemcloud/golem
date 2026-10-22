@@ -847,6 +847,12 @@ async fn a_user_who_may_only_read_does_not_start(_tracing: &Tracing, _crypto: &C
         .await
         .unwrap();
     auth.user_add("reader", PASSWORD, None).await.unwrap();
+
+    // An auth mutation invalidates the root client's token. Log in again before the next
+    // administrative operation so the setup does not depend on the token's invalidation timing.
+    let mut auth = inspection_client_auth(&etcd.client_url(), &pki)
+        .await
+        .auth_client();
     auth.user_grant_role("reader", "reader").await.unwrap();
 
     let mut config = auth_config(&etcd.client_url(), PASSWORD, &pki);
