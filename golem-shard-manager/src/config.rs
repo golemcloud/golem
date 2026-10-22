@@ -277,7 +277,7 @@ pub struct EtcdConfig {
     #[serde(with = "humantime_serde", default = "default_etcd_retry_min_delay")]
     pub retry_min_delay: Duration,
     /// The longest wait between two retries of an etcd failure. With `tls` set, also how often a
-    /// running replica checks whether etcd refuses its certificates.
+    /// running replica checks the TLS files for a renewed certificate.
     #[serde(with = "humantime_serde", default = "default_etcd_retry_max_delay")]
     pub retry_max_delay: Duration,
     /// How long etcd holds this replica's leadership lease without a renewal; renewed at TTL/3.
@@ -304,7 +304,7 @@ pub struct EtcdConfig {
     #[serde(default)]
     pub password: Option<EtcdPassword>,
     /// A file that holds the password of `username`, such as a key of a Kubernetes Secret mounted
-    /// as files. Read once, at startup, as it is: only one trailing line ending is removed.
+    /// as files. Read at startup, and again when a TLS file changes, as it is: only one trailing line ending is removed.
     #[serde(default)]
     pub password_file: Option<PathBuf>,
     /// Replaces the build version in this replica's election value. **Tests only**: the replicas
@@ -318,9 +318,10 @@ pub struct EtcdConfig {
 ///
 /// Each item comes from a PEM file or from an inline value (the PEM, Base64-encoded on one line),
 /// not both.
-/// Files and values are read once, at startup, so a renewed certificate takes effect on a
-/// restart. A running replica stops by itself when etcd refuses the certificates it holds, the
-/// files have changed since startup, and etcd accepts the files as they are now.
+/// Files are polled every `retry_max_delay`: a renewed certificate and key, and the CA, are used
+/// for new etcd connections without a restart, after etcd accepted them on a test connection; a
+/// set that cannot be used is logged and ignored until it changes again. Inline values change
+/// only with a restart.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EtcdTlsConfig {
     /// PEM file with the certificate of the CA that signed etcd's server certificate.

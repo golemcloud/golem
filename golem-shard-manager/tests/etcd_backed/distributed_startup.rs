@@ -33,6 +33,7 @@ use golem_service_base::clients::shard_manager_leader::{
     LeaderAddress, leader_of, refused_before_running,
 };
 use golem_service_base::grpc::client::GrpcClientConfig;
+use golem_shard_manager::RequestClient;
 use golem_shard_manager::config::{
     EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
@@ -1307,7 +1308,7 @@ async fn a_dead_member_in_the_endpoint_list_does_not_fail_startup(etcd: &Arc<Doc
     // The retrying read the leader's worker depends on: a failed read is a fail-stop, so it has
     // to survive what the single-shot reads above do not. A read never consults the fence.
     let persistence = EtcdRoutingTablePersistence::with_client(
-        probe,
+        RequestClient::fixed(probe),
         NUMBER_OF_SHARDS,
         LeaderFence::for_test("/golem/test/unread-by-a-read", 1),
         0,
@@ -1363,7 +1364,7 @@ async fn a_read_through_a_stalled_etcd_survives_it(etcd: &Arc<DockerEtcd>) {
     .expect("Cannot connect a client through the proxy");
 
     let persistence = EtcdRoutingTablePersistence::with_client(
-        client,
+        RequestClient::fixed(client),
         NUMBER_OF_SHARDS,
         LeaderFence::for_test("/golem/test/unread-by-a-read", 1),
         0,
