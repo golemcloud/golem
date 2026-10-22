@@ -8359,6 +8359,7 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
         for reads_before_crash in [16_usize, 128, 320] {
             tokio::time::timeout(Duration::from_secs(60), async {
                 loop {
+                    executor.commit_oplog(&worker).await?;
                     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                     let reads = entries
                         .iter()

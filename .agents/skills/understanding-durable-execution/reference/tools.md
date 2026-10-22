@@ -483,10 +483,15 @@ not byte bodies. `AttachmentInputProducer` records consumed payloads through
 `PrepareAttachmentObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
 actual consumption; host pipe reads commit their observation before handing bytes to transport.
 A durable owner's guest read observation is append-only, like a `CompletionDelivered` marker: the
-next commit of the owner oplog (usually the producer's next accepted `End`) persists it as part of
-the prefix, and invocation settlement commits any remainder. No later entry can become durable
-without it, and a crash before that commit leaves no record, so recovery reads the chunk again.
-Ephemeral owners still commit each guest read observation immediately.
+next commit of the owner oplog persists it as part of the prefix, and invocation settlement commits
+any remainder. No later entry can become durable without it, and a crash before that commit leaves
+no record, so recovery reads the chunk again. Ephemeral owners still commit each guest read
+observation immediately. Attachment writes and terminals are `WriteLocal` calls and follow the
+ordinary commit rule: their `End` is appended before the bytes or terminal are published, and it
+becomes durable with the next owner-oplog commit (the operation threshold, a host read, a remote
+effect, or invocation settlement). Because every reader's observation follows that `End` in the same
+oplog, no durable prefix holds a read without the write it observed; a crash before the commit loses
+both, and the body regenerates the write.
 The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
 stdin uses the same producer adapter. `NativeAttachmentInput` records at the host return boundary.
 The stdin of an external call has no attachment when the body is a component: the body reads the
@@ -502,20 +507,20 @@ consumers, guest stdin-closure watchers and pending regeneration block a cut tha
 history. Cloned asynchronous watcher waits retain that lifetime; internal observers alone do not.
 
 Semantic writer abandonment and rejection enqueue an owned terminal receipt through the existing
-cleanup queue. Live selection is synchronous; publication follows commit. Generic Rust destruction
-and runtime teardown record nothing. Retained terminal effects restore at their crossed replay
-boundary even if their host-call waiter no longer exists. Missing-terminal repair waits outside
-cleanup drains so reconstruction can still make progress, and retries if the replay target grows.
-The context registers these admission jobs synchronously in a separate owned task set, reusing
-`NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful completion drains
-cleanup, joins admissions, then drains their handoffs before publishing its terminal. The primary
-does not join before consuming a historical Finished; successful replay exit also drains pending
-disposals. A failed entity body closes and aborts admission jobs, but still joins already accepted
-terminal publications and native accepted-write reconstruction. Later destructors and unaccepted
-queued disposals cannot start repair in that failed context. Context destruction transfers abort
-and join ownership to the existing worker task scope.
-An exact recorded disposal refusal takes precedence over a later owner-finalization terminal:
-that terminal does not prove the requested disposal succeeded. Other retained disposals stay no-ops.
+cleanup queue. Live selection is synchronous; publication follows the terminal's append. Generic
+Rust destruction and runtime teardown record nothing. Retained terminal effects restore at their
+crossed replay boundary even if their host-call waiter no longer exists. Missing-terminal repair
+waits outside cleanup drains so reconstruction can still make progress, and retries if the replay
+target grows. The context registers these admission jobs synchronously in a separate owned task set,
+reusing `NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful
+completion drains cleanup, joins admissions, then drains their handoffs before publishing its
+terminal. The primary does not join before consuming a historical Finished; successful replay exit
+also drains pending disposals. A failed entity body closes and aborts admission jobs, but still
+joins already accepted terminal publications and native accepted-write reconstruction. Later
+destructors and unaccepted queued disposals cannot start repair in that failed context. Context
+destruction transfers abort and join ownership to the existing worker task scope. An exact recorded
+disposal refusal takes precedence over a later owner-finalization terminal: that terminal does not
+prove the requested disposal succeeded. Other retained disposals stay no-ops.
 
 `HistoricalAttachmentWriteJob` captures the durable-call preparation, invocation ID and argument
 ownership before spawning. Accessors reserve the guest import's ID through the existing import-order
