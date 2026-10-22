@@ -246,8 +246,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// while reserving the unpublished effect and invoking `enqueue(reservation)`. Returning
     /// without invoking `enqueue` rejects the candidate. Rejection returns the
     /// unfinished call and response, so the caller can select another terminal or retry.
-    /// Publication owns the reservation until the End append and DurableOnly commit succeed;
-    /// it must be infallible after acceptance.
+    /// Publication owns the reservation until the End append succeeds and, for a `WriteRemote`
+    /// call, its DurableOnly commit; other calls leave the End to the next owner-oplog commit,
+    /// as [`end_durable_function_access`] does. Publication must be infallible after acceptance.
     /// `failed` must synchronously fence observers before returning the owner cleanup future.
     /// The owned coordinator resolves the terminal receipt before polling that future, so
     /// cleanup may join the receipt without depending on itself. Runtime replacement and
@@ -282,7 +283,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         .await
     }
 
-    /// Shared commit-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
+    /// Shared append-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
     pub(crate) async fn complete_deferred_with_effect<Ctx, R, A, F, E, EF>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
@@ -349,13 +350,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             ));
         };
         let tasks = worker.tasks.clone();
+        let commits = *self.retry.function_type() == DurableFunctionType::WriteRemote;
         let coordinator = prepare_access_terminal_effect(
             &tasks,
             recording,
             async move {
-                worker
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await?;
+                if commits {
+                    worker
+                        .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                        .await?;
+                }
                 Ok(())
             },
             publish,
@@ -758,6 +762,10 @@ pub(super) fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseP3SocketsTcpReceiveChunk>(),
         TypeId::of::<HostResponseGolemApiCard>(),
         TypeId::of::<HostResponseGolemApiOplogEntries>(),
+        TypeId::of::<HostResponseToolAttachmentCreated>(),
+        TypeId::of::<HostResponseToolAttachmentWrite>(),
+        TypeId::of::<HostResponseToolAttachmentTerminalResult>(),
+        TypeId::of::<HostResponseToolAttachmentClosed>(),
         TypeId::of::<HostResponseConfigGetResponse>(),
         TypeId::of::<HostResponseConfigGetAllResponse>(),
         TypeId::of::<HostResponseCliEnvironmentGetEnvironment>(),

@@ -10,7 +10,7 @@ use super::attachment::{
 };
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessorContext, Cancellable, CompletionDelivery,
-    DeferredCallReplayOutcome, DurableAccess, DurableCallSession, DurableContext,
+    DeferredCallReplayOutcome, DurableAccess, DurableCallSession, DurableContext, OrderedAppend,
     PreparedContextStart, SharedDurableContext,
 };
 use crate::durable_host::durability::{
@@ -990,20 +990,15 @@ fn error_to_model(error: &StreamWriteError) -> model::StreamWriteError {
     }
 }
 
-type ProducerTerminalRecorder = Box<
-    dyn FnOnce() -> Result<
-            Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
-            WorkerExecutorError,
-        > + Send
-        + Sync,
->;
+type ProducerTerminalRecorder =
+    Box<dyn FnOnce() -> Result<Option<OrderedAppend>, WorkerExecutorError> + Send + Sync>;
 
 pub struct ProducerDisposal {
     controller: AttachmentController,
     primary_transition: bool,
     admission_error: Option<WorkerExecutorError>,
     record: Option<ProducerTerminalRecorder>,
-    pending: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    pending: Option<OrderedAppend>,
     no_body: bool,
     _permit: Option<crate::durable_host::concurrent::LiveCallPermit>,
 }
@@ -1416,7 +1411,9 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
                     "tool attachment cancellation",
                 );
                 tokio::spawn(failed);
-                tokio::spawn(async move { Err(error) })
+                let (sent, receipt) = tokio::sync::oneshot::channel();
+                let _ = sent.send(Err(error));
+                OrderedAppend::Receipt(receipt)
             }
         };
         let (done, receipt) = tokio::sync::oneshot::channel();
